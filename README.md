@@ -1,46 +1,205 @@
-# Getting Started with Create React App
+# Project Monitoring System
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A comprehensive React-based web application for project directors to monitor and manage multiple projects, track financial health, and make informed decisions. Built specifically for NETPAC AI to provide real-time insights into project performance, budget tracking, and operational health.
 
-## Available Scripts
+## 🚀 Features
 
-In the project directory, you can run:
+### Dashboard Overview
+- **High-Level KPIs**: Total projects, contract amounts, billed amounts, and outstanding balances
+- **Interactive Visualizations**: 
+  - Bar charts showing contract vs billed amounts by year
+  - Pie charts displaying project status distribution
+- **Real-time Project Health Indicators**: Color-coded status indicators for quick assessment
 
-### `npm start`
+### Project Management
+- **Comprehensive Project Table**: Sortable and filterable view of all projects
+- **Advanced Filtering**: Filter by year, status, client, project director, and search terms
+- **Project Details View**: In-depth project information including financial summaries and progress tracking
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+### Financial Tracking
+- **Budget vs Actual**: Track contract amounts against billed amounts
+- **Outstanding Balances**: Monitor remaining project balances and retention
+- **Billing Progress**: Visual progress bars showing percentage of project completion
+- **Project Health Scoring**: Automated health indicators based on billing performance
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+### User Experience
+- **Responsive Design**: Works seamlessly on desktop and mobile devices
+- **Intuitive Navigation**: Easy switching between dashboard and detailed views
+- **Material UI Components**: Modern, professional interface design
 
-### `npm test`
+## 🛠️ Technology Stack
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+- **Frontend**: React 18 with TypeScript
+- **UI Framework**: Material-UI (MUI) v5
+- **Charts**: Recharts for data visualization
+- **Styling**: Emotion (CSS-in-JS) with Material-UI theming
+- **Date Handling**: date-fns for date formatting and manipulation
+- **Build Tool**: Create React App with TypeScript template
 
-### `npm run build`
+## 📦 Installation
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd project-monitoring-system
+   ```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+3. **Start the development server**
+   ```bash
+   npm start
+   ```
 
-### `npm run eject`
+4. **Access the application**
+   Open [http://localhost:3000](http://localhost:3000) in your browser
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+## 🗂️ Project Structure
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+```
+src/
+├── components/           # React components
+│   ├── Dashboard.tsx     # Main dashboard with KPIs and project table
+│   ├── ProjectDetails.tsx # Detailed project view
+│   └── ProjectMonitoringApp.tsx # Main application wrapper
+├── data/
+│   └── mockData.ts       # Sample project data
+├── types/
+│   └── Project.ts        # TypeScript type definitions
+├── utils/
+│   └── projectUtils.ts   # Utility functions for calculations
+└── App.tsx              # Root application component
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+## 📊 Data Model
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+The application is built around the following core data structure:
 
-## Learn More
+### Project Interface
+```typescript
+interface Project {
+  id: string;
+  projectName: string;
+  client: string;
+  projectDirector: string;
+  ovpNumber: string;
+  poNumber: string;
+  scopeOfWork: string;
+  location: string;
+  contractAmount: number;
+  billedAmount: number;
+  remainingBalance: number;
+  retention: number;
+  status: ProjectStatus;
+  completionDate: Date | null;
+  createdDate: Date;
+  lastUpdated: Date;
+  remarks?: string;
+}
+```
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+### Project Status Types
+- **OPEN**: Active projects in progress
+- **CLOSED**: Successfully completed projects
+- **FOR_CLOSEOUT**: Projects awaiting final documentation
+- **PENDING**: Projects on hold or waiting to start
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+## 🎯 Key Features Breakdown
+
+### 1. Interactive Dashboard
+- **KPI Cards**: Real-time metrics for total projects, contract amounts, and balances
+- **Visual Charts**: Bar charts for yearly comparisons and pie charts for status distribution
+- **Project Health**: Color-coded indicators showing project financial health
+
+### 2. Advanced Filtering System
+- **Multi-dimensional Filtering**: By year, status, client, project director
+- **Real-time Search**: Instant filtering based on project name, client, or reference numbers
+- **Dynamic Updates**: All visualizations update automatically based on applied filters
+
+### 3. Detailed Project Views
+- **Comprehensive Information**: All project details in an organized layout
+- **Financial Summary**: Contract amounts, billed amounts, retention, and balances
+- **Progress Tracking**: Visual progress bars showing billing completion percentage
+- **Project Timeline**: Creation dates, completion dates, and last update information
+
+### 4. Responsive Design
+- **Mobile-Friendly**: Fully responsive layout that works on all device sizes
+- **Modern UI**: Clean, professional interface following Material Design principles
+- **Accessibility**: Built with accessibility best practices
+
+## 📈 Usage Examples
+
+### Viewing Project Health
+The dashboard provides immediate visual feedback on project health through:
+- **Green indicators**: Projects with >90% billing completion or closed status
+- **Orange indicators**: Projects with 70-90% billing completion
+- **Red indicators**: Projects with <70% billing completion
+
+### Filtering Projects
+Use the filter controls to:
+- View projects for a specific year
+- Filter by project status (Open, Closed, etc.)
+- Show projects for a particular client or director
+- Search by project name or reference numbers
+
+### Project Analysis
+Navigate to detailed views to:
+- Review comprehensive project information
+- Analyze financial performance and billing progress
+- Track project timeline and milestones
+- View project-specific remarks and notes
+
+## 🔧 Available Scripts
+
+- `npm start` - Start development server
+- `npm run build` - Create production build
+- `npm test` - Run test suite
+- `npm run eject` - Eject from Create React App (not recommended)
+
+## 🚀 Future Enhancements
+
+The current implementation provides a solid foundation. Potential future enhancements include:
+
+### Authentication & Authorization
+- User login system with role-based access
+- Project director-specific dashboards
+- Admin controls for data management
+
+### Data Integration
+- API integration for real-time data updates
+- CSV/Excel import functionality
+- Database connectivity for persistent storage
+
+### Advanced Analytics
+- Trend analysis and forecasting
+- Performance benchmarking
+- Custom reporting and exports
+
+### Enhanced Features
+- Project timeline visualization
+- Notification system for project milestones
+- Collaboration tools and project notes
+- Mobile application for field access
+
+## 📝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/new-feature`)
+3. Commit your changes (`git commit -am 'Add new feature'`)
+4. Push to the branch (`git push origin feature/new-feature`)
+5. Create a Pull Request
+
+## 📄 License
+
+This project is built for NETPAC AI internal use. All rights reserved.
+
+## 🤝 Support
+
+For questions, issues, or feature requests, please contact the development team or create an issue in the project repository.
+
+---
+
+**Built with ❤️ for NETPAC AI Project Directors**
