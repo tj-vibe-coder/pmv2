@@ -1698,7 +1698,7 @@ const buildPath = path.join(__dirname, 'build');
 const { existsSync } = require('fs');
 if (existsSync(buildPath)) {
   app.use(express.static(buildPath));
-  app.get('*', (req, res, next) => {
+  app.use((req, res, next) => {
     if (req.path.startsWith('/api')) return next();
     res.sendFile(path.join(buildPath, 'index.html'));
   });
