@@ -112,8 +112,8 @@ function initializeDatabase() {
       process.exit(1);
     } else {
       console.log('Projects table ready');
-      // Add project_no column if missing (local SQLite only; SQLite Cloud schema is already up to date)
-      if (!databaseUrl || !databaseUrl.startsWith('sqlitecloud://')) {
+      // Add project_no column if missing (local SQLite only; skip for SQLite Cloud)
+      if (dbLabel !== 'SQLite Cloud') {
         db.run('ALTER TABLE projects ADD COLUMN project_no TEXT', () => {});
       }
     }
@@ -140,8 +140,8 @@ function initializeDatabase() {
       console.error('Error creating users table:', err);
     } else {
       console.log('Users table ready');
-      // Add columns if missing (local SQLite only; SQLite Cloud schema is already up to date)
-      if (!databaseUrl || !databaseUrl.startsWith('sqlitecloud://')) {
+      // Add columns if missing (local SQLite only; skip for SQLite Cloud to avoid duplicate column errors)
+      if (dbLabel !== 'SQLite Cloud') {
         db.run('ALTER TABLE users ADD COLUMN approved INTEGER DEFAULT 1', () => {});
         db.run('ALTER TABLE users ADD COLUMN full_name TEXT', () => {});
       }
