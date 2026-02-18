@@ -1,6 +1,6 @@
 # Project Monitoring System
 
-A comprehensive React-based web application for project directors to monitor and manage multiple projects, track financial health, and make informed decisions. Built specifically for NETPAC AI to provide real-time insights into project performance, budget tracking, and operational health.
+A comprehensive React-based web application for project directors to monitor and manage multiple projects, track financial health, and make informed decisions. Built specifically for IOCT to provide real-time insights into project performance, budget tracking, and operational health.
 
 ## 🚀 Features
 
