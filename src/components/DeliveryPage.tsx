@@ -22,6 +22,7 @@ import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 import { useSearchParams } from 'react-router-dom';
 import dataService from '../services/dataService';
+import { useAuth } from '../contexts/AuthContext';
 import { Project } from '../types/Project';
 import { REPORT_COMPANIES, type ReportCompanyKey } from './ProjectDetails';
 import { ORDER_TRACKER_STORAGE_KEY, type OrderRecord } from './OrderTrackerPage';
@@ -57,6 +58,9 @@ export interface SavedDeliveryReceipt {
   poNumber: string;
   shippingName: string;
   shippingAddress: string;
+  shippingContactName: string;
+  shippingContactPhone: string;
+  shippingContactEmail: string;
   invoiceSameAsShipping: boolean;
   invoiceName: string;
   invoiceAddress: string;
@@ -94,6 +98,23 @@ function saveDRToList(dr: SavedDeliveryReceipt): void {
   localStorage.setItem(DELIVERY_RECEIPTS_STORAGE_KEY, JSON.stringify(list.slice(0, 500)));
 }
 
+function deleteSavedDR(id: string): void {
+  const list = loadSavedDRs().filter((dr) => dr.id !== id);
+  localStorage.setItem(DELIVERY_RECEIPTS_STORAGE_KEY, JSON.stringify(list));
+}
+
+/** Parse DR sequence number from deliveryNoteNo "ProjectNo-DR-N" */
+function parseDRNumber(deliveryNoteNo: string): number {
+  const match = deliveryNoteNo.match(/-DR-(\d+)$/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function getNextDRNumber(projectId: number | '', savedDRs: SavedDeliveryReceipt[]): number {
+  const drsForProject = savedDRs.filter((dr) => Number(dr.projectId) === Number(projectId));
+  const max = Math.max(0, ...drsForProject.map((dr) => parseDRNumber(dr.deliveryNoteNo || '')));
+  return max + 1;
+}
+
 function loadOrdersFromTracker(): OrderRecord[] {
   try {
     const raw = localStorage.getItem(ORDER_TRACKER_STORAGE_KEY);
@@ -103,25 +124,6 @@ function loadOrdersFromTracker(): OrderRecord[] {
     return [];
   }
 }
-
-const loadImageAsDataUrl = (url: string): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const img = new window.Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('No canvas context'));
-        return;
-      }
-      ctx.drawImage(img, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = () => reject(new Error('Failed to load image'));
-    img.src = url;
-  });
 
 /** Load logo and crop left edge to remove the vertical line in the image. */
 const loadLogoCroppedLeft = (url: string, cropPx: number = 14): Promise<string> =>
@@ -152,6 +154,8 @@ const loadLogoCroppedLeft = (url: string, cropPx: number = 14): Promise<string> 
   });
 
 const DeliveryPage: React.FC = () => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [reportCompany, setReportCompany] = useState<ReportCompanyKey>('ACT');
   const [deliveryNoteNo, setDeliveryNoteNo] = useState('');
   const [despatchDate, setDespatchDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -161,6 +165,9 @@ const DeliveryPage: React.FC = () => {
   const [poNumber, setPoNumber] = useState('');
   const [shippingName, setShippingName] = useState('');
   const [shippingAddress, setShippingAddress] = useState('');
+  const [shippingContactName, setShippingContactName] = useState('');
+  const [shippingContactPhone, setShippingContactPhone] = useState('');
+  const [shippingContactEmail, setShippingContactEmail] = useState('');
   const [invoiceSameAsShipping, setInvoiceSameAsShipping] = useState(true);
   const [invoiceName, setInvoiceName] = useState('');
   const [invoiceAddress, setInvoiceAddress] = useState('');
@@ -192,9 +199,12 @@ const DeliveryPage: React.FC = () => {
     const firstItemPo = order.items?.[0]?.poNumber;
     setPoNumber(orderOrProjectPo || (firstItemPo ?? ''));
     if (p) {
-      setDeliveryNoteNo((prev) => (prev ? prev : `${p.project_no || p.item_no || p.id}-DR-001`));
+      const projNo = String(p.project_no || p.item_no || p.id);
+      const nextNum = getNextDRNumber(pid, loadSavedDRs());
+      setDeliveryNoteNo((prev) => (prev ? prev : `${projNo}-DR-${nextNum}`));
       setShippingName(p.account_name || '');
       setShippingAddress(p.project_location || '');
+      setShippingContactName(p.client_approver || '');
     }
     if (order.items && order.items.length > 0) {
       const sourceItems = selectedItemIds && selectedItemIds.length > 0
@@ -225,16 +235,22 @@ const DeliveryPage: React.FC = () => {
     }
   }, [orderIdFromUrl, itemIdsFromUrl, projects, setSearchParams]);
 
-  useEffect(() => {
-    if (projectId === '' || linkedOrderId) return;
-    const p = projects.find((x) => x.id === Number(projectId));
+  // When project changes (user selects from dropdown), sync PO, shipping, DR number from the selected project
+  const handleProjectChange = (newProjectId: number | '') => {
+    setProjectId(newProjectId);
+    setLinkedOrderId(''); // clear order link when switching project
+    if (newProjectId === '') return;
+    const p = projects.find((x) => x.id === Number(newProjectId));
     if (p) {
-      setDeliveryNoteNo((prev) => (prev ? prev : `${p.project_no || p.item_no || p.id}-DR-001`));
-      if (!poNumber) setPoNumber(p.po_number || '');
-      if (!shippingName) setShippingName(p.account_name || '');
-      if (!shippingAddress) setShippingAddress(p.project_location || '');
+      const projNo = String(p.project_no || p.item_no || p.id);
+      const nextNum = getNextDRNumber(newProjectId, savedList);
+      setDeliveryNoteNo((prev) => (prev ? prev : `${projNo}-DR-${nextNum}`));
+      setPoNumber(p.po_number || '');
+      setShippingName(p.account_name || '');
+      setShippingAddress(p.project_location || '');
+      setShippingContactName(p.client_approver || '');
     }
-  }, [projectId, projects, poNumber, shippingName, shippingAddress, linkedOrderId]);
+  };
 
   const addItem = () => setItems((prev) => [...prev, { ...emptyItem(), itemNo: prev.length + 1 }]);
   const removeItem = (id: string) => {
@@ -263,6 +279,9 @@ const DeliveryPage: React.FC = () => {
       poNumber,
       shippingName,
       shippingAddress,
+      shippingContactName,
+      shippingContactPhone,
+      shippingContactEmail,
       invoiceSameAsShipping,
       invoiceName,
       invoiceAddress,
@@ -279,6 +298,12 @@ const DeliveryPage: React.FC = () => {
     setSavedList(loadSavedDRs());
   };
 
+  const handleDeleteSavedDR = (dr: SavedDeliveryReceipt) => {
+    if (!window.confirm(`Delete saved DR ${dr.deliveryNoteNo || dr.id}? This cannot be undone.`)) return;
+    deleteSavedDR(dr.id);
+    setSavedList(loadSavedDRs());
+  };
+
   const handleLoadDR = (dr: SavedDeliveryReceipt) => {
     setReportCompany(dr.reportCompany);
     setDeliveryNoteNo(dr.deliveryNoteNo);
@@ -288,6 +313,9 @@ const DeliveryPage: React.FC = () => {
     setPoNumber(dr.poNumber);
     setShippingName(dr.shippingName);
     setShippingAddress(dr.shippingAddress);
+    setShippingContactName(dr.shippingContactName ?? '');
+    setShippingContactPhone(dr.shippingContactPhone ?? '');
+    setShippingContactEmail(dr.shippingContactEmail ?? '');
     setInvoiceSameAsShipping(dr.invoiceSameAsShipping);
     setInvoiceName(dr.invoiceName);
     setInvoiceAddress(dr.invoiceAddress);
@@ -300,6 +328,33 @@ const DeliveryPage: React.FC = () => {
     setLinkedOrderId(dr.orderId || '');
   };
 
+  const filteredSavedList = projectId === ''
+    ? savedList
+    : savedList.filter((dr) => Number(dr.projectId) === Number(projectId));
+
+  const handleClearDR = () => {
+    setDeliveryNoteNo('');
+    setDespatchDate(new Date().toISOString().slice(0, 10));
+    setDeliveryMethod('Physical');
+    setProjectId('');
+    setPoNumber('');
+    setShippingName('');
+    setShippingAddress('');
+    setShippingContactName('');
+    setShippingContactPhone('');
+    setShippingContactEmail('');
+    setInvoiceSameAsShipping(true);
+    setInvoiceName('');
+    setInvoiceAddress('');
+    setItems([emptyItem()]);
+    setDispatchedByName('');
+    setDispatchedByDate('');
+    setReceivedByName('');
+    setReceivedByDate('');
+    setReceivedByPlace('');
+    setLinkedOrderId('');
+  };
+
   const handleLinkOrder = (orderId: string) => {
     setLinkedOrderId(orderId);
     if (orderId) {
@@ -310,15 +365,19 @@ const DeliveryPage: React.FC = () => {
 
   const shipName = shippingName.trim() || '—';
   const shipAddr = shippingAddress.trim() || '—';
+  const shipContact = shippingContactName.trim() || '';
+  const shipPhone = shippingContactPhone.trim() || '';
+  const shipEmail = shippingContactEmail.trim() || '';
   const invName = invoiceSameAsShipping ? shipName : (invoiceName.trim() || '—');
   const invAddr = invoiceSameAsShipping ? shipAddr : (invoiceAddress.trim() || '—');
+
+  const LINES_PER_PAGE = 20;
 
   const exportToPDF = async () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const margin = 14;
     const contentWidth = 210 - margin * 2;
     const pageHeight = 297;
-    let y = 14;
     const lineHeight = 5;
     const sectionGap = 5;
 
@@ -333,77 +392,91 @@ const DeliveryPage: React.FC = () => {
     const companyName = REPORT_COMPANIES[reportCompany];
     const companyAddress = REPORT_COMPANY_ADDRESS[reportCompany];
 
-    // Header: logo + company left (logo first, then company below it), "Delivery Receipt" + details right
-    const headerY = y;
-    let leftY = headerY;
+    // Load logo once for reuse on continuation pages
+    let logoDataUrl: string | null = null;
     if (reportCompany === 'ACT') {
       try {
         const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-advance-controle.png`;
-        const logoDataUrl = await loadLogoCroppedLeft(logoUrl);
+        logoDataUrl = await loadLogoCroppedLeft(logoUrl);
+      } catch (_) {}
+    }
+
+    /** Draw full header (company, address, Delivery Receipt title, DR details, Shipping/Invoice addresses, PO). Returns y after header. */
+    const drawHeader = (startY: number): number => {
+      let y = startY;
+      const headerY = y;
+      let leftY = headerY;
+      if (logoDataUrl && reportCompany === 'ACT') {
         const logoW = 12;
         const logoH = 10;
         doc.addImage(logoDataUrl, 'PNG', margin, headerY, logoW, logoH);
         leftY = headerY + logoH + 4;
-      } catch (_) {}
-    }
-    fontTitle();
-    doc.setFontSize(11);
-    doc.text(companyName, margin, leftY + 4);
-    fontBody();
-    doc.setFontSize(8);
-    const addrLines = doc.splitTextToSize(companyAddress, 75);
-    doc.text(addrLines, margin, leftY + 4 + lineHeight);
-    const leftHeaderBottom = leftY + 4 + lineHeight + addrLines.length * lineHeight;
+      }
+      fontTitle();
+      doc.setFontSize(11);
+      doc.text(companyName, margin, leftY + 4);
+      fontBody();
+      doc.setFontSize(8);
+      const addrLines = doc.splitTextToSize(companyAddress, 75);
+      doc.text(addrLines, margin, leftY + 4 + lineHeight);
+      const leftHeaderBottom = leftY + 4 + lineHeight + addrLines.length * lineHeight;
 
-    const rightX = 110;
-    fontTitle();
-    doc.setFontSize(14);
-    doc.text('Delivery Receipt', rightX, y + 6);
-    fontBody();
-    doc.setFontSize(8);
-    const detailLabels = ['DR Number', 'Dispatch Date', 'Delivery Method'];
-    const detailValues = [
-      deliveryNoteNo.trim() || '—',
-      despatchDate || '—',
-      deliveryMethod.trim() || 'Physical',
-    ];
-    let detailY = y + 12;
-    for (let i = 0; i < detailLabels.length; i++) {
-      doc.text(detailLabels[i], rightX, detailY + 0.5);
-      doc.text(detailValues[i], rightX + 38, detailY + 0.5);
-      detailY += 6;
-    }
-    y = Math.max(leftHeaderBottom, detailY) + sectionGap;
+      const rightX = 110;
+      fontTitle();
+      doc.setFontSize(14);
+      doc.text('Delivery Receipt', rightX, y + 6);
+      fontBody();
+      doc.setFontSize(8);
+      const detailLabels = ['DR Number', 'Dispatch Date', 'Delivery Method'];
+      const detailValues = [
+        deliveryNoteNo.trim() || '—',
+        despatchDate || '—',
+        deliveryMethod.trim() || 'Physical',
+      ];
+      let detailY = y + 12;
+      for (let i = 0; i < detailLabels.length; i++) {
+        doc.text(detailLabels[i], rightX, detailY + 0.5);
+        doc.text(detailValues[i], rightX + 38, detailY + 0.5);
+        detailY += 6;
+      }
+      y = Math.max(leftHeaderBottom, detailY) + sectionGap;
 
-    // Address blocks: Shipping (left), Invoice (right)
-    const blockWidth = (contentWidth - 8) / 2;
-    const blockHeight = 26;
-    doc.setFillColor(...DR_HEADER_BLUE);
-    doc.rect(margin, y, blockWidth, 7, 'F');
-    doc.rect(margin + blockWidth + 8, y, blockWidth, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    fontTitle();
-    doc.setFontSize(9);
-    doc.text('Shipping Address', margin + 3, y + 4.8);
-    doc.text('Invoice Address', margin + blockWidth + 11, y + 4.8);
-    doc.setTextColor(0, 0, 0);
-    fontBody();
-    doc.setFontSize(8);
-    y += 7;
-    const shipAddrLines = doc.splitTextToSize(`${shipName}\n${shipAddr}`, blockWidth - 6);
-    doc.text(shipAddrLines, margin + 3, y + 4);
-    const invAddrLines = doc.splitTextToSize(`${invName}\n${invAddr}`, blockWidth - 6);
-    doc.text(invAddrLines, margin + blockWidth + 11, y + 4);
-    y += blockHeight;
+      const blockWidth = (contentWidth - 8) / 2;
+      const blockHeight = 36;
+      doc.setFillColor(...DR_HEADER_BLUE);
+      doc.rect(margin, y, blockWidth, 7, 'F');
+      doc.rect(margin + blockWidth + 8, y, blockWidth, 7, 'F');
+      doc.setTextColor(255, 255, 255);
+      fontTitle();
+      doc.setFontSize(9);
+      doc.text('Shipping to', margin + 3, y + 4.8);
+      doc.text('Invoice Address', margin + blockWidth + 11, y + 4.8);
+      doc.setTextColor(0, 0, 0);
+      fontBody();
+      doc.setFontSize(8);
+      y += 7;
+      const shipParts: string[] = [
+        shipName,
+        shipAddr,
+        '',
+        `ATTN: ${shipContact || ''}`,
+        `Email: ${shipEmail || ''}`,
+        `Mobile No: ${shipPhone || ''}`,
+      ];
+      const shipAddrLines = doc.splitTextToSize(shipParts.join('\n'), blockWidth - 6);
+      doc.text(shipAddrLines, margin + 3, y + 4);
+      const invAddrLines = doc.splitTextToSize(`${invName}\n${invAddr}`, blockWidth - 6);
+      doc.text(invAddrLines, margin + blockWidth + 11, y + 4);
+      y += blockHeight;
 
-    // PO
-    fontTitle();
-    doc.setFontSize(10);
-    doc.text(`PO: ${poNumber.trim() || '—'}`, margin, y + 4);
-    fontBody();
-    y += 10;
+      fontTitle();
+      doc.setFontSize(10);
+      doc.text(`PO: ${poNumber.trim() || '—'}`, margin, y + 4);
+      fontBody();
+      y += 10;
+      return y;
+    };
 
-    // Items table (column widths sum to contentWidth 182): Item #, Description, QTY, UOM
     const tableCols = [12, 110, 28, 32];
     const headers = ['Item #', 'Description', 'QTY', 'UOM'];
     const bodyRows = items.map((it) => [
@@ -412,60 +485,73 @@ const DeliveryPage: React.FC = () => {
       String(Number(it.delivered) || 0),
       it.unit.trim() || '—',
     ]);
-    autoTable(doc, {
-      head: [headers],
-      body: bodyRows,
-      startY: y,
-      margin: { left: margin, right: margin },
-      tableWidth: contentWidth,
-      columnStyles: {
-        0: { cellWidth: tableCols[0] },
-        1: { cellWidth: tableCols[1] },
-        2: { cellWidth: tableCols[2] },
-        3: { cellWidth: tableCols[3] },
-      },
-      styles: { fontSize: 6, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
-      headStyles: { fillColor: DR_HEADER_BLUE, textColor: [255, 255, 255], fontStyle: 'bold', font: 'helvetica', fontSize: 6 },
-    });
-    const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
-    const tableEndY = docWithTable.lastAutoTable?.finalY ?? y;
 
-    // Dispatched By / Received By always in lower position (fixed at bottom so table can have up to 20+ items)
+    // Split items into chunks of LINES_PER_PAGE (20); items beyond 20 move to page 2, etc.
+    const itemChunks: string[][][] = [];
+    for (let i = 0; i < bodyRows.length; i += LINES_PER_PAGE) {
+      itemChunks.push(bodyRows.slice(i, i + LINES_PER_PAGE));
+    }
+    if (itemChunks.length === 0) itemChunks.push([]);
+
+    let y = 14;
+    for (let pageIdx = 0; pageIdx < itemChunks.length; pageIdx++) {
+      if (pageIdx > 0) {
+        doc.addPage();
+        y = 14;
+      }
+      y = drawHeader(y);
+      const chunk = itemChunks[pageIdx];
+      autoTable(doc, {
+        head: [headers],
+        body: chunk.length > 0 ? chunk : [['—', '—', '—', '—']],
+        startY: y,
+        margin: { left: margin, right: margin },
+        tableWidth: contentWidth,
+        columnStyles: {
+          0: { cellWidth: tableCols[0] },
+          1: { cellWidth: tableCols[1] },
+          2: { cellWidth: tableCols[2] },
+          3: { cellWidth: tableCols[3] },
+        },
+        styles: { fontSize: 6, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
+        headStyles: { fillColor: DR_HEADER_BLUE, textColor: [255, 255, 255], fontStyle: 'bold', font: 'helvetica', fontSize: 6 },
+      });
+    }
+
+    // Dispatched By / Received By on last page only
     const sigBlockHeight = 50;
     const footerMargin = 12;
-    if (tableEndY + sigBlockHeight > pageHeight - footerMargin) {
-      doc.addPage();
-    }
-    y = pageHeight - sigBlockHeight - footerMargin;
+    doc.setPage(doc.getNumberOfPages());
+    let ySig = pageHeight - sigBlockHeight - footerMargin;
 
     const sigLeftX = margin;
     const sigRightX = margin + 95;
     const sigLineW = 52;
     fontTitle();
     doc.setFontSize(10);
-    doc.text('Dispatched By', sigLeftX, y + 4);
-    doc.text('Received By', sigRightX, y + 4);
+    doc.text('Dispatched By', sigLeftX, ySig + 4);
+    doc.text('Received By', sigRightX, ySig + 4);
     fontBody();
     doc.setFontSize(8);
-    y += 7;
-    doc.text('Name:', sigLeftX, y + 4);
-    if (dispatchedByName) doc.text(dispatchedByName, sigLeftX + 22, y + 4);
+    ySig += 7;
+    doc.text('Name:', sigLeftX, ySig + 4);
+    if (dispatchedByName) doc.text(dispatchedByName, sigLeftX + 22, ySig + 4);
     doc.setDrawColor(180, 180, 180);
-    doc.line(sigLeftX + 20, y + 6, sigLeftX + 20 + sigLineW, y + 6);
-    doc.text('Name:', sigRightX, y + 4);
-    if (receivedByName) doc.text(receivedByName, sigRightX + 22, y + 4);
-    doc.line(sigRightX + 20, y + 6, sigRightX + 20 + sigLineW, y + 6);
-    y += lineHeight + 2;
-    doc.text('Date:', sigLeftX, y + 4);
-    if (dispatchedByDate) doc.text(dispatchedByDate, sigLeftX + 22, y + 4);
-    doc.line(sigLeftX + 20, y + 6, sigLeftX + 20 + sigLineW, y + 6);
-    doc.text('Date:', sigRightX, y + 4);
-    if (receivedByDate) doc.text(receivedByDate, sigRightX + 22, y + 4);
-    doc.line(sigRightX + 20, y + 6, sigRightX + 20 + sigLineW, y + 6);
-    y += lineHeight + 2;
-    doc.text('Place:', sigRightX, y + 4);
-    if (receivedByPlace) doc.text(receivedByPlace, sigRightX + 22, y + 4);
-    doc.line(sigRightX + 20, y + 6, sigRightX + 20 + sigLineW, y + 6);
+    doc.line(sigLeftX + 20, ySig + 6, sigLeftX + 20 + sigLineW, ySig + 6);
+    doc.text('Name:', sigRightX, ySig + 4);
+    if (receivedByName) doc.text(receivedByName, sigRightX + 22, ySig + 4);
+    doc.line(sigRightX + 20, ySig + 6, sigRightX + 20 + sigLineW, ySig + 6);
+    ySig += lineHeight + 2;
+    doc.text('Date:', sigLeftX, ySig + 4);
+    if (dispatchedByDate) doc.text(dispatchedByDate, sigLeftX + 22, ySig + 4);
+    doc.line(sigLeftX + 20, ySig + 6, sigLeftX + 20 + sigLineW, ySig + 6);
+    doc.text('Date:', sigRightX, ySig + 4);
+    if (receivedByDate) doc.text(receivedByDate, sigRightX + 22, ySig + 4);
+    doc.line(sigRightX + 20, ySig + 6, sigRightX + 20 + sigLineW, ySig + 6);
+    ySig += lineHeight + 2;
+    doc.text('Place:', sigRightX, ySig + 4);
+    if (receivedByPlace) doc.text(receivedByPlace, sigRightX + 22, ySig + 4);
+    doc.line(sigRightX + 20, ySig + 6, sigRightX + 20 + sigLineW, ySig + 6);
 
     // Footer on all pages
     const docNumber = `Doc. No.: ${(deliveryNoteNo || 'DR').trim().replace(/\s/g, '-')}`;
@@ -510,7 +596,7 @@ const DeliveryPage: React.FC = () => {
               label="DR Number"
               value={deliveryNoteNo}
               onChange={(e) => setDeliveryNoteNo(e.target.value)}
-              placeholder="e.g. IOCT2602002-DR-001"
+              placeholder="e.g. IOCT2602002-DR-1"
             />
           </Box>
           <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
@@ -539,7 +625,7 @@ const DeliveryPage: React.FC = () => {
               <Select
                 value={projectId === '' ? '' : projectId}
                 label="Project (optional)"
-                onChange={(e) => setProjectId(String(e.target.value) === '' ? '' : Number(e.target.value))}
+                onChange={(e) => handleProjectChange(String(e.target.value) === '' ? '' : Number(e.target.value))}
               >
                 <MenuItem value="">— None —</MenuItem>
                 {projects.map((p) => (
@@ -579,14 +665,23 @@ const DeliveryPage: React.FC = () => {
 
           <Box sx={{ width: '100%' }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
-              Shipping Address
+              Shipping to
             </Typography>
             <TextField
               fullWidth
               size="small"
-              label="Name"
+              label="Client / Company name"
               value={shippingName}
               onChange={(e) => setShippingName(e.target.value)}
+              sx={{ mb: 1 }}
+            />
+            <TextField
+              fullWidth
+              size="small"
+              label="ATTN (Contact person)"
+              value={shippingContactName}
+              onChange={(e) => setShippingContactName(e.target.value)}
+              placeholder="ATTN:"
               sx={{ mb: 1 }}
             />
             <TextField
@@ -597,7 +692,27 @@ const DeliveryPage: React.FC = () => {
               onChange={(e) => setShippingAddress(e.target.value)}
               multiline
               rows={2}
+              sx={{ mb: 1 }}
             />
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+              <TextField
+                size="small"
+                label="Mobile No"
+                value={shippingContactPhone}
+                onChange={(e) => setShippingContactPhone(e.target.value)}
+                placeholder="Mobile No"
+                sx={{ flex: 1, minWidth: 120 }}
+              />
+              <TextField
+                size="small"
+                label="Email"
+                value={shippingContactEmail}
+                onChange={(e) => setShippingContactEmail(e.target.value)}
+                placeholder="Email"
+                type="email"
+                sx={{ flex: 1, minWidth: 160 }}
+              />
+            </Box>
           </Box>
           <Box sx={{ width: '100%' }}>
             <FormControl fullWidth size="small" sx={{ mb: 1 }}>
@@ -799,12 +914,19 @@ const DeliveryPage: React.FC = () => {
             >
               Save DR
             </Button>
+            <Button
+              variant="outlined"
+              onClick={handleClearDR}
+              sx={{ borderColor: '#666', color: '#666' }}
+            >
+              Clear (new DR)
+            </Button>
           </Box>
 
-          {savedList.length > 0 && (
+          {filteredSavedList.length > 0 && (
             <Box sx={{ width: '100%', mt: 3 }}>
               <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-                <HistoryIcon /> Saved delivery receipts
+                <HistoryIcon /> Saved delivery receipts{projectId !== '' ? ' (this project)' : ' (all)'}
               </Typography>
               <TableContainer component={Paper} variant="outlined">
                 <Table size="small">
@@ -818,7 +940,7 @@ const DeliveryPage: React.FC = () => {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {savedList.map((dr) => (
+                    {filteredSavedList.map((dr) => (
                       <TableRow key={dr.id}>
                         <TableCell>{dr.deliveryNoteNo || '—'}</TableCell>
                         <TableCell>{dr.poNumber || '—'}</TableCell>
@@ -828,6 +950,16 @@ const DeliveryPage: React.FC = () => {
                           <Button size="small" variant="text" onClick={() => handleLoadDR(dr)}>
                             Load
                           </Button>
+                          {isAdmin && (
+                            <IconButton
+                              size="small"
+                              onClick={() => handleDeleteSavedDR(dr)}
+                              color="error"
+                              title="Delete (admin only)"
+                            >
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

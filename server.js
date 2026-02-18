@@ -1,5 +1,5 @@
+require('dotenv').config();
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const path = require('path');
 
@@ -11,16 +11,36 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Initialize SQLite database
-const dbPath = path.join(__dirname, 'projects.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('Error opening database:', err);
-  } else {
-    console.log('Connected to SQLite database');
-    initializeDatabase();
-  }
-});
+// Initialize database: SQLite Cloud if DATABASE_URL is set, else local SQLite
+const databaseUrl = process.env.DATABASE_URL;
+let db;
+let dbLabel = 'SQLite (local)';
+
+if (databaseUrl && databaseUrl.startsWith('sqlitecloud://')) {
+  const { Database } = require('@sqlitecloud/drivers');
+  dbLabel = 'SQLite Cloud';
+  db = new Database(databaseUrl, (err) => {
+    if (err) {
+      console.error('Error connecting to SQLite Cloud:', err);
+    } else {
+      console.log('Connected to SQLite Cloud');
+      db.serialize = (fn) => fn(); // no-op; driver queues commands internally
+      initializeDatabase();
+    }
+  });
+} else {
+  const sqlite3 = require('sqlite3').verbose();
+  const dbPath = databaseUrl || path.join(__dirname, 'projects.db');
+  dbLabel = dbPath;
+  db = new sqlite3.Database(dbPath, (err) => {
+    if (err) {
+      console.error('Error opening database:', err);
+    } else {
+      console.log('Connected to SQLite database');
+      initializeDatabase();
+    }
+  });
+}
 
 // Initialize database tables
 function initializeDatabase() {
@@ -91,8 +111,10 @@ function initializeDatabase() {
       console.error('Error creating projects table:', err);
     } else {
       console.log('Projects table ready');
-      // Add project_no column if missing (for existing databases)
-      db.run('ALTER TABLE projects ADD COLUMN project_no TEXT', () => {});
+      // Add project_no column if missing (local SQLite only; cloud table already has it)
+      if (!databaseUrl || !databaseUrl.startsWith('sqlitecloud://')) {
+        db.run('ALTER TABLE projects ADD COLUMN project_no TEXT', () => {});
+      }
     }
   });
 
@@ -139,6 +161,63 @@ function initializeDatabase() {
     if (err) console.error('Error creating clients table:', err);
     else console.log('Clients table ready');
   });
+
+  // Project attachments (OneDrive metadata)
+  const createAttachmentsTable = `
+    CREATE TABLE IF NOT EXISTS project_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      filename TEXT NOT NULL,
+      onedrive_item_id TEXT NOT NULL,
+      onedrive_web_url TEXT,
+      file_size INTEGER,
+      uploaded_by TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES projects(id)
+    )
+  `;
+  db.run(createAttachmentsTable, (err) => {
+    if (err) console.error('Error creating project_attachments table:', err);
+    else console.log('project_attachments table ready');
+  });
+  db.run('CREATE INDEX IF NOT EXISTS idx_attachments_project ON project_attachments(project_id)', () => {});
+
+  // Suppliers and supplier products (replaces Suppliers_All_POs.csv)
+  const createSuppliersTable = `
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      contact_name TEXT,
+      email TEXT,
+      phone TEXT,
+      address TEXT,
+      payment_terms TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `;
+  db.run(createSuppliersTable, (err) => {
+    if (err) console.error('Error creating suppliers table:', err);
+    else console.log('Suppliers table ready');
+  });
+  const createSupplierProductsTable = `
+    CREATE TABLE IF NOT EXISTS supplier_products (
+      id TEXT PRIMARY KEY,
+      supplier_id TEXT NOT NULL,
+      name TEXT,
+      part_no TEXT,
+      description TEXT,
+      brand TEXT,
+      unit TEXT DEFAULT 'pcs',
+      unit_price REAL,
+      price_date TEXT,
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+    )
+  `;
+  db.run(createSupplierProductsTable, (err) => {
+    if (err) console.error('Error creating supplier_products table:', err);
+    else console.log('Supplier_products table ready');
+  });
+  db.run('CREATE INDEX IF NOT EXISTS idx_supplier_products_supplier ON supplier_products(supplier_id)', () => {});
 
   // Create indexes for better performance
   db.run(`CREATE INDEX IF NOT EXISTS idx_project_director ON projects(project_director)`);
@@ -567,7 +646,7 @@ app.post('/api/projects/bulk', (req, res) => {
     });
   });
 
-  stmt.finalize();
+  if (typeof stmt.finalize === 'function') stmt.finalize();
 });
 
 // Update project
@@ -925,6 +1004,216 @@ app.get('/api/forecasting/metrics', (req, res) => {
   res.json(metrics);
 });
 
+// ========== Project Attachments API (OneDrive metadata) ==========
+app.get('/api/projects/:id/attachments', (req, res) => {
+  const projectId = req.params.id;
+  db.all('SELECT * FROM project_attachments WHERE project_id = ? ORDER BY created_at DESC', [projectId], (err, rows) => {
+    if (err) {
+      console.error('Error fetching attachments:', err);
+      return res.status(500).json({ error: 'Failed to fetch attachments' });
+    }
+    res.json(rows || []);
+  });
+});
+
+app.post('/api/projects/:id/attachments', (req, res) => {
+  const projectId = req.params.id;
+  const { filename, onedrive_item_id, onedrive_web_url, file_size, uploaded_by } = req.body;
+  if (!filename || !onedrive_item_id) {
+    return res.status(400).json({ error: 'filename and onedrive_item_id are required' });
+  }
+  db.run(
+    'INSERT INTO project_attachments (project_id, filename, onedrive_item_id, onedrive_web_url, file_size, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)',
+    [projectId, filename, onedrive_item_id, onedrive_web_url || null, file_size || null, uploaded_by || null],
+    function(err) {
+      if (err) {
+        console.error('Error creating attachment:', err);
+        return res.status(500).json({ error: 'Failed to save attachment' });
+      }
+      res.status(201).json({ id: this.lastID, message: 'Attachment saved' });
+    }
+  );
+});
+
+app.delete('/api/projects/:projectId/attachments/:attachmentId', (req, res) => {
+  const { projectId, attachmentId } = req.params;
+  db.run('DELETE FROM project_attachments WHERE id = ? AND project_id = ?', [attachmentId, projectId], function(err) {
+    if (err) {
+      console.error('Error deleting attachment:', err);
+      return res.status(500).json({ error: 'Failed to delete attachment' });
+    }
+    if (this.changes === 0) return res.status(404).json({ error: 'Attachment not found' });
+    res.json({ message: 'Attachment deleted' });
+  });
+});
+
+// Suppliers (from DB; replaces CSV)
+function ensureSuppliersTables(callback) {
+  db.run('CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, name TEXT NOT NULL, contact_name TEXT, email TEXT, phone TEXT, address TEXT, payment_terms TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)', (err) => {
+    if (err) return callback(err);
+    db.run('CREATE TABLE IF NOT EXISTS supplier_products (id TEXT PRIMARY KEY, supplier_id TEXT NOT NULL, name TEXT, part_no TEXT, description TEXT, brand TEXT, unit TEXT DEFAULT \'pcs\', unit_price REAL, price_date TEXT, FOREIGN KEY (supplier_id) REFERENCES suppliers(id))', (err2) => {
+      if (err2) return callback(err2);
+      callback();
+    });
+  });
+}
+
+app.get('/api/suppliers', (req, res) => {
+  ensureSuppliersTables((err) => {
+    if (err) {
+      console.error('Error ensuring suppliers tables:', err);
+      return res.status(500).json({ error: 'Database error' });
+    }
+    db.all('SELECT * FROM suppliers ORDER BY name', [], (err, suppliers) => {
+      if (err) {
+        console.error('Error fetching suppliers:', err);
+        return res.status(500).json({ error: 'Database error' });
+      }
+      if (!suppliers || suppliers.length === 0) {
+        return res.json([]);
+      }
+      db.all('SELECT * FROM supplier_products ORDER BY supplier_id', [], (err2, products) => {
+      if (err2) {
+        console.error('Error fetching supplier_products:', err2);
+        return res.status(500).json({ error: 'Database error' });
+      }
+      const bySupplier = (products || []).reduce((acc, p) => {
+        if (!acc[p.supplier_id]) acc[p.supplier_id] = [];
+        acc[p.supplier_id].push({
+          id: p.id,
+          name: p.name || '',
+          partNo: p.part_no || '',
+          description: p.description || '',
+          brand: p.brand || undefined,
+          unit: p.unit || 'pcs',
+          unitPrice: p.unit_price != null ? p.unit_price : undefined,
+          priceDate: p.price_date || undefined,
+        });
+        return acc;
+      }, {});
+      const list = suppliers.map((s) => ({
+        id: s.id,
+        name: s.name,
+        contactName: s.contact_name || '',
+        email: s.email || '',
+        phone: s.phone || '',
+        address: s.address || '',
+        paymentTerms: s.payment_terms || undefined,
+        products: bySupplier[s.id] || [],
+        createdAt: s.created_at || new Date().toISOString(),
+      }));
+      res.json(list);
+    });
+  });
+  });
+});
+
+app.post('/api/suppliers', (req, res) => {
+  const list = req.body;
+  if (!Array.isArray(list)) {
+    return res.status(400).json({ error: 'Body must be an array of suppliers' });
+  }
+  ensureSuppliersTables((err) => {
+    if (err) {
+      console.error('Error ensuring suppliers tables:', err);
+      return res.status(500).json({ error: 'Database error' });
+    }
+    db.serialize(() => {
+      db.run('DELETE FROM supplier_products', [], (delProdErr) => {
+        if (delProdErr) {
+          console.error('Error clearing supplier_products:', delProdErr);
+          return res.status(500).json({ error: 'Database error' });
+        }
+        db.run('DELETE FROM suppliers', [], (delSupErr) => {
+          if (delSupErr) {
+            console.error('Error clearing suppliers:', delSupErr);
+            return res.status(500).json({ error: 'Database error' });
+          }
+          if (list.length === 0) {
+            return res.json({ saved: true, count: 0 });
+          }
+          const placeholders = list.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+          const supplierRows = list.flatMap((s) => [
+            s.id,
+            (s.name || '').trim() || 'Unknown',
+            (s.contactName || '').trim() || null,
+            (s.email || '').trim() || null,
+            (s.phone || '').trim() || null,
+            (s.address || '').trim() || null,
+            (s.paymentTerms || '').trim() || null,
+            s.createdAt || new Date().toISOString(),
+          ]);
+          db.run(`INSERT INTO suppliers (id, name, contact_name, email, phone, address, payment_terms, created_at) VALUES ${placeholders}`, supplierRows, (insSupErr) => {
+            if (insSupErr) {
+              console.error('Error inserting suppliers:', insSupErr);
+              return res.status(500).json({ error: 'Database error' });
+            }
+            const products = list.flatMap((s) => (s.products || []).map((p) => ({
+              id: p.id,
+              supplier_id: s.id,
+              name: p.name || null,
+              part_no: p.partNo || null,
+              description: p.description || null,
+              brand: p.brand || null,
+              unit: p.unit || 'pcs',
+              unit_price: p.unitPrice != null ? p.unitPrice : null,
+              price_date: p.priceDate || null,
+            })));
+            if (products.length === 0) {
+              return res.json({ saved: true, count: list.length });
+            }
+            const prodPlaceholders = products.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+            const prodRows = products.flatMap((p) => [p.id, p.supplier_id, p.name, p.part_no, p.description, p.brand, p.unit, p.unit_price, p.price_date]);
+            db.run(`INSERT INTO supplier_products (id, supplier_id, name, part_no, description, brand, unit, unit_price, price_date) VALUES ${prodPlaceholders}`, prodRows, (insProdErr) => {
+              if (insProdErr) {
+                console.error('Error inserting supplier_products:', insProdErr);
+                return res.status(500).json({ error: 'Database error' });
+              }
+              res.json({ saved: true, count: list.length });
+            });
+          });
+        });
+      });
+    });
+  });
+});
+
+app.delete('/api/suppliers/:id', (req, res) => {
+  const id = req.params.id;
+  if (!id) return res.status(400).json({ error: 'Supplier id required' });
+  ensureSuppliersTables((err) => {
+    if (err) return res.status(500).json({ error: 'Database error' });
+    db.run('DELETE FROM supplier_products WHERE supplier_id = ?', [id], function (delProdErr) {
+      if (delProdErr) {
+        console.error('Error deleting supplier products:', delProdErr);
+        return res.status(500).json({ error: 'Database error' });
+      }
+      db.run('DELETE FROM suppliers WHERE id = ?', [id], function (delSupErr) {
+        if (delSupErr) {
+          console.error('Error deleting supplier:', delSupErr);
+          return res.status(500).json({ error: 'Database error' });
+        }
+        res.json({ deleted: true });
+      });
+    });
+  });
+});
+
+app.delete('/api/supplier-products/:id', (req, res) => {
+  const id = req.params.id;
+  if (!id) return res.status(400).json({ error: 'Product id required' });
+  ensureSuppliersTables((err) => {
+    if (err) return res.status(500).json({ error: 'Database error' });
+    db.run('DELETE FROM supplier_products WHERE id = ?', [id], function (err) {
+      if (err) {
+        console.error('Error deleting supplier product:', err);
+        return res.status(500).json({ error: 'Database error' });
+      }
+      res.json({ deleted: true });
+    });
+  });
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ 
@@ -935,15 +1224,26 @@ app.get('/api/health', (req, res) => {
 });
 
 
-// Start server
-app.listen(PORT, () => {
+// Start server — keep reference so the process stays alive
+const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Database: ${dbPath}`);
+  console.log(`Database: ${dbLabel}`);
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. Kill the process using it, e.g.:`);
+    console.error(`  lsof -ti:${PORT} | xargs kill`);
+  } else {
+    console.error('Server error:', err);
+  }
+  process.exit(1);
 });
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
   console.log('Closing database connection...');
+  server.close(() => {});
   db.close((err) => {
     if (err) {
       console.error('Error closing database:', err);

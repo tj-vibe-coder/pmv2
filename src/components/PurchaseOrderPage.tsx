@@ -26,11 +26,11 @@ import {
   Checkbox,
   FormControlLabel,
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, ExpandLess as ExpandLessIcon, Visibility as VisibilityIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ExpandMore as ExpandMoreIcon, ExpandLess as ExpandLessIcon, Visibility as VisibilityIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 import type { MaterialRequest, MaterialRequestItem } from './MaterialRequestFormPage';
-import { SUPPLIERS_STORAGE_KEY, type Supplier } from './SuppliersPage';
+import { SUPPLIERS_STORAGE_KEY, normalizeSupplierName, type Supplier, type SupplierProduct } from './SuppliersPage';
 import { ORDER_TRACKER_STORAGE_KEY, type OrderRecord, type OrderItem } from './OrderTrackerPage';
 import dataService from '../services/dataService';
 import type { Project } from '../types/Project';
@@ -110,6 +110,92 @@ const loadSuppliers = (): Supplier[] => {
   return [];
 };
 
+const saveSuppliers = (list: Supplier[]) => {
+  try {
+    localStorage.setItem(SUPPLIERS_STORAGE_KEY, JSON.stringify(list));
+  } catch (_) {}
+};
+
+/** Add PO items to supplier's products; update price if product exists (by partNo), else add new.
+ * Prefer matching supplier by normalized name so items go to the correct supplier (e.g. not always ECA). */
+function addPOItemsToSupplierProducts(supplierId: string, supplierName: string, items: PurchaseOrderItem[], orderDate?: string) {
+  let suppliers = loadSuppliers();
+  const poNameNorm = normalizeSupplierName(supplierName || '');
+  let supplier = suppliers.find((s) => normalizeSupplierName(s.name) === poNameNorm);
+  if (!supplier) {
+    supplier = suppliers.find((s) => s.id === supplierId && normalizeSupplierName(s.name) === poNameNorm);
+  }
+  if (!supplier) {
+    const newSupplier: Supplier = {
+      id: `supplier-${Date.now()}`,
+      name: supplierName.trim() || 'Unknown',
+      contactName: '',
+      email: '',
+      phone: '',
+      address: '',
+      products: [],
+      createdAt: new Date().toISOString(),
+    };
+    supplier = newSupplier;
+    suppliers = [newSupplier, ...suppliers];
+  }
+
+  let updated = false;
+  for (const item of items) {
+    const up = Number(item.unitPrice ?? 0) || 0;
+    if (up <= 0) continue;
+
+    const partNo = (item.partNo || '').trim();
+    const name = (item.description || item.partNo || '—').trim().slice(0, 80);
+    const desc = (item.description || '').trim();
+    const unit = (item.unit || 'pcs').trim();
+
+    const priceDate = orderDate || new Date().toISOString().slice(0, 10);
+    const brand = (item.brand || '').trim();
+    const existing = partNo ? supplier.products.find((p) => (p.partNo || '').trim() === partNo) : undefined;
+    if (existing) {
+      existing.unitPrice = up;
+      existing.priceDate = priceDate;
+      existing.brand = brand || existing.brand;
+      updated = true;
+    } else {
+      const newProduct: SupplierProduct = {
+        id: `prod-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name: name || '—',
+        partNo: partNo || '',
+        description: desc || '',
+        brand: brand || '',
+        unit: unit || 'pcs',
+        unitPrice: up,
+        priceDate,
+      };
+      supplier.products = [...(supplier.products || []), newProduct];
+      updated = true;
+    }
+  }
+  if (updated && supplier) {
+    const sup = supplier;
+    const updatedSupplier: Supplier = { ...sup, products: sup.products ?? [] };
+    const next: Supplier[] = suppliers.map((s) => (s.id === sup.id ? updatedSupplier : s));
+    saveSuppliers(next);
+  }
+}
+
+/** Sync all POs to supplier products (for backfilling existing POs) */
+export function syncAllPOsToSuppliers(): number {
+  const pos = loadPOs();
+  let totalAdded = 0;
+  for (const po of pos) {
+    const suppliersBefore = loadSuppliers();
+    const countBefore = suppliersBefore.reduce((n, s) => n + (s.products?.length ?? 0), 0);
+    addPOItemsToSupplierProducts(po.supplierId, po.supplierName, po.items || [], po.orderDate);
+    const suppliersAfter = loadSuppliers();
+    const countAfter = suppliersAfter.reduce((n, s) => n + (s.products?.length ?? 0), 0);
+    totalAdded += Math.max(0, countAfter - countBefore);
+  }
+  return totalAdded;
+}
+
 const loadPOs = (): PurchaseOrder[] => {
   try {
     const raw = localStorage.getItem(PURCHASE_ORDERS_STORAGE_KEY);
@@ -128,12 +214,6 @@ const savePOs = (list: PurchaseOrder[]) => {
 function getProjectNo(project: Project | undefined): string {
   if (!project) return 'GEN';
   return (project.project_no || String(project.item_no ?? project.id)).trim() || 'GEN';
-}
-
-/** Get project name for PO number (e.g. "Project Alpha") */
-function getProjectNameForPO(project: Project | undefined): string {
-  if (!project) return 'GEN';
-  return (project.project_name || '').trim() || getProjectNo(project);
 }
 
 /** Strip IOCT (or similar) prefix from project number for PO display (e.g. IOCT2602002 -> 2602002). */
@@ -176,6 +256,28 @@ const mrfItemToPOItem = (i: MaterialRequestItem, mrfId?: string): PurchaseOrderI
     notes: i.notes || '',
   };
 };
+
+/** Find a supplier product that matches PO item by Part No. or Description; returns the product if found (for price lookup). */
+function findSupplierProductMatch(supplier: Supplier | undefined, item: PurchaseOrderItem): SupplierProduct | undefined {
+  if (!supplier?.products?.length) return undefined;
+  const partNo = (item.partNo || '').trim().toLowerCase();
+  const desc = (item.description || '').trim().toLowerCase();
+  if (!partNo && !desc) return undefined;
+  const byPart = partNo
+    ? supplier.products.find((p) => (p.partNo || '').trim().toLowerCase() === partNo)
+    : undefined;
+  if (byPart) return byPart;
+  const byDesc = desc
+    ? supplier.products.find(
+        (p) =>
+          (p.name || '').toLowerCase().includes(desc) ||
+          (p.description || '').toLowerCase().includes(desc) ||
+          desc.includes((p.name || '').toLowerCase()) ||
+          desc.includes((p.description || '').toLowerCase().slice(0, 80))
+      )
+    : undefined;
+  return byDesc;
+}
 
 function lineTotal(item: PurchaseOrderItem): number {
   return (Number(item.quantity) || 0) * (Number(item.unitPrice ?? 0) || 0);
@@ -242,7 +344,6 @@ function exportPOToPDF(po: PurchaseOrder) {
   let y = 12;
   const lineHeight = 5;
   const sectionGap = 5;
-  const boxPadding = 2;
   const baseFontSize = 9;
   const titleFontSize = 12;
   const sectionFontSize = 10;
@@ -305,7 +406,6 @@ function exportPOToPDF(po: PurchaseOrder) {
   y = Math.max(leftBlockY, rowY + 4) + sectionGap;
 
   // ─── 2. VENDOR (left) | SHIP TO (right) with blue banners ─────────────────
-  const vendorBoxTop = y;
   doc.setFillColor(headerBlue[0], headerBlue[1], headerBlue[2]);
   doc.rect(margin, y, halfWidth - 2, bannerHeight, 'F');
   doc.rect(margin + halfWidth + 2, y, halfWidth - 2, bannerHeight, 'F');
@@ -342,7 +442,7 @@ function exportPOToPDF(po: PurchaseOrder) {
     y += blockLineHeight;
   }
   if (po.supplierPhone) {
-    doc.text(`Viber: ${po.supplierPhone}`, vendorX, y);
+    doc.text(`Contact No.: ${po.supplierPhone}`, vendorX, y);
     y += blockLineHeight;
   }
   const vendorBlockBottom = y;
@@ -365,7 +465,7 @@ function exportPOToPDF(po: PurchaseOrder) {
     y += blockLineHeight;
   }
   if (companyContact.phone) {
-    doc.text(`Viber: ${companyContact.phone}`, shipToX, y);
+    doc.text(`Contact No.: ${companyContact.phone}`, shipToX, y);
     y += blockLineHeight;
   }
   y = Math.max(vendorBlockBottom, y) + sectionGap;
@@ -395,7 +495,7 @@ function exportPOToPDF(po: PurchaseOrder) {
       formatPhp(amount),
     ];
   });
-  const tableFontSize = 8;
+  const tableFontSize = 6;
   autoTable(doc, {
     head: [headers],
     body: bodyRows,
@@ -436,27 +536,28 @@ function exportPOToPDF(po: PurchaseOrder) {
   const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
   y = (docWithTable.lastAutoTable?.finalY ?? y) + 4;
 
-  // ─── 5. PRICING SUMMARY (PHP, 12% VAT, discount) ───────────────────────
-  doc.setFont('helvetica', 'normal');
+  // ─── 5. PRICING SUMMARY (labels beside amounts, all caps bold) ───────────
+  const amountColWidth = 42;
+  const labelColRight = totalColRight - amountColWidth;
+  doc.setFont('helvetica', 'bold');
   doc.setFontSize(baseFontSize);
-  doc.text('Subtotal (VAT Exclusive)', margin, y);
+  doc.text('SUBTOTAL (VAT EXCLUSIVE)', labelColRight, y, { align: 'right' });
   doc.text(`PHP ${formatPhp(subtotal)}`, totalColRight, y, { align: 'right' });
   y += lineHeight;
   if (discount > 0) {
-    doc.text('Discount', margin, y);
+    doc.text('DISCOUNT', labelColRight, y, { align: 'right' });
     doc.text(`PHP ${formatPhp(discount)}`, totalColRight, y, { align: 'right' });
     y += lineHeight;
-    doc.text('Amount (VAT Exclusive)', margin, y);
+    doc.text('AMOUNT (VAT EXCLUSIVE)', labelColRight, y, { align: 'right' });
     doc.text(`PHP ${formatPhp(amountVatEx)}`, totalColRight, y, { align: 'right' });
     y += lineHeight;
   }
   if (!noVatFlag) {
-    doc.text('12% VAT', margin, y);
+    doc.text('12% VAT', labelColRight, y, { align: 'right' });
     doc.text(`PHP ${formatPhp(vatAmount)}`, totalColRight, y, { align: 'right' });
     y += lineHeight;
   }
-  doc.setFont('helvetica', 'bold');
-  doc.text(noVatFlag ? 'Grand Total' : 'Grand Total (VAT Inclusive)', margin, y);
+  doc.text(noVatFlag ? 'GRAND TOTAL' : 'GRAND TOTAL (VAT INCLUSIVE)', labelColRight, y, { align: 'right' });
   doc.text(`PHP ${formatPhp(grandTotal)}`, totalColRight, y, { align: 'right' });
   doc.setFont('helvetica', 'normal');
   y += sectionGap + 4;
@@ -478,10 +579,10 @@ function exportPOToPDF(po: PurchaseOrder) {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(baseFontSize);
   y += 5;
-  const termsLines: string[] = [];
-  termsLines.push(`Payment Terms: ${po.paymentTerms ?? 'One hundred (100) days, PDC'}`);
-  termsLines.push(`Delivery / Lead Time: ${po.leadTime ?? 'Three (3) days'}`);
-  termsLines.push('');
+  doc.text(`Payment Terms: ${po.paymentTerms ?? 'One hundred (100) days, PDC'}`, margin, y);
+  y += lineHeight;
+  doc.text(`Delivery / Lead Time: ${po.leadTime ?? 'Three (3) days'}`, margin, y);
+  y += lineHeight * 2;
   const termsSections: { title: string; text: string }[] = [
     {
       title: 'Scope',
@@ -521,12 +622,15 @@ function exportPOToPDF(po: PurchaseOrder) {
     },
   ];
   termsSections.forEach(({ title, text }) => {
-    termsLines.push(title);
-    termsLines.push(...doc.splitTextToSize(text, contentWidth));
-    termsLines.push('');
+    doc.setFont('helvetica', 'bold');
+    doc.text(title, margin, y);
+    y += lineHeight;
+    doc.setFont('helvetica', 'normal');
+    const textLines = doc.splitTextToSize(text, contentWidth);
+    doc.text(textLines, margin, y);
+    y += textLines.length * lineHeight + lineHeight;
   });
-  doc.text(termsLines, margin, y);
-  y += termsLines.length * lineHeight + sectionGap;
+  y += sectionGap;
 
   // ─── 7. IMPORTANT NOTES ───────────────────────────────────────────────
   doc.setFont('helvetica', 'bold');
@@ -547,21 +651,17 @@ function exportPOToPDF(po: PurchaseOrder) {
   doc.text(importantLines, margin, y);
   y += importantLines.length * lineHeight + sectionGap;
 
-  // ─── 8. APPROVAL AND ACKNOWLEDGMENT SECTION ───────────────────────────
+  // ─── 8. APPROVAL AND ACKNOWLEDGMENT (no underline) ───────────────────
   y += 4;
-  const sigLineY = y + 10;
+  const sigY = y + 6;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(baseFontSize);
   doc.text('Authorised by (Buyer):', margin, y);
   doc.text('Acknowledged by (Supplier):', margin + 95, y);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(baseFontSize);
-  doc.text(po.approvedBy?.trim() || '_________________________', margin, sigLineY);
-  doc.text(po.receivedByVendor?.trim() || '_________________________', margin + 95, sigLineY);
-  doc.setDrawColor(0, 0, 0);
-  doc.line(margin, sigLineY + 1, margin + 75, sigLineY + 1);
-  doc.line(margin + 95, sigLineY + 1, margin + 170, sigLineY + 1);
-  y = sigLineY + sectionGap + 6;
+  doc.text(po.approvedBy?.trim() || '', margin, sigY);
+  doc.text(po.receivedByVendor?.trim() || '', margin + 95, sigY);
+  y = sigY + sectionGap + 6;
 
   // Footer on page 2
   doc.setFont('helvetica', 'normal');
@@ -578,6 +678,7 @@ const PurchaseOrderPage: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [viewPO, setViewPO] = useState<PurchaseOrder | null>(null);
+  const [editingPO, setEditingPO] = useState<PurchaseOrder | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Create form state
@@ -679,6 +780,23 @@ const PurchaseOrderPage: React.FC = () => {
     }
   }, [createOpen, selectedSupplierId, suppliers]);
 
+  // When supplier or items change: if a PO item matches a product in supplier data (Part No. or Description), fetch price (user can still modify)
+  useEffect(() => {
+    if (!createOpen || !selectedSupplierId || createDialogItems.length === 0) return;
+    const sup = suppliers.find((s) => s.id === selectedSupplierId);
+    if (!sup) return;
+    setCreateDialogItems((prev) => {
+      const next = prev.map((item) => {
+        const match = findSupplierProductMatch(sup, item);
+        const newPrice = match?.unitPrice != null ? match.unitPrice : item.unitPrice;
+        if (newPrice === item.unitPrice) return item;
+        return { ...item, unitPrice: newPrice ?? 0 };
+      });
+      const changed = next.some((it, i) => it.unitPrice !== prev[i].unitPrice);
+      return changed ? next : prev;
+    });
+  }, [createOpen, selectedSupplierId, suppliers, createDialogItems.length]);
+
   const submittedMRFs = mrfs.filter((m) => m.status === 'Submitted');
   const selectedSupplier = suppliers.find((s) => s.id === selectedSupplierId);
   const firstMRF = selectedMrfIds.length > 0 ? mrfs.find((m) => m.id === selectedMrfIds[0]) : undefined;
@@ -769,6 +887,7 @@ const PurchaseOrderPage: React.FC = () => {
       createdAt: new Date().toISOString(),
     };
     persist([po, ...orders]);
+    addPOItemsToSupplierProducts(po.supplierId, po.supplierName, createDialogItems, po.orderDate);
     setCreateOpen(false);
   };
 
@@ -776,7 +895,54 @@ const PurchaseOrderPage: React.FC = () => {
     if (!window.confirm('Delete this Purchase Order?')) return;
     persist(orders.filter((o) => o.id !== id));
     if (viewPO?.id === id) setViewPO(null);
+    if (editingPO?.id === id) setEditingPO(null);
     if (expandedId === id) setExpandedId(null);
+  };
+
+  const handleOpenEdit = (po: PurchaseOrder) => {
+    setEditingPO(JSON.parse(JSON.stringify(po)));
+  };
+
+  const handleSaveEdit = () => {
+    if (!editingPO) return;
+    persist(orders.map((o) => (o.id === editingPO.id ? editingPO : o)));
+    if (viewPO?.id === editingPO.id) setViewPO(editingPO);
+    setEditingPO(null);
+  };
+
+  const updateEditPO = (patch: Partial<PurchaseOrder>) => {
+    setEditingPO((prev) => (prev ? { ...prev, ...patch } : null));
+  };
+
+  const updateEditItem = (itemId: string, patch: Partial<PurchaseOrderItem>) => {
+    setEditingPO((prev) => {
+      if (!prev) return null;
+      return { ...prev, items: prev.items.map((i) => (i.id === itemId ? { ...i, ...patch } : i)) };
+    });
+  };
+
+  const addEditItem = () => {
+    setEditingPO((prev) => {
+      if (!prev) return null;
+      const newItem: PurchaseOrderItem = {
+        id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        description: '',
+        partNo: '',
+        brand: '',
+        quantity: 0,
+        unit: 'pcs',
+        unitPrice: 0,
+        notes: '',
+      };
+      return { ...prev, items: [...prev.items, newItem] };
+    });
+  };
+
+  const removeEditItem = (itemId: string) => {
+    setEditingPO((prev) => {
+      if (!prev || prev.items.length <= 1) return prev;
+      return { ...prev, items: prev.items.filter((i) => i.id !== itemId) };
+    });
   };
 
   const handleStatusChange = (id: string, status: PurchaseOrder['status']) => {
@@ -893,6 +1059,9 @@ const PurchaseOrderPage: React.FC = () => {
                         <IconButton size="small" onClick={() => setViewPO(po)} title="View details">
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
+                        <IconButton size="small" onClick={() => handleOpenEdit(po)} title="Edit PO">
+                          <EditIcon fontSize="small" />
+                        </IconButton>
                         <IconButton size="small" onClick={() => exportPOToPDF(po)} title="Export to PDF" sx={{ color: '#c62828' }}>
                           <PictureAsPdfIcon fontSize="small" />
                         </IconButton>
@@ -912,15 +1081,15 @@ const PurchaseOrderPage: React.FC = () => {
                               Line items ({po.items.length})
                             </Typography>
                             <TableContainer>
-                              <Table size="small" sx={{ '& .MuiTableCell-root': { borderColor: 'divider' } }}>
+                              <Table size="small" sx={{ '& .MuiTableCell-root': { borderColor: 'divider', fontSize: '0.75rem' } }}>
                                 <TableHead>
                                   <TableRow>
-                                    <TableCell sx={{ fontWeight: 600 }}>Description</TableCell>
-                                    <TableCell sx={{ fontWeight: 600 }}>Part #</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 600 }}>Qty</TableCell>
-                                    <TableCell sx={{ fontWeight: 600 }}>Unit</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 600 }}>Unit Price</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 600 }}>Total</TableCell>
+                                    <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Description</TableCell>
+                                    <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Part #</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Qty</TableCell>
+                                    <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Unit</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Unit Price</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Total</TableCell>
                                   </TableRow>
                                 </TableHead>
                                 <TableBody>
@@ -1054,17 +1223,17 @@ const PurchaseOrderPage: React.FC = () => {
                     : 'Items from MRF(s) — select a supplier above to see only items for that supplier, then include and enter unit price'}
                 </Typography>
                 <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-                  <Table size="small">
+                  <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.75rem' } }}>
                     <TableHead>
                       <TableRow>
-                        <TableCell padding="checkbox" sx={{ fontWeight: 600 }}>Include</TableCell>
-                        <TableCell sx={{ fontWeight: 600 }}>Source MRF</TableCell>
-                        <TableCell sx={{ minWidth: 120, fontWeight: 600 }}>For supplier</TableCell>
-                        <TableCell sx={{ fontWeight: 600 }}>Description</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 600 }}>Qty</TableCell>
-                        <TableCell sx={{ fontWeight: 600 }}>Unit</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 600 }}>Unit Price</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 600 }}>Total</TableCell>
+                        <TableCell padding="checkbox" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Include</TableCell>
+                        <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Source MRF</TableCell>
+                        <TableCell sx={{ minWidth: 120, fontWeight: 600, fontSize: '0.75rem' }}>For supplier</TableCell>
+                        <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Description</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Qty</TableCell>
+                        <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Unit</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Unit Price</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Total</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -1096,19 +1265,23 @@ const PurchaseOrderPage: React.FC = () => {
                   </Table>
                 </TableContainer>
                 {createDialogItems.length > 0 && (
-                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                  <Box sx={{ mt: 0.5 }}>
                     {(() => {
-                      const { subtotal, discount, amountVatEx, vatAmount, grandTotal } = poAmounts({ items: createDialogItems, noVat, discount: createDiscount });
+                      const { subtotal, amountVatEx, vatAmount, grandTotal } = poAmounts({ items: createDialogItems, noVat, discount: createDiscount });
                       return (
-                        <>
+                        <Typography variant="caption" color="text.secondary">
                           Subtotal: {subtotal.toFixed(2)}
-                          {createDiscount > 0 && ` · Discount: ${createDiscount.toFixed(2)} · Amount (VAT EX): ${amountVatEx.toFixed(2)}`}
+                          {createDiscount > 0 && (
+                            <Typography component="span" variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                              {` · Discount: ${createDiscount.toFixed(2)} · Amount (VAT EX): ${amountVatEx.toFixed(2)}`}
+                            </Typography>
+                          )}
                           {!noVat && ` · 12% VAT: ${vatAmount.toFixed(2)} · Total: ${grandTotal.toFixed(2)}`}
                           {noVat && ` · Total: ${grandTotal.toFixed(2)}`}
-                        </>
+                        </Typography>
                       );
                     })()}
-                  </Typography>
+                  </Box>
                 )}
               </Box>
             )}
@@ -1127,6 +1300,130 @@ const PurchaseOrderPage: React.FC = () => {
         </DialogActions>
       </Dialog>
 
+      {/* Edit PO Dialog */}
+      <Dialog open={!!editingPO} onClose={() => setEditingPO(null)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 2 } }}>
+        {editingPO && (
+          <>
+            <DialogTitle sx={{ borderBottom: '1px solid #e2e8f0' }}>Edit Purchase Order — {editingPO.poNumber}</DialogTitle>
+            <DialogContent sx={{ pt: 2 }}>
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="PO Number" value={editingPO.poNumber} onChange={(e) => updateEditPO({ poNumber: e.target.value })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Supplier</InputLabel>
+                    <Select
+                      value={editingPO.supplierId}
+                      label="Supplier"
+                      onChange={(e) => {
+                        const sup = suppliers.find((s) => s.id === e.target.value);
+                        if (sup) updateEditPO({ supplierId: sup.id, supplierName: sup.name, supplierEmail: sup.email || '', supplierPhone: sup.phone || '', supplierAddress: sup.address || '' });
+                      }}
+                    >
+                      {suppliers.map((s) => (
+                        <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Order date" type="date" value={editingPO.orderDate} onChange={(e) => updateEditPO({ orderDate: e.target.value })} InputLabelProps={{ shrink: true }} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Expected delivery" type="date" value={editingPO.expectedDelivery} onChange={(e) => updateEditPO({ expectedDelivery: e.target.value })} InputLabelProps={{ shrink: true }} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Requested by" value={editingPO.requestedBy} onChange={(e) => updateEditPO({ requestedBy: e.target.value })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Quotation reference" value={editingPO.quotationReference ?? ''} onChange={(e) => updateEditPO({ quotationReference: e.target.value || undefined })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Payment terms" value={editingPO.paymentTerms ?? ''} onChange={(e) => updateEditPO({ paymentTerms: e.target.value || undefined })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Lead time" value={editingPO.leadTime ?? ''} onChange={(e) => updateEditPO({ leadTime: e.target.value || undefined })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <FormControlLabel control={<Checkbox checked={!!editingPO.noVat} onChange={(e) => updateEditPO({ noVat: e.target.checked })} />} label="No VAT" />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" type="number" label="Discount" value={editingPO.discount ?? 0} onChange={(e) => updateEditPO({ discount: parseFloat(e.target.value) || 0 })} inputProps={{ min: 0, step: 0.01 }} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Supplier attention to" value={editingPO.supplierAttentionTo ?? ''} onChange={(e) => updateEditPO({ supplierAttentionTo: e.target.value || undefined })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Approved by" value={editingPO.approvedBy ?? ''} onChange={(e) => updateEditPO({ approvedBy: e.target.value || undefined })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Received by vendor" value={editingPO.receivedByVendor ?? ''} onChange={(e) => updateEditPO({ receivedByVendor: e.target.value || undefined })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Report company</InputLabel>
+                    <Select value={editingPO.reportCompany ?? 'IOCT'} label="Report company" onChange={(e) => updateEditPO({ reportCompany: e.target.value as ReportCompanyKey })}>
+                      <MenuItem value="IOCT">{REPORT_COMPANIES.IOCT}</MenuItem>
+                      <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Status</InputLabel>
+                    <Select value={editingPO.status} label="Status" onChange={(e) => updateEditPO({ status: e.target.value as PurchaseOrder['status'] })}>
+                      <MenuItem value="Draft">Draft</MenuItem>
+                      <MenuItem value="Sent">Sent</MenuItem>
+                      <MenuItem value="Confirmed">Confirmed</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+              </Grid>
+              <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>Line items</Typography>
+              <TableContainer>
+                <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.75rem' } }}>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 600 }}>Description</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Part #</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Brand</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600 }}>Qty</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Unit</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600 }}>Unit price</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Notes</TableCell>
+                      <TableCell width={48} />
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {editingPO.items.map((i) => (
+                      <TableRow key={i.id}>
+                        <TableCell><TextField size="small" fullWidth value={i.description} onChange={(e) => updateEditItem(i.id, { description: e.target.value })} placeholder="Description" sx={{ '& .MuiInput-root': { fontSize: '0.75rem' } }} /></TableCell>
+                        <TableCell><TextField size="small" fullWidth value={i.partNo} onChange={(e) => updateEditItem(i.id, { partNo: e.target.value })} placeholder="Part #" sx={{ '& .MuiInput-root': { fontSize: '0.75rem' } }} /></TableCell>
+                        <TableCell><TextField size="small" fullWidth value={i.brand} onChange={(e) => updateEditItem(i.id, { brand: e.target.value })} placeholder="Brand" sx={{ '& .MuiInput-root': { fontSize: '0.75rem' } }} /></TableCell>
+                        <TableCell><TextField size="small" type="number" value={i.quantity} onChange={(e) => updateEditItem(i.id, { quantity: parseInt(e.target.value, 10) || 0 })} inputProps={{ min: 0 }} sx={{ width: 70 }} /></TableCell>
+                        <TableCell><TextField size="small" fullWidth value={i.unit} onChange={(e) => updateEditItem(i.id, { unit: e.target.value })} placeholder="pcs" sx={{ width: 64, '& .MuiInput-root': { fontSize: '0.75rem' } }} /></TableCell>
+                        <TableCell><TextField size="small" type="number" value={i.unitPrice ?? ''} onChange={(e) => updateEditItem(i.id, { unitPrice: parseFloat(e.target.value) || 0 })} inputProps={{ min: 0, step: 0.01 }} sx={{ width: 90 }} /></TableCell>
+                        <TableCell><TextField size="small" fullWidth value={i.notes} onChange={(e) => updateEditItem(i.id, { notes: e.target.value })} placeholder="Notes" sx={{ '& .MuiInput-root': { fontSize: '0.75rem' } }} /></TableCell>
+                        <TableCell><IconButton size="small" onClick={() => removeEditItem(i.id)} color="error" title="Remove line"><DeleteIcon fontSize="small" /></IconButton></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              <Button size="small" startIcon={<AddIcon />} onClick={addEditItem} sx={{ mt: 1 }}>Add line</Button>
+              <Box sx={{ textAlign: 'right', mt: 1 }}>
+                {(() => { const { grandTotal } = poAmounts(editingPO); return <Typography variant="body2" fontWeight={600}>Total: {grandTotal.toFixed(2)}</Typography>; })()}
+              </Box>
+            </DialogContent>
+            <DialogActions sx={{ borderTop: '1px solid #e2e8f0', p: 2 }}>
+              <Button onClick={() => setEditingPO(null)}>Cancel</Button>
+              <Button variant="contained" onClick={handleSaveEdit} sx={{ bgcolor: '#2c5aa0', '&:hover': { bgcolor: '#1e4a72' } }}>Save</Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
+
       {/* View PO Dialog */}
       <Dialog open={!!viewPO} onClose={() => setViewPO(null)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 2 } }}>
         {viewPO && (
@@ -1135,6 +1432,9 @@ const PurchaseOrderPage: React.FC = () => {
               Purchase Order — {viewPO.poNumber}
               <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
                 <Chip label={viewPO.status} size="small" color={statusColor[viewPO.status]} />
+                <Button size="small" variant="outlined" startIcon={<EditIcon />} onClick={() => { setViewPO(null); handleOpenEdit(viewPO); }}>
+                  Edit
+                </Button>
                 <Button size="small" variant="outlined" startIcon={<PictureAsPdfIcon />} onClick={() => exportPOToPDF(viewPO)} sx={{ color: '#c62828', borderColor: '#c62828' }}>
                   Export to PDF
                 </Button>
@@ -1173,30 +1473,30 @@ const PurchaseOrderPage: React.FC = () => {
               </Grid>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>Line items</Typography>
               <TableContainer>
-                <Table size="small">
+                <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.75rem' } }}>
                   <TableHead>
                     <TableRow>
-                      <TableCell sx={{ fontWeight: 600 }}>Description</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Part #</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Brand</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600 }}>Qty</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Unit</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600 }}>Unit Price</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600 }}>Total</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Notes</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Description</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Part #</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Brand</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Qty</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Unit</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Unit Price</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Total</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Notes</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {viewPO.items.map((i) => (
                       <TableRow key={i.id}>
-                        <TableCell>{i.description || '—'}</TableCell>
-                        <TableCell>{i.partNo || '—'}</TableCell>
-                        <TableCell>{i.brand || '—'}</TableCell>
-                        <TableCell align="right">{i.quantity}</TableCell>
-                        <TableCell>{i.unit || '—'}</TableCell>
-                        <TableCell align="right">{Number(i.unitPrice ?? 0).toFixed(2)}</TableCell>
-                        <TableCell align="right">{lineTotal(i).toFixed(2)}</TableCell>
-                        <TableCell>{i.notes || '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.75rem' }}>{i.description || '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.75rem' }}>{i.partNo || '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.75rem' }}>{i.brand || '—'}</TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{i.quantity}</TableCell>
+                        <TableCell sx={{ fontSize: '0.75rem' }}>{i.unit || '—'}</TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{Number(i.unitPrice ?? 0).toFixed(2)}</TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{lineTotal(i).toFixed(2)}</TableCell>
+                        <TableCell sx={{ fontSize: '0.75rem' }}>{i.notes || '—'}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -1208,7 +1508,7 @@ const PurchaseOrderPage: React.FC = () => {
                   return (
                     <>
                       <Typography variant="body2">Subtotal: {subtotal.toFixed(2)}</Typography>
-                      {discount > 0 && <Typography variant="body2">Discount: {discount.toFixed(2)} · Amount (VAT EX): {amountVatEx.toFixed(2)}</Typography>}
+                      {discount > 0 && <Typography variant="body2" sx={{ fontStyle: 'italic' }}>Discount: {discount.toFixed(2)} · Amount (VAT EX): {amountVatEx.toFixed(2)}</Typography>}
                       {!viewPO.noVat && <Typography variant="body2">12% VAT: {vatAmount.toFixed(2)}</Typography>}
                       <Typography variant="body2" fontWeight={600}>{viewPO.noVat ? 'Total' : 'Total (incl. VAT)'}: {grandTotal.toFixed(2)}</Typography>
                     </>

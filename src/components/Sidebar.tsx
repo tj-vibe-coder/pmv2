@@ -22,18 +22,22 @@ import {
   TrendingUp as TrendingUpIcon,
   People as ClientsIcon,
   Assignment as MaterialRequestIcon,
-  LocalShipping as OrderTrackerIcon,
   ReceiptLong as DeliveryIcon,
   Storefront as SuppliersIcon,
   ShoppingCart as PurchaseOrderIcon,
   Inventory2 as SupplyChainIcon,
   ExpandLess as ExpandLessIcon,
   ExpandMore as ExpandMoreIcon,
+  Description as ReportsIcon,
+  PictureAsPdf as PictureAsPdfIcon,
+  Cloud as CloudIcon,
+  RequestQuote as EstimateIcon,
 } from '@mui/icons-material';
 
 const SIDEBAR_WIDTH = 280;
 
-const SUPPLY_CHAIN_PATHS = ['/material-request', '/order-tracker', '/delivery', '/suppliers', '/purchase-order'];
+const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
+const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
 
 const Sidebar: React.FC = () => {
   const theme = useTheme();
@@ -42,10 +46,16 @@ const Sidebar: React.FC = () => {
   const [supplyChainOpen, setSupplyChainOpen] = useState(() =>
     SUPPLY_CHAIN_PATHS.some((p) => location.pathname === p)
   );
+  const [reportsOpen, setReportsOpen] = useState(() =>
+    REPORTS_PATHS.some((p) => location.pathname.startsWith(p))
+  );
 
   useEffect(() => {
     if (SUPPLY_CHAIN_PATHS.some((p) => location.pathname === p)) {
       setSupplyChainOpen(true);
+    }
+    if (REPORTS_PATHS.some((p) => location.pathname.startsWith(p))) {
+      setReportsOpen(true);
     }
   }, [location.pathname]);
 
@@ -317,34 +327,7 @@ const Sidebar: React.FC = () => {
                     <MaterialRequestIcon fontSize="small" />
                   </ListItemIcon>
                   <ListItemText
-                    primary="Material Request"
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                </ListItemButton>
-              </ListItem>
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
-                <ListItemButton
-                  selected={location.pathname === '/order-tracker'}
-                  onClick={() => navigate('/order-tracker')}
-                  sx={{
-                    borderRadius: 2,
-                    mx: 1,
-                    minHeight: 48,
-                    '&.Mui-selected': {
-                      backgroundColor: 'rgba(255,255,255,0.15)',
-                      color: 'white',
-                      '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
-                    },
-                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
-                    transition: 'all 0.2s ease-in-out',
-                  }}
-                >
-                  <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
-                    <OrderTrackerIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Order Tracker"
+                    primary="Requests & Orders"
                     primaryTypographyProps={{ fontSize: '0.875rem' }}
                     sx={{ color: 'white' }}
                   />
@@ -426,6 +409,175 @@ const Sidebar: React.FC = () => {
                   </ListItemIcon>
                   <ListItemText
                     primary="Purchase Order"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/estimates'}
+                  onClick={() => navigate('/estimates')}
+                  sx={{
+                    borderRadius: 2,
+                    mx: 1,
+                    minHeight: 48,
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(255,255,255,0.15)',
+                      color: 'white',
+                      '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                    },
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                    transition: 'all 0.2s ease-in-out',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                    <EstimateIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Estimates"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+            </List>
+          </Collapse>
+
+          {/* Reports (collapsible parent) */}
+          <ListItem disablePadding sx={{ mb: 0.5 }}>
+            <ListItemButton
+              onClick={() => setReportsOpen((open) => !open)}
+              sx={{
+                borderRadius: 2,
+                mx: 1,
+                minHeight: 56,
+                '&:hover': {
+                  backgroundColor: 'rgba(255,255,255,0.1)',
+                },
+                transition: 'all 0.2s ease-in-out',
+              }}
+            >
+              <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
+                <ReportsIcon />
+              </ListItemIcon>
+              <ListItemText
+                primary="Reports"
+                secondary="Progress, service, completion"
+                secondaryTypographyProps={{
+                  color: 'rgba(255,255,255,0.7)',
+                  fontSize: '0.75rem',
+                }}
+                sx={{ color: 'white' }}
+              />
+              {reportsOpen ? <ExpandLessIcon sx={{ color: 'white' }} /> : <ExpandMoreIcon sx={{ color: 'white' }} />}
+            </ListItemButton>
+          </ListItem>
+          <Collapse in={reportsOpen} timeout="auto" unmountOnExit>
+            <List component="div" disablePadding sx={{ pl: 2 }}>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/reports/progress' || (location.pathname === '/reports' || location.pathname === '/reports/')}
+                  onClick={() => navigate('/reports/progress')}
+                  sx={{
+                    borderRadius: 2,
+                    mx: 1,
+                    minHeight: 48,
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(255,255,255,0.15)',
+                      color: 'white',
+                      '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                    },
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                    transition: 'all 0.2s ease-in-out',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                    <PictureAsPdfIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Progress Report"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname.startsWith('/reports/service')}
+                  onClick={() => navigate('/reports/service')}
+                  sx={{
+                    borderRadius: 2,
+                    mx: 1,
+                    minHeight: 48,
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(255,255,255,0.15)',
+                      color: 'white',
+                      '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                    },
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                    transition: 'all 0.2s ease-in-out',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                    <PictureAsPdfIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Service Report"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname.startsWith('/reports/completion')}
+                  onClick={() => navigate('/reports/completion')}
+                  sx={{
+                    borderRadius: 2,
+                    mx: 1,
+                    minHeight: 48,
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(255,255,255,0.15)',
+                      color: 'white',
+                      '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                    },
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                    transition: 'all 0.2s ease-in-out',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                    <PictureAsPdfIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Certificate of Completion"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname.startsWith('/reports/attachments')}
+                  onClick={() => navigate('/reports/attachments')}
+                  sx={{
+                    borderRadius: 2,
+                    mx: 1,
+                    minHeight: 48,
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(255,255,255,0.15)',
+                      color: 'white',
+                      '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                    },
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                    transition: 'all 0.2s ease-in-out',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                    <CloudIcon />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Attachments"
                     primaryTypographyProps={{ fontSize: '0.875rem' }}
                     sx={{ color: 'white' }}
                   />
