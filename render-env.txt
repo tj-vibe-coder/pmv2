@@ -1,6 +1,8 @@
 # RENDER SETUP (important)
 # - Build Command:  npm run build
-# - Start Command:  node server.js   (do NOT use "npm start" – that runs both dev server and API and causes port conflicts)
+# - Start Command:  node server.js
+#   In Render dashboard: Settings → Start Command → set to exactly:  node server.js
+#   Do NOT use "npm start" or leave default – that runs dev server + API and crashes (port/path-to-regexp).
 # - DATABASE_URL:   MUST be your REAL SQLite Cloud URL from https://sqlitecloud.com (dashboard → your database → connection URL).
 #   The error "ENOTFOUND your_project.g6.sqlite.cloud" means you left the placeholder – replace with the actual host and apikey.
 # -----------------------------------------------------------------------------
