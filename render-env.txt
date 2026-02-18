@@ -3,8 +3,8 @@
 # - Start Command:  node server.js
 #   In Render dashboard: Settings → Start Command → set to exactly:  node server.js
 #   Do NOT use "npm start" or leave default – that runs dev server + API and crashes (port/path-to-regexp).
-# - DATABASE_URL:   MUST be your REAL SQLite Cloud URL from https://sqlitecloud.com (dashboard → your database → connection URL).
-#   The error "ENOTFOUND your_project.g6.sqlite.cloud" means you left the placeholder – replace with the actual host and apikey.
+# - DATABASE_URL:   REQUIRED on Render. Set to your SQLite Cloud URL (from https://sqlitecloud.com dashboard).
+#   If unset, the app uses a local file; Render's disk is ephemeral so "no such table" will occur. Use SQLite Cloud for production.
 # -----------------------------------------------------------------------------
 
 # Copy the lines below into Render → Environment. Replace YOUR_* with real values.

@@ -109,6 +109,7 @@ function initializeDatabase() {
   db.run(createProjectsTable, (err) => {
     if (err) {
       console.error('Error creating projects table:', err);
+      process.exit(1);
     } else {
       console.log('Projects table ready');
       // Add project_no column if missing (local SQLite only; cloud table already has it)
@@ -116,6 +117,7 @@ function initializeDatabase() {
         db.run('ALTER TABLE projects ADD COLUMN project_no TEXT', () => {});
       }
     }
+    startServer();
   });
 
   // Create users table
@@ -1704,26 +1706,28 @@ if (existsSync(buildPath)) {
   });
 }
 
-// Start server — keep reference so the process stays alive
-const server = app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Database: ${dbLabel}`);
-});
-
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`Port ${PORT} is already in use. Kill the process using it, e.g.:`);
-    console.error(`  lsof -ti:${PORT} | xargs kill`);
-  } else {
-    console.error('Server error:', err);
-  }
-  process.exit(1);
-});
+// Start server only after DB is ready (called from initializeDatabase createProjectsTable callback)
+let server;
+function startServer() {
+  server = app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Database: ${dbLabel}`);
+  });
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already in use. Kill the process using it, e.g.:`);
+      console.error(`  lsof -ti:${PORT} | xargs kill`);
+    } else {
+      console.error('Server error:', err);
+    }
+    process.exit(1);
+  });
+}
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
   console.log('Closing database connection...');
-  server.close(() => {});
+  if (server) server.close(() => {});
   db.close((err) => {
     if (err) {
       console.error('Error closing database:', err);
