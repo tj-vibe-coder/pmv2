@@ -214,4 +214,4 @@ For questions, issues, or feature requests, please contact the development team 
 
 ---
 
-**Built with ❤️ for NETPAC AI Project Directors**
+**Built with ❤️ for IOCT**
