@@ -23,6 +23,7 @@ import dataService from '../services/dataService';
 import { Project } from '../types/Project';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
+import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 
 const LIQUIDATION_CATEGORIES = [
   'Tools / Direct',
@@ -58,6 +59,37 @@ const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
   remarks: '',
 });
 
+const PROJECT_EXPENSES_KEY = 'projectExpenses';
+function addLiquidationRowsToProjectExpenses(rows: LiquidationRow[]): void {
+  try {
+    const raw = localStorage.getItem(PROJECT_EXPENSES_KEY);
+    const existing = raw ? JSON.parse(raw) : [];
+    const toAdd = rows.filter((r) => {
+      const pid = r.projectId;
+      const amt = Number(r.amount);
+      return pid !== '' && pid !== null && pid !== undefined && !isNaN(Number(pid)) && amt > 0;
+    });
+    const now = new Date().toISOString();
+    toAdd.forEach((r) => {
+      const pid = Number(r.projectId);
+      if (isNaN(pid)) return;
+      existing.unshift({
+        id: `exp-liq-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        projectId: pid,
+        projectName: (r.projectName || '').trim() || '—',
+        description: (r.particulars || '').trim() || 'Liquidation',
+        amount: Number(r.amount),
+        date: r.date || now.slice(0, 10),
+        category: (r.category || '').trim() || 'Others',
+        createdAt: now,
+      });
+    });
+    if (toAdd.length > 0) {
+      localStorage.setItem(PROJECT_EXPENSES_KEY, JSON.stringify(existing));
+    }
+  } catch (_) {}
+}
+
 export default function LiquidationFormPage() {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -66,10 +98,12 @@ export default function LiquidationFormPage() {
   const [dateOfSubmission, setDateOfSubmission] = useState(() =>
     new Date().toISOString().slice(0, 10)
   );
-  const [formNo, setFormNo] = useState('LQ-0021');
+  const [formNo, setFormNo] = useState('');
   const [rows, setRows] = useState<LiquidationRow[]>([]);
   const [draftId, setDraftId] = useState<number | null>(null);
   const [drafts, setDrafts] = useState<{ id: number; form_no: string; date_of_submission: string; status: string; total_amount: number }[]>([]);
+  const [submittedLiquidations, setSubmittedLiquidations] = useState<{ id: number; form_no: string; date_of_submission: string; status: string; total_amount: number }[]>([]);
+  const [isViewingSubmitted, setIsViewingSubmitted] = useState(false);
   const [cashAdvances, setCashAdvances] = useState<{ id: number; amount: number; balance_remaining: number }[]>([]);
   const [saving, setSaving] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
@@ -88,6 +122,19 @@ export default function LiquidationFormPage() {
   }, []);
 
   const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
+
+  // Fetch next form number on mount (for new forms)
+  useEffect(() => {
+    if (!token || draftId !== null || formNo) return;
+    fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success && d.form_no) {
+          setFormNo(d.form_no);
+        }
+      })
+      .catch(() => {});
+  }, [token, draftId, formNo]);
   useEffect(() => {
     if (!token) return;
     fetch(`${API_BASE}/api/liquidations`, { headers: { Authorization: `Bearer ${token}` } })
@@ -95,6 +142,7 @@ export default function LiquidationFormPage() {
       .then((d) => {
         if (d.success && d.liquidations) {
           setDrafts(d.liquidations.filter((l: { status: string }) => l.status === 'draft'));
+          setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { id: number }, b: { id: number }) => b.id - a.id));
         }
       })
       .catch(() => {});
@@ -122,6 +170,7 @@ export default function LiquidationFormPage() {
     employee_name: employeeName,
     employee_number: employeeNumber,
     rows_json: rows.map((r) => ({
+      id: r.id,
       date: r.date,
       category: r.category,
       projectId: r.projectId,
@@ -154,7 +203,12 @@ export default function LiquidationFormPage() {
         setSubmitSuccess('Draft saved.');
         fetch(`${API_BASE}/api/liquidations`, { headers: { Authorization: `Bearer ${token}` } })
           .then((r) => r.json())
-          .then((d) => d.success && d.liquidations && setDrafts(d.liquidations.filter((l: { status: string }) => l.status === 'draft')))
+          .then((d) => {
+            if (d.success && d.liquidations) {
+              setDrafts(d.liquidations.filter((l: { status: string }) => l.status === 'draft'));
+              setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { id: number }, b: { id: number }) => b.id - a.id));
+            }
+          })
           .catch(() => {});
       } else {
         setSubmitSuccess(data.error || 'Save failed');
@@ -166,31 +220,49 @@ export default function LiquidationFormPage() {
     }
   };
 
-  const loadDraft = async (id: number) => {
+  const loadDraft = async (id: number, isSubmitted = false) => {
     if (!token) return;
     const res = await fetch(`${API_BASE}/api/liquidations/${id}`, { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json().catch(() => ({}));
     if (!data.success || !data.liquidation) return;
     const l = data.liquidation;
-    setFormNo(l.form_no || 'LQ-0021');
+    setIsViewingSubmitted(isSubmitted || l.status === 'submitted');
+    setFormNo(l.form_no || '');
     setDateOfSubmission(l.date_of_submission || new Date().toISOString().slice(0, 10));
     setEmployeeName(l.employee_name || '');
     setEmployeeNumber(l.employee_number || '');
     setCaId(l.ca_id || '');
-    const raw = typeof l.rows_json === 'string' ? JSON.parse(l.rows_json || '[]') : l.rows_json || [];
-    setRows(
-      raw.map((r: Record<string, unknown>) => ({
-        ...newRow(String(r.projectName ?? ''), String(r.projectNo ?? '')),
-        date: String(r.date ?? new Date().toISOString().slice(0, 10)),
-        category: String(r.category ?? ''),
-        projectId: (r.projectId as number) ?? '',
-        projectName: String(r.projectName ?? ''),
-        projectNo: String(r.projectNo ?? ''),
-        particulars: String(r.particulars ?? ''),
-        amount: Number(r.amount) || 0,
-        remarks: String(r.remarks ?? ''),
-      }))
-    );
+    let raw: Record<string, unknown>[] = [];
+    try {
+      raw = Array.isArray(l.rows_json)
+        ? l.rows_json
+        : typeof l.rows_json === 'string'
+          ? JSON.parse(l.rows_json || '[]')
+          : [];
+    } catch {
+      raw = [];
+    }
+    if (!Array.isArray(raw)) raw = [];
+    const loadedRows: LiquidationRow[] =
+      raw.length === 0
+        ? [newRow('', '')]
+        : raw.map((r: Record<string, unknown>) => {
+            const base = newRow(String(r.projectName ?? ''), String(r.projectNo ?? ''));
+            const pidValue = r.projectId;
+            const projectId: number | '' = pidValue !== undefined && pidValue !== null && pidValue !== '' ? (typeof pidValue === 'number' ? pidValue : isNaN(Number(pidValue)) ? '' : Number(pidValue)) : '';
+            return {
+              id: typeof r.id === 'string' && r.id ? String(r.id) : base.id,
+              date: String(r.date ?? new Date().toISOString().slice(0, 10)),
+              category: String(r.category ?? ''),
+              projectId,
+              projectName: String(r.projectName ?? ''),
+              projectNo: String(r.projectNo ?? ''),
+              particulars: String(r.particulars ?? ''),
+              amount: Number(r.amount) || 0,
+              remarks: String(r.remarks ?? ''),
+            };
+          });
+    setRows(loadedRows);
     setDraftId(l.id);
     setSubmitSuccess(null);
   };
@@ -204,7 +276,19 @@ export default function LiquidationFormPage() {
     setSaving(true);
     setSubmitSuccess(null);
     try {
-      const body = { ...payload(), status: 'submitted' };
+      // Get next form number if not set (for new submissions)
+      let finalFormNo = formNo;
+      if (!finalFormNo || finalFormNo.trim() === '') {
+        const res = await fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } });
+        const data = await res.json().catch(() => ({}));
+        if (data.success && data.form_no) {
+          finalFormNo = data.form_no;
+          setFormNo(finalFormNo);
+        } else {
+          finalFormNo = 'LQ-0001';
+        }
+      }
+      const body = { ...payload(), form_no: finalFormNo, status: 'submitted' };
       const url = draftId ? `${API_BASE}/api/liquidations/${draftId}` : `${API_BASE}/api/liquidations`;
       const method = draftId ? 'PUT' : 'POST';
       const res = await fetch(url, {
@@ -214,12 +298,29 @@ export default function LiquidationFormPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
+        addLiquidationRowsToProjectExpenses(rows);
         setDraftId(null);
+        setIsViewingSubmitted(false);
         setRows([newRow('', '')]);
-        setSubmitSuccess('Liquidation submitted. Amount applied to CA has been deducted.');
+        setFormNo('');
+        setSubmitSuccess('Liquidation submitted. Amount applied to CA has been deducted; expenses added to project expense.');
+        // Fetch next form number for new form
+        fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.success && d.form_no) {
+              setFormNo(d.form_no);
+            }
+          })
+          .catch(() => {});
         fetch(`${API_BASE}/api/liquidations`, { headers: { Authorization: `Bearer ${token}` } })
           .then((r) => r.json())
-          .then((d) => d.success && d.liquidations && setDrafts(d.liquidations.filter((l: { status: string }) => l.status === 'draft')))
+          .then((d) => {
+            if (d.success && d.liquidations) {
+              setDrafts(d.liquidations.filter((l: { status: string }) => l.status === 'draft'));
+              setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { id: number }, b: { id: number }) => b.id - a.id));
+            }
+          })
           .catch(() => {});
         fetch(`${API_BASE}/api/cash-advances`, { headers: { Authorization: `Bearer ${token}` } })
           .then((r) => r.json())
@@ -274,23 +375,59 @@ export default function LiquidationFormPage() {
 
   const totalAmount = rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
 
-  const exportToPDF = () => {
+  const exportToPDF = async () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const margin = 14;
     const pageWidth = 210;
     const pageHeight = 297;
-    let y = 14;
-    doc.setFontSize(16);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Expense Liquidation Form', pageWidth / 2, y, { align: 'center' });
-    y += 10;
-    doc.setFont('helvetica', 'normal');
+    const footerY = pageHeight - 10;
+    const headerY = 14;
+    let y = headerY;
+
+    // Load Arial Narrow font
+    const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
+    if (hasArialNarrow) {
+      doc.addFileToVFS('ArialNarrow.ttf', arialNarrowBase64);
+      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'normal');
+      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'bold');
+    }
+    const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
+    const fontBold = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'bold');
+
+    // Load logo once for reuse on all pages
+    let logoDataUrl: string | null = null;
+    let logoWidth = 0;
+    let logoHeight = 0;
+    try {
+      const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
+      const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
+      logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+      logoWidth = ACT_LOGO_PDF_WIDTH;
+      logoHeight = ACT_LOGO_PDF_HEIGHT;
+    } catch (_) {}
+
+    const lineHeight = 5;
+    // Draw header on first page (logo, company name, Liquidation Form + Date on right)
+    const drawHeader = () => {
+      if (logoDataUrl) {
+        doc.addImage(logoDataUrl, 'PNG', margin, headerY - 2, logoWidth, logoHeight);
+        doc.setFontSize(9);
+        fontBold();
+        doc.text('Advance Controle Technologie Inc.', margin, headerY + logoHeight + 4);
+      }
+      doc.setFontSize(16);
+      doc.setFont('helvetica', 'bold'); // Use Arial Bold (helvetica bold) for title
+      doc.text('Liquidation Form', pageWidth - margin, headerY, { align: 'right' });
+      fontBody();
+      doc.setFontSize(10);
+      doc.text(`Date: ${dateOfSubmission || '—'}`, pageWidth - margin, headerY + lineHeight, { align: 'right' });
+    };
+
+    drawHeader();
+    y += logoHeight > 0 ? logoHeight + 10 : 6;
+    fontBody();
     doc.setFontSize(10);
-    doc.text(`Form No.: ${formNo || '—'}`, margin, y);
-    doc.text(`Date of Submission: ${dateOfSubmission || '—'}`, margin + 70, y);
-    y += 6;
-    doc.text(`Employee Name: ${(employeeName || '—').trim()}`, margin, y);
-    doc.text(`Employee No.: ${(employeeNumber || '—').trim()}`, margin + 70, y);
+    doc.text(`Name: ${(employeeName || '—').trim()}`, margin, y);
     y += 10;
     const body = rows.length > 0
       ? rows.map((r, i) => [
@@ -304,30 +441,55 @@ export default function LiquidationFormPage() {
           (r.remarks || '—').slice(0, 15),
         ])
       : [['—', '—', '—', '—', '—', '—', '0.00', '—']];
+    
     autoTable(doc, {
       head: [['No.', 'Date', 'Category', 'Project', 'PO #', 'Particulars', 'Amount', 'Remarks']],
       body,
       startY: y,
       margin: { left: margin, right: margin },
       tableWidth: pageWidth - margin * 2,
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [44, 90, 160] },
+      styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
+      headStyles: { fillColor: [44, 90, 160], font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', fontStyle: 'bold' },
+      didDrawPage: () => {
+        // Draw header on all pages (logo, company name, Liquidation Form + Date on right)
+        if (logoDataUrl) {
+          doc.addImage(logoDataUrl, 'PNG', margin, headerY - 2, logoWidth, logoHeight);
+          doc.setFontSize(9);
+          fontBold();
+          doc.text('Advance Controle Technologie Inc.', margin, headerY + logoHeight + 4);
+        }
+        doc.setFontSize(16);
+        doc.setFont('helvetica', 'bold'); // Use Arial Bold (helvetica bold) for title
+        doc.text('Liquidation Form', pageWidth - margin, headerY, { align: 'right' });
+        fontBody();
+        doc.setFontSize(10);
+        doc.text(`Date: ${dateOfSubmission || '—'}`, pageWidth - margin, headerY + lineHeight, { align: 'right' });
+      },
     });
     const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
     y = (docWithTable.lastAutoTable?.finalY ?? y) + 8;
+    // Total on the right side - use Helvetica Bold
     doc.setFont('helvetica', 'bold');
-    doc.text(`Total: ${totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, margin, y);
-    if (caId) doc.text(`Applied to CA #${caId}`, margin + 80, y);
+    doc.text(`Total: ${totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, pageWidth - margin, y, { align: 'right' });
+    if (caId) doc.text(`Applied to CA #${caId}`, margin, y);
     y += 14;
-    doc.setFont('helvetica', 'normal');
+    fontBody();
     doc.setFontSize(9);
-    const sigY = pageHeight - 36;
+    const sigY = footerY - 28;
     doc.text('Prepared by:', margin, sigY);
-    doc.line(margin, sigY + 2, margin + 50, sigY + 2);
-    doc.text('Signature', margin, sigY + 8);
-    doc.text('Approved by:', pageWidth - margin - 50, sigY);
-    doc.line(pageWidth - margin - 50, sigY + 2, pageWidth - margin, sigY + 2);
-    doc.text('Signature', pageWidth - margin - 50, sigY + 8);
+    const preparedByName = (employeeName || user?.full_name || user?.username || user?.email || '—').trim() || '—';
+    doc.text(preparedByName, margin, sigY + 6);
+    
+    // Add footer with page number and Doc No. on all pages (Doc No. is LIQ-001, not LIQ-LQ-001)
+    const totalPages = doc.getNumberOfPages();
+    const docNo = !formNo ? 'LIQ-001' : formNo.startsWith('LIQ-') ? formNo : formNo.startsWith('LQ-') ? 'LIQ-' + formNo.slice(3) : 'LIQ-' + formNo;
+    doc.setFontSize(8);
+    for (let p = 1; p <= totalPages; p++) {
+      doc.setPage(p);
+      doc.text(`Page ${p} of ${totalPages}`, pageWidth - margin, footerY, { align: 'right' });
+      doc.text(`Doc No.: ${docNo}`, margin, footerY);
+    }
+    
     doc.save(`Liquidation_${formNo || 'form'}_${dateOfSubmission.replace(/-/g, '')}.pdf`);
   };
 
@@ -426,32 +588,61 @@ export default function LiquidationFormPage() {
             size="small"
             startIcon={<SaveIcon />}
             onClick={saveDraft}
-            disabled={saving}
+            disabled={saving || isViewingSubmitted}
             sx={{ borderColor: theme.primary, color: theme.primary }}
           >
             Save draft
           </Button>
-          {drafts.length > 0 && (
-            <Select
+          {(drafts.length > 0 || submittedLiquidations.length > 0) && (
+            <Select<string>
               size="small"
               displayEmpty
               value=""
               onChange={(e) => {
-                const raw = e.target.value;
-                const id = raw === '' ? 0 : Number(raw);
-                if (id) loadDraft(id);
+                const raw = e.target.value as string;
+                if (raw === '') {
+                  setIsViewingSubmitted(false);
+                  setDraftId(null);
+                  setRows([newRow('', '')]);
+                  setFormNo('');
+                  setEmployeeName('');
+                  setEmployeeNumber('');
+                  setDateOfSubmission(new Date().toISOString().slice(0, 10));
+                  setCaId('');
+                  setSubmitSuccess(null);
+                  return;
+                }
+                const parts = raw.split(':');
+                const id = Number(parts[1]);
+                const isSubmitted = parts[0] === 'submitted';
+                if (id) loadDraft(id, isSubmitted);
               }}
-              sx={{ minWidth: 180, '& .MuiSelect-select': { py: 0.75 } }}
-              renderValue={(v) => (v === '' ? 'Load draft…' : `Draft #${v}`)}
+              sx={{ minWidth: 200, '& .MuiSelect-select': { py: 0.75 } }}
+              renderValue={(v: string) => (v === '' ? 'Load liquidation…' : v.includes(':') ? `#${v.split(':')[1]}` : '')}
             >
               <MenuItem value="">
-                <em>Load draft…</em>
+                <em>Load liquidation…</em>
               </MenuItem>
-              {drafts.map((d) => (
-                <MenuItem key={d.id} value={d.id}>
-                  {d.form_no || `#${d.id}`} – {d.date_of_submission || 'no date'} (₱{Number(d.total_amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })})
-                </MenuItem>
-              ))}
+              {drafts.length > 0 && [
+                <MenuItem key="drafts-header" disabled sx={{ fontWeight: 600, fontSize: '0.75rem', color: 'text.secondary' }}>
+                  Drafts
+                </MenuItem>,
+                ...drafts.map((d) => (
+                  <MenuItem key={`draft-${d.id}`} value={`draft:${d.id}`}>
+                    {d.form_no || `#${d.id}`} – {d.date_of_submission || 'no date'} (₱{Number(d.total_amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })})
+                  </MenuItem>
+                )),
+              ]}
+              {submittedLiquidations.length > 0 && [
+                <MenuItem key="submitted-header" disabled sx={{ fontWeight: 600, fontSize: '0.75rem', color: 'text.secondary', mt: drafts.length > 0 ? 1 : 0 }}>
+                  Submitted
+                </MenuItem>,
+                ...submittedLiquidations.map((d) => (
+                  <MenuItem key={`submitted-${d.id}`} value={`submitted:${d.id}`}>
+                    {d.form_no || `#${d.id}`} – {d.date_of_submission || 'no date'} (₱{Number(d.total_amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })})
+                  </MenuItem>
+                )),
+              ]}
             </Select>
           )}
           <Button
@@ -512,9 +703,10 @@ export default function LiquidationFormPage() {
             <TextField
               fullWidth
               size="small"
-              label="Employee Name"
+              label="Name"
               value={employeeName}
               onChange={(e) => setEmployeeName(e.target.value)}
+              disabled={isViewingSubmitted}
               sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'background.paper' } }}
             />
           </Box>
@@ -525,6 +717,7 @@ export default function LiquidationFormPage() {
               label="Employee Number"
               value={employeeNumber}
               onChange={(e) => setEmployeeNumber(e.target.value)}
+              disabled={isViewingSubmitted}
               sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'background.paper' } }}
             />
           </Box>
@@ -537,6 +730,7 @@ export default function LiquidationFormPage() {
               value={dateOfSubmission}
               onChange={(e) => setDateOfSubmission(e.target.value)}
               InputLabelProps={{ shrink: true }}
+              disabled={isViewingSubmitted}
               sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'background.paper' } }}
             />
           </Box>
@@ -547,6 +741,7 @@ export default function LiquidationFormPage() {
               label="Form No."
               value={formNo}
               onChange={(e) => setFormNo(e.target.value)}
+              disabled={isViewingSubmitted}
               sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'background.paper' } }}
             />
           </Box>
@@ -562,6 +757,7 @@ export default function LiquidationFormPage() {
                   if (typeof v === 'string' && v === '') setCaId('');
                   else setCaId(Number(v));
                 }}
+                disabled={isViewingSubmitted}
                 sx={{ bgcolor: 'background.paper', minHeight: 40 }}
                 renderValue={(v) => ((v as unknown) === '' || v == null ? 'Apply to CA (optional)' : `CA #${v}`)}
               >
@@ -578,11 +774,19 @@ export default function LiquidationFormPage() {
           )}
         </Box>
 
+        {isViewingSubmitted && (
+          <Box sx={{ mb: 2, p: 1.5, bgcolor: 'info.light', borderRadius: 1, border: '1px solid', borderColor: 'info.main' }}>
+            <Typography variant="body2" sx={{ color: 'info.dark', fontWeight: 500 }}>
+              Viewing submitted liquidation (read-only). To create a new liquidation, select "Load liquidation…" and choose a draft or create a new form.
+            </Typography>
+          </Box>
+        )}
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
           <Button
             variant="contained"
             startIcon={<AddIcon />}
             onClick={addRow}
+            disabled={isViewingSubmitted}
             sx={{
               bgcolor: theme.primary,
               '&:hover': { bgcolor: theme.secondary },
@@ -638,6 +842,7 @@ export default function LiquidationFormPage() {
                         type="date"
                         value={row.date}
                         onChange={(e) => updateRow(row.id, 'date', e.target.value)}
+                        disabled={isViewingSubmitted}
                         fullWidth
                         variant="outlined"
                         InputLabelProps={{ shrink: true }}
@@ -650,6 +855,7 @@ export default function LiquidationFormPage() {
                         value={row.category}
                         displayEmpty
                         onChange={(e) => updateRow(row.id, 'category', e.target.value)}
+                        disabled={isViewingSubmitted}
                         sx={{ minWidth: 130, '& .MuiSelect-select': { py: 0.75 } }}
                       >
                         <MenuItem value="">
@@ -671,6 +877,7 @@ export default function LiquidationFormPage() {
                           const val = e.target.value;
                           setRowProject(row.id, val === '' ? '' : Number(val));
                         }}
+                        disabled={isViewingSubmitted}
                         sx={{ minWidth: 200, width: '100%', '& .MuiSelect-select': { py: 0.75 } }}
                         renderValue={(v: number | '') => {
                           if (v === '' || v === undefined) return <em>Select project</em>;
@@ -759,7 +966,7 @@ export default function LiquidationFormPage() {
               variant="contained"
               startIcon={<SendIcon />}
               onClick={submitLiquidation}
-              disabled={saving}
+              disabled={saving || isViewingSubmitted}
               sx={{ bgcolor: theme.secondary, '&:hover': { bgcolor: theme.primary } }}
             >
               Submit liquidation

@@ -1352,6 +1352,33 @@ app.get('/api/liquidations', (req, res) => {
   });
 });
 
+app.get('/api/liquidations/next-form-no', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    db.all('SELECT form_no FROM liquidations WHERE status = ? AND form_no IS NOT NULL AND form_no != ? ORDER BY id DESC', ['submitted', ''], (err, rows) => {
+      if (err) {
+        console.error('Error fetching next form number:', err);
+        return res.status(500).json({ success: false, error: 'Database error' });
+      }
+      let nextNum = 1;
+      if (rows && rows.length > 0) {
+        const formNos = rows.map((r) => r.form_no).filter((fn) => fn && typeof fn === 'string' && fn.startsWith('LQ-'));
+        if (formNos.length > 0) {
+          const nums = formNos.map((fn) => {
+            const match = fn.match(/LQ-0*(\d+)/);
+            return match ? parseInt(match[1], 10) : 0;
+          }).filter((n) => n > 0);
+          if (nums.length > 0) {
+            nextNum = Math.max(...nums) + 1;
+          }
+        }
+      }
+      const formNo = `LQ-${String(nextNum).padStart(4, '0')}`;
+      res.json({ success: true, form_no: formNo });
+    });
+  });
+});
+
 app.get('/api/liquidations/:id', (req, res) => {
   getCurrentUser(req, (err, user) => {
     if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });

@@ -113,95 +113,110 @@ const ReportsPage: React.FC = () => {
 
   if (loading) {
     return (
-      <Container maxWidth="xl" sx={{ py: 4 }}>
+      <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <Typography>Loading...</Typography>
-      </Container>
+      </Box>
     );
   }
 
   return (
-    <Container maxWidth="xl" sx={{ py: 4 }}>
-      <Box display="flex" alignItems="center" mb={3}>
-        <IconButton onClick={() => navigate('/dashboard')} sx={{ mr: 2 }}>
-          <ArrowBackIcon />
-        </IconButton>
-        <Typography variant="h4" component="h1" sx={{ flexGrow: 1, color: NET_PACIFIC_COLORS.primary }}>
-          Reports
-        </Typography>
+    <Box sx={{ 
+      height: 'calc(100vh - 80px)', 
+      display: 'flex', 
+      flexDirection: 'column',
+      overflow: 'hidden',
+      margin: -2, // Counteract AppLayout padding
+      backgroundColor: '#f5f5f5',
+    }}>
+      <Box sx={{ flexShrink: 0, p: 2, borderBottom: '1px solid #e0e0e0', bgcolor: '#fff' }}>
+        <Box display="flex" alignItems="center" mb={2}>
+          <IconButton onClick={() => navigate('/dashboard')} sx={{ mr: 2 }}>
+            <ArrowBackIcon />
+          </IconButton>
+          <Typography variant="h4" component="h1" sx={{ flexGrow: 1, color: NET_PACIFIC_COLORS.primary }}>
+            Reports
+          </Typography>
+        </Box>
+
+        <Paper sx={{ p: 2 }}>
+          <Autocomplete
+            options={projects}
+            getOptionLabel={(option) => `${option.project_name} (${option.project_no || option.item_no || option.id})`}
+            value={selectedProject}
+            onChange={(_, newValue) => {
+              setSelectedProject(newValue);
+              if (newValue) {
+                navigate(`/reports/${tab}?projectId=${newValue.id}`);
+              }
+            }}
+            renderInput={(params) => <TextField {...params} label="Select Project" size="small" />}
+            sx={{ maxWidth: 600 }}
+          />
+        </Paper>
       </Box>
 
-      <Paper sx={{ mb: 3, p: 2 }}>
-        <Autocomplete
-          options={projects}
-          getOptionLabel={(option) => `${option.project_name} (${option.project_no || option.item_no || option.id})`}
-          value={selectedProject}
-          onChange={(_, newValue) => {
-            setSelectedProject(newValue);
-            if (newValue) {
-              navigate(`/reports/${tab}?projectId=${newValue.id}`);
-            }
-          }}
-          renderInput={(params) => <TextField {...params} label="Select Project" size="small" />}
-          sx={{ maxWidth: 600 }}
-        />
-      </Paper>
-
       {selectedProject ? (
-        <>
-          <Tabs value={tab} onChange={handleTabChange} sx={{ mb: 3, borderBottom: 1, borderColor: 'divider' }}>
-            <Tab label="Progress Report" value="progress" />
-            <Tab label="Service Report" value="service" />
-            <Tab label="Certificate of Completion" value="completion" />
-            <Tab label="Attachments" value="attachments" />
-          </Tabs>
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <Box sx={{ flexShrink: 0, px: 2, borderBottom: 1, borderColor: 'divider' }}>
+            <Tabs value={tab} onChange={handleTabChange}>
+              <Tab label="Progress Report" value="progress" />
+              <Tab label="Service Report" value="service" />
+              <Tab label="Certificate of Completion" value="completion" />
+              <Tab label="Attachments" value="attachments" />
+            </Tabs>
+          </Box>
 
-          {tab === 'progress' && (
-            <ProgressReportTab
-              project={selectedProject}
-              currentUser={currentUser}
-              reportCompany={reportCompany}
-              setReportCompany={setReportCompany}
-              preparedBy={preparedBy}
-              setPreparedBy={setPreparedBy}
-              onPreview={handlePreview}
-            />
-          )}
-          {tab === 'service' && (
-            <ServiceReportTab
-              project={selectedProject}
-              currentUser={currentUser}
-              reportCompany={reportCompany}
-              setReportCompany={setReportCompany}
-              preparedBy={preparedBy}
-              setPreparedBy={setPreparedBy}
-              onPreview={handlePreview}
-            />
-          )}
-          {tab === 'completion' && (
-            <CompletionCertificateTab
-              project={selectedProject}
-              currentUser={currentUser}
-              reportCompany={reportCompany}
-              setReportCompany={setReportCompany}
-              preparedBy={preparedBy}
-              setPreparedBy={setPreparedBy}
-              onPreview={handlePreview}
-            />
-          )}
-          {tab === 'attachments' && (
-            <AttachmentsTab project={selectedProject} currentUser={currentUser} />
-          )}
-        </>
+          <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
+            {tab === 'progress' && (
+              <ProgressReportTab
+                project={selectedProject}
+                currentUser={currentUser}
+                reportCompany={reportCompany}
+                setReportCompany={setReportCompany}
+                preparedBy={preparedBy}
+                setPreparedBy={setPreparedBy}
+                onPreview={handlePreview}
+              />
+            )}
+            {tab === 'service' && (
+              <ServiceReportTab
+                project={selectedProject}
+                currentUser={currentUser}
+                reportCompany={reportCompany}
+                setReportCompany={setReportCompany}
+                preparedBy={preparedBy}
+                setPreparedBy={setPreparedBy}
+                onPreview={handlePreview}
+              />
+            )}
+            {tab === 'completion' && (
+              <CompletionCertificateTab
+                project={selectedProject}
+                currentUser={currentUser}
+                reportCompany={reportCompany}
+                setReportCompany={setReportCompany}
+                preparedBy={preparedBy}
+                setPreparedBy={setPreparedBy}
+                onPreview={handlePreview}
+              />
+            )}
+            {tab === 'attachments' && (
+              <AttachmentsTab project={selectedProject} currentUser={currentUser} />
+            )}
+          </Box>
+        </Box>
       ) : (
-        <Paper sx={{ p: 4, textAlign: 'center' }}>
-          <Typography variant="h6" color="text.secondary">
-            Please select a project to generate reports
-          </Typography>
-        </Paper>
+        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 4 }}>
+          <Paper sx={{ p: 4, textAlign: 'center' }}>
+            <Typography variant="h6" color="text.secondary">
+              Please select a project to generate reports
+            </Typography>
+          </Paper>
+        </Box>
       )}
 
       <PdfPreviewDialog open={pdfPreviewOpen} onClose={handleClosePreview} pdfBlob={pdfPreviewBlob} title={pdfPreviewTitle} />
-    </Container>
+    </Box>
   );
 };
 
