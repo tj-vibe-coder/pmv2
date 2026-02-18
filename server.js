@@ -1693,6 +1693,16 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Production: serve React build (Render single-service deploy)
+const buildPath = path.join(__dirname, 'build');
+const { existsSync } = require('fs');
+if (existsSync(buildPath)) {
+  app.use(express.static(buildPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(buildPath, 'index.html'));
+  });
+}
 
 // Start server — keep reference so the process stays alive
 const server = app.listen(PORT, () => {
