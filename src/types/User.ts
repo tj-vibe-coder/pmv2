@@ -2,7 +2,9 @@ export interface User {
   id: number;
   username: string;
   email: string;
-  role: 'admin' | 'user' | 'viewer';
+  role: 'superadmin' | 'admin' | 'user' | 'viewer';
+  approved?: number;
+  full_name?: string | null;
   created_at: number;
   updated_at: number;
 }

@@ -11,6 +11,8 @@ import LoginPage from './components/LoginPage';
 import ProjectMonitoringApp from './components/ProjectMonitoringApp';
 import ProjectLocationDashboard from './components/ProjectLocationDashboard';
 import ExpenseMonitoring from './components/ExpenseMonitoring';
+import LiquidationFormPage from './components/LiquidationFormPage';
+import CAFormPage from './components/CAFormPage';
 import Forecasting from './components/Forecasting';
 import ClientsPage from './components/ClientsPage';
 import MaterialRequestFormPage from './components/MaterialRequestFormPage';
@@ -19,6 +21,8 @@ import SuppliersPage from './components/SuppliersPage';
 import PurchaseOrderPage from './components/PurchaseOrderPage';
 import EstimatesPage from './components/EstimatesPage';
 import ReportsPage from './components/ReportsPage';
+import UserApprovalsPage from './components/UserApprovalsPage';
+import UsersPage from './components/UsersPage';
 
 const theme = createTheme({
   palette: {
@@ -103,6 +107,15 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
 };
 
+// Superadmin-only route: redirect to dashboard if not superadmin (use inside ProtectedRoute)
+const SuperadminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
+  if (user?.role !== 'superadmin') {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <>{children}</>;
+};
+
 // Main App Layout component
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return (
@@ -159,6 +172,26 @@ function App() {
                 <ProtectedRoute>
                   <AppLayout>
                     <ExpenseMonitoring />
+                  </AppLayout>
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/liquidation-form" 
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <LiquidationFormPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/ca-form" 
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CAFormPage />
                   </AppLayout>
                 </ProtectedRoute>
               } 
@@ -241,6 +274,30 @@ function App() {
                   <AppLayout>
                     <ReportsPage />
                   </AppLayout>
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/user-approvals" 
+              element={
+                <ProtectedRoute>
+                  <SuperadminRoute>
+                    <AppLayout>
+                      <UserApprovalsPage />
+                    </AppLayout>
+                  </SuperadminRoute>
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/users" 
+              element={
+                <ProtectedRoute>
+                  <SuperadminRoute>
+                    <AppLayout>
+                      <UsersPage />
+                    </AppLayout>
+                  </SuperadminRoute>
                 </ProtectedRoute>
               } 
             />
