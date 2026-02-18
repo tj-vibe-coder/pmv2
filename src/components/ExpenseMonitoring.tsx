@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
 import {
   Typography,
   Box,
@@ -137,6 +138,9 @@ const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR + 2 - 2025 }, (_, i) => 2025 + i);
 
 const ExpenseMonitoring: React.FC = () => {
+  const location = useLocation();
+  const isChildRoute = location.pathname === '/expense-monitoring/ca-form' || location.pathname === '/expense-monitoring/liquidation-form';
+  
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [selectedYear, setSelectedYear] = useState<number>(0);
   const [selectedProjectId, setSelectedProjectId] = useState<number | ''>('');
@@ -383,6 +387,10 @@ const ExpenseMonitoring: React.FC = () => {
   const handleYearChange = (event: SelectChangeEvent<number>) => {
     setSelectedYear(Number(event.target.value));
   };
+
+  if (isChildRoute) {
+    return <Outlet />;
+  }
 
   if (loading) {
     return (

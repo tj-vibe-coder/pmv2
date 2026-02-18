@@ -15,8 +15,10 @@ import {
   MenuItem,
   IconButton,
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, Save as SaveIcon, Send as SendIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import { autoTable } from 'jspdf-autotable';
 import dataService from '../services/dataService';
 import { Project } from '../types/Project';
 import { useAuth } from '../contexts/AuthContext';
@@ -272,6 +274,63 @@ export default function LiquidationFormPage() {
 
   const totalAmount = rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
 
+  const exportToPDF = () => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const margin = 14;
+    const pageWidth = 210;
+    const pageHeight = 297;
+    let y = 14;
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Expense Liquidation Form', pageWidth / 2, y, { align: 'center' });
+    y += 10;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.text(`Form No.: ${formNo || '—'}`, margin, y);
+    doc.text(`Date of Submission: ${dateOfSubmission || '—'}`, margin + 70, y);
+    y += 6;
+    doc.text(`Employee Name: ${(employeeName || '—').trim()}`, margin, y);
+    doc.text(`Employee No.: ${(employeeNumber || '—').trim()}`, margin + 70, y);
+    y += 10;
+    const body = rows.length > 0
+      ? rows.map((r, i) => [
+          String(i + 1),
+          r.date || '—',
+          r.category || '—',
+          (r.projectName || '—').slice(0, 25),
+          r.projectNo || '—',
+          (r.particulars || '—').slice(0, 30),
+          Number(r.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 }),
+          (r.remarks || '—').slice(0, 15),
+        ])
+      : [['—', '—', '—', '—', '—', '—', '0.00', '—']];
+    autoTable(doc, {
+      head: [['No.', 'Date', 'Category', 'Project', 'PO #', 'Particulars', 'Amount', 'Remarks']],
+      body,
+      startY: y,
+      margin: { left: margin, right: margin },
+      tableWidth: pageWidth - margin * 2,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [44, 90, 160] },
+    });
+    const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
+    y = (docWithTable.lastAutoTable?.finalY ?? y) + 8;
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Total: ${totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, margin, y);
+    if (caId) doc.text(`Applied to CA #${caId}`, margin + 80, y);
+    y += 14;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    const sigY = pageHeight - 36;
+    doc.text('Prepared by:', margin, sigY);
+    doc.line(margin, sigY + 2, margin + 50, sigY + 2);
+    doc.text('Signature', margin, sigY + 8);
+    doc.text('Approved by:', pageWidth - margin - 50, sigY);
+    doc.line(pageWidth - margin - 50, sigY + 2, pageWidth - margin, sigY + 2);
+    doc.text('Signature', pageWidth - margin - 50, sigY + 8);
+    doc.save(`Liquidation_${formNo || 'form'}_${dateOfSubmission.replace(/-/g, '')}.pdf`);
+  };
+
   const handleExport = () => {
     const wb = XLSX.utils.book_new();
     const headerRow1 = ['Employee Name', employeeName, 'Employee Number', employeeNumber];
@@ -402,6 +461,15 @@ export default function LiquidationFormPage() {
             sx={{ borderColor: theme.primary, color: theme.primary, '&:hover': { borderColor: theme.secondary, color: theme.secondary } }}
           >
             Import
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<PictureAsPdfIcon />}
+            onClick={exportToPDF}
+            sx={{ borderColor: theme.primary, color: theme.primary }}
+          >
+            Export to PDF (for signing)
           </Button>
           <Button
             variant="contained"

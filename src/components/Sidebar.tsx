@@ -41,6 +41,7 @@ import {
 const SIDEBAR_WIDTH = 280;
 
 const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
+const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form'];
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
 
 const Sidebar: React.FC = () => {
@@ -54,6 +55,9 @@ const Sidebar: React.FC = () => {
   const [reportsOpen, setReportsOpen] = useState(() =>
     REPORTS_PATHS.some((p) => location.pathname.startsWith(p))
   );
+  const [expenseMonitoringOpen, setExpenseMonitoringOpen] = useState(() =>
+    EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)
+  );
 
   useEffect(() => {
     if (SUPPLY_CHAIN_PATHS.some((p) => location.pathname === p)) {
@@ -61,6 +65,9 @@ const Sidebar: React.FC = () => {
     }
     if (REPORTS_PATHS.some((p) => location.pathname.startsWith(p))) {
       setReportsOpen(true);
+    }
+    if (EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)) {
+      setExpenseMonitoringOpen(true);
     }
   }, [location.pathname]);
 
@@ -172,21 +179,14 @@ const Sidebar: React.FC = () => {
             </ListItemButton>
           </ListItem>
 
+          {/* Expense Monitoring (collapsible parent) */}
           <ListItem disablePadding sx={{ mb: 0.5 }}>
             <ListItemButton
-              selected={location.pathname === '/expense-monitoring'}
-              onClick={() => navigate('/expense-monitoring')}
+              onClick={() => setExpenseMonitoringOpen((open) => !open)}
               sx={{
                 borderRadius: 2,
                 mx: 1,
                 minHeight: 56,
-                '&.Mui-selected': {
-                  backgroundColor: 'rgba(255,255,255,0.15)',
-                  color: 'white',
-                  '&:hover': {
-                    backgroundColor: 'rgba(255,255,255,0.2)',
-                  },
-                },
                 '&:hover': {
                   backgroundColor: 'rgba(255,255,255,0.1)',
                 },
@@ -198,87 +198,101 @@ const Sidebar: React.FC = () => {
               </ListItemIcon>
               <ListItemText
                 primary="Expense Monitoring"
-                secondary="Track project expenses"
+                secondary="Expenses, CA, liquidation"
                 secondaryTypographyProps={{
                   color: 'rgba(255,255,255,0.7)',
                   fontSize: '0.75rem',
                 }}
                 sx={{ color: 'white' }}
               />
+              {expenseMonitoringOpen ? <ExpandLessIcon sx={{ color: 'white' }} /> : <ExpandMoreIcon sx={{ color: 'white' }} />}
             </ListItemButton>
           </ListItem>
-
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <ListItemButton
-              selected={location.pathname === '/liquidation-form'}
-              onClick={() => navigate('/liquidation-form')}
-              sx={{
-                borderRadius: 2,
-                mx: 1,
-                minHeight: 56,
-                '&.Mui-selected': {
-                  backgroundColor: 'rgba(255,255,255,0.15)',
-                  color: 'white',
-                  '&:hover': {
-                    backgroundColor: 'rgba(255,255,255,0.2)',
-                  },
-                },
-                '&:hover': {
-                  backgroundColor: 'rgba(255,255,255,0.1)',
-                },
-                transition: 'all 0.2s ease-in-out',
-              }}
-            >
-              <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
-                <ReceiptIcon />
-              </ListItemIcon>
-              <ListItemText
-                primary="Liquidation Form"
-                secondary="Submit expense liquidation"
-                secondaryTypographyProps={{
-                  color: 'rgba(255,255,255,0.7)',
-                  fontSize: '0.75rem',
-                }}
-                sx={{ color: 'white' }}
-              />
-            </ListItemButton>
-          </ListItem>
-
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <ListItemButton
-              selected={location.pathname === '/ca-form'}
-              onClick={() => navigate('/ca-form')}
-              sx={{
-                borderRadius: 2,
-                mx: 1,
-                minHeight: 56,
-                '&.Mui-selected': {
-                  backgroundColor: 'rgba(255,255,255,0.15)',
-                  color: 'white',
-                  '&:hover': {
-                    backgroundColor: 'rgba(255,255,255,0.2)',
-                  },
-                },
-                '&:hover': {
-                  backgroundColor: 'rgba(255,255,255,0.1)',
-                },
-                transition: 'all 0.2s ease-in-out',
-              }}
-            >
-              <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
-                <AccountBalanceIcon />
-              </ListItemIcon>
-              <ListItemText
-                primary="CA Form"
-                secondary="Request cash advance"
-                secondaryTypographyProps={{
-                  color: 'rgba(255,255,255,0.7)',
-                  fontSize: '0.75rem',
-                }}
-                sx={{ color: 'white' }}
-              />
-            </ListItemButton>
-          </ListItem>
+          <Collapse in={expenseMonitoringOpen} timeout="auto" unmountOnExit>
+            <List component="div" disablePadding sx={{ pl: 2 }}>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/expense-monitoring' && !location.pathname.includes('/ca-form') && !location.pathname.includes('/liquidation-form')}
+                  onClick={() => navigate('/expense-monitoring')}
+                  sx={{
+                    borderRadius: 2,
+                    mx: 1,
+                    minHeight: 48,
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(255,255,255,0.15)',
+                      color: 'white',
+                      '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                    },
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                    transition: 'all 0.2s ease-in-out',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                    <ReceiptIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Expense Monitoring"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/expense-monitoring/ca-form'}
+                  onClick={() => navigate('/expense-monitoring/ca-form')}
+                  sx={{
+                    borderRadius: 2,
+                    mx: 1,
+                    minHeight: 48,
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(255,255,255,0.15)',
+                      color: 'white',
+                      '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                    },
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                    transition: 'all 0.2s ease-in-out',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                    <AccountBalanceIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="CA Form"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/expense-monitoring/liquidation-form'}
+                  onClick={() => navigate('/expense-monitoring/liquidation-form')}
+                  sx={{
+                    borderRadius: 2,
+                    mx: 1,
+                    minHeight: 48,
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(255,255,255,0.15)',
+                      color: 'white',
+                      '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                    },
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                    transition: 'all 0.2s ease-in-out',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                    <ReceiptIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Liquidation Form"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+            </List>
+          </Collapse>
 
           <ListItem disablePadding sx={{ mb: 0.5 }}>
             <ListItemButton

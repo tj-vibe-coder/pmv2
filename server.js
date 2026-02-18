@@ -252,6 +252,12 @@ function initializeDatabase() {
     if (err) console.error('Error creating cash_advances table:', err);
     else console.log('cash_advances table ready');
   });
+  db.run('ALTER TABLE cash_advances ADD COLUMN breakdown TEXT', (err) => {
+    if (err && !/duplicate column/i.test(err.message)) console.error('Error adding breakdown column:', err);
+  });
+  db.run('ALTER TABLE cash_advances ADD COLUMN project_id INTEGER', (err) => {
+    if (err && !/duplicate column/i.test(err.message)) console.error('Error adding project_id column:', err);
+  });
 
   // Liquidations: draft or submitted; can link to CA to reduce its balance on submit
   const createLiquidationsTable = `
@@ -1210,8 +1216,8 @@ app.get('/api/cash-advances', (req, res) => {
     if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     const sql = isAdmin
-      ? 'SELECT ca.*, u.username, u.full_name FROM cash_advances ca JOIN users u ON ca.user_id = u.id ORDER BY ca.id DESC'
-      : 'SELECT ca.*, u.username, u.full_name FROM cash_advances ca JOIN users u ON ca.user_id = u.id WHERE ca.user_id = ? ORDER BY ca.id DESC';
+      ? 'SELECT ca.*, u.username, u.full_name, p.project_name, p.project_no FROM cash_advances ca JOIN users u ON ca.user_id = u.id LEFT JOIN projects p ON ca.project_id = p.id ORDER BY ca.id DESC'
+      : 'SELECT ca.*, u.username, u.full_name, p.project_name, p.project_no FROM cash_advances ca JOIN users u ON ca.user_id = u.id LEFT JOIN projects p ON ca.project_id = p.id WHERE ca.user_id = ? ORDER BY ca.id DESC';
     const params = isAdmin ? [] : [user.id];
     db.all(sql, params, (err, rows) => {
       if (err) {
@@ -1226,13 +1232,31 @@ app.get('/api/cash-advances', (req, res) => {
 app.post('/api/cash-advances', (req, res) => {
   getCurrentUser(req, (err, user) => {
     if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
-    const amount = parseFloat(req.body.amount);
-    if (!amount || amount <= 0) return res.status(400).json({ success: false, error: 'Invalid amount' });
-    const purpose = (req.body.purpose || '').trim() || null;
-    const requestedAt = Math.floor(Date.now() / 1000);
+    const projectId = req.body.project_id != null ? parseInt(req.body.project_id, 10) : null;
+    let breakdownJson = null;
+    let amount = parseFloat(req.body.amount);
+    const rawBreakdown = req.body.breakdown;
+    if (Array.isArray(rawBreakdown) && rawBreakdown.length > 0) {
+      const items = rawBreakdown.map((r) => ({
+        category: String(r.category ?? '').trim() || null,
+        description: String(r.description ?? '').trim() || null,
+        amount: parseFloat(r.amount),
+      })).filter((r) => Number.isFinite(r.amount) && r.amount > 0);
+      const sum = items.reduce((s, r) => s + r.amount, 0);
+      if (items.length > 0) {
+        breakdownJson = JSON.stringify(items);
+        if (sum > 0) amount = sum;
+      }
+    }
+    if (!amount || amount <= 0) return res.status(400).json({ success: false, error: 'Add at least one breakdown line with an amount (total is auto-computed)' });
+    let requestedAt = Math.floor(Date.now() / 1000);
+    const dateRequested = req.body.date_requested;
+    if (dateRequested && /^\d{4}-\d{2}-\d{2}$/.test(String(dateRequested).trim())) {
+      requestedAt = Math.floor(new Date(dateRequested + 'T12:00:00').getTime() / 1000);
+    }
     db.run(
-      'INSERT INTO cash_advances (user_id, amount, balance_remaining, status, purpose, requested_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [user.id, amount, 0, 'pending', purpose, requestedAt, requestedAt],
+      'INSERT INTO cash_advances (user_id, amount, balance_remaining, status, purpose, breakdown, project_id, requested_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [user.id, amount, 0, 'pending', null, breakdownJson, projectId || null, requestedAt, requestedAt],
       function (err) {
         if (err) {
           console.error('Error creating cash advance:', err);
@@ -1270,6 +1294,41 @@ app.patch('/api/cash-advances/:id', (req, res) => {
           res.json({ success: true, message: status === 'approved' ? 'Cash advance approved' : 'Cash advance rejected' });
         }
       );
+    });
+  });
+});
+
+app.delete('/api/cash-advances/:id', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ success: false, error: 'Invalid id' });
+    const canDeleteAny = user.role === 'superadmin' || user.role === 'admin';
+    db.get('SELECT id, user_id, status FROM cash_advances WHERE id = ?', [id], (err, row) => {
+      if (err) return res.status(500).json({ success: false, error: 'Database error' });
+      if (!row) return res.status(404).json({ success: false, error: 'Cash advance not found' });
+      const userId = Number(user.id);
+      const rowUserId = Number(row.user_id);
+      if (canDeleteAny) {
+        // Superadmin / admin: can delete any CA (pending, approved, or rejected)
+      } else {
+        if (row.status !== 'pending') return res.status(400).json({ success: false, error: 'Only pending requests can be deleted' });
+        if (rowUserId !== userId) return res.status(403).json({ success: false, error: 'You can only delete your own request' });
+      }
+      // Unlink liquidations that reference this CA so delete doesn't hit FK constraint
+      db.run('UPDATE liquidations SET ca_id = NULL WHERE ca_id = ?', [id], function (updateErr) {
+        if (updateErr) {
+          console.error('Error unlinking liquidations before CA delete:', updateErr);
+          return res.status(500).json({ success: false, error: 'Database error' });
+        }
+        db.run('DELETE FROM cash_advances WHERE id = ?', [id], function (err) {
+          if (err) {
+            console.error('Error deleting cash advance:', err);
+            return res.status(500).json({ success: false, error: 'Database error' });
+          }
+          res.json({ success: true, message: 'Cash advance deleted' });
+        });
+      });
     });
   });
 });
