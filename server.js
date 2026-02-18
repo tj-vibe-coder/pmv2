@@ -112,10 +112,10 @@ function initializeDatabase() {
       process.exit(1);
     } else {
       console.log('Projects table ready');
-      // Add project_no column if missing (ignore duplicate column on existing DBs)
-      db.run('ALTER TABLE projects ADD COLUMN project_no TEXT', (err) => {
-        if (err && !/duplicate column/i.test(String(err.message || err))) console.error('Error adding project_no column:', err);
-      });
+      // Add project_no column if missing (local SQLite only; SQLite Cloud schema is already up to date)
+      if (!databaseUrl || !databaseUrl.startsWith('sqlitecloud://')) {
+        db.run('ALTER TABLE projects ADD COLUMN project_no TEXT', () => {});
+      }
     }
     startServer();
   });
@@ -140,13 +140,11 @@ function initializeDatabase() {
       console.error('Error creating users table:', err);
     } else {
       console.log('Users table ready');
-      // Add columns if missing (ignore duplicate column on SQLite Cloud / existing DBs)
-      db.run('ALTER TABLE users ADD COLUMN approved INTEGER DEFAULT 1', (err) => {
-        if (err && !/duplicate column/i.test(String(err.message || err))) console.error('Error adding approved column:', err);
-      });
-      db.run('ALTER TABLE users ADD COLUMN full_name TEXT', (err) => {
-        if (err && !/duplicate column/i.test(String(err.message || err))) console.error('Error adding full_name column:', err);
-      });
+      // Add columns if missing (local SQLite only; SQLite Cloud schema is already up to date)
+      if (!databaseUrl || !databaseUrl.startsWith('sqlitecloud://')) {
+        db.run('ALTER TABLE users ADD COLUMN approved INTEGER DEFAULT 1', () => {});
+        db.run('ALTER TABLE users ADD COLUMN full_name TEXT', () => {});
+      }
       setTimeout(() => {
         createDefaultUsers();
       }, 100);
