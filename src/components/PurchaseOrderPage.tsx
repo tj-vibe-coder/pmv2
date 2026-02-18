@@ -36,6 +36,7 @@ import dataService from '../services/dataService';
 import type { Project } from '../types/Project';
 import { REPORT_COMPANIES, type ReportCompanyKey } from './ProjectDetails';
 import { useAuth } from '../contexts/AuthContext';
+import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 
 export const PURCHASE_ORDERS_STORAGE_KEY = 'purchaseOrders';
 
@@ -47,7 +48,7 @@ const REPORT_COMPANY_ADDRESS: Record<ReportCompanyKey, string> = {
 };
 
 const REPORT_COMPANY_CONTACT: Record<ReportCompanyKey, { attn?: string; email?: string; phone?: string }> = {
-  ACT: {},
+  ACT: { attn: 'Mark Chesner A. Cantuba', email: 'markchesner.actech@gmail.com', phone: '09958194250; 09947827005' },
   IOCT: { attn: 'Reuel Rivera', email: 'rj.rivera@iocontroltech.com', phone: '+63 977 015 2940' },
 };
 
@@ -335,12 +336,13 @@ function formatPoDate(isoDate: string): string {
 
 /**
  * Export Purchase Order as a formal, professional PDF suitable for corporate submission and audit.
- * Structure: Company header → PO details → Supplier → Itemized table → Pricing summary → Terms → Approval section → Footer.
+ * Structure: Company header (with logo) → PO details → Supplier → Itemized table → Pricing summary → Terms → Approval section → Footer.
  */
-function exportPOToPDF(po: PurchaseOrder) {
+async function exportPOToPDF(po: PurchaseOrder) {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const margin = 14;
   const contentWidth = 210 - margin * 2;
+  const halfWidth = contentWidth / 2;
   const pageHeight = 297;
   let y = 12;
   const lineHeight = 5;
@@ -356,6 +358,53 @@ function exportPOToPDF(po: PurchaseOrder) {
   const noVatFlag = po.noVat === true;
   const { subtotal, discount, amountVatEx, vatAmount, grandTotal } = poAmounts(po);
 
+  // Load ArialNarrow font (same as DR)
+  const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
+  if (hasArialNarrow) {
+    doc.addFileToVFS('ArialNarrow.ttf', arialNarrowBase64);
+    doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'normal');
+  }
+  const fontTitle = () => doc.setFont('helvetica', 'bold');
+  const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
+
+  // Load company logo (ACT or IOCT)
+  let logoDataUrl: string | null = null;
+  let logoW = 0;
+  let logoH = 0;
+  if (reportCompany === 'ACT') {
+    try {
+      const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
+      const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
+      logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+      logoW = ACT_LOGO_PDF_WIDTH;
+      logoH = ACT_LOGO_PDF_HEIGHT;
+    } catch (_) {}
+  } else if (reportCompany === 'IOCT') {
+    try {
+      const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
+      const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
+      logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+      logoW = IOCT_LOGO_PDF_WIDTH;
+      logoH = IOCT_LOGO_PDF_HEIGHT;
+    } catch (_) {}
+  }
+
+  // ─── 1. Our Company with logo (left) | PURCHASE ORDER block (right) ───
+  if (logoDataUrl && logoW && logoH) {
+    doc.addImage(logoDataUrl, 'PNG', margin, y, logoW, logoH);
+    y += logoH + 4;
+  }
+  const companyContact = REPORT_COMPANY_CONTACT[reportCompany];
+  fontTitle();
+  doc.setFontSize(titleFontSize);
+  doc.text(companyName, margin, y);
+  fontBody();
+  doc.setFontSize(baseFontSize);
+  y += 5;
+  const buyerAddrLines = doc.splitTextToSize(companyAddress, halfWidth - 4);
+  doc.text(buyerAddrLines, margin, y);
+  const leftBlockY = y + buyerAddrLines.length * lineHeight;
+
   // Display PO as "2602002-001" (number only, no IOCT, no PO)
   const seqNo = parsePOSeqNo(po.poNumber);
   const yy =
@@ -370,40 +419,27 @@ function exportPOToPDF(po: PurchaseOrder) {
     baseNo ? `${baseNo}-${seqNo}` : po.poNumber.replace(/\s*-\s*/g, '-').replace(/^IOCT/i, '').replace(/-PO-/i, '-');
 
   const rightX = 210 - margin;
-  const halfWidth = contentWidth / 2;
   const bannerHeight = 6;
   const bannerTextSize = 9;
   const headerBlue = PO_PDF_HEADER_BLUE;
 
-  // ─── 1. Our Company (left) | PURCHASE ORDER block (right) ───
-  const companyContact = REPORT_COMPANY_CONTACT[reportCompany];
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(titleFontSize);
-  doc.text(companyName, margin, y);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(baseFontSize);
-  y += 5;
-  const buyerAddrLines = doc.splitTextToSize(companyAddress, halfWidth - 4);
-  doc.text(buyerAddrLines, margin, y);
-  const leftBlockY = y + buyerAddrLines.length * lineHeight;
-
   // PO block: right side, all lines right-aligned (rightX already defined above)
   const poTitleY = 14;
   doc.setTextColor(headerBlue[0], headerBlue[1], headerBlue[2]);
-  doc.setFont('helvetica', 'bold');
+  fontTitle();
   doc.setFontSize(14);
   doc.text('PURCHASE ORDER', rightX, poTitleY, { align: 'right' });
   doc.setTextColor(0, 0, 0);
-  doc.setFont('helvetica', 'normal');
+  fontBody();
   doc.setFontSize(baseFontSize);
   let rowY = poTitleY + 10;
   doc.text(`Date:${formatPoDate(po.orderDate || '')}`, rightX, rowY, { align: 'right' });
   rowY += 6;
-  doc.setFont('helvetica', 'bold');
+  fontTitle();
   doc.setFontSize(11);
   doc.text(`P.O No.:${displayPoNumber}`, rightX, rowY, { align: 'right' });
   doc.setFontSize(baseFontSize);
-  doc.setFont('helvetica', 'normal');
+  fontBody();
   y = Math.max(leftBlockY, rowY + 4) + sectionGap;
 
   // ─── 2. VENDOR (left) | SHIP TO (right) with blue banners ─────────────────
@@ -411,25 +447,28 @@ function exportPOToPDF(po: PurchaseOrder) {
   doc.rect(margin, y, halfWidth - 2, bannerHeight, 'F');
   doc.rect(margin + halfWidth + 2, y, halfWidth - 2, bannerHeight, 'F');
   doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
+  fontTitle();
   doc.setFontSize(bannerTextSize);
   doc.text('VENDOR', margin + 2, y + 4);
   doc.text('SHIP TO', margin + halfWidth + 4, y + 4);
   doc.setTextColor(0, 0, 0);
-  doc.setFont('helvetica', 'normal');
+  fontBody();
   doc.setFontSize(baseFontSize);
   y += bannerHeight + 3;
 
-  // Single-line spacing between each item (like reference layout)
-  const blockLineHeight = 5.5;
+  // Single-line spacing between each item (tight spacing, no extra gaps)
+  const blockLineHeight = 4;
   const vendorX = margin + 2;
   const shipToX = margin + halfWidth + 4;
   const vendorContentY = y;
 
   // VENDOR: Attention, Company, Address, Email, Phone (one line each, single-line spacing)
+  fontBody();
   doc.text(po.supplierAttentionTo ? `Attention: ${po.supplierAttentionTo}` : 'Attention: —', vendorX, y);
   y += blockLineHeight;
+  fontTitle();
   doc.text(po.supplierName, vendorX, y);
+  fontBody();
   y += blockLineHeight;
   if (po.supplierAddress) {
     const supLines = doc.splitTextToSize(po.supplierAddress, halfWidth - 8);
@@ -450,11 +489,14 @@ function exportPOToPDF(po: PurchaseOrder) {
 
   // SHIP TO: Attention, Company, Address, Email, Phone (same spacing)
   y = vendorContentY;
+  fontBody();
   if (companyContact.attn) {
     doc.text(`Attention: ${companyContact.attn}`, shipToX, y);
     y += blockLineHeight;
   }
+  fontTitle();
   doc.text(companyName, shipToX, y);
+  fontBody();
   y += blockLineHeight;
   const shipToAddrLines = doc.splitTextToSize(companyAddress, halfWidth - 8);
   shipToAddrLines.forEach((line: string) => {
@@ -471,9 +513,10 @@ function exportPOToPDF(po: PurchaseOrder) {
   }
   y = Math.max(vendorBlockBottom, y) + sectionGap;
 
-  // Delivery Date & Quotation Ref. (one line)
+  // Quotation Ref.
+  fontBody();
   doc.setFontSize(smallFontSize);
-  doc.text(`Delivery Date: ${po.expectedDelivery || '—'}  |  Quotation Ref.: ${po.quotationReference ?? '—'}`, margin, y);
+  doc.text(`Quotation Ref.: ${po.quotationReference ?? '—'}`, margin, y);
   y += lineHeight + 2;
 
   // ─── 3. ITEMIZED ORDER TABLE ───────────────────────────────────────────
@@ -513,10 +556,11 @@ function exportPOToPDF(po: PurchaseOrder) {
       6: { cellWidth: tableCols[6], halign: 'right', overflow: 'linebreak' },
       7: { cellWidth: tableCols[7], halign: 'right', overflow: 'linebreak' },
     },
-    styles: { fontSize: tableFontSize, font: 'helvetica' },
+    styles: { fontSize: tableFontSize, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
     headStyles: {
       fillColor: PO_PDF_HEADER_BLUE,
       textColor: [255, 255, 255],
+      font: 'helvetica',
       fontStyle: 'bold',
       fontSize: tableFontSize,
       halign: 'left',
@@ -540,7 +584,7 @@ function exportPOToPDF(po: PurchaseOrder) {
   // ─── 5. PRICING SUMMARY (labels beside amounts, all caps bold) ───────────
   const amountColWidth = 42;
   const labelColRight = totalColRight - amountColWidth;
-  doc.setFont('helvetica', 'bold');
+  fontTitle();
   doc.setFontSize(baseFontSize);
   doc.text('SUBTOTAL (VAT EXCLUSIVE)', labelColRight, y, { align: 'right' });
   doc.text(`PHP ${formatPhp(subtotal)}`, totalColRight, y, { align: 'right' });
@@ -560,26 +604,27 @@ function exportPOToPDF(po: PurchaseOrder) {
   }
   doc.text(noVatFlag ? 'GRAND TOTAL' : 'GRAND TOTAL (VAT INCLUSIVE)', labelColRight, y, { align: 'right' });
   doc.text(`PHP ${formatPhp(grandTotal)}`, totalColRight, y, { align: 'right' });
-  doc.setFont('helvetica', 'normal');
+  fontBody();
   y += sectionGap + 4;
 
   // Footer on page 1
   const footerY = pageHeight - 12;
   const totalPages = 2;
   const footerBase = `${companyName}  |  PO: ${displayPoNumber}  |  Seq: ${seqDisplay}`;
-  doc.setFont('helvetica', 'normal');
+  fontBody();
   doc.setFontSize(smallFontSize);
   doc.text(`${footerBase}  |  Page 1 of ${totalPages}`, margin, footerY);
 
   // ─── 6. TERMS AND CONDITIONS (page 2) ───────────────────────────────────
   doc.addPage();
   y = 12;
-  doc.setFont('helvetica', 'bold');
+  fontTitle();
   doc.setFontSize(sectionFontSize);
   doc.text('Terms and Conditions', margin, y);
-  doc.setFont('helvetica', 'normal');
+  fontBody();
   doc.setFontSize(baseFontSize);
   y += 5;
+  fontBody();
   doc.text(`Payment Terms: ${po.paymentTerms ?? 'One hundred (100) days, PDC'}`, margin, y);
   y += lineHeight;
   doc.text(`Delivery / Lead Time: ${po.leadTime ?? 'Three (3) days'}`, margin, y);
@@ -623,10 +668,10 @@ function exportPOToPDF(po: PurchaseOrder) {
     },
   ];
   termsSections.forEach(({ title, text }) => {
-    doc.setFont('helvetica', 'bold');
+    fontTitle();
     doc.text(title, margin, y);
     y += lineHeight;
-    doc.setFont('helvetica', 'normal');
+    fontBody();
     const textLines = doc.splitTextToSize(text, contentWidth);
     doc.text(textLines, margin, y);
     y += textLines.length * lineHeight + lineHeight;
@@ -634,10 +679,10 @@ function exportPOToPDF(po: PurchaseOrder) {
   y += sectionGap;
 
   // ─── 7. IMPORTANT NOTES ───────────────────────────────────────────────
-  doc.setFont('helvetica', 'bold');
+  fontTitle();
   doc.setFontSize(sectionFontSize);
   doc.text('Important Notes', margin, y);
-  doc.setFont('helvetica', 'normal');
+  fontBody();
   doc.setFontSize(baseFontSize);
   y += 5;
   const importantNotes = [
@@ -655,17 +700,18 @@ function exportPOToPDF(po: PurchaseOrder) {
   // ─── 8. APPROVAL AND ACKNOWLEDGMENT (no underline) ───────────────────
   y += 4;
   const sigY = y + 6;
-  doc.setFont('helvetica', 'bold');
+  fontTitle();
   doc.setFontSize(baseFontSize);
   doc.text('Authorised by (Buyer):', margin, y);
   doc.text('Acknowledged by (Supplier):', margin + 95, y);
-  doc.setFont('helvetica', 'normal');
+  fontBody();
+  fontBody();
   doc.text(po.approvedBy?.trim() || '', margin, sigY);
   doc.text(po.receivedByVendor?.trim() || '', margin + 95, sigY);
   y = sigY + sectionGap + 6;
 
   // Footer on page 2
-  doc.setFont('helvetica', 'normal');
+  fontBody();
   doc.setFontSize(smallFontSize);
   doc.text(`${footerBase}  |  Page 2 of ${totalPages}`, margin, footerY);
 

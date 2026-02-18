@@ -24,6 +24,9 @@ import {
   DialogActions,
   Tabs,
   Tab,
+  FormControl,
+  InputLabel,
+  Select,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, Send as SendIcon, Visibility as VisibilityIcon, FileDownload as FileDownloadIcon, PictureAsPdf as PictureAsPdfIcon, Upload as UploadIcon, Edit as EditIcon } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
@@ -36,9 +39,12 @@ import { ORDER_TRACKER_STORAGE_KEY, type OrderRecord, type OrderItem } from './O
 import OrderTrackerPage from './OrderTrackerPage';
 import { SUPPLIERS_STORAGE_KEY, type Supplier } from './SuppliersPage';
 import PdfPreviewDialog from './PdfPreviewDialog';
+import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
+import { REPORT_COMPANIES, type ReportCompanyKey } from './ProjectDetails';
 
 const STORAGE_KEY = 'materialRequests';
 const PO_STORAGE_KEY = 'purchaseOrders';
+const MRF_HEADER_BLUE = [44, 90, 160] as [number, number, number];
 
 /** Minimal PO shape to detect which MRF items are already in a PO (avoid circular import) */
 interface POStub {
@@ -91,6 +97,7 @@ export interface MaterialRequest {
   items: MaterialRequestItem[];
   status: 'Draft' | 'Submitted';
   createdAt: string;
+  reportCompany?: ReportCompanyKey;
 }
 
 const defaultItem: MaterialRequestItem = {
@@ -143,6 +150,7 @@ const MaterialRequestFormPage: React.FC = () => {
   const [dateNeeded, setDateNeeded] = useState('');
   const [requestedBy, setRequestedBy] = useState('');
   const [deliveryLocation, setDeliveryLocation] = useState('');
+  const [reportCompany, setReportCompany] = useState<ReportCompanyKey>('IOCT');
   const [items, setItems] = useState<MaterialRequestItem[]>([
     { ...defaultItem, id: `item-${Date.now()}` },
   ]);
@@ -193,6 +201,7 @@ const MaterialRequestFormPage: React.FC = () => {
     setDateNeeded(r.dateNeeded ?? '');
     setRequestedBy(r.requestedBy ?? '');
     setDeliveryLocation(r.deliveryLocation ?? '');
+    setReportCompany(r.reportCompany ?? 'IOCT');
     setItems(
       r.items && r.items.length > 0
         ? r.items.map((i) => ({ ...i, id: i.id || `item-${Date.now()}-${Math.random()}` }))
@@ -209,6 +218,7 @@ const MaterialRequestFormPage: React.FC = () => {
     setDateNeeded('');
     setRequestedBy('');
     setDeliveryLocation('');
+    setReportCompany('IOCT');
     setItems([{ ...defaultItem, id: `item-${Date.now()}` }]);
     setMessage(null);
   };
@@ -459,20 +469,36 @@ const MaterialRequestFormPage: React.FC = () => {
 
   const exportToPDF = () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    
+    // Load ArialNarrow font (same as DR/PO)
+    const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
+    if (hasArialNarrow) {
+      doc.addFileToVFS('ArialNarrow.ttf', arialNarrowBase64);
+      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'normal');
+    }
+    const fontTitle = () => doc.setFont('helvetica', 'bold');
+    const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
+    
+    fontTitle();
     doc.setFontSize(14);
     doc.text('Material Request Form - Summary', 14, 15);
+    fontBody();
     doc.setFontSize(10);
     autoTable(doc, {
       head: [['Request No.', 'Project', 'Date', 'Requested By', 'Delivery Location', 'Status']],
       body: requests.map((r) => [r.requestNo, r.projectName, r.requestDate, r.requestedBy, r.deliveryLocation, r.status]),
       startY: 22,
       margin: { left: 14 },
+      styles: { fontSize: 10, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
+      headStyles: { fillColor: MRF_HEADER_BLUE, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', fontSize: 10 },
     });
     const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
     let finalY = docWithTable.lastAutoTable?.finalY ?? 22;
     if (finalY > 0) finalY += 6;
+    fontTitle();
     doc.setFontSize(11);
     doc.text('Items (all requests)', 14, finalY + 4);
+    fontBody();
     autoTable(doc, {
       head: [['Request No.', 'No.', 'Item / Description', 'Part #', 'Brand', 'Qty', 'Unit', 'Notes']],
       body: requests.flatMap((r) =>
@@ -491,11 +517,13 @@ const MaterialRequestFormPage: React.FC = () => {
       ),
       startY: finalY + 8,
       margin: { left: 14 },
+      styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
+      headStyles: { fillColor: MRF_HEADER_BLUE, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', fontSize: 8 },
     });
     doc.save(`MaterialRequests_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
-  const exportViewRequestToPDF = (r: MaterialRequest, preview = false): Blob | void => {
+  const exportViewRequestToPDF = async (r: MaterialRequest, preview = false): Promise<Blob | void> => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = 210;
     const pageHeight = 297;
@@ -504,20 +532,59 @@ const MaterialRequestFormPage: React.FC = () => {
     const poNumber = r.projectPoNumber ?? (r.projectId ? projects.find((p) => p.id === r.projectId)?.po_number : null) ?? '';
     const blank = (v: string) => (v || '').trim() || '';
 
+    // Use reportCompany from request, default to IOCT
+    const reportCompany: ReportCompanyKey = r.reportCompany ?? 'IOCT';
+
+    // Load ArialNarrow font (same as DR/PO)
+    const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
+    if (hasArialNarrow) {
+      doc.addFileToVFS('ArialNarrow.ttf', arialNarrowBase64);
+      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'normal');
+    }
+    const fontTitle = () => doc.setFont('helvetica', 'bold');
+    const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
+
+    // Load company logo (ACT or IOCT)
+    let logoDataUrl: string | null = null;
+    let logoW = 0;
+    let logoH = 0;
+    let y = 12;
+    if (reportCompany === 'ACT') {
+      try {
+        const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
+        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
+        logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+        logoW = ACT_LOGO_PDF_WIDTH;
+        logoH = ACT_LOGO_PDF_HEIGHT;
+      } catch (_) {}
+    } else if (reportCompany === 'IOCT') {
+      try {
+        const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
+        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
+        logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+        logoW = IOCT_LOGO_PDF_WIDTH;
+        logoH = IOCT_LOGO_PDF_HEIGHT;
+      } catch (_) {}
+    }
+
+    // Draw logo at top left if available
+    if (logoDataUrl && logoW && logoH) {
+      doc.addImage(logoDataUrl, 'PNG', margin, y, logoW, logoH);
+      y += logoH + 4;
+    }
+
+    const leftTextY = logoDataUrl && logoW && logoH ? y : 15;
+    fontTitle();
     doc.setFontSize(20);
-    doc.setFont('helvetica', 'bold');
     doc.text('Material Request', rightX, 15, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
+    fontBody();
     doc.setFontSize(10);
     doc.text(`Request No.: ${r.requestNo}`, rightX, 24, { align: 'right' });
     doc.text(`Date: ${r.requestDate}`, rightX, 30, { align: 'right' });
 
-    doc.text(`Project: ${blank(r.projectName)}`, margin, 15);
-    doc.text(`PO No.: ${blank(poNumber)}`, margin, 22);
-    doc.text(`Requested By: ${blank(r.requestedBy)}`, margin, 29);
-    doc.text(`Delivery Location: ${blank(r.deliveryLocation)}`, margin, 36);
-    doc.text(`Status: ${blank(r.status)}`, margin, 43);
-    doc.text(`Date need: ${blank(r.dateNeeded ?? '')}`, margin, 50);
+    doc.text(`Project: ${blank(r.projectName)}`, margin, leftTextY);
+    doc.text(`PO No.: ${blank(poNumber)}`, margin, leftTextY + 7);
+    doc.text(`Requested By: ${blank(r.requestedBy)}`, margin, leftTextY + 14);
     const body = (r.items && r.items.length > 0)
       ? r.items.map((item, idx) => [
           String(idx + 1),
@@ -529,18 +596,37 @@ const MaterialRequestFormPage: React.FC = () => {
           blank(item.notes ?? ''),
         ])
       : [['', 'No items', '', '', '', '', '']];
+    const tableStartY = leftTextY + 21;
     autoTable(doc, {
       head: [['No.', 'Item / Description', 'Part #', 'Brand', 'Qty', 'Unit', 'Notes']],
       body,
-      startY: 58,
+      startY: tableStartY,
       margin: { left: margin, right: margin },
       tableWidth: pageWidth - margin * 2,
-      styles: { fontSize: 7 },
-      headStyles: { fontSize: 7 },
+      styles: { fontSize: 7, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
+      headStyles: { fillColor: MRF_HEADER_BLUE, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', fontSize: 7 },
     });
+    const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
     const totalPages = doc.getNumberOfPages();
     const docNumber = `Doc. No.: ${r.requestNo}`;
     const footerY = pageHeight - 10;
+    
+    // Signature section at bottom of last page
+    doc.setPage(totalPages);
+    const sigY = footerY - 20;
+    const preparedByName = (user?.full_name?.trim() || user?.username || user?.email || '').trim() || '—';
+    const sigLineWidth = 50;
+    const sigX = margin;
+    
+    fontBody();
+    doc.setFontSize(9);
+    doc.text('Prepared by:', sigX, sigY);
+    doc.text(preparedByName, sigX, sigY + 6);
+    doc.setDrawColor(180, 180, 180);
+    doc.line(sigX, sigY + 8, sigX + sigLineWidth, sigY + 8);
+    
+    // Footer on all pages
+    fontBody();
     doc.setFontSize(8);
     for (let p = 1; p <= totalPages; p++) {
       doc.setPage(p);
@@ -555,8 +641,8 @@ const MaterialRequestFormPage: React.FC = () => {
   const [pdfPreviewBlob, setPdfPreviewBlob] = useState<Blob | null>(null);
   const [pdfPreviewTitle, setPdfPreviewTitle] = useState('');
 
-  const handlePreviewMRF = (r: MaterialRequest) => {
-    const blob = exportViewRequestToPDF(r, true);
+  const handlePreviewMRF = async (r: MaterialRequest) => {
+    const blob = await exportViewRequestToPDF(r, true);
     if (blob) {
       setPdfPreviewBlob(blob);
       setPdfPreviewTitle(`Material Request - ${r.requestNo}`);
@@ -591,6 +677,7 @@ const MaterialRequestFormPage: React.FC = () => {
       items: items.map((i) => ({ ...i })),
       status: asDraft ? 'Draft' : 'Submitted',
       createdAt: isEditing && editingRequest ? editingRequest.createdAt : new Date().toISOString(),
+      reportCompany: reportCompany,
     };
     const next = isEditing
       ? requests.map((r) => (r.id === editingRequestId ? req : r))
@@ -717,6 +804,19 @@ const MaterialRequestFormPage: React.FC = () => {
                 <MenuItem key={p.id} value={p.id}>{p.project_name}</MenuItem>
               ))}
             </TextField>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Report as company</InputLabel>
+              <Select
+                value={reportCompany}
+                label="Report as company"
+                onChange={(e) => setReportCompany(e.target.value as ReportCompanyKey)}
+              >
+                <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
+                <MenuItem value="IOCT">{REPORT_COMPANIES.IOCT}</MenuItem>
+              </Select>
+            </FormControl>
           </Grid>
           <Grid size={{ xs: 12, sm: 4 }}>
             <TextField
@@ -1015,7 +1115,7 @@ const MaterialRequestFormPage: React.FC = () => {
                       </IconButton>
                       <IconButton
                         size="small"
-                        onClick={() => exportViewRequestToPDF(r)}
+                        onClick={() => exportViewRequestToPDF(r).catch(console.error)}
                         title="Export to PDF"
                       >
                         <FileDownloadIcon fontSize="small" />
@@ -1157,7 +1257,7 @@ const MaterialRequestFormPage: React.FC = () => {
               <Button variant="outlined" startIcon={<PictureAsPdfIcon />} onClick={() => handlePreviewMRF(viewRequest)} sx={{ borderColor: '#2c5aa0', color: '#2c5aa0' }}>
                 Preview PDF
               </Button>
-              <Button variant="contained" startIcon={<FileDownloadIcon />} onClick={() => exportViewRequestToPDF(viewRequest)} sx={{ bgcolor: '#2c5aa0', '&:hover': { bgcolor: '#1e4a72' } }}>
+              <Button variant="contained" startIcon={<FileDownloadIcon />} onClick={() => exportViewRequestToPDF(viewRequest).catch(console.error)} sx={{ bgcolor: '#2c5aa0', '&:hover': { bgcolor: '#1e4a72' } }}>
                 Export to PDF
               </Button>
             </>

@@ -33,6 +33,12 @@ const REPORT_COMPANY_ADDRESS: Record<ReportCompanyKey, string> = {
   IOCT: 'B63, L7 Dynamism Jubilation Enclave, Santo Niño, City of Biñan, Laguna, Region IV-A (Calabarzon), 4024',
 };
 
+/** Default DR (Delivery Receipt) contact for Shipping To – ATTN, Email, Mobile. Fetched when report company is selected. */
+const REPORT_COMPANY_DR_CONTACT: Record<ReportCompanyKey, { attn: string; email: string; phone: string }> = {
+  ACT: { attn: '', email: '', phone: '' },
+  IOCT: { attn: 'Francis Porras', email: 'f.porras@iocontroltech.com', phone: '+63 977 015 2940' },
+};
+
 const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
 
 const UOM_OPTIONS = ['', 'pc', 'pcs', 'set', 'box', 'boxes', 'ea', 'unit', 'lot', 'kg', 'm', 'meters', 'liters', 'm²', 'roll', 'rolls', 'pair', 'dozen', 'carton', 'pack', 'bundle', 'other'];
@@ -189,6 +195,7 @@ const DeliveryPage: React.FC = () => {
     dataService.getProjects().then(setProjects);
     setOrders(loadOrdersFromTracker());
   }, []);
+
 
   // Prefill from Order when "Link to Order" is selected or URL has ?orderId= (optional ?itemIds=id1,id2 for selected items only)
   const applyOrderPrefill = (order: OrderRecord, projectList: Project[], selectedItemIds?: string[]) => {
@@ -394,10 +401,23 @@ const DeliveryPage: React.FC = () => {
 
     // Load logo once for reuse on continuation pages
     let logoDataUrl: string | null = null;
+    let logoW = 0;
+    let logoH = 0;
     if (reportCompany === 'ACT') {
       try {
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-advance-controle.png`;
-        logoDataUrl = await loadLogoCroppedLeft(logoUrl);
+        const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
+        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
+        logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+        logoW = ACT_LOGO_PDF_WIDTH;
+        logoH = ACT_LOGO_PDF_HEIGHT;
+      } catch (_) {}
+    } else if (reportCompany === 'IOCT') {
+      try {
+        const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
+        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
+        logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+        logoW = IOCT_LOGO_PDF_WIDTH;
+        logoH = IOCT_LOGO_PDF_HEIGHT;
       } catch (_) {}
     }
 
@@ -406,9 +426,7 @@ const DeliveryPage: React.FC = () => {
       let y = startY;
       const headerY = y;
       let leftY = headerY;
-      if (logoDataUrl && reportCompany === 'ACT') {
-        const logoW = 12;
-        const logoH = 10;
+      if (logoDataUrl && logoW && logoH) {
         doc.addImage(logoDataUrl, 'PNG', margin, headerY, logoW, logoH);
         leftY = headerY + logoH + 4;
       }
@@ -565,7 +583,7 @@ const DeliveryPage: React.FC = () => {
       doc.text(`Page ${p} of ${totalPages}`, 210 - margin, footerY, { align: 'right' });
     }
 
-    const filename = `Delivery_Receipt_${(deliveryNoteNo || 'DR').replace(/\s/g, '_')}.pdf`;
+    const filename = `${(deliveryNoteNo || 'DR').replace(/\s/g, '_')}.pdf`;
     doc.save(filename);
   };
 
@@ -582,7 +600,14 @@ const DeliveryPage: React.FC = () => {
               <Select
                 value={reportCompany}
                 label="Report as company"
-                onChange={(e) => setReportCompany(e.target.value as ReportCompanyKey)}
+                onChange={(e) => {
+                  const v = e.target.value as ReportCompanyKey;
+                  setReportCompany(v);
+                  const contact = REPORT_COMPANY_DR_CONTACT[v];
+                  setShippingContactName(contact.attn);
+                  setShippingContactEmail(contact.email);
+                  setShippingContactPhone(contact.phone);
+                }}
               >
                 <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
                 <MenuItem value="IOCT">{REPORT_COMPANIES.IOCT}</MenuItem>

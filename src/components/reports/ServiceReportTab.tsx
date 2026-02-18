@@ -30,6 +30,7 @@ import {
   saveServiceReport,
   clearServiceReports,
 } from '../ProjectDetails';
+import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
@@ -155,8 +156,13 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     const lineHeight = 5.2;
     const sectionGap = 6;
 
-    const fontTitle = () => { doc.setFont('helvetica', 'bold'); };
-    const fontBody = () => { doc.setFont('helvetica', 'normal'); };
+    const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
+    if (hasArialNarrow) {
+      doc.addFileToVFS('ArialNarrow.ttf', arialNarrowBase64);
+      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'normal');
+    }
+    const fontTitle = () => doc.setFont('helvetica', 'bold');
+    const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
     const companyName = REPORT_COMPANIES[reportCompany];
     const companyNameUpper = companyName.toUpperCase();
     const projectNo = (project.project_no || String(project.item_no ?? project.id) || '').trim() || '—';
@@ -165,10 +171,19 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
 
     if (reportCompany === 'ACT') {
       try {
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-advance-controle.png`;
-        const logoDataUrl = await loadImageAsDataUrl(logoUrl);
-        doc.addImage(logoDataUrl, 'PNG', margin, y, 12, 10);
-        y += 14;
+        const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
+        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
+        const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+        doc.addImage(logoDataUrl, 'PNG', margin, y, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT);
+        y += ACT_LOGO_PDF_HEIGHT + 4;
+      } catch (_) {}
+    } else if (reportCompany === 'IOCT') {
+      try {
+        const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
+        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
+        const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+        doc.addImage(logoDataUrl, 'PNG', margin, y, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT);
+        y += IOCT_LOGO_PDF_HEIGHT + 4;
       } catch (_) {}
     }
 
@@ -237,7 +252,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       tableWidth: contentWidth,
       theme: 'grid',
       columnStyles: { 0: { cellWidth: 10 }, 1: { cellWidth: contentWidth * 0.5 - 5 }, 2: { cellWidth: contentWidth * 0.5 - 5 } },
-      styles: { fontSize: 8, font: 'helvetica', overflow: 'linebreak', cellPadding: 2 },
+      styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', overflow: 'linebreak', cellPadding: 2 },
       headStyles: { fillColor: DR_HEADER_BLUE, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
     });
     const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };

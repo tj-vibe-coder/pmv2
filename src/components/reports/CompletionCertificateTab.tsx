@@ -4,6 +4,7 @@ import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '
 import { Project } from '../../types/Project';
 import jsPDF from 'jspdf';
 import { REPORT_COMPANIES, type ReportCompanyKey } from '../ProjectDetails';
+import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 
@@ -55,8 +56,13 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     const sectionGap = 7;
     const afterHeading = 5;
 
-    const fontTitle = () => { doc.setFont('helvetica', 'bold'); };
-    const fontBody = () => { doc.setFont('helvetica', 'normal'); };
+    const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
+    if (hasArialNarrow) {
+      doc.addFileToVFS('ArialNarrow.ttf', arialNarrowBase64);
+      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'normal');
+    }
+    const fontTitle = () => doc.setFont('helvetica', 'bold');
+    const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
 
     // Our company (contractor) – from report company selection
     const companyName = REPORT_COMPANIES[reportCompany];
@@ -67,13 +73,22 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
       ? new Date(typeof project.completion_date === 'number' ? project.completion_date * 1000 : project.completion_date).toLocaleDateString('en-US', { dateStyle: 'long' })
       : new Date().toLocaleDateString('en-US', { dateStyle: 'long' });
 
-    // Optional company logo (e.g. ACT)
+    // Optional company logo (e.g. ACT, IOCT)
     if (reportCompany === 'ACT') {
       try {
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-advance-controle.png`;
-        const logoDataUrl = await loadImageAsDataUrl(logoUrl);
-        doc.addImage(logoDataUrl, 'PNG', margin, y, 12, 10);
-        y += 14;
+        const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
+        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
+        const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+        doc.addImage(logoDataUrl, 'PNG', margin, y, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT);
+        y += ACT_LOGO_PDF_HEIGHT + 4;
+      } catch (_) {}
+    } else if (reportCompany === 'IOCT') {
+      try {
+        const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
+        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
+        const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+        doc.addImage(logoDataUrl, 'PNG', margin, y, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT);
+        y += IOCT_LOGO_PDF_HEIGHT + 4;
       } catch (_) {}
     }
 
