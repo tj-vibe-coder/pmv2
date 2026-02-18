@@ -35,6 +35,7 @@ import { ORDER_TRACKER_STORAGE_KEY, type OrderRecord, type OrderItem } from './O
 import dataService from '../services/dataService';
 import type { Project } from '../types/Project';
 import { REPORT_COMPANIES, type ReportCompanyKey } from './ProjectDetails';
+import { useAuth } from '../contexts/AuthContext';
 
 export const PURCHASE_ORDERS_STORAGE_KEY = 'purchaseOrders';
 
@@ -699,6 +700,7 @@ const PurchaseOrderPage: React.FC = () => {
   const [receivedByVendor, setReceivedByVendor] = useState('');
   const [reportCompany, setReportCompany] = useState<ReportCompanyKey>('IOCT');
   const [createDialogItems, setCreateDialogItems] = useState<PurchaseOrderItem[]>([]);
+  const { user: currentUser } = useAuth();
 
   /** Composite ids of items already in any existing PO (to avoid double-order in new PO) */
   const alreadyInPoIds = useMemo(() => {
@@ -873,7 +875,9 @@ const PurchaseOrderPage: React.FC = () => {
       projectName: firstMRF.projectName || '—',
       orderDate,
       expectedDelivery: expectedDelivery.trim() || '—',
-      requestedBy: selectedMrfIds.length === 1 ? (firstMRF.requestedBy || '—') : 'Multiple',
+      requestedBy: selectedMrfIds.length === 1
+        ? (firstMRF.requestedBy?.trim() || (currentUser?.full_name?.trim() || currentUser?.username || '') || '—')
+        : 'Multiple',
       quotationReference: quotationReference.trim(),
       paymentTerms: paymentTerms.trim() || undefined,
       leadTime: leadTime.trim() || undefined,
@@ -900,7 +904,10 @@ const PurchaseOrderPage: React.FC = () => {
   };
 
   const handleOpenEdit = (po: PurchaseOrder) => {
-    setEditingPO(JSON.parse(JSON.stringify(po)));
+    const copy = JSON.parse(JSON.stringify(po)) as PurchaseOrder;
+    const fullName = (currentUser?.full_name?.trim() || currentUser?.username || '').trim();
+    if (fullName && (!copy.requestedBy || copy.requestedBy === '—')) copy.requestedBy = fullName;
+    setEditingPO(copy);
   };
 
   const handleSaveEdit = () => {

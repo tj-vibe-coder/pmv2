@@ -62,9 +62,13 @@ const ReportsPage: React.FC = () => {
   const [pdfPreviewTitle, setPdfPreviewTitle] = useState('');
 
   useEffect(() => {
-    const defaultName = currentUser?.username || currentUser?.email || '';
-    setPreparedBy((prev) => (prev.name === '' && defaultName ? { ...prev, name: defaultName } : prev));
-  }, [currentUser?.username, currentUser?.email]);
+    setPreparedBy((prev) => {
+      const name = prev.name === '' ? (currentUser?.full_name?.trim() || currentUser?.username || currentUser?.email || '') : prev.name;
+      const designation = prev.designation === '' ? (currentUser?.designation?.trim() || '') : prev.designation;
+      if (name !== prev.name || designation !== prev.designation) return { ...prev, name, designation };
+      return prev;
+    });
+  }, [currentUser?.full_name, currentUser?.username, currentUser?.email, currentUser?.designation]);
 
   useEffect(() => {
     try {

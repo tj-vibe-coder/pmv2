@@ -31,6 +31,7 @@ import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 import dataService from '../services/dataService';
 import { Project } from '../types/Project';
+import { useAuth } from '../contexts/AuthContext';
 import { ORDER_TRACKER_STORAGE_KEY, type OrderRecord, type OrderItem } from './OrderTrackerPage';
 import OrderTrackerPage from './OrderTrackerPage';
 import { SUPPLIERS_STORAGE_KEY, type Supplier } from './SuppliersPage';
@@ -150,6 +151,12 @@ const MaterialRequestFormPage: React.FC = () => {
   const [editingRequestId, setEditingRequestId] = useState<string | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [pos, setPos] = useState<POStub[]>([]);
+  const { user } = useAuth();
+
+  useEffect(() => {
+    const name = (user?.full_name?.trim() || user?.username || '').trim();
+    if (name) setRequestedBy((prev) => (prev === '' ? name : prev));
+  }, [user?.full_name, user?.username]);
 
   useEffect(() => {
     dataService.getProjects().then(setProjects);

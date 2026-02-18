@@ -32,7 +32,7 @@ const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 
 export interface AttachmentsTabProps {
   project: Project;
-  currentUser: { username?: string; email?: string } | null;
+  currentUser: { full_name?: string | null; username?: string; email?: string } | null;
 }
 
 const AttachmentsTab: React.FC<AttachmentsTabProps> = ({ project, currentUser }) => {

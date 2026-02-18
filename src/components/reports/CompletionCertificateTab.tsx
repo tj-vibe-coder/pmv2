@@ -28,7 +28,7 @@ const loadImageAsDataUrl = (url: string): Promise<string> =>
 
 export interface CompletionCertificateTabProps {
   project: Project;
-  currentUser: { username?: string; email?: string } | null;
+  currentUser: { full_name?: string | null; username?: string; email?: string } | null;
   reportCompany: ReportCompanyKey;
   setReportCompany: (v: ReportCompanyKey) => void;
   preparedBy: { name: string; designation: string; company: string; date: string };
@@ -194,7 +194,7 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     doc.text('Contractor Representative:', rightColX, y);
     fontBody();
     doc.setFontSize(10);
-    const repName = (preparedBy.name || currentUser?.username || currentUser?.email || '').trim() || '—';
+    const repName = (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
     const repDesignation = (preparedBy.designation || '').trim() || '—';
     doc.line(rightColX, rowY + 2, rightColX + lineWidth, rowY + 2);
     doc.text(repName, rightColX, rowY);
