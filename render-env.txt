@@ -1,9 +1,15 @@
-# Copy the lines below into Render → Your Service → Environment → Add Environment Variable
-# Paste each KEY = value (without the # comment). Replace placeholders with your real values.
+# RENDER SETUP (important)
+# - Build Command:  npm run build
+# - Start Command:  node server.js   (do NOT use "npm start" – that runs both dev server and API and causes port conflicts)
+# - DATABASE_URL:   MUST be your REAL SQLite Cloud URL from https://sqlitecloud.com (dashboard → your database → connection URL).
+#   The error "ENOTFOUND your_project.g6.sqlite.cloud" means you left the placeholder – replace with the actual host and apikey.
 # -----------------------------------------------------------------------------
 
-# Backend (Node API) – set these on the service that runs "node server.js" or "npm run start:server"
-PORT=3001
+# Copy the lines below into Render → Environment. Replace YOUR_* with real values.
+# -----------------------------------------------------------------------------
+
+# PORT is set by Render automatically; only set if you need a specific port.
+# DATABASE_URL – get the real URL from SQLite Cloud dashboard (not the placeholder below)
 DATABASE_URL=sqlitecloud://YOUR_PROJECT.g6.sqlite.cloud:8860/YOUR_DB.sqlitecloud?apikey=YOUR_SQLITECLOUD_API_KEY
 
 # -----------------------------------------------------------------------------
