@@ -206,7 +206,7 @@ The current implementation provides a solid foundation. Potential future enhance
 
 ## 📄 License
 
-This project is built for NETPAC AI internal use. All rights reserved.
+This project is built for IOCT internal use. All rights reserved.
 
 ## 🤝 Support
 
