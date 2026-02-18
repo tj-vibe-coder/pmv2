@@ -57,6 +57,18 @@ A comprehensive React-based web application for project directors to monitor and
 4. **Access the application**
    Open [http://localhost:3000](http://localhost:3000) in your browser
 
+### OneDrive Attachments (optional)
+
+To enable project file attachments stored in OneDrive:
+
+1. Create an app in [Azure Portal](https://portal.azure.com) → App registrations → New registration
+2. Add API permissions: Microsoft Graph → Delegated → `Files.ReadWrite`, `User.Read`
+3. Add a redirect URI: `http://localhost:3000` (for dev)
+4. Copy `.env.example` to `.env` and set `REACT_APP_ONEDRIVE_CLIENT_ID` to your app's Client ID
+5. Restart the dev server
+
+Files are stored in the user's OneDrive under `Projects/{projectId}/`.
+
 ## 🗂️ Project Structure
 
 ```

@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
-  TextField,
   Button,
   Typography,
   Alert,
@@ -27,8 +26,6 @@ interface RegistrationData extends LoginCredentials {
 }
 
 const darkBlue = '#1e4a72';
-const midBlue = '#2c5aa0';
-const lightBlue = '#4f7bc8';
 
 const LoginPage: React.FC = () => {
   const { login, isAuthenticated } = useAuth();

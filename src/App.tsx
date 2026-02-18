@@ -4,6 +4,7 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { Box } from '@mui/material';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
@@ -13,10 +14,11 @@ import ExpenseMonitoring from './components/ExpenseMonitoring';
 import Forecasting from './components/Forecasting';
 import ClientsPage from './components/ClientsPage';
 import MaterialRequestFormPage from './components/MaterialRequestFormPage';
-import OrderTrackerPage from './components/OrderTrackerPage';
 import DeliveryPage from './components/DeliveryPage';
 import SuppliersPage from './components/SuppliersPage';
 import PurchaseOrderPage from './components/PurchaseOrderPage';
+import EstimatesPage from './components/EstimatesPage';
+import ReportsPage from './components/ReportsPage';
 
 const theme = createTheme({
   palette: {
@@ -125,6 +127,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 function App() {
   return (
     <AuthProvider>
+      <OneDriveAuthProvider>
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <Router>
@@ -190,16 +193,7 @@ function App() {
                 </ProtectedRoute>
               } 
             />
-            <Route 
-              path="/order-tracker" 
-              element={
-                <ProtectedRoute>
-                  <AppLayout>
-                    <OrderTrackerPage />
-                  </AppLayout>
-                </ProtectedRoute>
-              } 
-            />
+            <Route path="/order-tracker" element={<Navigate to="/material-request?tab=orders" replace />} />
             <Route 
               path="/delivery" 
               element={
@@ -231,6 +225,26 @@ function App() {
               } 
             />
             <Route 
+              path="/estimates" 
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <EstimatesPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/reports/:tab?" 
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <ReportsPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
               path="/" 
               element={
                 <ProtectedRoute>
@@ -241,6 +255,7 @@ function App() {
           </Routes>
         </Router>
       </ThemeProvider>
+      </OneDriveAuthProvider>
     </AuthProvider>
   );
 }

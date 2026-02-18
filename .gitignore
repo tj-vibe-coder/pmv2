@@ -17,6 +17,9 @@
 .env.local
 .env.*.local
 
+# extracted PO logs
+scripts/logs/
+
 # local database
 projects.db
 *.db

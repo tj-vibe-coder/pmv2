@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -21,18 +22,19 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  FormControl,
-  InputLabel,
-  Select,
+  Tabs,
+  Tab,
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon, Send as SendIcon, Visibility as VisibilityIcon, FileDownload as FileDownloadIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon, Send as SendIcon, Visibility as VisibilityIcon, FileDownload as FileDownloadIcon, PictureAsPdf as PictureAsPdfIcon, Upload as UploadIcon, Edit as EditIcon } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 import dataService from '../services/dataService';
 import { Project } from '../types/Project';
 import { ORDER_TRACKER_STORAGE_KEY, type OrderRecord, type OrderItem } from './OrderTrackerPage';
+import OrderTrackerPage from './OrderTrackerPage';
 import { SUPPLIERS_STORAGE_KEY, type Supplier } from './SuppliersPage';
+import PdfPreviewDialog from './PdfPreviewDialog';
 
 const STORAGE_KEY = 'materialRequests';
 const PO_STORAGE_KEY = 'purchaseOrders';
@@ -80,7 +82,9 @@ export interface MaterialRequest {
   requestNo: string;
   projectId: number | null;
   projectName: string;
+  projectPoNumber?: string;
   requestDate: string;
+  dateNeeded?: string;
   requestedBy: string;
   deliveryLocation: string;
   items: MaterialRequestItem[];
@@ -124,9 +128,9 @@ const saveStored = (list: MaterialRequest[]) => {
   } catch (_) {}
 };
 
-/** Parse MRF number from requestNo "Project No - MRF-#" */
+/** Parse MRF number from requestNo "ProjectNo-MRF-#" */
 const parseMRFNumber = (requestNo: string): number => {
-  const match = requestNo.match(/ - MRF-(\d+)$/);
+  const match = requestNo.match(/-MRF-(\d+)$/);
   return match ? parseInt(match[1], 10) : 0;
 };
 
@@ -135,6 +139,7 @@ const MaterialRequestFormPage: React.FC = () => {
   const [requests, setRequests] = useState<MaterialRequest[]>([]);
   const [projectId, setProjectId] = useState<number | ''>('');
   const [requestDate, setRequestDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dateNeeded, setDateNeeded] = useState('');
   const [requestedBy, setRequestedBy] = useState('');
   const [deliveryLocation, setDeliveryLocation] = useState('');
   const [items, setItems] = useState<MaterialRequestItem[]>([
@@ -142,6 +147,7 @@ const MaterialRequestFormPage: React.FC = () => {
   ]);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [viewRequest, setViewRequest] = useState<MaterialRequest | null>(null);
+  const [editingRequestId, setEditingRequestId] = useState<string | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [pos, setPos] = useState<POStub[]>([]);
 
@@ -168,7 +174,37 @@ const MaterialRequestFormPage: React.FC = () => {
             .map((r) => parseMRFNumber(r.requestNo))
         ) + 1;
   const generatedRequestNo =
-    projectId && projectNo ? `${projectNo} - MRF-${nextMRFForProject}` : '';
+    projectId && projectNo ? `${projectNo}-MRF-${nextMRFForProject}` : '';
+
+  const editingRequest = editingRequestId ? requests.find((r) => r.id === editingRequestId) : null;
+  const displayRequestNo = editingRequest ? editingRequest.requestNo : generatedRequestNo;
+
+  const handleLoadForEdit = (r: MaterialRequest) => {
+    setEditingRequestId(r.id);
+    setProjectId(r.projectId ?? '');
+    setRequestDate(r.requestDate);
+    setDateNeeded(r.dateNeeded ?? '');
+    setRequestedBy(r.requestedBy ?? '');
+    setDeliveryLocation(r.deliveryLocation ?? '');
+    setItems(
+      r.items && r.items.length > 0
+        ? r.items.map((i) => ({ ...i, id: i.id || `item-${Date.now()}-${Math.random()}` }))
+        : [{ ...defaultItem, id: `item-${Date.now()}` }]
+    );
+    setMessage(null);
+    setViewRequest(null);
+  };
+
+  const handleClearMRF = () => {
+    setEditingRequestId(null);
+    setProjectId('');
+    setRequestDate(new Date().toISOString().slice(0, 10));
+    setDateNeeded('');
+    setRequestedBy('');
+    setDeliveryLocation('');
+    setItems([{ ...defaultItem, id: `item-${Date.now()}` }]);
+    setMessage(null);
+  };
 
   const addItem = () => {
     setItems((prev) => [...prev, { ...defaultItem, id: `item-${Date.now()}-${prev.length}` }]);
@@ -198,6 +234,193 @@ const MaterialRequestFormPage: React.FC = () => {
     if (viewRequest?.id === id) setViewRequest(null);
     setMessage({ type: 'success', text: 'Request deleted.' });
     setTimeout(() => setMessage(null), 3000);
+  };
+
+  const exportToCSV = () => {
+    const headers = ['Request No.', 'Project', 'Date', 'Requested By', 'Delivery Location', 'Status', 'No.', 'Item / Description', 'Part #', 'Brand', 'Qty', 'Unit', 'Notes'];
+    const rows = requests.flatMap((r) =>
+      (r.items && r.items.length > 0
+        ? r.items.map((item, idx) => [
+            r.requestNo,
+            r.projectName,
+            r.requestDate,
+            r.requestedBy,
+            r.deliveryLocation,
+            r.status,
+            idx + 1,
+            `"${(item.description || '').replace(/"/g, '""')}"`,
+            item.partNo || '',
+            item.brand || '',
+            item.quantity,
+            item.unit || '',
+            `"${(item.notes || '').replace(/"/g, '""')}"`,
+          ])
+        : [[r.requestNo, r.projectName, r.requestDate, r.requestedBy, r.deliveryLocation, r.status, '', '—', '', '', '', '', '']])
+    );
+    const csv = [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `MaterialRequests_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportItemsTemplateCSV = () => {
+    const headers = ['Item / Description', 'Part #', 'Brand', 'Qty', 'Unit', 'Notes'];
+    const csv = headers.join(',') + '\n';
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const filename = projectNo ? `${projectNo}-PR.csv` : 'Project-PR.csv';
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  /** Parse full CSV text, handling multi-line quoted fields */
+  const parseCSV = (text: string): string[][] => {
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let field = '';
+    let i = 0;
+    let inQuotes = false;
+    const flushField = () => {
+      row.push(field);
+      field = '';
+    };
+    const flushRow = () => {
+      if (row.length > 0 || field) {
+        if (field) flushField();
+        rows.push(row);
+        row = [];
+      }
+    };
+    while (i < text.length) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"' && text[i + 1] === '"') {
+          field += '"';
+          i += 2;
+        } else if (c === '"') {
+          inQuotes = false;
+          i++;
+        } else {
+          field += c;
+          i++;
+        }
+      } else {
+        if (c === '"') {
+          inQuotes = true;
+          i++;
+        } else if (c === ',' || c === '\n' || c === '\r') {
+          if (c === ',') {
+            flushField();
+            i++;
+          } else {
+            flushRow();
+            if (c === '\r' && text[i + 1] === '\n') i += 2;
+            else i++;
+          }
+        } else {
+          field += c;
+          i++;
+        }
+      }
+    }
+    if (field || row.length > 0) {
+      if (field) flushField();
+      if (row.length > 0) rows.push(row);
+    }
+    return rows;
+  };
+
+  const importFromCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = (reader.result as string) || '';
+        const rows = parseCSV(text);
+        if (rows.length < 2) {
+          setMessage({ type: 'error', text: 'CSV must have a header row and at least one data row.' });
+          setTimeout(() => setMessage(null), 4000);
+          return;
+        }
+        const headerRow = rows[0];
+        const headers = headerRow.map((h) => String(h).replace(/^"|"$/g, '').trim().toLowerCase());
+        const col = (name: string[]) => {
+          const idx = headers.findIndex((h) => name.some((n) => h.includes(n)));
+          return idx >= 0 ? idx : -1;
+        };
+        // Template order: Item/Description, Part #, Brand, Qty, Unit, Notes
+        const isTemplateOrder =
+          headers.length >= 6 &&
+          (headers[0].includes('item') || headers[0].includes('description')) &&
+          (headers[1].includes('part') || headers[1] === 'part #') &&
+          (headers[2].includes('brand') || headers[2] === 'brand');
+        const descCol = isTemplateOrder ? 0 : col(['description', 'item', 'item/description', 'item / description']);
+        const partCol = isTemplateOrder ? 1 : headers.findIndex((h) => {
+          const partTerms = ['part #', 'part no', 'partno', 'part number', 'p/n', 'part'];
+          const hasPart = partTerms.some((t) => h.includes(t));
+          const isBrandOnly = /^brand\s*$/i.test(h) || /^brand\s+name$/i.test(h);
+          return hasPart && !isBrandOnly;
+        });
+        const brandCol = isTemplateOrder ? 2 : headers.findIndex((h) => {
+          const hasBrand = h.includes('brand') || h.includes('manufacturer') || h.includes('maker');
+          const hasPart = h.includes('part') || h.includes('part#') || h.includes('part no');
+          return hasBrand && !hasPart;
+        });
+        const qtyCol = isTemplateOrder ? 3 : col(['qty', 'quantity', 'qty.', 'amount']);
+        const unitCol = isTemplateOrder ? 4 : col(['unit', 'uom']);
+        const notesCol = isTemplateOrder ? 5 : col(['notes', 'remarks']);
+
+        if (descCol < 0 && partCol < 0) {
+          setMessage({ type: 'error', text: 'CSV must have "Item/Description" or "Part #" column.' });
+          setTimeout(() => setMessage(null), 4000);
+          return;
+        }
+
+        const newItems: MaterialRequestItem[] = [];
+        for (let i = 1; i < rows.length; i++) {
+          const cells = rows[i];
+          const get = (c: number) => (c >= 0 && cells[c] !== undefined ? String(cells[c]).replace(/^"|"$/g, '').trim() : '');
+          const desc = descCol >= 0 ? get(descCol) : '';
+          const part = partCol >= 0 ? get(partCol) : '';
+          const brand = brandCol >= 0 ? get(brandCol) : '';
+          const qtyVal = qtyCol >= 0 ? get(qtyCol) : '0';
+          const qty = parseFloat(String(qtyVal).replace(/[^0-9.]/g, '')) || 0;
+          const unit = unitCol >= 0 ? get(unitCol) : 'pcs';
+          const notes = notesCol >= 0 ? get(notesCol) : '';
+          if (!desc && !part) continue;
+          newItems.push({
+            id: `item-${Date.now()}-${i}`,
+            description: desc,
+            partNo: part,
+            brand: brand,
+            quantity: qty,
+            unit: units.includes(unit) ? unit : 'pcs',
+            notes,
+          });
+        }
+        if (newItems.length === 0) {
+          setMessage({ type: 'error', text: 'No valid rows found in CSV.' });
+          setTimeout(() => setMessage(null), 4000);
+          return;
+        }
+        setItems(newItems);
+        setMessage({ type: 'success', text: `Imported ${newItems.length} items from CSV.` });
+        setTimeout(() => setMessage(null), 3000);
+      } catch (err) {
+        setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to parse CSV.' });
+        setTimeout(() => setMessage(null), 4000);
+      }
+    };
+    reader.readAsText(file);
   };
 
   const exportToExcel = () => {
@@ -265,35 +488,79 @@ const MaterialRequestFormPage: React.FC = () => {
     doc.save(`MaterialRequests_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
-  const exportViewRequestToPDF = (r: MaterialRequest) => {
+  const exportViewRequestToPDF = (r: MaterialRequest, preview = false): Blob | void => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    doc.setFontSize(14);
-    doc.text('Material Request', 14, 15);
+    const pageWidth = 210;
+    const pageHeight = 297;
+    const margin = 14;
+    const rightX = pageWidth - margin;
+    const poNumber = r.projectPoNumber ?? (r.projectId ? projects.find((p) => p.id === r.projectId)?.po_number : null) ?? '';
+    const blank = (v: string) => (v || '').trim() || '';
+
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Material Request', rightX, 15, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
-    doc.text(`Request No.: ${r.requestNo}`, 14, 22);
-    doc.text(`Project: ${r.projectName}`, 14, 28);
-    doc.text(`Date: ${r.requestDate}`, 14, 34);
-    doc.text(`Requested By: ${r.requestedBy}`, 14, 40);
-    doc.text(`Delivery Location: ${r.deliveryLocation}`, 14, 46);
-    doc.text(`Status: ${r.status}`, 14, 52);
+    doc.text(`Request No.: ${r.requestNo}`, rightX, 24, { align: 'right' });
+    doc.text(`Date: ${r.requestDate}`, rightX, 30, { align: 'right' });
+
+    doc.text(`Project: ${blank(r.projectName)}`, margin, 15);
+    doc.text(`PO No.: ${blank(poNumber)}`, margin, 22);
+    doc.text(`Requested By: ${blank(r.requestedBy)}`, margin, 29);
+    doc.text(`Delivery Location: ${blank(r.deliveryLocation)}`, margin, 36);
+    doc.text(`Status: ${blank(r.status)}`, margin, 43);
+    doc.text(`Date need: ${blank(r.dateNeeded ?? '')}`, margin, 50);
     const body = (r.items && r.items.length > 0)
       ? r.items.map((item, idx) => [
           String(idx + 1),
-          item.description || '—',
-          item.partNo || '—',
-          item.brand || '—',
+          blank(item.description ?? ''),
+          blank(item.partNo ?? ''),
+          blank(item.brand ?? ''),
           String(item.quantity),
-          item.unit || '—',
-          item.notes || '—',
+          blank(item.unit ?? ''),
+          blank(item.notes ?? ''),
         ])
-      : [['—', 'No items', '—', '—', '—', '—', '—']];
+      : [['', 'No items', '', '', '', '', '']];
     autoTable(doc, {
       head: [['No.', 'Item / Description', 'Part #', 'Brand', 'Qty', 'Unit', 'Notes']],
       body,
       startY: 58,
-      margin: { left: 14 },
+      margin: { left: margin, right: margin },
+      tableWidth: pageWidth - margin * 2,
+      styles: { fontSize: 7 },
+      headStyles: { fontSize: 7 },
     });
-    doc.save(`MRF_${r.requestNo.replace(/\s/g, '_')}.pdf`);
+    const totalPages = doc.getNumberOfPages();
+    const docNumber = `Doc. No.: ${r.requestNo}`;
+    const footerY = pageHeight - 10;
+    doc.setFontSize(8);
+    for (let p = 1; p <= totalPages; p++) {
+      doc.setPage(p);
+      doc.text(docNumber, margin, footerY);
+      doc.text(`Page ${p} of ${totalPages}`, rightX, footerY, { align: 'right' });
+    }
+    if (preview) return doc.output('blob') as Blob;
+    doc.save(`${r.requestNo}.pdf`);
+  };
+
+  const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
+  const [pdfPreviewBlob, setPdfPreviewBlob] = useState<Blob | null>(null);
+  const [pdfPreviewTitle, setPdfPreviewTitle] = useState('');
+
+  const handlePreviewMRF = (r: MaterialRequest) => {
+    const blob = exportViewRequestToPDF(r, true);
+    if (blob) {
+      setPdfPreviewBlob(blob);
+      setPdfPreviewTitle(`Material Request - ${r.requestNo}`);
+      setPdfPreviewOpen(true);
+    }
+  };
+
+  const handleClosePreview = () => {
+    setPdfPreviewOpen(false);
+    setPdfPreviewBlob(null);
+    setPdfPreviewTitle('');
   };
 
   const handleSubmit = (asDraft: boolean) => {
@@ -302,22 +569,28 @@ const MaterialRequestFormPage: React.FC = () => {
       setMessage({ type: 'error', text: 'Please select a project to generate Request No.' });
       return;
     }
-    const no = generatedRequestNo;
+    const isEditing = !!editingRequestId;
+    const no = isEditing && editingRequest ? editingRequest.requestNo : generatedRequestNo;
     const req: MaterialRequest = {
-      id: `req-${Date.now()}`,
+      id: isEditing && editingRequest ? editingRequest.id : `req-${Date.now()}`,
       requestNo: no,
       projectId: pid,
-      projectName: projectName || '—',
+      projectName: projectName || '',
+      projectPoNumber: selectedProject?.po_number || undefined,
       requestDate: requestDate,
-      requestedBy: requestedBy.trim() || '—',
-      deliveryLocation: deliveryLocation.trim() || '—',
+      dateNeeded: dateNeeded.trim() || undefined,
+      requestedBy: requestedBy.trim() || '',
+      deliveryLocation: deliveryLocation.trim() || '',
       items: items.map((i) => ({ ...i })),
       status: asDraft ? 'Draft' : 'Submitted',
-      createdAt: new Date().toISOString(),
+      createdAt: isEditing && editingRequest ? editingRequest.createdAt : new Date().toISOString(),
     };
-    const next = [req, ...requests];
+    const next = isEditing
+      ? requests.map((r) => (r.id === editingRequestId ? req : r))
+      : [req, ...requests];
     setRequests(next);
     saveStored(next);
+    setEditingRequestId(null);
 
     if (!asDraft) {
       const itemsSummary = items
@@ -351,22 +624,51 @@ const MaterialRequestFormPage: React.FC = () => {
       try {
         const raw = localStorage.getItem(ORDER_TRACKER_STORAGE_KEY);
         const orders: OrderRecord[] = raw ? JSON.parse(raw) : [];
-        orders.unshift(order);
+        const existingIdx = orders.findIndex((o) => o.materialRequestId === req.id);
+        if (existingIdx >= 0) {
+          orders[existingIdx] = order;
+        } else {
+          orders.unshift(order);
+        }
         localStorage.setItem(ORDER_TRACKER_STORAGE_KEY, JSON.stringify(orders));
       } catch (_) {}
     }
 
-    setMessage({ type: 'success', text: asDraft ? 'Saved as draft.' : 'Material request submitted and added to Order Tracker.' });
+    setMessage({ type: 'success', text: asDraft ? 'Saved as draft.' : isEditing ? 'Material request updated.' : 'Material request submitted and added to Order Tracker.' });
     setTimeout(() => setMessage(null), 3000);
     setProjectId('');
     setRequestDate(new Date().toISOString().slice(0, 10));
+    setDateNeeded('');
     setRequestedBy('');
     setDeliveryLocation('');
     setItems([{ ...defaultItem, id: `item-${Date.now()}` }]);
   };
 
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get('tab') === 'orders' ? 'orders' : 'requests';
+
+  const handleTabChange = (_: React.SyntheticEvent, newValue: number) => {
+    setSearchParams(newValue === 1 ? { tab: 'orders' } : {});
+  };
+
+  if (tab === 'orders') {
+    return (
+      <Box>
+        <Tabs value={1} onChange={handleTabChange} sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+          <Tab label="Requests" value={0} />
+          <Tab label="Orders" value={1} />
+        </Tabs>
+        <OrderTrackerPage />
+      </Box>
+    );
+  }
+
   return (
     <Box>
+      <Tabs value={0} onChange={handleTabChange} sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+        <Tab label="Requests" value={0} />
+        <Tab label="Orders" value={1} />
+      </Tabs>
       <Typography variant="h5" sx={{ fontWeight: 600, color: '#2c5aa0', mb: 2 }}>
         Material Request Form
       </Typography>
@@ -379,7 +681,7 @@ const MaterialRequestFormPage: React.FC = () => {
 
       <Paper sx={{ p: 3, mb: 3, borderRadius: 2, border: '1px solid #e2e8f0' }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
-          New Request
+          {editingRequest ? 'Edit Request' : 'New Request'}
         </Typography>
         <Grid container spacing={2}>
           <Grid size={{ xs: 12, sm: 6 }}>
@@ -387,10 +689,10 @@ const MaterialRequestFormPage: React.FC = () => {
               fullWidth
               size="small"
               label="Request No."
-              value={generatedRequestNo}
+              value={displayRequestNo}
               InputProps={{ readOnly: true }}
               placeholder="Select a project to auto-generate"
-              helperText="Format: Project No - MRF-#"
+              helperText="Format: ProjectNo-MRF-#"
             />
           </Grid>
           <Grid size={{ xs: 12, sm: 6 }}>
@@ -424,6 +726,17 @@ const MaterialRequestFormPage: React.FC = () => {
             <TextField
               fullWidth
               size="small"
+              type="date"
+              label="Date need"
+              value={dateNeeded}
+              onChange={(e) => setDateNeeded(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <TextField
+              fullWidth
+              size="small"
               label="Requested By"
               value={requestedBy}
               onChange={(e) => setRequestedBy(e.target.value)}
@@ -440,9 +753,32 @@ const MaterialRequestFormPage: React.FC = () => {
           </Grid>
         </Grid>
 
-        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>
-          Items
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mt: 3, mb: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+            Items
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <input
+              type="file"
+              id="mrf-csv-import"
+              accept=".csv"
+              hidden
+              onChange={importFromCSV}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              component="label"
+              htmlFor="mrf-csv-import"
+              startIcon={<UploadIcon />}
+            >
+              Import from CSV
+            </Button>
+            <Button variant="outlined" size="small" startIcon={<FileDownloadIcon />} onClick={exportItemsTemplateCSV}>
+              Download template
+            </Button>
+          </Box>
+        </Box>
         <TableContainer>
           <Table size="small">
             <TableHead>
@@ -554,12 +890,15 @@ const MaterialRequestFormPage: React.FC = () => {
         </Button>
 
         <Divider sx={{ my: 2 }} />
-        <Box sx={{ display: 'flex', gap: 1 }}>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           <Button variant="outlined" onClick={() => handleSubmit(true)}>
             Save as draft
           </Button>
           <Button variant="contained" startIcon={<SendIcon />} onClick={() => handleSubmit(false)} sx={{ bgcolor: '#2c5aa0', '&:hover': { bgcolor: '#1e4a72' } }}>
             Submit request
+          </Button>
+          <Button variant="outlined" onClick={handleClearMRF} sx={{ borderColor: '#666', color: '#666' }}>
+            Clear (new request)
           </Button>
         </Box>
       </Paper>
@@ -569,7 +908,16 @@ const MaterialRequestFormPage: React.FC = () => {
           <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
             Request history
           </Typography>
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<FileDownloadIcon />}
+              onClick={exportToCSV}
+              disabled={requests.length === 0}
+            >
+              Export to CSV
+            </Button>
             <Button
               variant="outlined"
               size="small"
@@ -639,10 +987,31 @@ const MaterialRequestFormPage: React.FC = () => {
                     <TableCell align="center">
                       <IconButton
                         size="small"
+                        onClick={() => handleLoadForEdit(r)}
+                        title="Load for edit"
+                      >
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                      <IconButton
+                        size="small"
                         onClick={() => setViewRequest(r)}
-                        title="View items"
+                        title="View details"
                       >
                         <VisibilityIcon fontSize="small" />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        onClick={() => handlePreviewMRF(r)}
+                        title="Preview PDF"
+                      >
+                        <PictureAsPdfIcon fontSize="small" />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        onClick={() => exportViewRequestToPDF(r)}
+                        title="Export to PDF"
+                      >
+                        <FileDownloadIcon fontSize="small" />
                       </IconButton>
                       <IconButton
                         size="small"
@@ -676,11 +1045,19 @@ const MaterialRequestFormPage: React.FC = () => {
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6 }}>
                   <Typography variant="caption" color="text.secondary">Project</Typography>
-                  <Typography variant="body1" fontWeight={500}>{viewRequest.projectName}</Typography>
+                  <Typography variant="body1" fontWeight={500}>{viewRequest.projectName || ''}</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <Typography variant="caption" color="text.secondary">PO No.</Typography>
+                  <Typography variant="body1" fontWeight={500}>{viewRequest.projectPoNumber ?? (viewRequest.projectId ? projects.find((p) => p.id === viewRequest.projectId)?.po_number : null) ?? ''}</Typography>
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6 }}>
                   <Typography variant="caption" color="text.secondary">Date</Typography>
                   <Typography variant="body1" fontWeight={500}>{viewRequest.requestDate}</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <Typography variant="caption" color="text.secondary">Date need</Typography>
+                  <Typography variant="body1" fontWeight={500}>{viewRequest.dateNeeded || ''}</Typography>
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6 }}>
                   <Typography variant="caption" color="text.secondary">Requested By</Typography>
@@ -766,12 +1143,27 @@ const MaterialRequestFormPage: React.FC = () => {
         <DialogActions sx={{ borderTop: '1px solid #e2e8f0', p: 2 }}>
           <Button onClick={() => setViewRequest(null)}>Close</Button>
           {viewRequest && (
-            <Button variant="contained" startIcon={<PictureAsPdfIcon />} onClick={() => exportViewRequestToPDF(viewRequest)} sx={{ bgcolor: '#2c5aa0', '&:hover': { bgcolor: '#1e4a72' } }}>
-              Export to PDF
-            </Button>
+            <>
+              <Button variant="outlined" startIcon={<EditIcon />} onClick={() => { handleLoadForEdit(viewRequest); setViewRequest(null); }}>
+                Load for edit
+              </Button>
+              <Button variant="outlined" startIcon={<PictureAsPdfIcon />} onClick={() => handlePreviewMRF(viewRequest)} sx={{ borderColor: '#2c5aa0', color: '#2c5aa0' }}>
+                Preview PDF
+              </Button>
+              <Button variant="contained" startIcon={<FileDownloadIcon />} onClick={() => exportViewRequestToPDF(viewRequest)} sx={{ bgcolor: '#2c5aa0', '&:hover': { bgcolor: '#1e4a72' } }}>
+                Export to PDF
+              </Button>
+            </>
           )}
         </DialogActions>
       </Dialog>
+
+      <PdfPreviewDialog
+        open={pdfPreviewOpen}
+        onClose={handleClosePreview}
+        pdfBlob={pdfPreviewBlob}
+        title={pdfPreviewTitle}
+      />
     </Box>
   );
 };

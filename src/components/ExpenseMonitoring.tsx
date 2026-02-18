@@ -41,10 +41,11 @@ import {
   Area,
   AreaChart
 } from 'recharts';
-import { Add as AddIcon, List as ListIcon } from '@mui/icons-material';
+import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import { getBudgets } from '../utils/projectBudgetStorage';
+import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem } from './PurchaseOrderPage';
 
 const EXPENSES_KEY = 'projectExpenses';
 
@@ -67,6 +68,9 @@ export interface ProjectExpense {
   date: string;
   category: string;
   createdAt: string;
+  /** When synced from PO, avoid duplicate sync */
+  sourcePoId?: string;
+  sourcePoItemId?: string;
 }
 
 const loadExpenses = (): ProjectExpense[] => {
@@ -82,6 +86,17 @@ const saveExpenses = (data: ProjectExpense[]) => {
     localStorage.setItem(EXPENSES_KEY, JSON.stringify(data));
   } catch (_) {}
 };
+
+const loadPOs = (): PurchaseOrder[] => {
+  try {
+    const raw = localStorage.getItem(PURCHASE_ORDERS_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (_) {}
+  return [];
+};
+
+const lineTotal = (item: PurchaseOrderItem): number =>
+  (Number(item.quantity) || 0) * (Number(item.unitPrice ?? 0) || 0);
 
 const NET_PACIFIC_COLORS = {
   primary: '#2c5aa0',
@@ -135,6 +150,7 @@ const ExpenseMonitoring: React.FC = () => {
   const [expenseDescription, setExpenseDescription] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('');
   const [expensesDialogProject, setExpensesDialogProject] = useState<Project | null>(null);
+  const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -238,6 +254,96 @@ const ExpenseMonitoring: React.FC = () => {
 
   const expensesForProject = (projectId: number) => expenses.filter((e) => e.projectId === projectId);
 
+  const handleSyncFromPO = () => {
+    const pos = loadPOs();
+    const existing = loadExpenses();
+    const syncedPoIds = new Set(existing.filter((e) => e.sourcePoId && !e.sourcePoItemId).map((e) => e.sourcePoId!));
+    const syncedPoItemKeys = new Set(
+      existing.filter((e) => e.sourcePoId && e.sourcePoItemId).map((e) => `${e.sourcePoId}:${e.sourcePoItemId}`)
+    );
+
+    const newExpenses: ProjectExpense[] = [];
+    const isMultiMRF = (po: { mrfIds?: string[]; mrfRequestNos?: string[] }) =>
+      (po.mrfIds && po.mrfIds.length > 1) || (po.mrfRequestNos && po.mrfRequestNos.length > 1);
+
+    for (const po of pos) {
+      const pid = po.projectId;
+      if (pid == null) continue;
+
+      const project = allProjects.find((p) => p.id === pid);
+      const projectName = project?.project_name ?? po.projectName ?? '—';
+      const orderDate = po.orderDate || new Date().toISOString().slice(0, 10);
+
+      if (isMultiMRF(po)) {
+        // Multiple MRFs: log each item separately
+        for (const item of po.items || []) {
+          const amt = lineTotal(item);
+          if (amt <= 0) continue;
+          const key = `${po.id}:${item.id}`;
+          if (syncedPoItemKeys.has(key)) continue;
+
+          const mrfRequestNo = (() => {
+            if (po.mrfIds && po.mrfRequestNos && item.id) {
+              const idx = po.mrfIds.findIndex((id) => item.id.startsWith(`${id}-`));
+              return idx >= 0 ? po.mrfRequestNos[idx] : po.mrfRequestNos[0];
+            }
+            return po.mrfRequestNo;
+          })();
+          const desc = [item.description, item.partNo, item.brand].filter(Boolean).join(' ') || '—';
+
+          newExpenses.push({
+            id: `exp-po-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            projectId: pid,
+            projectName,
+            description: `PO ${po.poNumber} · MRF ${mrfRequestNo}: ${desc}`,
+            amount: amt,
+            date: orderDate,
+            category: 'Materials',
+            createdAt: new Date().toISOString(),
+            sourcePoId: po.id,
+            sourcePoItemId: item.id,
+          });
+          syncedPoItemKeys.add(key);
+        }
+      } else {
+        // Single MRF: one expense per PO (total)
+        if (syncedPoIds.has(po.id)) continue;
+        const total = (po.items || []).reduce((sum, item) => sum + lineTotal(item), 0);
+        if (total <= 0) continue;
+
+        newExpenses.push({
+          id: `exp-po-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          projectId: pid,
+          projectName,
+          description: `PO ${po.poNumber} (${po.supplierName || '—'})`,
+          amount: total,
+          date: orderDate,
+          category: 'Materials',
+          createdAt: new Date().toISOString(),
+          sourcePoId: po.id,
+        });
+        syncedPoIds.add(po.id);
+      }
+    }
+
+    if (newExpenses.length === 0) {
+      setSyncMessage({ type: 'info', text: 'No new POs with prices to sync. All POs are already logged or have no item prices.' });
+    } else {
+      const next = [...newExpenses, ...existing];
+      setExpenses(next);
+      saveExpenses(next);
+      setSyncMessage({ type: 'success', text: `Synced ${newExpenses.length} expense(s) — total ${formatCurrency(newExpenses.reduce((s, e) => s + e.amount, 0))} logged.` });
+    }
+    setTimeout(() => setSyncMessage(null), 4000);
+  };
+
+  const handleDeleteExpense = (id: string) => {
+    if (!window.confirm('Delete this expense? This cannot be undone.')) return;
+    const next = expenses.filter((e) => e.id !== id);
+    setExpenses(next);
+    saveExpenses(next);
+  };
+
   const handleAddExpense = () => {
     const pid = expenseProjectId === '' ? null : Number(expenseProjectId);
     const amount = Number(expenseAmount) || 0;
@@ -293,15 +399,40 @@ const ExpenseMonitoring: React.FC = () => {
         <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
           Expense Monitoring
         </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setAddExpenseOpen(true)}
-          sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
-        >
-          Add Expense
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="outlined"
+            startIcon={<SyncIcon />}
+            onClick={handleSyncFromPO}
+            sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+          >
+            Sync from PO
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setAddExpenseOpen(true)}
+            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+          >
+            Add Expense
+          </Button>
+        </Box>
       </Box>
+
+      {syncMessage && (
+        <Box
+          sx={{
+            py: 1,
+            px: 2,
+            mb: 2,
+            borderRadius: 1,
+            bgcolor: syncMessage.type === 'success' ? 'success.light' : syncMessage.type === 'error' ? 'error.light' : 'info.light',
+            color: syncMessage.type === 'success' ? 'success.dark' : syncMessage.type === 'error' ? 'error.dark' : 'info.dark',
+          }}
+        >
+          {syncMessage.text}
+        </Box>
+      )}
 
       {/* Filters */}
       <Box display="flex" gap={2} mb={2} flexWrap="wrap">
@@ -578,15 +709,18 @@ const ExpenseMonitoring: React.FC = () => {
                 <TableRow>
                   <TableCell>Date</TableCell>
                   <TableCell>Project</TableCell>
+                  <TableCell>Project No.</TableCell>
+                  <TableCell>PO Number</TableCell>
                   <TableCell>Category</TableCell>
-                  <TableCell>Description</TableCell>
+                  <TableCell>Description Part #</TableCell>
                   <TableCell align="right">Amount</TableCell>
+                  <TableCell padding="none" align="center" width={48}>Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {expensesInYear.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                    <TableCell colSpan={8} align="center" sx={{ py: 3, color: 'text.secondary' }}>
                       {selectedYear === 0
                         ? 'No expenses yet. Use the Add Expense button to add an expense.'
                         : `No expenses in ${selectedYear}. Use the Add Expense button to add an expense.`}
@@ -595,15 +729,26 @@ const ExpenseMonitoring: React.FC = () => {
                 ) : (
                   (selectedProjectId === '' ? expensesInYear : expensesInYear.filter((e) => e.projectId === selectedProjectId))
                     .slice(0, 50)
-                    .map((expense) => (
+                    .map((expense) => {
+                      const project = allProjects.find((p) => p.id === expense.projectId);
+                      const projectNo = project?.project_no || String(project?.item_no ?? project?.id ?? '');
+                      const poNumber = project?.po_number ?? '—';
+                      return (
                     <TableRow key={expense.id}>
                       <TableCell>{expense.date}</TableCell>
                       <TableCell>{expense.projectName}</TableCell>
+                      <TableCell>{projectNo || '—'}</TableCell>
+                      <TableCell>{poNumber}</TableCell>
                       <TableCell>{expense.category}</TableCell>
                       <TableCell>{expense.description}</TableCell>
                       <TableCell align="right">{formatCurrency(expense.amount)}</TableCell>
+                      <TableCell padding="none" align="center">
+                        <IconButton size="small" onClick={() => handleDeleteExpense(expense.id)} title="Delete expense" color="error">
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </TableCell>
                     </TableRow>
-                  ))
+                  ); })
                 )}
               </TableBody>
             </Table>

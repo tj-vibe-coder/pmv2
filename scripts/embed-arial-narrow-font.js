@@ -35,6 +35,7 @@ function fetch(url) {
 
 function extractTtfFromTarGz(buffer) {
   const inflated = zlib.gunzipSync(buffer);
+  const entries = [];
   let offset = 0;
   while (offset + 512 <= inflated.length) {
     const name = inflated.slice(offset, offset + 100).toString('utf8').replace(/\0.*$/, '').trim();
@@ -43,11 +44,14 @@ function extractTtfFromTarGz(buffer) {
     offset += 512;
     if (name.endsWith('.ttf')) {
       const ttf = inflated.slice(offset, offset + size);
-      if (ttf.length > 1000) return ttf;
+      if (ttf.length > 1000) entries.push({ name, size, offset, ttf });
     }
     offset += Math.ceil((size || 0) / 512) * 512;
   }
-  return null;
+  // Prefer Regular (not Italic/Bold) for body text
+  const regular = entries.find((e) => /Regular|normal/i.test(e.name) && !/Italic|Bold/i.test(e.name));
+  if (regular) return regular.ttf;
+  return entries.length > 0 ? entries[0].ttf : null;
 }
 
 async function run() {
@@ -68,10 +72,14 @@ async function run() {
       base64 = buf.toString('base64');
     }
   } else {
-    console.log('Download from GitHub often fails. Use a local TTF instead:');
+    console.log('Arial Narrow is not applied in PDFs because the font is not embedded (src/fonts/arialNarrowBase64.ts is empty).');
+    console.log('');
+    console.log('To embed the font, provide a path to a TTF file:');
     console.log('  1. Download Liberation Sans Narrow from https://github.com/liberationfonts/liberation-sans-narrow/releases');
-    console.log('  2. Extract the .tar.gz and find LiberationSansNarrow-Regular.ttf');
-    console.log('  3. Run: node scripts/embed-arial-narrow-font.js /path/to/LiberationSansNarrow-Regular.ttf');
+    console.log('     (e.g. liberation-narrow-fonts-ttf-1.07.6.tar.gz — extract it to get the .ttf)');
+    console.log('  2. Run: node scripts/embed-arial-narrow-font.js /path/to/LiberationSansNarrow-Regular.ttf');
+    console.log('');
+    console.log('Or use any Arial Narrow–compatible .ttf from your system.');
     throw new Error('No font path provided. Run with a path to a .ttf file.');
   }
 
