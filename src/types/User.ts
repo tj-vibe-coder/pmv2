@@ -5,6 +5,7 @@ export interface User {
   role: 'superadmin' | 'admin' | 'user' | 'viewer';
   approved?: number;
   full_name?: string | null;
+  designation?: string | null;
   created_at: number;
   updated_at: number;
 }

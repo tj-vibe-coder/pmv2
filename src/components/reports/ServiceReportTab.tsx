@@ -55,7 +55,7 @@ const loadImageAsDataUrl = (url: string): Promise<string> =>
 
 export interface ServiceReportTabProps {
   project: Project;
-  currentUser: { username?: string; email?: string } | null;
+  currentUser: { full_name?: string | null; username?: string; email?: string } | null;
   reportCompany: ReportCompanyKey;
   setReportCompany: (v: ReportCompanyKey) => void;
   preparedBy: { name: string; designation: string; company: string; date: string };
@@ -289,7 +289,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     doc.text('Prepared by:', leftColX, lastPageSignatureY);
     doc.text('Approved by:', rightColX, lastPageSignatureY);
     let rowY = lastPageSignatureY + signatureSpace;
-    const preparedByName = (preparedBy.name || currentUser?.username || currentUser?.email || '').trim() || '—';
+    const preparedByName = (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
     drawSignatureLine(leftColX, 'Name', rowY, preparedByName);
     drawSignatureLine(rightColX, 'Name', rowY, undefined);
     rowY += sigLineHeight;

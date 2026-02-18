@@ -71,7 +71,7 @@ const wbsNumInputSx = {
 
 export interface ProgressReportTabProps {
   project: Project;
-  currentUser: { username?: string; email?: string } | null;
+  currentUser: { full_name?: string | null; username?: string; email?: string } | null;
   reportCompany: ReportCompanyKey;
   setReportCompany: (v: ReportCompanyKey) => void;
   preparedBy: { name: string; designation: string; company: string; date: string };
@@ -288,7 +288,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     const approverName = (approverParts[0] || '').trim() || '—';
     const approverDesignation = (approverParts[1] || '').trim() || '—';
     const approverCompany = (project.account_name || '').trim() || '—';
-    const preparedByName = (preparedBy.name || currentUser?.username || currentUser?.email || '').trim() || '—';
+    const preparedByName = (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
     drawSignatureLine(leftColX, 'Name', rowY, preparedByName);
     drawSignatureLine(rightColX, 'Name', rowY, approverName);
     rowY += sigLineHeight;
@@ -342,7 +342,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
         )}
         <TextField size="small" label="PB #" placeholder="e.g. 1" value={pbInput} onChange={(e) => setPbInput(e.target.value)} sx={{ width: 80 }} />
         <Typography variant="body2" color="text.secondary" sx={{ alignSelf: 'center' }}>Prepared by (PDF):</Typography>
-        <TextField size="small" label="Name" value={preparedBy.name} onChange={(e) => setPreparedBy((p) => ({ ...p, name: e.target.value }))} sx={{ width: 140 }} placeholder={currentUser?.username || currentUser?.email || 'Name'} />
+        <TextField size="small" label="Name" value={preparedBy.name} onChange={(e) => setPreparedBy((p) => ({ ...p, name: e.target.value }))} sx={{ width: 140 }} placeholder={currentUser?.full_name || currentUser?.username || currentUser?.email || 'Name'} />
         <TextField size="small" label="Designation" value={preparedBy.designation} onChange={(e) => setPreparedBy((p) => ({ ...p, designation: e.target.value }))} sx={{ width: 120 }} />
         <TextField size="small" label="Company" value={preparedBy.company} onChange={(e) => setPreparedBy((p) => ({ ...p, company: e.target.value }))} sx={{ width: 120 }} />
         <TextField size="small" label="Date" value={preparedBy.date} onChange={(e) => setPreparedBy((p) => ({ ...p, date: e.target.value }))} sx={{ width: 110 }} placeholder="MM/DD/YYYY" />

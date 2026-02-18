@@ -29,6 +29,7 @@ interface UserRow {
   username: string;
   email: string;
   full_name: string | null;
+  designation: string | null;
   role: string;
   approved: number;
   created_at: number;
@@ -44,6 +45,7 @@ export default function UsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editFullName, setEditFullName] = useState('');
+  const [editDesignation, setEditDesignation] = useState('');
   const [editRole, setEditRole] = useState<string>('');
   const [editApproved, setEditApproved] = useState<number>(1);
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -91,6 +93,7 @@ export default function UsersPage() {
   const startEdit = (u: UserRow) => {
     setEditingId(u.id);
     setEditFullName(u.full_name ?? '');
+    setEditDesignation(u.designation ?? '');
     setEditRole(u.role);
     setEditApproved(u.approved);
   };
@@ -113,6 +116,7 @@ export default function UsersPage() {
         },
         body: JSON.stringify({
           full_name: editFullName.trim() || null,
+          designation: editDesignation.trim() || null,
           role: editRole,
           approved: editApproved,
         }),
@@ -125,6 +129,7 @@ export default function UsersPage() {
               ? {
                   ...u,
                   full_name: editFullName.trim() || null,
+                  designation: editDesignation.trim() || null,
                   role: editRole,
                   approved: editApproved,
                 }
@@ -186,7 +191,7 @@ export default function UsersPage() {
         Users DB
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        View and edit user data. Set Full name so it appears on forms (e.g. Liquidation).
+        View and edit user data. Set Full name and Designation so they appear on reports.
       </Typography>
 
       {error && (
@@ -208,6 +213,7 @@ export default function UsersPage() {
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Username</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Email</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Full name</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Designation</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Role</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Approved</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Created</TableCell>
@@ -234,6 +240,20 @@ export default function UsersPage() {
                       />
                     ) : (
                       u.full_name || '—'
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {editingId === u.id ? (
+                      <TextField
+                        size="small"
+                        value={editDesignation}
+                        onChange={(e) => setEditDesignation(e.target.value)}
+                        placeholder="Designation"
+                        fullWidth
+                        sx={{ maxWidth: 180 }}
+                      />
+                    ) : (
+                      u.designation || '—'
                     )}
                   </TableCell>
                   <TableCell>

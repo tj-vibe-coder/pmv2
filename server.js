@@ -130,6 +130,7 @@ function initializeDatabase() {
       role TEXT DEFAULT 'user',
       approved INTEGER DEFAULT 0,
       full_name TEXT,
+      designation TEXT,
       created_at INTEGER DEFAULT (strftime('%s', 'now')),
       updated_at INTEGER DEFAULT (strftime('%s', 'now'))
     )
@@ -140,11 +141,14 @@ function initializeDatabase() {
       console.error('Error creating users table:', err);
     } else {
       console.log('Users table ready');
-      // Add columns if missing (local SQLite only; skip for SQLite Cloud to avoid duplicate column errors)
+      // Add columns if missing (local only for approved/full_name; designation added for both, duplicate ignored)
       if (dbLabel !== 'SQLite Cloud') {
         db.run('ALTER TABLE users ADD COLUMN approved INTEGER DEFAULT 1', () => {});
         db.run('ALTER TABLE users ADD COLUMN full_name TEXT', () => {});
       }
+      db.run('ALTER TABLE users ADD COLUMN designation TEXT', (err) => {
+        if (err && !/duplicate column/i.test(String(err.message || err))) console.error('Error adding designation column:', err);
+      });
       setTimeout(() => {
         createDefaultUsers();
       }, 100);
@@ -410,6 +414,7 @@ app.post('/api/auth/login', (req, res) => {
       role: user.role,
       approved: user.approved ? 1 : 0,
       full_name: user.full_name || null,
+      designation: user.designation || null,
       created_at: user.created_at,
       updated_at: user.updated_at
     };
@@ -513,6 +518,7 @@ app.get('/api/auth/me', (req, res) => {
         role: user.role,
         approved: user.approved ? 1 : 0,
         full_name: user.full_name || null,
+        designation: user.designation || null,
         created_at: user.created_at,
         updated_at: user.updated_at
       };
@@ -557,7 +563,7 @@ function listAllUsers(req, res) {
       return res.status(403).json({ success: false, error: 'Superadmin only' });
     }
     db.all(
-      'SELECT id, username, email, full_name, role, approved, created_at, updated_at FROM users ORDER BY id',
+      'SELECT id, username, email, full_name, designation, role, approved, created_at, updated_at FROM users ORDER BY id',
       [],
       (err, rows) => {
         if (err) {
@@ -602,12 +608,16 @@ usersRouter.patch('/:id', (req, res) => {
     if (user.role !== 'superadmin') {
       return res.status(403).json({ success: false, error: 'Superadmin only' });
     }
-    const { full_name, role, approved } = req.body;
+    const { full_name, designation, role, approved } = req.body;
     const updates = [];
     const values = [];
     if (full_name !== undefined) {
       updates.push('full_name = ?');
       values.push(full_name == null ? null : String(full_name).trim());
+    }
+    if (designation !== undefined) {
+      updates.push('designation = ?');
+      values.push(designation == null ? null : String(designation).trim());
     }
     if (role !== undefined && ['superadmin', 'admin', 'user', 'viewer'].includes(role)) {
       updates.push('role = ?');
