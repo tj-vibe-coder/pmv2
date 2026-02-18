@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import {
   Drawer,
   Box,
@@ -32,6 +33,9 @@ import {
   PictureAsPdf as PictureAsPdfIcon,
   Cloud as CloudIcon,
   RequestQuote as EstimateIcon,
+  HowToReg as HowToRegIcon,
+  Group as GroupIcon,
+  AccountBalance as AccountBalanceIcon,
 } from '@mui/icons-material';
 
 const SIDEBAR_WIDTH = 280;
@@ -43,6 +47,7 @@ const Sidebar: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
   const [supplyChainOpen, setSupplyChainOpen] = useState(() =>
     SUPPLY_CHAIN_PATHS.some((p) => location.pathname === p)
   );
@@ -194,6 +199,78 @@ const Sidebar: React.FC = () => {
               <ListItemText
                 primary="Expense Monitoring"
                 secondary="Track project expenses"
+                secondaryTypographyProps={{
+                  color: 'rgba(255,255,255,0.7)',
+                  fontSize: '0.75rem',
+                }}
+                sx={{ color: 'white' }}
+              />
+            </ListItemButton>
+          </ListItem>
+
+          <ListItem disablePadding sx={{ mb: 0.5 }}>
+            <ListItemButton
+              selected={location.pathname === '/liquidation-form'}
+              onClick={() => navigate('/liquidation-form')}
+              sx={{
+                borderRadius: 2,
+                mx: 1,
+                minHeight: 56,
+                '&.Mui-selected': {
+                  backgroundColor: 'rgba(255,255,255,0.15)',
+                  color: 'white',
+                  '&:hover': {
+                    backgroundColor: 'rgba(255,255,255,0.2)',
+                  },
+                },
+                '&:hover': {
+                  backgroundColor: 'rgba(255,255,255,0.1)',
+                },
+                transition: 'all 0.2s ease-in-out',
+              }}
+            >
+              <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
+                <ReceiptIcon />
+              </ListItemIcon>
+              <ListItemText
+                primary="Liquidation Form"
+                secondary="Submit expense liquidation"
+                secondaryTypographyProps={{
+                  color: 'rgba(255,255,255,0.7)',
+                  fontSize: '0.75rem',
+                }}
+                sx={{ color: 'white' }}
+              />
+            </ListItemButton>
+          </ListItem>
+
+          <ListItem disablePadding sx={{ mb: 0.5 }}>
+            <ListItemButton
+              selected={location.pathname === '/ca-form'}
+              onClick={() => navigate('/ca-form')}
+              sx={{
+                borderRadius: 2,
+                mx: 1,
+                minHeight: 56,
+                '&.Mui-selected': {
+                  backgroundColor: 'rgba(255,255,255,0.15)',
+                  color: 'white',
+                  '&:hover': {
+                    backgroundColor: 'rgba(255,255,255,0.2)',
+                  },
+                },
+                '&:hover': {
+                  backgroundColor: 'rgba(255,255,255,0.1)',
+                },
+                transition: 'all 0.2s ease-in-out',
+              }}
+            >
+              <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
+                <AccountBalanceIcon />
+              </ListItemIcon>
+              <ListItemText
+                primary="CA Form"
+                secondary="Request cash advance"
                 secondaryTypographyProps={{
                   color: 'rgba(255,255,255,0.7)',
                   fontSize: '0.75rem',
@@ -592,6 +669,66 @@ const Sidebar: React.FC = () => {
 
       <Box sx={{ p: 2 }}>
         <List sx={{ px: 0 }}>
+          {user?.role === 'superadmin' && (
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                selected={location.pathname === '/user-approvals'}
+                onClick={() => navigate('/user-approvals')}
+                sx={{
+                  borderRadius: 2,
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    color: 'white',
+                  },
+                  '&:hover': {
+                    backgroundColor: 'rgba(255,255,255,0.1)',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
+                  <HowToRegIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="User approvals"
+                  primaryTypographyProps={{
+                    fontSize: '0.875rem',
+                    color: 'rgba(255,255,255,0.9)',
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+          )}
+          {user?.role === 'superadmin' && (
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                selected={location.pathname === '/users'}
+                onClick={() => navigate('/users')}
+                sx={{
+                  borderRadius: 2,
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    color: 'white',
+                  },
+                  '&:hover': {
+                    backgroundColor: 'rgba(255,255,255,0.1)',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
+                  <GroupIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="Users DB"
+                  primaryTypographyProps={{
+                    fontSize: '0.875rem',
+                    color: 'rgba(255,255,255,0.9)',
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+          )}
           <ListItem disablePadding>
             <ListItemButton
               sx={{

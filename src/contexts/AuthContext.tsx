@@ -28,21 +28,30 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const savedUser = localStorage.getItem('netpacific_user');
     const savedToken = localStorage.getItem('netpacific_token');
-    
-    if (savedUser && savedToken) {
-      try {
-        const parsedUser = JSON.parse(savedUser);
-        setUser(parsedUser);
-      } catch (error) {
-        console.error('Error parsing saved user data:', error);
+    if (!savedToken) {
+      setIsLoading(false);
+      return;
+    }
+    // Refetch current user from server so we have latest full_name and other fields
+    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${savedToken}` } })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.user) {
+          setUser(data.user);
+          localStorage.setItem('netpacific_user', JSON.stringify(data.user));
+        } else {
+          localStorage.removeItem('netpacific_user');
+          localStorage.removeItem('netpacific_token');
+          setUser(null);
+        }
+      })
+      .catch(() => {
         localStorage.removeItem('netpacific_user');
         localStorage.removeItem('netpacific_token');
-      }
-    }
-    
-    setIsLoading(false);
+        setUser(null);
+      })
+      .finally(() => setIsLoading(false));
   }, []);
 
   const login = async (credentials: LoginCredentials): Promise<{ success: boolean; error?: string }> => {

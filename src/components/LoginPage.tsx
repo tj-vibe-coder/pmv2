@@ -79,7 +79,7 @@ const LoginPage: React.FC = () => {
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!loginData.username.trim() || !loginData.password.trim()) {
-      setError('Please enter both email/username and password');
+      setError('Please enter both username and password');
       return;
     }
     setLoading(true);
@@ -264,16 +264,16 @@ const LoginPage: React.FC = () => {
           {isLogin ? (
             <>
               <FormControl fullWidth sx={{ mb: 2 }} variant="outlined">
-                <InputLabel htmlFor="login-email" sx={{ bgcolor: 'white', px: 0.5 }}>
-                  Email
+                <InputLabel htmlFor="login-username" sx={{ bgcolor: 'white', px: 0.5 }}>
+                  Username
                 </InputLabel>
                 <OutlinedInput
-                  id="login-email"
+                  id="login-username"
                   value={loginData.username}
                   onChange={handleLoginChange('username')}
-                  placeholder="username@gmail.com"
+                  placeholder="Enter your username"
                   disabled={loading}
-                  label="Email"
+                  label="Username"
                   sx={{
                     bgcolor: 'white',
                     '& .MuiOutlinedInput-notchedOutline': { borderColor: '#e0e0e0' },

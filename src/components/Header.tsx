@@ -42,6 +42,7 @@ const Header: React.FC = () => {
 
   const getRoleColor = (role: string) => {
     switch (role) {
+      case 'superadmin': return '#8e44ad';
       case 'admin': return '#e74c3c';
       case 'user': return '#3498db';
       case 'viewer': return '#95a5a6';

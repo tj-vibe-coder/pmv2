@@ -126,6 +126,8 @@ function initializeDatabase() {
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       role TEXT DEFAULT 'user',
+      approved INTEGER DEFAULT 0,
+      full_name TEXT,
       created_at INTEGER DEFAULT (strftime('%s', 'now')),
       updated_at INTEGER DEFAULT (strftime('%s', 'now'))
     )
@@ -136,7 +138,9 @@ function initializeDatabase() {
       console.error('Error creating users table:', err);
     } else {
       console.log('Users table ready');
-      // Create default admin user with a delay to ensure table is ready
+      // Add approved column if missing (existing DBs)
+      db.run('ALTER TABLE users ADD COLUMN approved INTEGER DEFAULT 1', () => {});
+      db.run('ALTER TABLE users ADD COLUMN full_name TEXT', () => {});
       setTimeout(() => {
         createDefaultUsers();
       }, 100);
@@ -219,27 +223,96 @@ function initializeDatabase() {
   });
   db.run('CREATE INDEX IF NOT EXISTS idx_supplier_products_supplier ON supplier_products(supplier_id)', () => {});
 
+  // Cash advances (CA): user requests CA; admin approves; liquidation submission reduces balance
+  const createCashAdvancesTable = `
+    CREATE TABLE IF NOT EXISTS cash_advances (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      balance_remaining REAL NOT NULL,
+      status TEXT DEFAULT 'pending',
+      purpose TEXT,
+      requested_at INTEGER,
+      approved_at INTEGER,
+      approved_by INTEGER,
+      created_at INTEGER DEFAULT (strftime('%s', 'now')),
+      updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `;
+  db.run(createCashAdvancesTable, (err) => {
+    if (err) console.error('Error creating cash_advances table:', err);
+    else console.log('cash_advances table ready');
+  });
+
+  // Liquidations: draft or submitted; can link to CA to reduce its balance on submit
+  const createLiquidationsTable = `
+    CREATE TABLE IF NOT EXISTS liquidations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      form_no TEXT,
+      date_of_submission TEXT,
+      employee_name TEXT,
+      employee_number TEXT,
+      rows_json TEXT,
+      total_amount REAL DEFAULT 0,
+      ca_id INTEGER,
+      status TEXT DEFAULT 'draft',
+      created_at INTEGER DEFAULT (strftime('%s', 'now')),
+      updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (ca_id) REFERENCES cash_advances(id)
+    )
+  `;
+  db.run(createLiquidationsTable, (err) => {
+    if (err) console.error('Error creating liquidations table:', err);
+    else console.log('liquidations table ready');
+  });
+
   // Create indexes for better performance
   db.run(`CREATE INDEX IF NOT EXISTS idx_project_director ON projects(project_director)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_project_status ON projects(project_status)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_year ON projects(year)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_username ON users(username)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_email ON users(email)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_cash_advances_user ON cash_advances(user_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_liquidations_user ON liquidations(user_id)`);
 }
 
-// Create default users
+// Create default users (all approved)
 function createDefaultUsers() {
-  // Simple password hashing (in production, use bcrypt)
   const adminPasswordHash = Buffer.from('admin123').toString('base64');
   const userPasswordHash = Buffer.from('user123').toString('base64');
-  
+  const superadminPasswordHash = Buffer.from('IOCT0201!').toString('base64');
+
+  // Superadmin: TJC
+  db.get('SELECT id FROM users WHERE username = ? OR email = ?', ['TJC', 'tyronejames.caballero@gmail.com'], (err, row) => {
+    if (err) {
+      console.error('Error checking for superadmin:', err);
+    } else if (!row) {
+      db.run(
+        'INSERT INTO users (username, email, password_hash, role, approved, full_name) VALUES (?, ?, ?, ?, ?, ?)',
+        ['TJC', 'tyronejames.caballero@gmail.com', superadminPasswordHash, 'superadmin', 1, 'Tyrone James Caballero'],
+        (err) => {
+          if (err) {
+            console.error('Error creating superadmin user:', err);
+          } else {
+            console.log('Superadmin created (username: TJC, email: tyronejames.caballero@gmail.com)');
+          }
+        }
+      );
+    } else {
+      db.run('UPDATE users SET full_name = ? WHERE username = ?', ['Tyrone James Caballero', 'TJC'], () => {});
+    }
+  });
+
   db.get('SELECT id FROM users WHERE username = ?', ['admin'], (err, row) => {
     if (err) {
       console.error('Error checking for admin user:', err);
     } else if (!row) {
       db.run(
-        'INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)',
-        ['admin', 'admin@netpacific.com', adminPasswordHash, 'admin'],
+        'INSERT INTO users (username, email, password_hash, role, approved) VALUES (?, ?, ?, ?, ?)',
+        ['admin', 'admin@netpacific.com', adminPasswordHash, 'admin', 1],
         (err) => {
           if (err) {
             console.error('Error creating admin user:', err);
@@ -250,14 +323,14 @@ function createDefaultUsers() {
       );
     }
   });
-  
+
   db.get('SELECT id FROM users WHERE username = ?', ['user'], (err, row) => {
     if (err) {
       console.error('Error checking for user:', err);
     } else if (!row) {
       db.run(
-        'INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)',
-        ['user', 'user@netpacific.com', userPasswordHash, 'user'],
+        'INSERT INTO users (username, email, password_hash, role, approved) VALUES (?, ?, ?, ?, ?)',
+        ['user', 'user@netpacific.com', userPasswordHash, 'user', 1],
         (err) => {
           if (err) {
             console.error('Error creating user:', err);
@@ -269,15 +342,14 @@ function createDefaultUsers() {
     }
   });
 
-  // IOCT admin: projects@iocontroltech.com
   const projectsPasswordHash = Buffer.from('IOCT0201!').toString('base64');
   db.get('SELECT id FROM users WHERE username = ? OR email = ?', ['projects', 'projects@iocontroltech.com'], (err, row) => {
     if (err) {
       console.error('Error checking for projects admin:', err);
     } else if (!row) {
       db.run(
-        'INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)',
-        ['projects', 'projects@iocontroltech.com', projectsPasswordHash, 'admin'],
+        'INSERT INTO users (username, email, password_hash, role, approved) VALUES (?, ?, ?, ?, ?)',
+        ['projects', 'projects@iocontroltech.com', projectsPasswordHash, 'admin', 1],
         (err) => {
           if (err) {
             console.error('Error creating projects admin user:', err);
@@ -317,6 +389,12 @@ app.post('/api/auth/login', (req, res) => {
       return res.json({ success: false, error: 'Invalid credentials' });
     }
 
+    // Only superadmin or approved users can log in
+    const approved = user.approved === 1 || user.approved === true;
+    if (!approved && user.role !== 'superadmin') {
+      return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
+    }
+
     // Generate simple token (in production, use JWT)
     const token = Buffer.from(`${user.id}:${user.username}:${Date.now()}`).toString('base64');
 
@@ -326,6 +404,8 @@ app.post('/api/auth/login', (req, res) => {
       username: user.username,
       email: user.email,
       role: user.role,
+      approved: user.approved ? 1 : 0,
+      full_name: user.full_name || null,
       created_at: user.created_at,
       updated_at: user.updated_at
     };
@@ -355,7 +435,8 @@ app.post('/api/auth/register', (req, res) => {
     return res.json({ success: false, error: 'Please enter a valid email address' });
   }
 
-  if (!['admin', 'user', 'viewer'].includes(role)) {
+  // Registration only allows user or viewer; admin/superadmin are created by superadmin
+  if (!['user', 'viewer'].includes(role)) {
     return res.json({ success: false, error: 'Invalid role specified' });
   }
 
@@ -373,25 +454,27 @@ app.post('/api/auth/register', (req, res) => {
     // Hash password (simple base64 encoding - use bcrypt in production)
     const passwordHash = Buffer.from(password).toString('base64');
     const createdAt = Math.floor(Date.now() / 1000);
+    const approved = 0; // New users require superadmin approval
 
     db.run(
-      'INSERT INTO users (username, email, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [username, email, passwordHash, role, createdAt, createdAt],
+      'INSERT INTO users (username, email, password_hash, role, approved, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [username, email, passwordHash, role, approved, createdAt, createdAt],
       function(err) {
         if (err) {
           console.error('Error creating user:', err);
           return res.json({ success: false, error: 'Failed to create user account' });
         }
 
-        console.log(`New user registered: ${username} (${email}) with role: ${role}`);
+        console.log(`New user registered: ${username} (${email}) with role: ${role} (pending approval)`);
         res.json({ 
           success: true, 
-          message: 'User account created successfully',
+          message: 'Account created. You will be able to log in after an administrator approves your account.',
           user: {
             id: this.lastID,
             username,
             email,
             role,
+            approved: 0,
             created_at: createdAt
           }
         });
@@ -424,6 +507,8 @@ app.get('/api/auth/me', (req, res) => {
         username: user.username,
         email: user.email,
         role: user.role,
+        approved: user.approved ? 1 : 0,
+        full_name: user.full_name || null,
         created_at: user.created_at,
         updated_at: user.updated_at
       };
@@ -434,6 +519,197 @@ app.get('/api/auth/me', (req, res) => {
     res.json({ success: false, error: 'Invalid token' });
   }
 });
+
+// Helper: get current user from Bearer token (for protected routes)
+function getCurrentUser(req, callback) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return callback(null, null);
+  }
+  const token = authHeader.substring(7);
+  try {
+    const decoded = Buffer.from(token, 'base64').toString();
+    const [userId] = decoded.split(':');
+    db.get('SELECT * FROM users WHERE id = ?', [parseInt(userId)], (err, user) => {
+      if (err || !user) return callback(err, null);
+      callback(null, user);
+    });
+  } catch (e) {
+    callback(null, null);
+  }
+}
+
+// Users API (superadmin only) – mounted at /api/users
+const usersRouter = express.Router();
+
+// List all users – also registered on app so GET /api/users always matches
+function listAllUsers(req, res) {
+  console.log('GET /api/users');
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    if (user.role !== 'superadmin') {
+      return res.status(403).json({ success: false, error: 'Superadmin only' });
+    }
+    db.all(
+      'SELECT id, username, email, full_name, role, approved, created_at, updated_at FROM users ORDER BY id',
+      [],
+      (err, rows) => {
+        if (err) {
+          console.error('Error fetching users:', err);
+          return res.status(500).json({ success: false, error: 'Database error' });
+        }
+        res.json({ success: true, users: rows });
+      }
+    );
+  });
+}
+app.get('/api/users', listAllUsers);
+usersRouter.get('/', listAllUsers);
+
+// List users pending approval (GET /api/users/pending)
+usersRouter.get('/pending', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    if (user.role !== 'superadmin') {
+      return res.status(403).json({ success: false, error: 'Superadmin only' });
+    }
+    db.all('SELECT id, username, email, role, created_at FROM users WHERE approved = 0 ORDER BY created_at DESC', [], (err, rows) => {
+      if (err) {
+        console.error('Error fetching pending users:', err);
+        return res.status(500).json({ success: false, error: 'Database error' });
+      }
+      res.json({ success: true, users: rows });
+    });
+  });
+});
+
+// Update a user (PATCH /api/users/:id)
+usersRouter.patch('/:id', (req, res) => {
+  const targetId = parseInt(req.params.id, 10);
+  if (!targetId) return res.status(400).json({ success: false, error: 'Invalid user id' });
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    if (user.role !== 'superadmin') {
+      return res.status(403).json({ success: false, error: 'Superadmin only' });
+    }
+    const { full_name, role, approved } = req.body;
+    const updates = [];
+    const values = [];
+    if (full_name !== undefined) {
+      updates.push('full_name = ?');
+      values.push(full_name == null ? null : String(full_name).trim());
+    }
+    if (role !== undefined && ['superadmin', 'admin', 'user', 'viewer'].includes(role)) {
+      updates.push('role = ?');
+      values.push(role);
+    }
+    if (approved !== undefined) {
+      updates.push('approved = ?');
+      values.push(approved ? 1 : 0);
+    }
+    if (updates.length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid fields to update' });
+    }
+    updates.push('updated_at = ?');
+    values.push(Math.floor(Date.now() / 1000));
+    values.push(targetId);
+    db.run(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
+      values,
+      function (err) {
+        if (err) {
+          console.error('Error updating user:', err);
+          return res.status(500).json({ success: false, error: 'Database error' });
+        }
+        if (this.changes === 0) {
+          return res.status(404).json({ success: false, error: 'User not found' });
+        }
+        res.json({ success: true, message: 'User updated' });
+      }
+    );
+  });
+});
+
+// Approve a user (POST /api/users/:id/approve)
+usersRouter.post('/:id/approve', (req, res) => {
+  const targetId = parseInt(req.params.id, 10);
+  if (!targetId) return res.status(400).json({ success: false, error: 'Invalid user id' });
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    if (user.role !== 'superadmin') {
+      return res.status(403).json({ success: false, error: 'Superadmin only' });
+    }
+    db.run('UPDATE users SET approved = 1, updated_at = ? WHERE id = ?', [Math.floor(Date.now() / 1000), targetId], function (err) {
+      if (err) {
+        console.error('Error approving user:', err);
+        return res.status(500).json({ success: false, error: 'Database error' });
+      }
+      if (this.changes === 0) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+      console.log(`User ${targetId} approved by superadmin ${user.username}`);
+      res.json({ success: true, message: 'User approved' });
+    });
+  });
+});
+
+// Delete a user – superadmin only; cannot delete self or last superadmin (shared handler)
+function deleteUserHandler(req, res) {
+  const targetId = parseInt(req.params.id, 10);
+  if (!targetId) return res.status(400).json({ success: false, error: 'Invalid user id' });
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    if (user.role !== 'superadmin') {
+      return res.status(403).json({ success: false, error: 'Superadmin only' });
+    }
+    if (user.id === targetId) {
+      return res.status(400).json({ success: false, error: 'You cannot delete your own account' });
+    }
+    db.get('SELECT id, role FROM users WHERE id = ?', [targetId], (err, target) => {
+      if (err) {
+        console.error('Error fetching user for delete:', err);
+        return res.status(500).json({ success: false, error: 'Database error' });
+      }
+      if (!target) return res.status(404).json({ success: false, error: 'User not found' });
+      if (target.role === 'superadmin') {
+        db.get('SELECT COUNT(*) AS n FROM users WHERE role = ?', ['superadmin'], (err, row) => {
+          if (err) return res.status(500).json({ success: false, error: 'Database error' });
+          if (row && row.n <= 1) {
+            return res.status(400).json({ success: false, error: 'Cannot delete the last superadmin' });
+          }
+          doDelete();
+        });
+      } else {
+        doDelete();
+      }
+    });
+    function doDelete() {
+      db.run('DELETE FROM users WHERE id = ?', [targetId], function (err) {
+        if (err) {
+          console.error('Error deleting user:', err);
+          return res.status(500).json({ success: false, error: 'Database error' });
+        }
+        if (this.changes === 0) return res.status(404).json({ success: false, error: 'User not found' });
+        console.log(`User ${targetId} deleted by superadmin ${user.username}`);
+        res.json({ success: true, message: 'User deleted' });
+      });
+    }
+  });
+}
+app.delete('/api/users/:id', deleteUserHandler);
+usersRouter.delete('/:id', deleteUserHandler);
+
+app.use('/api/users', usersRouter);
 
 // Get all projects
 app.get('/api/projects', (req, res) => {
@@ -912,6 +1188,200 @@ app.post('/api/expenses', (req, res) => {
   };
   
   res.status(201).json({ success: true, expense: newExpense });
+});
+
+// Cash Advances (CA): request, list, approve (admin)
+app.get('/api/cash-advances', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+    const sql = isAdmin
+      ? 'SELECT ca.*, u.username, u.full_name FROM cash_advances ca JOIN users u ON ca.user_id = u.id ORDER BY ca.id DESC'
+      : 'SELECT ca.*, u.username, u.full_name FROM cash_advances ca JOIN users u ON ca.user_id = u.id WHERE ca.user_id = ? ORDER BY ca.id DESC';
+    const params = isAdmin ? [] : [user.id];
+    db.all(sql, params, (err, rows) => {
+      if (err) {
+        console.error('Error fetching cash advances:', err);
+        return res.status(500).json({ success: false, error: 'Database error' });
+      }
+      res.json({ success: true, cash_advances: rows || [] });
+    });
+  });
+});
+
+app.post('/api/cash-advances', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const amount = parseFloat(req.body.amount);
+    if (!amount || amount <= 0) return res.status(400).json({ success: false, error: 'Invalid amount' });
+    const purpose = (req.body.purpose || '').trim() || null;
+    const requestedAt = Math.floor(Date.now() / 1000);
+    db.run(
+      'INSERT INTO cash_advances (user_id, amount, balance_remaining, status, purpose, requested_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [user.id, amount, 0, 'pending', purpose, requestedAt, requestedAt],
+      function (err) {
+        if (err) {
+          console.error('Error creating cash advance:', err);
+          return res.status(500).json({ success: false, error: 'Database error' });
+        }
+        res.status(201).json({ success: true, id: this.lastID, message: 'Cash advance requested' });
+      }
+    );
+  });
+});
+
+app.patch('/api/cash-advances/:id', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    if (user.role !== 'superadmin' && user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ success: false, error: 'Invalid id' });
+    const { status } = req.body;
+    if (status !== 'approved' && status !== 'rejected') {
+      return res.status(400).json({ success: false, error: 'Status must be approved or rejected' });
+    }
+    db.get('SELECT id, amount, status FROM cash_advances WHERE id = ?', [id], (err, row) => {
+      if (err) return res.status(500).json({ success: false, error: 'Database error' });
+      if (!row) return res.status(404).json({ success: false, error: 'Cash advance not found' });
+      if (row.status !== 'pending') return res.status(400).json({ success: false, error: 'Already processed' });
+      const now = Math.floor(Date.now() / 1000);
+      const balanceRemaining = status === 'approved' ? row.amount : 0;
+      db.run(
+        'UPDATE cash_advances SET status = ?, balance_remaining = ?, approved_at = ?, approved_by = ?, updated_at = ? WHERE id = ?',
+        [status, balanceRemaining, status === 'approved' ? now : null, status === 'approved' ? user.id : null, now, id],
+        function (err) {
+          if (err) return res.status(500).json({ success: false, error: 'Database error' });
+          res.json({ success: true, message: status === 'approved' ? 'Cash advance approved' : 'Cash advance rejected' });
+        }
+      );
+    });
+  });
+});
+
+// Liquidations: save draft, load, submit (optional link to CA to reduce balance)
+app.get('/api/liquidations', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+    const sql = isAdmin
+      ? 'SELECT l.*, u.username, u.full_name FROM liquidations l JOIN users u ON l.user_id = u.id ORDER BY l.id DESC'
+      : 'SELECT l.*, u.username, u.full_name FROM liquidations l JOIN users u ON l.user_id = u.id WHERE l.user_id = ? ORDER BY l.id DESC';
+    const params = isAdmin ? [] : [user.id];
+    db.all(sql, params, (err, rows) => {
+      if (err) {
+        console.error('Error fetching liquidations:', err);
+        return res.status(500).json({ success: false, error: 'Database error' });
+      }
+      res.json({ success: true, liquidations: rows || [] });
+    });
+  });
+});
+
+app.get('/api/liquidations/:id', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ success: false, error: 'Invalid id' });
+    db.get('SELECT * FROM liquidations WHERE id = ?', [id], (err, row) => {
+      if (err) return res.status(500).json({ success: false, error: 'Database error' });
+      if (!row) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+      if (user.role !== 'superadmin' && user.role !== 'admin' && row.user_id !== user.id) {
+        return res.status(403).json({ success: false, error: 'Forbidden' });
+      }
+      res.json({ success: true, liquidation: row });
+    });
+  });
+});
+
+app.post('/api/liquidations', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const { form_no, date_of_submission, employee_name, employee_number, rows_json, total_amount, status, ca_id } = req.body;
+    const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
+    const total = parseFloat(total_amount) || 0;
+    const now = Math.floor(Date.now() / 1000);
+    const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
+    const caId = ca_id ? parseInt(ca_id, 10) : null;
+
+    const insert = () => {
+      db.run(
+        'INSERT INTO liquidations (user_id, form_no, date_of_submission, employee_name, employee_number, rows_json, total_amount, ca_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [user.id, form_no || null, date_of_submission || null, employee_name || null, employee_number || null, JSON.stringify(rows), total, caId, liqStatus, now, now],
+        function (err) {
+          if (err) {
+            console.error('Error creating liquidation:', err);
+            return res.status(500).json({ success: false, error: 'Database error' });
+          }
+          const lid = this.lastID;
+          if (liqStatus === 'submitted' && caId) {
+            db.run('UPDATE cash_advances SET balance_remaining = balance_remaining - ?, updated_at = ? WHERE id = ?', [total, now, caId], (err) => {
+              if (err) console.error('Error reducing CA balance:', err);
+            });
+          }
+          res.status(201).json({ success: true, id: lid, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved' });
+        }
+      );
+    };
+
+    if (liqStatus === 'submitted' && caId) {
+      db.get('SELECT id, balance_remaining FROM cash_advances WHERE id = ? AND user_id = ? AND status = ?', [caId, user.id, 'approved'], (err, ca) => {
+        if (err) return res.status(500).json({ success: false, error: 'Database error' });
+        if (!ca) return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
+        insert();
+      });
+    } else {
+      insert();
+    }
+  });
+});
+
+app.put('/api/liquidations/:id', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ success: false, error: 'Invalid id' });
+    db.get('SELECT id, user_id, status FROM liquidations WHERE id = ?', [id], (err, row) => {
+      if (err) return res.status(500).json({ success: false, error: 'Database error' });
+      if (!row) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+      if (row.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
+      if (row.status === 'submitted') return res.status(400).json({ success: false, error: 'Cannot edit submitted liquidation' });
+
+      const { form_no, date_of_submission, employee_name, employee_number, rows_json, total_amount, status, ca_id } = req.body;
+      const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
+      const total = parseFloat(total_amount) || 0;
+      const now = Math.floor(Date.now() / 1000);
+      const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
+      const caId = ca_id ? parseInt(ca_id, 10) : null;
+
+      const update = () => {
+        db.run(
+          'UPDATE liquidations SET form_no = ?, date_of_submission = ?, employee_name = ?, employee_number = ?, rows_json = ?, total_amount = ?, ca_id = ?, status = ?, updated_at = ? WHERE id = ?',
+          [form_no || null, date_of_submission || null, employee_name || null, employee_number || null, JSON.stringify(rows), total, caId, liqStatus, now, id],
+          function (err) {
+            if (err) return res.status(500).json({ success: false, error: 'Database error' });
+            if (liqStatus === 'submitted' && caId) {
+              db.run('UPDATE cash_advances SET balance_remaining = balance_remaining - ?, updated_at = ? WHERE id = ?', [total, now, caId], (err) => {
+                if (err) console.error('Error reducing CA balance:', err);
+              });
+            }
+            res.json({ success: true, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
+          }
+        );
+      };
+
+      if (liqStatus === 'submitted' && caId) {
+        db.get('SELECT id, balance_remaining FROM cash_advances WHERE id = ? AND user_id = ? AND status = ?', [caId, user.id, 'approved'], (err, ca) => {
+          if (err) return res.status(500).json({ success: false, error: 'Database error' });
+          if (!ca) return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
+          update();
+        });
+      } else {
+        update();
+      }
+    });
+  });
 });
 
 // Forecasting Endpoints
