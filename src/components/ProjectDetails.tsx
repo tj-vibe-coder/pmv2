@@ -30,7 +30,7 @@ export const REPORT_PREPARED_BY_KEY = 'reportPreparedBy';
 
 export const REPORT_COMPANIES = {
   IOCT: 'IO Control Technologie OPC',
-  ACT: 'Advance Controle Technologie Inc.',
+  ACT: 'Advance Controle Technologie Inc',
 } as const;
 export type ReportCompanyKey = keyof typeof REPORT_COMPANIES;
 

@@ -47,8 +47,17 @@ const REPORT_COMPANY_ADDRESS: Record<ReportCompanyKey, string> = {
   IOCT: 'B63, L7 Dynamism Jubilation Enclave, Santo Niño, City of Biñan, Laguna, Region IV-A (Calabarzon), 4024',
 };
 
-const REPORT_COMPANY_CONTACT: Record<ReportCompanyKey, { attn?: string; email?: string; phone?: string }> = {
-  ACT: { attn: 'Mark Chesner A. Cantuba', email: 'markchesner.actech@gmail.com', phone: '09958194250; 09947827005' },
+const REPORT_COMPANY_CONTACT: Record<
+  ReportCompanyKey,
+  { attn?: string; email?: string; phone?: string; tin?: string; tel?: string }
+> = {
+  ACT: {
+    attn: 'Claro Arno Royd Sanchez',
+    email: 'sales.actech.inc@gmail.com',
+    phone: '0917-5046701',
+    tin: '008-133-926-000',
+    tel: 'Tel No. (046) 458-6155',
+  },
   IOCT: { attn: 'Reuel Rivera', email: 'rj.rivera@iocontroltech.com', phone: '+63 977 015 2940' },
 };
 
@@ -289,15 +298,16 @@ function poSubtotal(items: PurchaseOrderItem[]): number {
   return items.reduce((sum, i) => sum + lineTotal(i), 0);
 }
 
-/** Subtotal, discount, amount (VAT ex), VAT, grand total for a PO */
+/** Subtotal, discount (PHP amount), discount %, amount (VAT ex), VAT, grand total for a PO */
 function poAmounts(po: { items: PurchaseOrderItem[]; noVat?: boolean; discount?: number }) {
   const subtotal = poSubtotal(po.items);
-  const discount = po.discount ?? 0;
-  const amountVatEx = Math.max(0, subtotal - discount);
+  const discountAmount = po.discount ?? 0; // discount is stored as PHP amount
+  const discountPercent = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0; // calculate percentage
+  const amountVatEx = Math.max(0, subtotal - discountAmount);
   const vatRate = 0.12;
   const vatAmount = po.noVat ? 0 : amountVatEx * vatRate;
   const grandTotal = amountVatEx + vatAmount;
-  return { subtotal, discount, amountVatEx, vatAmount, grandTotal };
+  return { subtotal, discount: discountAmount, discountPercent, amountVatEx, vatAmount, grandTotal };
 }
 
 const statusColor: Record<PurchaseOrder['status'], 'default' | 'primary' | 'success'> = {
@@ -356,7 +366,11 @@ async function exportPOToPDF(po: PurchaseOrder) {
   const companyName = REPORT_COMPANIES[reportCompany];
   const companyAddress = REPORT_COMPANY_ADDRESS[reportCompany];
   const noVatFlag = po.noVat === true;
-  const { subtotal, discount, amountVatEx, vatAmount, grandTotal } = poAmounts(po);
+  const { subtotal, discount, discountPercent, amountVatEx, vatAmount, grandTotal } = poAmounts(po);
+
+  // Load MRFs to check project IDs for items
+  const mrfs = loadMRFs();
+  const mrfMap = new Map(mrfs.map(m => [m.id, m]));
 
   // Load ArialNarrow font (same as DR)
   const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
@@ -389,12 +403,13 @@ async function exportPOToPDF(po: PurchaseOrder) {
     } catch (_) {}
   }
 
-  // ─── 1. Our Company with logo (left) | PURCHASE ORDER block (right) ───
+  // ─── 1. Our Company (left): Logo above, then Name, Address, TIN, Tel No., Email | PURCHASE ORDER block (right) ───
+  const companyContact = REPORT_COMPANY_CONTACT[reportCompany];
+  const headerLineHeight = 4;
   if (logoDataUrl && logoW && logoH) {
     doc.addImage(logoDataUrl, 'PNG', margin, y, logoW, logoH);
     y += logoH + 4;
   }
-  const companyContact = REPORT_COMPANY_CONTACT[reportCompany];
   fontTitle();
   doc.setFontSize(titleFontSize);
   doc.text(companyName, margin, y);
@@ -403,7 +418,20 @@ async function exportPOToPDF(po: PurchaseOrder) {
   y += 5;
   const buyerAddrLines = doc.splitTextToSize(companyAddress, halfWidth - 4);
   doc.text(buyerAddrLines, margin, y);
-  const leftBlockY = y + buyerAddrLines.length * lineHeight;
+  y += buyerAddrLines.length * lineHeight;
+  if (companyContact.tin) {
+    doc.text(`TIN: ${companyContact.tin}`, margin, y);
+    y += headerLineHeight;
+  }
+  if (companyContact.tel) {
+    doc.text(companyContact.tel, margin, y);
+    y += headerLineHeight;
+  }
+  if (companyContact.email) {
+    doc.text(`Email: ${companyContact.email}`, margin, y);
+    y += headerLineHeight;
+  }
+  const leftBlockY = y;
 
   // Display PO as "2602002-001" (number only, no IOCT, no PO)
   const seqNo = parsePOSeqNo(po.poNumber);
@@ -511,6 +539,14 @@ async function exportPOToPDF(po: PurchaseOrder) {
     doc.text(`Contact No.: ${companyContact.phone}`, shipToX, y);
     y += blockLineHeight;
   }
+  if (companyContact.tin) {
+    doc.text(`TIN: ${companyContact.tin}`, shipToX, y);
+    y += blockLineHeight;
+  }
+  if (companyContact.tel) {
+    doc.text(companyContact.tel, shipToX, y);
+    y += blockLineHeight;
+  }
   y = Math.max(vendorBlockBottom, y) + sectionGap;
 
   // Quotation Ref.
@@ -528,9 +564,55 @@ async function exportPOToPDF(po: PurchaseOrder) {
     const qty = Number(it.quantity) || 0;
     const up = Number(it.unitPrice ?? 0) || 0;
     const amount = qty * up;
+    
+    // Check if item is from a different project and add reference below description
+    const baseDescription = it.description || '—';
+    let descriptionCell: string | string[] = baseDescription;
+    
+    // Check all MRFs associated with this PO
+    const poMrfIds = po.mrfIds && po.mrfIds.length > 0 ? po.mrfIds : (po.mrfId ? [po.mrfId] : []);
+    const poMrfRequestNos = po.mrfRequestNos && po.mrfRequestNos.length > 0 ? po.mrfRequestNos : (po.mrfRequestNo ? [po.mrfRequestNo] : []);
+    
+    if (po.projectId != null && poMrfIds.length > 0 && mrfMap.size > 0) {
+      // Extract MRF ID from item ID (format: "mrfId-itemId" for multi-MRF, or just "itemId" for single MRF)
+      let itemMrfId: string | undefined;
+      let itemMrf: MaterialRequest | undefined;
+      
+      // Try to find MRF ID from item ID prefix
+      for (const mrfId of poMrfIds) {
+        if (it.id.startsWith(`${mrfId}-`)) {
+          itemMrfId = mrfId;
+          itemMrf = mrfMap.get(mrfId);
+          break;
+        }
+      }
+      
+      // If not found and only one MRF, assume all items belong to that MRF
+      if (!itemMrf && poMrfIds.length === 1) {
+        itemMrfId = poMrfIds[0];
+        itemMrf = mrfMap.get(itemMrfId);
+      }
+      
+      // Fallback: try to find MRF by matching request numbers
+      if (!itemMrf && poMrfRequestNos.length > 0) {
+        const allMrfs = Array.from(mrfMap.values());
+        for (const mrf of allMrfs) {
+          if (poMrfRequestNos.includes(mrf.requestNo)) {
+            itemMrf = mrf;
+            break;
+          }
+        }
+      }
+      
+      // If MRF exists and has different projectId, add reference below description (with blank line before Ref)
+      if (itemMrf && itemMrf.projectId !== null && itemMrf.projectId !== po.projectId) {
+        descriptionCell = `${baseDescription}\n\nRef:${itemMrf.requestNo}`;
+      }
+    }
+    
     return [
       String(idx + 1),
-      (it.description || '—').slice(0, 58),
+      descriptionCell,
       (it.partNo || '—').slice(0, 38),
       (it.brand || '—').slice(0, 20),
       String(qty).slice(0, 4),
@@ -548,7 +630,7 @@ async function exportPOToPDF(po: PurchaseOrder) {
     tableWidth: contentWidth,
     columnStyles: {
       0: { cellWidth: tableCols[0], halign: 'center', overflow: 'linebreak' },
-      1: { cellWidth: tableCols[1], halign: 'left', overflow: 'linebreak' },
+      1: { cellWidth: tableCols[1], halign: 'left', overflow: 'linebreak', cellPadding: { top: 2, bottom: 2, left: 2, right: 2 } },
       2: { cellWidth: tableCols[2], halign: 'left', overflow: 'linebreak' },
       3: { cellWidth: tableCols[3], halign: 'right', overflow: 'ellipsize' },
       4: { cellWidth: tableCols[4], halign: 'right', overflow: 'ellipsize' },
@@ -575,6 +657,17 @@ async function exportPOToPDF(po: PurchaseOrder) {
         data.cell.styles.halign = rightAlignCols.includes(data.column.index)
           ? (data.column.index === 0 ? 'center' : 'right')
           : 'left';
+      } else if (data.section === 'body' && data.column.index === 1) {
+        // Description column - ensure it handles multi-line text properly
+        data.cell.styles.overflow = 'linebreak';
+        data.cell.styles.cellPadding = { top: 2, bottom: 2, left: 2, right: 2 };
+        // Increase min height if description has multiple lines (blank line + Ref line)
+        const lineCount = Array.isArray(data.cell.text)
+          ? data.cell.text.length
+          : ((String(data.cell.text ?? '').match(/\n/g) || []).length + 1);
+        if (lineCount > 1) {
+          data.cell.styles.minCellHeight = lineCount >= 3 ? 14 : 10;
+        }
       }
     },
   });
@@ -590,7 +683,7 @@ async function exportPOToPDF(po: PurchaseOrder) {
   doc.text(`PHP ${formatPhp(subtotal)}`, totalColRight, y, { align: 'right' });
   y += lineHeight;
   if (discount > 0) {
-    doc.text('DISCOUNT', labelColRight, y, { align: 'right' });
+    doc.text(`DISCOUNT (${discountPercent.toFixed(2)}%)`, labelColRight, y, { align: 'right' });
     doc.text(`PHP ${formatPhp(discount)}`, totalColRight, y, { align: 'right' });
     y += lineHeight;
     doc.text('AMOUNT (VAT EXCLUSIVE)', labelColRight, y, { align: 'right' });
@@ -1128,7 +1221,7 @@ const PurchaseOrderPage: React.FC = () => {
                         <Collapse in={expandedId === po.id} timeout="auto" unmountOnExit>
                           <Box sx={{ py: 2, px: 2, bgcolor: 'grey.50' }}>
                             <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
-                              MRF Ref: {po.mrfRequestNos && po.mrfRequestNos.length > 1 ? po.mrfRequestNos.join(', ') : po.mrfRequestNo}
+                              Ref: {po.mrfRequestNos && po.mrfRequestNos.length > 1 ? po.mrfRequestNos.join(', ') : po.mrfRequestNo}
                             </Typography>
                             <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
                               Line items ({po.items.length})
@@ -1265,7 +1358,7 @@ const PurchaseOrderPage: React.FC = () => {
               </Select>
             </FormControl>
             <FormControlLabel control={<Checkbox checked={noVat} onChange={(e) => setNoVat(e.target.checked)} />} label="No VAT" />
-            <TextField fullWidth size="small" type="number" label="Discount (PHP)" value={createDiscount || ''} onChange={(e) => setCreateDiscount(parseFloat(e.target.value) || 0)} inputProps={{ min: 0, step: 0.01 }} placeholder="0" />
+            <TextField fullWidth size="small" type="number" label="DISCOUNT (PHP)" value={createDiscount || ''} onChange={(e) => setCreateDiscount(parseFloat(e.target.value) || 0)} inputProps={{ min: 0, step: 0.01 }} placeholder="0" />
             <TextField fullWidth size="small" label="Approved by" value={approvedBy} onChange={(e) => setApprovedBy(e.target.value)} placeholder="Name" />
             <TextField fullWidth size="small" label="Received by vendor" value={receivedByVendor} onChange={(e) => setReceivedByVendor(e.target.value)} placeholder="Vendor acknowledgment" />
             {combinedItems.length > 0 && (
@@ -1320,13 +1413,13 @@ const PurchaseOrderPage: React.FC = () => {
                 {createDialogItems.length > 0 && (
                   <Box sx={{ mt: 0.5 }}>
                     {(() => {
-                      const { subtotal, amountVatEx, vatAmount, grandTotal } = poAmounts({ items: createDialogItems, noVat, discount: createDiscount });
+                      const { subtotal, discount, discountPercent, amountVatEx, vatAmount, grandTotal } = poAmounts({ items: createDialogItems, noVat, discount: createDiscount });
                       return (
                         <Typography variant="caption" color="text.secondary">
                           Subtotal: {subtotal.toFixed(2)}
                           {createDiscount > 0 && (
                             <Typography component="span" variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                              {` · Discount: ${createDiscount.toFixed(2)} · Amount (VAT EX): ${amountVatEx.toFixed(2)}`}
+                              {` · Discount (${discountPercent.toFixed(2)}%): PHP ${discount.toFixed(2)} · Amount (VAT EX): ${amountVatEx.toFixed(2)}`}
                             </Typography>
                           )}
                           {!noVat && ` · 12% VAT: ${vatAmount.toFixed(2)} · Total: ${grandTotal.toFixed(2)}`}
@@ -1402,7 +1495,7 @@ const PurchaseOrderPage: React.FC = () => {
                   <FormControlLabel control={<Checkbox checked={!!editingPO.noVat} onChange={(e) => updateEditPO({ noVat: e.target.checked })} />} label="No VAT" />
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6 }}>
-                  <TextField fullWidth size="small" type="number" label="Discount" value={editingPO.discount ?? 0} onChange={(e) => updateEditPO({ discount: parseFloat(e.target.value) || 0 })} inputProps={{ min: 0, step: 0.01 }} />
+                  <TextField fullWidth size="small" type="number" label="DISCOUNT (PHP)" value={editingPO.discount ?? 0} onChange={(e) => updateEditPO({ discount: parseFloat(e.target.value) || 0 })} inputProps={{ min: 0, step: 0.01 }} />
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6 }}>
                   <TextField fullWidth size="small" label="Supplier attention to" value={editingPO.supplierAttentionTo ?? ''} onChange={(e) => updateEditPO({ supplierAttentionTo: e.target.value || undefined })} />
@@ -1557,11 +1650,11 @@ const PurchaseOrderPage: React.FC = () => {
               </TableContainer>
               <Box sx={{ textAlign: 'right', mt: 1 }}>
                 {(() => {
-                  const { subtotal, discount, amountVatEx, vatAmount, grandTotal } = poAmounts(viewPO);
+                  const { subtotal, discount, discountPercent, amountVatEx, vatAmount, grandTotal } = poAmounts(viewPO);
                   return (
                     <>
                       <Typography variant="body2">Subtotal: {subtotal.toFixed(2)}</Typography>
-                      {discount > 0 && <Typography variant="body2" sx={{ fontStyle: 'italic' }}>Discount: {discount.toFixed(2)} · Amount (VAT EX): {amountVatEx.toFixed(2)}</Typography>}
+                      {discount > 0 && <Typography variant="body2" sx={{ fontStyle: 'italic' }}>Discount ({discountPercent.toFixed(2)}%): PHP {discount.toFixed(2)} · Amount (VAT EX): {amountVatEx.toFixed(2)}</Typography>}
                       {!viewPO.noVat && <Typography variant="body2">12% VAT: {vatAmount.toFixed(2)}</Typography>}
                       <Typography variant="body2" fontWeight={600}>{viewPO.noVat ? 'Total' : 'Total (incl. VAT)'}: {grandTotal.toFixed(2)}</Typography>
                     </>

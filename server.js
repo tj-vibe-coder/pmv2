@@ -11,36 +11,29 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Initialize database: SQLite Cloud if DATABASE_URL is set, else local SQLite
+// Initialize database: Always use SQLite Cloud (DATABASE_URL is required)
 const databaseUrl = process.env.DATABASE_URL;
-let db;
-let dbLabel = 'SQLite (local)';
 
-if (databaseUrl && databaseUrl.startsWith('sqlitecloud://')) {
-  const { Database } = require('@sqlitecloud/drivers');
-  dbLabel = 'SQLite Cloud';
-  db = new Database(databaseUrl, (err) => {
-    if (err) {
-      console.error('Error connecting to SQLite Cloud:', err);
-    } else {
-      console.log('Connected to SQLite Cloud');
-      db.serialize = (fn) => fn(); // no-op; driver queues commands internally
-      initializeDatabase();
-    }
-  });
-} else {
-  const sqlite3 = require('sqlite3').verbose();
-  const dbPath = databaseUrl || path.join(__dirname, 'projects.db');
-  dbLabel = dbPath;
-  db = new sqlite3.Database(dbPath, (err) => {
-    if (err) {
-      console.error('Error opening database:', err);
-    } else {
-      console.log('Connected to SQLite database');
-      initializeDatabase();
-    }
-  });
+if (!databaseUrl || !databaseUrl.startsWith('sqlitecloud://')) {
+  console.error('ERROR: DATABASE_URL environment variable is required and must be a SQLite Cloud URL (sqlitecloud://...)');
+  console.error('Please set DATABASE_URL in your .env file');
+  process.exit(1);
 }
+
+const { Database } = require('@sqlitecloud/drivers');
+let db;
+const dbLabel = 'SQLite Cloud';
+
+db = new Database(databaseUrl, (err) => {
+  if (err) {
+    console.error('Error connecting to SQLite Cloud:', err);
+    process.exit(1);
+  } else {
+    console.log('Connected to SQLite Cloud');
+    db.serialize = (fn) => fn(); // no-op; driver queues commands internally
+    initializeDatabase();
+  }
+});
 
 // Initialize database tables
 function initializeDatabase() {
@@ -112,10 +105,8 @@ function initializeDatabase() {
       process.exit(1);
     } else {
       console.log('Projects table ready');
-      // Add project_no column if missing (local SQLite only; skip for SQLite Cloud)
-      if (dbLabel !== 'SQLite Cloud') {
-        db.run('ALTER TABLE projects ADD COLUMN project_no TEXT', () => {});
-      }
+      // Add project_no column if missing (SQLite Cloud will ignore if already exists)
+      db.run('ALTER TABLE projects ADD COLUMN project_no TEXT', () => {});
     }
     startServer();
   });
@@ -141,11 +132,9 @@ function initializeDatabase() {
       console.error('Error creating users table:', err);
     } else {
       console.log('Users table ready');
-      // Add columns if missing (local only for approved/full_name; designation added for both, duplicate ignored)
-      if (dbLabel !== 'SQLite Cloud') {
-        db.run('ALTER TABLE users ADD COLUMN approved INTEGER DEFAULT 1', () => {});
-        db.run('ALTER TABLE users ADD COLUMN full_name TEXT', () => {});
-      }
+      // Add columns if missing (SQLite Cloud will ignore if already exists)
+      db.run('ALTER TABLE users ADD COLUMN approved INTEGER DEFAULT 1', () => {});
+      db.run('ALTER TABLE users ADD COLUMN full_name TEXT', () => {});
       db.run('ALTER TABLE users ADD COLUMN designation TEXT', (err) => {
         if (err && !/duplicate column/i.test(String(err.message || err))) console.error('Error adding designation column:', err);
       });
