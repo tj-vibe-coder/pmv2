@@ -21,6 +21,7 @@ import SuppliersPage from './components/SuppliersPage';
 import PurchaseOrderPage from './components/PurchaseOrderPage';
 import EstimatesPage from './components/EstimatesPage';
 import ReportsPage from './components/ReportsPage';
+import EHSPage from './components/EHSPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
 import UsersPage from './components/UsersPage';
 
@@ -262,6 +263,16 @@ function App() {
                 <ProtectedRoute>
                   <AppLayout>
                     <ReportsPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/ehs/:tab?" 
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <EHSPage />
                   </AppLayout>
                 </ProtectedRoute>
               } 

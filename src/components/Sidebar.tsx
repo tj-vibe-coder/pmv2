@@ -36,6 +36,7 @@ import {
   HowToReg as HowToRegIcon,
   Group as GroupIcon,
   AccountBalance as AccountBalanceIcon,
+  HealthAndSafety as HealthAndSafetyIcon,
 } from '@mui/icons-material';
 
 const SIDEBAR_WIDTH = 280;
@@ -43,6 +44,7 @@ const SIDEBAR_WIDTH = 280;
 const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
 const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form'];
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
+const EHS_PATHS = ['/ehs', '/ehs/safety-certificate', '/ehs/safety-manual', '/ehs/osh-program'];
 
 const Sidebar: React.FC = () => {
   const theme = useTheme();
@@ -58,6 +60,9 @@ const Sidebar: React.FC = () => {
   const [expenseMonitoringOpen, setExpenseMonitoringOpen] = useState(() =>
     EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)
   );
+  const [ehsOpen, setEhsOpen] = useState(() =>
+    EHS_PATHS.some((p) => location.pathname.startsWith(p) || location.pathname === p)
+  );
 
   useEffect(() => {
     if (SUPPLY_CHAIN_PATHS.some((p) => location.pathname === p)) {
@@ -68,6 +73,9 @@ const Sidebar: React.FC = () => {
     }
     if (EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)) {
       setExpenseMonitoringOpen(true);
+    }
+    if (EHS_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(p))) {
+      setEhsOpen(true);
     }
   }, [location.pathname]);
 
@@ -676,6 +684,121 @@ const Sidebar: React.FC = () => {
               </ListItem>
             </List>
           </Collapse>
+
+        {/* EHS (collapsible parent) */}
+        <ListItem disablePadding sx={{ mb: 0.5 }}>
+          <ListItemButton
+            onClick={() => setEhsOpen((open) => !open)}
+            sx={{
+              borderRadius: 2,
+              mx: 1,
+              minHeight: 56,
+              '&:hover': {
+                backgroundColor: 'rgba(255,255,255,0.1)',
+              },
+              transition: 'all 0.2s ease-in-out',
+            }}
+          >
+            <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
+              <HealthAndSafetyIcon />
+            </ListItemIcon>
+            <ListItemText
+              primary="EHS"
+              secondary="Safety compliance & documents"
+              secondaryTypographyProps={{
+                color: 'rgba(255,255,255,0.7)',
+                fontSize: '0.75rem',
+              }}
+              sx={{ color: 'white' }}
+            />
+            {ehsOpen ? <ExpandLessIcon sx={{ color: 'white' }} /> : <ExpandMoreIcon sx={{ color: 'white' }} />}
+          </ListItemButton>
+        </ListItem>
+        <Collapse in={ehsOpen} timeout="auto" unmountOnExit>
+          <List component="div" disablePadding sx={{ pl: 2 }}>
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                selected={location.pathname === '/ehs/safety-certificate' || (location.pathname === '/ehs' || location.pathname === '/ehs/')}
+                onClick={() => navigate('/ehs/safety-certificate')}
+                sx={{
+                  borderRadius: 2,
+                  mx: 1,
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    color: 'white',
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                  },
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                  transition: 'all 0.2s ease-in-out',
+                }}
+              >
+                <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                  <PictureAsPdfIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText
+                  primary="Safety Certificate"
+                  primaryTypographyProps={{ fontSize: '0.875rem' }}
+                  sx={{ color: 'white' }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                selected={location.pathname === '/ehs/safety-manual'}
+                onClick={() => navigate('/ehs/safety-manual')}
+                sx={{
+                  borderRadius: 2,
+                  mx: 1,
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    color: 'white',
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                  },
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                  transition: 'all 0.2s ease-in-out',
+                }}
+              >
+                <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                  <PictureAsPdfIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText
+                  primary="Safety Manual"
+                  primaryTypographyProps={{ fontSize: '0.875rem' }}
+                  sx={{ color: 'white' }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                selected={location.pathname === '/ehs/osh-program'}
+                onClick={() => navigate('/ehs/osh-program')}
+                sx={{
+                  borderRadius: 2,
+                  mx: 1,
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    color: 'white',
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                  },
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                  transition: 'all 0.2s ease-in-out',
+                }}
+              >
+                <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                  <PictureAsPdfIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText
+                  primary="OSH Program"
+                  primaryTypographyProps={{ fontSize: '0.875rem' }}
+                  sx={{ color: 'white' }}
+                />
+              </ListItemButton>
+            </ListItem>
+          </List>
+        </Collapse>
         </List>
       </Box>
 
