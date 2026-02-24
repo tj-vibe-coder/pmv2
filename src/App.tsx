@@ -22,6 +22,7 @@ import PurchaseOrderPage from './components/PurchaseOrderPage';
 import EstimatesPage from './components/EstimatesPage';
 import ReportsPage from './components/ReportsPage';
 import EHSPage from './components/EHSPage';
+import IDGeneratorPage from './components/IDGeneratorPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
 import UsersPage from './components/UsersPage';
 
@@ -273,6 +274,16 @@ function App() {
                 <ProtectedRoute>
                   <AppLayout>
                     <EHSPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/id-generator" 
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <IDGeneratorPage />
                   </AppLayout>
                 </ProtectedRoute>
               } 
