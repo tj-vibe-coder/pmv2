@@ -37,6 +37,7 @@ import {
   Group as GroupIcon,
   AccountBalance as AccountBalanceIcon,
   HealthAndSafety as HealthAndSafetyIcon,
+  Badge as BadgeIcon,
 } from '@mui/icons-material';
 
 const SIDEBAR_WIDTH = 280;
@@ -799,6 +800,38 @@ const Sidebar: React.FC = () => {
             </ListItem>
           </List>
         </Collapse>
+
+        <ListItem disablePadding sx={{ mb: 0.5 }}>
+          <ListItemButton
+            selected={location.pathname === '/id-generator'}
+            onClick={() => navigate('/id-generator')}
+            sx={{
+              borderRadius: 2,
+              mx: 1,
+              minHeight: 48,
+              '&.Mui-selected': {
+                backgroundColor: 'rgba(255,255,255,0.15)',
+                color: 'white',
+                '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+              },
+              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+              transition: 'all 0.2s ease-in-out',
+            }}
+          >
+            <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
+              <BadgeIcon />
+            </ListItemIcon>
+            <ListItemText
+              primary="ID Generator"
+              secondary="Employee ID cards"
+              secondaryTypographyProps={{
+                color: 'rgba(255,255,255,0.7)',
+                fontSize: '0.75rem',
+              }}
+              sx={{ color: 'white' }}
+            />
+          </ListItemButton>
+        </ListItem>
         </List>
       </Box>
 
