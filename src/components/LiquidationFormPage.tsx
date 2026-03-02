@@ -104,6 +104,7 @@ export default function LiquidationFormPage() {
   const [drafts, setDrafts] = useState<{ id: number; form_no: string; date_of_submission: string; status: string; total_amount: number }[]>([]);
   const [submittedLiquidations, setSubmittedLiquidations] = useState<{ id: number; form_no: string; date_of_submission: string; status: string; total_amount: number }[]>([]);
   const [isViewingSubmitted, setIsViewingSubmitted] = useState(false);
+  const [loadedOptionValue, setLoadedOptionValue] = useState<string>('');
   const [cashAdvances, setCashAdvances] = useState<{ id: number; amount: number; balance_remaining: number }[]>([]);
   const [saving, setSaving] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
@@ -199,7 +200,9 @@ export default function LiquidationFormPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
-        setDraftId(data.id || draftId);
+        const newId = data.id ?? draftId;
+        setDraftId(newId);
+        if (newId) setLoadedOptionValue(`draft:${newId}`);
         setSubmitSuccess('Draft saved.');
         fetch(`${API_BASE}/api/liquidations`, { headers: { Authorization: `Bearer ${token}` } })
           .then((r) => r.json())
@@ -226,7 +229,11 @@ export default function LiquidationFormPage() {
     const data = await res.json().catch(() => ({}));
     if (!data.success || !data.liquidation) return;
     const l = data.liquidation;
-    setIsViewingSubmitted(isSubmitted || l.status === 'submitted');
+    const serverStatus = String(l.status ?? '').toLowerCase().trim();
+    const submitted =
+      isSubmitted ||
+      serverStatus === 'submitted';
+    setIsViewingSubmitted(submitted);
     setFormNo(l.form_no || '');
     setDateOfSubmission(l.date_of_submission || new Date().toISOString().slice(0, 10));
     setEmployeeName(l.employee_name || '');
@@ -263,7 +270,8 @@ export default function LiquidationFormPage() {
             };
           });
     setRows(loadedRows);
-    setDraftId(l.id);
+    setDraftId(submitted ? null : l.id);
+    setLoadedOptionValue(submitted ? `submitted:${l.id}` : `draft:${l.id}`);
     setSubmitSuccess(null);
   };
 
@@ -300,6 +308,7 @@ export default function LiquidationFormPage() {
       if (data.success) {
         addLiquidationRowsToProjectExpenses(rows);
         setDraftId(null);
+        setLoadedOptionValue('');
         setIsViewingSubmitted(false);
         setRows([newRow('', '')]);
         setFormNo('');
@@ -597,12 +606,13 @@ export default function LiquidationFormPage() {
             <Select<string>
               size="small"
               displayEmpty
-              value=""
+              value={loadedOptionValue}
               onChange={(e) => {
                 const raw = e.target.value as string;
                 if (raw === '') {
                   setIsViewingSubmitted(false);
                   setDraftId(null);
+                  setLoadedOptionValue('');
                   setRows([newRow('', '')]);
                   setFormNo('');
                   setEmployeeName('');
@@ -775,10 +785,23 @@ export default function LiquidationFormPage() {
         </Box>
 
         {isViewingSubmitted && (
-          <Box sx={{ mb: 2, p: 1.5, bgcolor: 'info.light', borderRadius: 1, border: '1px solid', borderColor: 'info.main' }}>
+          <Box sx={{ mb: 2, p: 1.5, bgcolor: 'info.light', borderRadius: 1, border: '1px solid', borderColor: 'info.main', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
             <Typography variant="body2" sx={{ color: 'info.dark', fontWeight: 500 }}>
-              Viewing submitted liquidation (read-only). To create a new liquidation, select "Load liquidation…" and choose a draft or create a new form.
+              Viewing submitted liquidation (read-only). To edit, create an editable copy below.
             </Typography>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => {
+                setDraftId(null);
+                setLoadedOptionValue('');
+                setIsViewingSubmitted(false);
+                setSubmitSuccess(null);
+              }}
+              sx={{ borderColor: 'info.main', color: 'info.dark' }}
+            >
+              Create editable copy
+            </Button>
           </Box>
         )}
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
