@@ -1,5 +1,5 @@
-import React from 'react';
-import { Box, Paper, Typography, Button } from '@mui/material';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Box, Paper, Typography, Button, TextField } from '@mui/material';
 import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
 import jsPDF from 'jspdf';
@@ -37,6 +37,24 @@ export interface CompletionCertificateTabProps {
   onPreview: (blob: Blob, title: string) => void;
 }
 
+const formatCompletionDateForPdf = (value: string | number | Date | null | undefined): string => {
+  if (!value) return new Date().toLocaleDateString('en-US', { dateStyle: 'long' });
+  if (typeof value === 'string' && value.trim() !== '') {
+    const d = new Date(value.trim());
+    if (!isNaN(d.getTime())) return d.toLocaleDateString('en-US', { dateStyle: 'long' });
+  }
+  if (typeof value === 'number') return new Date(value * 1000).toLocaleDateString('en-US', { dateStyle: 'long' });
+  return new Date(value).toLocaleDateString('en-US', { dateStyle: 'long' });
+};
+
+const projectCompletionDateToInputValue = (project: Project): string => {
+  const d = project.completion_date;
+  if (!d) return '';
+  const date = typeof d === 'number' ? new Date(d * 1000) : new Date(d);
+  if (isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
+};
+
 const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
   project,
   currentUser,
@@ -44,6 +62,14 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
   preparedBy,
   onPreview,
 }) => {
+  const [completionDateOverride, setCompletionDateOverride] = useState<string>(() => projectCompletionDateToInputValue(project));
+  useEffect(() => {
+    setCompletionDateOverride(projectCompletionDateToInputValue(project));
+  }, [project.id, project.completion_date]);
+  const completionDateDisplay = useMemo(
+    () => formatCompletionDateForPdf(completionDateOverride.trim() || undefined),
+    [completionDateOverride]
+  );
 
   const buildPdf = async (preview: boolean): Promise<Blob | void> => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -69,9 +95,7 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     const projectTitle = project.project_name || '—';
     const poNumber = project.po_number || '—';
     const clientName = project.account_name || '—';
-    const completionDate = project.completion_date
-      ? new Date(typeof project.completion_date === 'number' ? project.completion_date * 1000 : project.completion_date).toLocaleDateString('en-US', { dateStyle: 'long' })
-      : new Date().toLocaleDateString('en-US', { dateStyle: 'long' });
+    const completionDate = completionDateDisplay;
 
     // Optional company logo (e.g. ACT, IOCT)
     if (reportCompany === 'ACT') {
@@ -234,7 +258,8 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     }
 
     if (preview) return doc.output('blob') as Blob;
-    doc.save(`Certificate_of_Completion_${(project.project_name || 'project').replace(/\s/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    const docNoFilename = `${(projectNo === '—' ? 'COC' : String(projectNo).replace(/[/\\?%*:|"<>]/g, '-'))}-COC.pdf`;
+    doc.save(docNoFilename);
   };
 
   const handlePreview = async () => {
@@ -250,6 +275,15 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Generate the Final Project Completion Certificate. Preview or Export to PDF.
       </Typography>
+      <TextField
+        label="Completion Date"
+        type="date"
+        value={completionDateOverride}
+        onChange={(e) => setCompletionDateOverride(e.target.value)}
+        size="small"
+        sx={{ minWidth: 200, mb: 2, display: 'block' }}
+        InputLabelProps={{ shrink: true }}
+      />
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
         <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
         <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={() => buildPdf(false)} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Export Certificate of Completion</Button>

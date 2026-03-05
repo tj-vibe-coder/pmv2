@@ -248,7 +248,7 @@ const EHSPage: React.FC = () => {
 
   const handleTabChange = (_: React.SyntheticEvent, newValue: string) => {
     setLocalTab(newValue);
-    navigate(`/ehs/${newValue}`);
+    navigate(`/utilities/ehs/${newValue}`);
   };
 
   const buildSafetyManualPdf = useCallback(async (preview: boolean): Promise<Blob | void> => {
