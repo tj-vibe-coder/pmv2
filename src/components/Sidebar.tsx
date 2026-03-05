@@ -20,7 +20,6 @@ import {
   Settings as SettingsIcon,
   Notifications as NotificationsIcon,
   AccountBalanceWallet as ReceiptIcon,
-  TrendingUp as TrendingUpIcon,
   People as ClientsIcon,
   Assignment as MaterialRequestIcon,
   ReceiptLong as DeliveryIcon,
@@ -38,6 +37,7 @@ import {
   AccountBalance as AccountBalanceIcon,
   HealthAndSafety as HealthAndSafetyIcon,
   Badge as BadgeIcon,
+  Build as BuildIcon,
 } from '@mui/icons-material';
 
 const SIDEBAR_WIDTH = 280;
@@ -45,7 +45,7 @@ const SIDEBAR_WIDTH = 280;
 const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
 const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form'];
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
-const EHS_PATHS = ['/ehs', '/ehs/safety-certificate', '/ehs/safety-manual', '/ehs/osh-program'];
+const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator'];
 
 const Sidebar: React.FC = () => {
   const theme = useTheme();
@@ -61,8 +61,8 @@ const Sidebar: React.FC = () => {
   const [expenseMonitoringOpen, setExpenseMonitoringOpen] = useState(() =>
     EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)
   );
-  const [ehsOpen, setEhsOpen] = useState(() =>
-    EHS_PATHS.some((p) => location.pathname.startsWith(p) || location.pathname === p)
+  const [utilitiesOpen, setUtilitiesOpen] = useState(() =>
+    UTILITIES_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(p))
   );
 
   useEffect(() => {
@@ -75,8 +75,8 @@ const Sidebar: React.FC = () => {
     if (EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)) {
       setExpenseMonitoringOpen(true);
     }
-    if (EHS_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(p))) {
-      setEhsOpen(true);
+    if (UTILITIES_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(p))) {
+      setUtilitiesOpen(true);
     }
   }, [location.pathname]);
 
@@ -302,42 +302,6 @@ const Sidebar: React.FC = () => {
               </ListItem>
             </List>
           </Collapse>
-
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <ListItemButton
-              selected={location.pathname === '/forecasting'}
-              onClick={() => navigate('/forecasting')}
-              sx={{
-                borderRadius: 2,
-                mx: 1,
-                minHeight: 56,
-                '&.Mui-selected': {
-                  backgroundColor: 'rgba(255,255,255,0.15)',
-                  color: 'white',
-                  '&:hover': {
-                    backgroundColor: 'rgba(255,255,255,0.2)',
-                  },
-                },
-                '&:hover': {
-                  backgroundColor: 'rgba(255,255,255,0.1)',
-                },
-                transition: 'all 0.2s ease-in-out',
-              }}
-            >
-              <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
-                <TrendingUpIcon />
-              </ListItemIcon>
-              <ListItemText
-                primary="Forecasting"
-                secondary="Business analytics & predictions"
-                secondaryTypographyProps={{
-                  color: 'rgba(255,255,255,0.7)',
-                  fontSize: '0.75rem',
-                }}
-                sx={{ color: 'white' }}
-              />
-            </ListItemButton>
-          </ListItem>
 
           <ListItem disablePadding sx={{ mb: 0.5 }}>
             <ListItemButton
@@ -686,10 +650,10 @@ const Sidebar: React.FC = () => {
             </List>
           </Collapse>
 
-        {/* EHS (collapsible parent) */}
+        {/* Utilities (collapsible: EHS + ID Generator) */}
         <ListItem disablePadding sx={{ mb: 0.5 }}>
           <ListItemButton
-            onClick={() => setEhsOpen((open) => !open)}
+            onClick={() => setUtilitiesOpen((open) => !open)}
             sx={{
               borderRadius: 2,
               mx: 1,
@@ -701,30 +665,31 @@ const Sidebar: React.FC = () => {
             }}
           >
             <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
-              <HealthAndSafetyIcon />
+              <BuildIcon />
             </ListItemIcon>
             <ListItemText
-              primary="EHS"
-              secondary="Safety compliance & documents"
+              primary="Utilities"
+              secondary="EHS, ID cards & tools"
               secondaryTypographyProps={{
                 color: 'rgba(255,255,255,0.7)',
                 fontSize: '0.75rem',
               }}
               sx={{ color: 'white' }}
             />
-            {ehsOpen ? <ExpandLessIcon sx={{ color: 'white' }} /> : <ExpandMoreIcon sx={{ color: 'white' }} />}
+            {utilitiesOpen ? <ExpandLessIcon sx={{ color: 'white' }} /> : <ExpandMoreIcon sx={{ color: 'white' }} />}
           </ListItemButton>
         </ListItem>
-        <Collapse in={ehsOpen} timeout="auto" unmountOnExit>
+        <Collapse in={utilitiesOpen} timeout="auto" unmountOnExit>
           <List component="div" disablePadding sx={{ pl: 2 }}>
             <ListItem disablePadding sx={{ mb: 0.5 }}>
               <ListItemButton
-                selected={location.pathname === '/ehs/safety-certificate' || (location.pathname === '/ehs' || location.pathname === '/ehs/')}
-                onClick={() => navigate('/ehs/safety-certificate')}
+                selected={location.pathname === '/utilities/ehs/safety-certificate' || (location.pathname === '/utilities/ehs' || location.pathname === '/utilities/ehs/')}
+                onClick={() => navigate('/utilities/ehs/safety-certificate')}
                 sx={{
                   borderRadius: 2,
                   mx: 1,
-                  minHeight: 48,
+                  minHeight: 40,
+                  pl: 3,
                   '&.Mui-selected': {
                     backgroundColor: 'rgba(255,255,255,0.15)',
                     color: 'white',
@@ -734,24 +699,25 @@ const Sidebar: React.FC = () => {
                   transition: 'all 0.2s ease-in-out',
                 }}
               >
-                <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
-                  <PictureAsPdfIcon fontSize="small" />
+                <ListItemIcon sx={{ color: 'inherit', minWidth: 32 }}>
+                  <PictureAsPdfIcon sx={{ fontSize: 18 }} />
                 </ListItemIcon>
                 <ListItemText
                   primary="Safety Certificate"
-                  primaryTypographyProps={{ fontSize: '0.875rem' }}
+                  primaryTypographyProps={{ fontSize: '0.8125rem' }}
                   sx={{ color: 'white' }}
                 />
               </ListItemButton>
             </ListItem>
             <ListItem disablePadding sx={{ mb: 0.5 }}>
               <ListItemButton
-                selected={location.pathname === '/ehs/safety-manual'}
-                onClick={() => navigate('/ehs/safety-manual')}
+                selected={location.pathname === '/utilities/ehs/safety-manual'}
+                onClick={() => navigate('/utilities/ehs/safety-manual')}
                 sx={{
                   borderRadius: 2,
                   mx: 1,
-                  minHeight: 48,
+                  minHeight: 40,
+                  pl: 3,
                   '&.Mui-selected': {
                     backgroundColor: 'rgba(255,255,255,0.15)',
                     color: 'white',
@@ -761,20 +727,48 @@ const Sidebar: React.FC = () => {
                   transition: 'all 0.2s ease-in-out',
                 }}
               >
-                <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
-                  <PictureAsPdfIcon fontSize="small" />
+                <ListItemIcon sx={{ color: 'inherit', minWidth: 32 }}>
+                  <PictureAsPdfIcon sx={{ fontSize: 18 }} />
                 </ListItemIcon>
                 <ListItemText
                   primary="Safety Manual"
-                  primaryTypographyProps={{ fontSize: '0.875rem' }}
+                  primaryTypographyProps={{ fontSize: '0.8125rem' }}
                   sx={{ color: 'white' }}
                 />
               </ListItemButton>
             </ListItem>
             <ListItem disablePadding sx={{ mb: 0.5 }}>
               <ListItemButton
-                selected={location.pathname === '/ehs/osh-program'}
-                onClick={() => navigate('/ehs/osh-program')}
+                selected={location.pathname === '/utilities/ehs/osh-program'}
+                onClick={() => navigate('/utilities/ehs/osh-program')}
+                sx={{
+                  borderRadius: 2,
+                  mx: 1,
+                  minHeight: 40,
+                  pl: 3,
+                  '&.Mui-selected': {
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    color: 'white',
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                  },
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                  transition: 'all 0.2s ease-in-out',
+                }}
+              >
+                <ListItemIcon sx={{ color: 'inherit', minWidth: 32 }}>
+                  <PictureAsPdfIcon sx={{ fontSize: 18 }} />
+                </ListItemIcon>
+                <ListItemText
+                  primary="OSH Program"
+                  primaryTypographyProps={{ fontSize: '0.8125rem' }}
+                  sx={{ color: 'white' }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                selected={location.pathname === '/utilities/id-generator'}
+                onClick={() => navigate('/utilities/id-generator')}
                 sx={{
                   borderRadius: 2,
                   mx: 1,
@@ -789,10 +783,10 @@ const Sidebar: React.FC = () => {
                 }}
               >
                 <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
-                  <PictureAsPdfIcon fontSize="small" />
+                  <BadgeIcon fontSize="small" />
                 </ListItemIcon>
                 <ListItemText
-                  primary="OSH Program"
+                  primary="ID Generator"
                   primaryTypographyProps={{ fontSize: '0.875rem' }}
                   sx={{ color: 'white' }}
                 />
@@ -800,38 +794,6 @@ const Sidebar: React.FC = () => {
             </ListItem>
           </List>
         </Collapse>
-
-        <ListItem disablePadding sx={{ mb: 0.5 }}>
-          <ListItemButton
-            selected={location.pathname === '/id-generator'}
-            onClick={() => navigate('/id-generator')}
-            sx={{
-              borderRadius: 2,
-              mx: 1,
-              minHeight: 48,
-              '&.Mui-selected': {
-                backgroundColor: 'rgba(255,255,255,0.15)',
-                color: 'white',
-                '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
-              },
-              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
-              transition: 'all 0.2s ease-in-out',
-            }}
-          >
-            <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
-              <BadgeIcon />
-            </ListItemIcon>
-            <ListItemText
-              primary="ID Generator"
-              secondary="Employee ID cards"
-              secondaryTypographyProps={{
-                color: 'rgba(255,255,255,0.7)',
-                fontSize: '0.75rem',
-              }}
-              sx={{ color: 'white' }}
-            />
-          </ListItemButton>
-        </ListItem>
         </List>
       </Box>
 

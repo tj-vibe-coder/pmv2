@@ -3,8 +3,15 @@
 # - Start Command:  node server.js
 #   In Render dashboard: Settings → Start Command → set to exactly:  node server.js
 #   Do NOT use "npm start" or leave default – that runs dev server + API and crashes (port/path-to-regexp).
-# - DATABASE_URL:   REQUIRED on Render. Set to your SQLite Cloud URL (from https://sqlitecloud.com dashboard).
-#   If unset, the app uses a local file; Render's disk is ephemeral so "no such table" will occur. Use SQLite Cloud for production.
+#
+# WHY RENDER APP "NOT SYNC" WITH OUR DB?
+# The app only talks to ONE database: the one in DATABASE_URL. For Render to show the same
+# data as your local/dev app, Render must use the SAME SQLite Cloud database.
+# - Copy the EXACT DATABASE_URL from your local .env into Render → Environment.
+# - If Render has no DATABASE_URL, the server won't start. If it has a different URL
+#   (e.g. a new SQLite Cloud DB), Render will show a different/empty database.
+# - REACT_APP_API_URL: only needed if frontend and backend are separate Render services.
+#   If you use one Render Web Service (build + node server.js), leave it unset.
 # -----------------------------------------------------------------------------
 
 # Copy the lines below into Render → Environment. Replace YOUR_* with real values.

@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, Outlet, useParams } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { Box } from '@mui/material';
@@ -13,7 +13,6 @@ import ProjectLocationDashboard from './components/ProjectLocationDashboard';
 import ExpenseMonitoring from './components/ExpenseMonitoring';
 import LiquidationFormPage from './components/LiquidationFormPage';
 import CAFormPage from './components/CAFormPage';
-import Forecasting from './components/Forecasting';
 import ClientsPage from './components/ClientsPage';
 import MaterialRequestFormPage from './components/MaterialRequestFormPage';
 import DeliveryPage from './components/DeliveryPage';
@@ -21,6 +20,7 @@ import SuppliersPage from './components/SuppliersPage';
 import PurchaseOrderPage from './components/PurchaseOrderPage';
 import EstimatesPage from './components/EstimatesPage';
 import ReportsPage from './components/ReportsPage';
+import UtilitiesPage from './components/UtilitiesPage';
 import EHSPage from './components/EHSPage';
 import IDGeneratorPage from './components/IDGeneratorPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
@@ -118,6 +118,13 @@ const SuperadminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) 
   return <>{children}</>;
 };
 
+// Redirect legacy /ehs and /ehs/:tab to /utilities/ehs and /utilities/ehs/:tab
+const RedirectEhsToUtilities: React.FC = () => {
+  const { tab } = useParams<{ tab?: string }>();
+  const to = tab ? `/utilities/ehs/${tab}` : '/utilities/ehs';
+  return <Navigate to={to} replace />;
+};
+
 // Main App Layout component
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return (
@@ -187,16 +194,6 @@ function App() {
                 element={<CAFormPage />}
               />
             </Route>
-            <Route 
-              path="/forecasting" 
-              element={
-                <ProtectedRoute>
-                  <AppLayout>
-                    <Forecasting />
-                  </AppLayout>
-                </ProtectedRoute>
-              } 
-            />
             <Route 
               path="/clients" 
               element={
@@ -268,26 +265,23 @@ function App() {
                 </ProtectedRoute>
               } 
             />
+            <Route path="/ehs" element={<Navigate to="/utilities/ehs" replace />} />
+            <Route path="/ehs/:tab" element={<RedirectEhsToUtilities />} />
             <Route 
-              path="/ehs/:tab?" 
+              path="/utilities" 
               element={
                 <ProtectedRoute>
                   <AppLayout>
-                    <EHSPage />
+                    <UtilitiesPage />
                   </AppLayout>
                 </ProtectedRoute>
               } 
-            />
-            <Route 
-              path="/id-generator" 
-              element={
-                <ProtectedRoute>
-                  <AppLayout>
-                    <IDGeneratorPage />
-                  </AppLayout>
-                </ProtectedRoute>
-              } 
-            />
+            >
+              <Route index element={<Navigate to="/utilities/ehs" replace />} />
+              <Route path="ehs/:tab?" element={<EHSPage />} />
+              <Route path="id-generator" element={<IDGeneratorPage />} />
+            </Route>
+            <Route path="/id-generator" element={<Navigate to="/utilities/id-generator" replace />} />
             <Route 
               path="/user-approvals" 
               element={
