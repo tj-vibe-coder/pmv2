@@ -9,11 +9,17 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
   TextField,
   Button,
   Select,
   MenuItem,
   IconButton,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
@@ -60,7 +66,7 @@ const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
 });
 
 const PROJECT_EXPENSES_KEY = 'projectExpenses';
-function addLiquidationRowsToProjectExpenses(rows: LiquidationRow[]): void {
+function addLiquidationRowsToProjectExpenses(rows: LiquidationRow[], liquidationId?: number, formNo?: string): void {
   try {
     const raw = localStorage.getItem(PROJECT_EXPENSES_KEY);
     const existing = raw ? JSON.parse(raw) : [];
@@ -69,22 +75,31 @@ function addLiquidationRowsToProjectExpenses(rows: LiquidationRow[]): void {
       const amt = Number(r.amount);
       return pid !== '' && pid !== null && pid !== undefined && !isNaN(Number(pid)) && amt > 0;
     });
+    // Build set of already-synced keys to avoid duplicates
+    const syncedKeys = new Set(
+      existing.filter((e: any) => e.sourceLiquidationId != null && e.sourceLiquidationRowId).map((e: any) => `${e.sourceLiquidationId}:${e.sourceLiquidationRowId}`)
+    );
     const now = new Date().toISOString();
+    let added = 0;
     toAdd.forEach((r) => {
       const pid = Number(r.projectId);
       if (isNaN(pid)) return;
+      if (liquidationId && syncedKeys.has(`${liquidationId}:${r.id}`)) return;
       existing.unshift({
         id: `exp-liq-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         projectId: pid,
         projectName: (r.projectName || '').trim() || '—',
-        description: (r.particulars || '').trim() || 'Liquidation',
+        description: formNo ? `Liquidation ${formNo}: ${(r.particulars || '').trim() || 'Liquidation'}` : (r.particulars || '').trim() || 'Liquidation',
         amount: Number(r.amount),
         date: r.date || now.slice(0, 10),
         category: (r.category || '').trim() || 'Others',
         createdAt: now,
+        sourceLiquidationId: liquidationId,
+        sourceLiquidationRowId: r.id,
       });
+      added++;
     });
-    if (toAdd.length > 0) {
+    if (added > 0) {
       localStorage.setItem(PROJECT_EXPENSES_KEY, JSON.stringify(existing));
     }
   } catch (_) {}
@@ -109,7 +124,33 @@ export default function LiquidationFormPage() {
   const [saving, setSaving] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [caId, setCaId] = useState<number | ''>('');
+  const [sortConfig, setSortConfig] = useState<{ key: 'date' | 'amount'; direction: 'asc' | 'desc' } | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const canDeleteLiquidation = draftId !== null || loadedOptionValue.startsWith('submitted:');
+  const liquidationToDeleteId = draftId ?? (loadedOptionValue.startsWith('submitted:') ? parseInt(loadedOptionValue.split(':')[1], 10) : null);
+
+  const handleSort = (key: 'date' | 'amount') => {
+    setSortConfig((prev) => {
+      if (prev?.key === key) return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      return { key, direction: 'asc' };
+    });
+  };
+
+  const sortedRows = React.useMemo(() => {
+    if (!sortConfig) return rows;
+    return [...rows].sort((a, b) => {
+      if (sortConfig.key === 'date') {
+        const cmp = (a.date || '').localeCompare(b.date || '');
+        return sortConfig.direction === 'asc' ? cmp : -cmp;
+      }
+      const aVal = Number(a.amount) || 0;
+      const bVal = Number(b.amount) || 0;
+      return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+    });
+  }, [rows, sortConfig]);
 
   useEffect(() => {
     const fullName = user?.full_name?.trim();
@@ -275,6 +316,91 @@ export default function LiquidationFormPage() {
     setSubmitSuccess(null);
   };
 
+  const refreshLiquidationsList = () => {
+    if (!token) return;
+    fetch(`${API_BASE}/api/liquidations`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success && d.liquidations) {
+          setDrafts(d.liquidations.filter((l: { status: string }) => l.status === 'draft'));
+          setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { id: number }, b: { id: number }) => b.id - a.id));
+        }
+      })
+      .catch(() => {});
+  };
+
+  const handleDeleteLiquidation = async () => {
+    const id = liquidationToDeleteId;
+    if (!token || id == null || isNaN(Number(id))) return;
+    setIsDeleting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/liquidations/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      let data: { success?: boolean; error?: string } = {};
+      try {
+        const text = await res.text();
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = {};
+      }
+      if (data.success) {
+        const idToRemove = id;
+        setDrafts((prev) => prev.filter((d) => d.id !== idToRemove));
+        setSubmittedLiquidations((prev) => prev.filter((d) => d.id !== idToRemove));
+        setDeleteDialogOpen(false);
+        setDraftId(null);
+        setLoadedOptionValue('');
+        setIsViewingSubmitted(false);
+        setRows([newRow('', '')]);
+        setFormNo('');
+        setEmployeeName(user?.full_name?.trim() || user?.username || '');
+        setEmployeeNumber('');
+        setDateOfSubmission(new Date().toISOString().slice(0, 10));
+        setCaId('');
+        setSubmitSuccess('Liquidation deleted.');
+        refreshLiquidationsList();
+        fetch(`${API_BASE}/api/cash-advances`, { headers: { Authorization: `Bearer ${token}` } })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.success && d.cash_advances) {
+              setCashAdvances(
+                d.cash_advances.filter(
+                  (ca: { status: string; balance_remaining: number }) =>
+                    ca.status === 'approved' && Number(ca.balance_remaining) > 0
+                )
+              );
+            }
+          })
+          .catch(() => {});
+      } else if (res.status === 404) {
+        const idToRemove = id;
+        setDrafts((prev) => prev.filter((d) => d.id !== idToRemove));
+        setSubmittedLiquidations((prev) => prev.filter((d) => d.id !== idToRemove));
+        setDeleteDialogOpen(false);
+        setDraftId(null);
+        setLoadedOptionValue('');
+        setIsViewingSubmitted(false);
+        setRows([newRow('', '')]);
+        setFormNo('');
+        setEmployeeName(user?.full_name?.trim() || user?.username || '');
+        setEmployeeNumber('');
+        setDateOfSubmission(new Date().toISOString().slice(0, 10));
+        setCaId('');
+        setSubmitSuccess('Liquidation removed from list.');
+        refreshLiquidationsList();
+      } else {
+        const errMsg = data.error || (res.status === 401 ? 'Unauthorized' : res.status === 403 ? 'Forbidden' : `Delete failed (${res.status})`);
+        setSubmitSuccess(errMsg);
+      }
+    } catch (e) {
+      setSubmitSuccess(e instanceof Error ? e.message : 'Network error');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const submitLiquidation = async () => {
     if (!token) return;
     if (rows.length === 0) {
@@ -306,7 +432,7 @@ export default function LiquidationFormPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
-        addLiquidationRowsToProjectExpenses(rows);
+        addLiquidationRowsToProjectExpenses(rows, data.id ?? draftId ?? undefined, finalFormNo);
         setDraftId(null);
         setLoadedOptionValue('');
         setIsViewingSubmitted(false);
@@ -438,8 +564,9 @@ export default function LiquidationFormPage() {
     doc.setFontSize(10);
     doc.text(`Name: ${(employeeName || '—').trim()}`, margin, y);
     y += 10;
-    const body = rows.length > 0
-      ? rows.map((r, i) => [
+    const exportRows = [...rows].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const body = exportRows.length > 0
+      ? exportRows.map((r, i) => [
           String(i + 1),
           r.date || '—',
           r.category || '—',
@@ -450,33 +577,38 @@ export default function LiquidationFormPage() {
           (r.remarks || '—').slice(0, 15),
         ])
       : [['—', '—', '—', '—', '—', '—', '0.00', '—']];
-    
-    autoTable(doc, {
-      head: [['No.', 'Date', 'Category', 'Project', 'PO #', 'Particulars', 'Amount', 'Remarks']],
-      body,
-      startY: y,
-      margin: { left: margin, right: margin },
+
+    const tableStartY = y;
+    const rowsPerPage = 25;
+    const bottomReserve = 60;
+    const tableHead = [['No.', 'Date', 'Category', 'Project', 'PO #', 'Particulars', 'Amount', 'Remarks']];
+    const tableOpts = {
+      margin: { left: margin, right: margin, bottom: bottomReserve },
       tableWidth: pageWidth - margin * 2,
-      styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
-      headStyles: { fillColor: [44, 90, 160], font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', fontStyle: 'bold' },
-      didDrawPage: () => {
-        // Draw header on all pages (logo, company name, Liquidation Form + Date on right)
-        if (logoDataUrl) {
-          doc.addImage(logoDataUrl, 'PNG', margin, headerY - 2, logoWidth, logoHeight);
-          doc.setFontSize(9);
-          fontBold();
-          doc.text('Advance Controle Technologie Inc.', margin, headerY + logoHeight + 4);
-        }
-        doc.setFontSize(16);
-        doc.setFont('helvetica', 'bold'); // Use Arial Bold (helvetica bold) for title
-        doc.text('Liquidation Form', pageWidth - margin, headerY, { align: 'right' });
-        fontBody();
-        doc.setFontSize(10);
-        doc.text(`Date: ${dateOfSubmission || '—'}`, pageWidth - margin, headerY + lineHeight, { align: 'right' });
-      },
-    });
+      styles: { fontSize: 7, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', cellPadding: 2 },
+      headStyles: { fillColor: [44, 90, 160] as [number, number, number], font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', fontStyle: 'bold' as const, fontSize: 7, cellPadding: 2 },
+    };
+
+    const chunks: string[][][] = [];
+    for (let i = 0; i < body.length; i += rowsPerPage) {
+      chunks.push(body.slice(i, i + rowsPerPage));
+    }
+    if (chunks.length === 0) chunks.push([['—', '—', '—', '—', '—', '—', '0.00', '—']]);
+
+    for (let i = 0; i < chunks.length; i++) {
+      if (i > 0) {
+        doc.addPage();
+        drawHeader();
+      }
+      autoTable(doc, {
+        head: tableHead,
+        body: chunks[i],
+        startY: tableStartY,
+        ...tableOpts,
+      });
+    }
     const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
-    y = (docWithTable.lastAutoTable?.finalY ?? y) + 8;
+    y = (docWithTable.lastAutoTable?.finalY ?? tableStartY) + 8;
     // Total on the right side - use Helvetica Bold
     doc.setFont('helvetica', 'bold');
     doc.text(`Total: ${totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, pageWidth - margin, y, { align: 'right' });
@@ -507,7 +639,8 @@ export default function LiquidationFormPage() {
     const headerRow1 = ['Employee Name', employeeName, 'Employee Number', employeeNumber];
     const headerRow2 = ['Date of Submission', dateOfSubmission, 'Form No.', formNo];
     const tableHeaders = ['No.', 'Date', 'Category', 'Project Name', 'PO #', 'Particulars', 'Amount', 'Remarks'];
-    const dataRows = rows.map((r, i) => [
+    const exportRows = [...rows].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const dataRows = exportRows.map((r, i) => [
       i + 1,
       r.date,
       r.category,
@@ -602,6 +735,18 @@ export default function LiquidationFormPage() {
           >
             Save draft
           </Button>
+          {canDeleteLiquidation && (
+            <Button
+              variant="outlined"
+              size="small"
+              color="error"
+              startIcon={<DeleteIcon />}
+              onClick={() => setDeleteDialogOpen(true)}
+              sx={{ borderColor: 'error.main', color: 'error.main' }}
+            >
+              Delete
+            </Button>
+          )}
           {(drafts.length > 0 || submittedLiquidations.length > 0) && (
             <Select<string>
               size="small"
@@ -824,8 +969,14 @@ export default function LiquidationFormPage() {
             <TableHead>
               <TableRow sx={{ bgcolor: theme.primary + '12' }}>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary, width: 48 }}>No.</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 110 }}>
-                  Date
+                <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 110 }} sortDirection={sortConfig?.key === 'date' ? sortConfig.direction : false}>
+                  <TableSortLabel
+                    active={sortConfig?.key === 'date'}
+                    direction={sortConfig?.key === 'date' ? sortConfig.direction : 'asc'}
+                    onClick={() => handleSort('date')}
+                  >
+                    Date
+                  </TableSortLabel>
                 </TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 120 }}>
                   Category
@@ -839,8 +990,14 @@ export default function LiquidationFormPage() {
                 <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 160 }}>
                   Particulars
                 </TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 100 }}>
-                  Amount
+                <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 100 }} sortDirection={sortConfig?.key === 'amount' ? sortConfig.direction : false}>
+                  <TableSortLabel
+                    active={sortConfig?.key === 'amount'}
+                    direction={sortConfig?.key === 'amount' ? sortConfig.direction : 'asc'}
+                    onClick={() => handleSort('amount')}
+                  >
+                    Amount
+                  </TableSortLabel>
                 </TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 100 }}>
                   Remarks
@@ -856,7 +1013,7 @@ export default function LiquidationFormPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                rows.map((row, index) => (
+                sortedRows.map((row, index) => (
                   <TableRow key={row.id} hover sx={{ '&:hover .delete-btn': { opacity: 1 } }}>
                     <TableCell sx={{ color: 'text.secondary' }}>{index + 1}</TableCell>
                     <TableCell>
@@ -997,6 +1154,24 @@ export default function LiquidationFormPage() {
           </Box>
         )}
       </Paper>
+
+      <Dialog open={deleteDialogOpen} onClose={() => !isDeleting && setDeleteDialogOpen(false)}>
+        <DialogTitle>Delete liquidation</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Are you sure you want to delete this liquidation? This cannot be undone.
+            {isViewingSubmitted && ' If it was applied to a cash advance, the balance will be restored.'}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)} disabled={isDeleting}>
+            Cancel
+          </Button>
+          <Button color="error" variant="contained" onClick={handleDeleteLiquidation} disabled={isDeleting}>
+            {isDeleting ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

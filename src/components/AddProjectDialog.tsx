@@ -54,6 +54,7 @@ const AddProjectDialog: React.FC<AddProjectDialogProps> = ({ open, onClose, onPr
     if (client) {
       setFormData((prev) => ({
         ...prev,
+        client_id: client.id,
         account_name: client.client_name,
         payment_terms: client.payment_terms || prev.payment_terms,
         client_approver: client.contact_person ? [client.contact_person, client.designation].filter(Boolean).join(' – ') : prev.client_approver,
@@ -62,6 +63,7 @@ const AddProjectDialog: React.FC<AddProjectDialogProps> = ({ open, onClose, onPr
     } else {
       setFormData((prev) => ({
         ...prev,
+        client_id: null as any,
         account_name: '',
         client_approver: prev.client_approver,
       }));
@@ -72,6 +74,7 @@ const AddProjectDialog: React.FC<AddProjectDialogProps> = ({ open, onClose, onPr
   const [formData, setFormData] = useState({
     project_no: '',
     project_name: '',
+    client_id: null as number | null,
     account_name: '',
     year: new Date().getFullYear(),
     project_category: '',
@@ -81,7 +84,7 @@ const AddProjectDialog: React.FC<AddProjectDialogProps> = ({ open, onClose, onPr
     updated_contract_amount: 0,
     status_percent: 0,
     po_number: '',
-    po_date: '', // YYYY-MM-DD for input; PO Date = start of project
+    po_date: '',
     client_status: '',
     down_payment_percent: 0.1,
     retention_percent: 0.1,
@@ -191,6 +194,7 @@ const AddProjectDialog: React.FC<AddProjectDialogProps> = ({ open, onClose, onPr
       setFormData({
         project_no: '',
         project_name: '',
+        client_id: null,
         account_name: '',
         year: new Date().getFullYear(),
         project_category: '',

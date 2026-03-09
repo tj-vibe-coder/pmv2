@@ -47,6 +47,7 @@ import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import { getBudgets } from '../utils/projectBudgetStorage';
 import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem } from './PurchaseOrderPage';
+import { API_BASE } from '../config/api';
 
 const EXPENSES_KEY = 'projectExpenses';
 
@@ -72,6 +73,9 @@ export interface ProjectExpense {
   /** When synced from PO, avoid duplicate sync */
   sourcePoId?: string;
   sourcePoItemId?: string;
+  /** When synced from Liquidation, avoid duplicate sync */
+  sourceLiquidationId?: number;
+  sourceLiquidationRowId?: string;
 }
 
 const loadExpenses = (): ProjectExpense[] => {
@@ -139,7 +143,7 @@ const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR + 2 - 2025 }, (_, i) => 2
 
 const ExpenseMonitoring: React.FC = () => {
   const location = useLocation();
-  const isChildRoute = location.pathname === '/expense-monitoring/ca-form' || location.pathname === '/expense-monitoring/liquidation-form';
+  const isChildRoute = location.pathname === '/expense-monitoring/ca-form' || location.pathname === '/expense-monitoring/liquidation-form' || location.pathname === '/expense-monitoring/direct-labor';
   
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [selectedYear, setSelectedYear] = useState<number>(0);
@@ -174,6 +178,13 @@ const ExpenseMonitoring: React.FC = () => {
     setBudgets(getBudgets());
     setExpenses(loadExpenses());
   }, []);
+
+  // Reload expenses when navigating within expense monitoring (e.g. back from Liquidation form) so liquidations are reflected
+  useEffect(() => {
+    if (location.pathname.startsWith('/expense-monitoring')) {
+      setExpenses(loadExpenses());
+    }
+  }, [location.pathname]);
 
   const expensesInYear = useMemo(() => {
     if (selectedYear === 0) return expenses;
@@ -341,6 +352,77 @@ const ExpenseMonitoring: React.FC = () => {
     setTimeout(() => setSyncMessage(null), 4000);
   };
 
+  const handleSyncFromLiquidation = async () => {
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      if (!token) {
+        setSyncMessage({ type: 'error', text: 'Not authenticated. Please log in first.' });
+        setTimeout(() => setSyncMessage(null), 4000);
+        return;
+      }
+      const res = await fetch(`${API_BASE}/api/liquidations`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (!data.success || !data.liquidations) {
+        setSyncMessage({ type: 'error', text: 'Failed to fetch liquidations.' });
+        setTimeout(() => setSyncMessage(null), 4000);
+        return;
+      }
+
+      const submitted = data.liquidations.filter((l: any) => l.status === 'submitted');
+      const existing = loadExpenses();
+      const syncedKeys = new Set(
+        existing.filter((e) => e.sourceLiquidationId != null && e.sourceLiquidationRowId).map((e) => `${e.sourceLiquidationId}:${e.sourceLiquidationRowId}`)
+      );
+
+      const newExpenses: ProjectExpense[] = [];
+      for (const liq of submitted) {
+        let rows: any[] = [];
+        try { rows = JSON.parse(liq.rows_json || '[]'); } catch (_) { continue; }
+
+        for (const row of rows) {
+          const pid = Number(row.projectId);
+          if (!pid || isNaN(pid)) continue;
+          const amt = Number(row.amount);
+          if (!amt || amt <= 0) continue;
+
+          const key = `${liq.id}:${row.id}`;
+          if (syncedKeys.has(key)) continue;
+
+          const project = allProjects.find((p) => p.id === pid);
+          const projectName = row.projectName || project?.project_name || '—';
+
+          newExpenses.push({
+            id: `exp-liq-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            projectId: pid,
+            projectName,
+            description: `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`,
+            amount: amt,
+            date: row.date || liq.date_of_submission || new Date().toISOString().slice(0, 10),
+            category: (row.category || '').trim() || 'Others',
+            createdAt: new Date().toISOString(),
+            sourceLiquidationId: liq.id,
+            sourceLiquidationRowId: row.id,
+          });
+          syncedKeys.add(key);
+        }
+      }
+
+      if (newExpenses.length === 0) {
+        setSyncMessage({ type: 'info', text: 'No new liquidation expenses to sync. All submitted liquidations are already logged.' });
+      } else {
+        const next = [...newExpenses, ...existing];
+        setExpenses(next);
+        saveExpenses(next);
+        setSyncMessage({ type: 'success', text: `Synced ${newExpenses.length} liquidation expense(s) — total ${formatCurrency(newExpenses.reduce((s, e) => s + e.amount, 0))} logged.` });
+      }
+    } catch (err) {
+      setSyncMessage({ type: 'error', text: 'Error syncing liquidations.' });
+    }
+    setTimeout(() => setSyncMessage(null), 4000);
+  };
+
   const handleDeleteExpense = (id: string) => {
     if (!window.confirm('Delete this expense? This cannot be undone.')) return;
     const next = expenses.filter((e) => e.id !== id);
@@ -415,6 +497,14 @@ const ExpenseMonitoring: React.FC = () => {
             sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
           >
             Sync from PO
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<SyncIcon />}
+            onClick={handleSyncFromLiquidation}
+            sx={{ borderColor: NET_PACIFIC_COLORS.accent1, color: NET_PACIFIC_COLORS.accent1 }}
+          >
+            Sync from Liquidation
           </Button>
           <Button
             variant="contained"

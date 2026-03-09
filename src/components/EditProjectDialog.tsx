@@ -53,6 +53,7 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
   const [formData, setFormData] = useState({
     project_no: '',
     project_name: '',
+    client_id: null as number | null,
     account_name: '',
     year: new Date().getFullYear(),
     project_category: '',
@@ -90,6 +91,7 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
       setFormData({
         project_no: project.project_no || '',
         project_name: project.project_name || '',
+        client_id: project.client_id ?? null,
         account_name: project.account_name || '',
         year: project.year || new Date().getFullYear(),
         project_category: project.project_category || '',
@@ -115,7 +117,10 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
 
   useEffect(() => {
     if (open && project && clients.length > 0) {
-      const client = clients.find((c) => c.client_name === project.account_name) || null;
+      const client = (project.client_id
+        ? clients.find((c) => c.id === project.client_id)
+        : clients.find((c) => c.client_name === project.account_name)
+      ) || null;
       setSelectedClient(client);
     } else if (!open) {
       setSelectedClient(null);
@@ -129,6 +134,7 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
     if (client) {
       setFormData((prev) => ({
         ...prev,
+        client_id: client.id,
         account_name: client.client_name,
         payment_terms: client.payment_terms || prev.payment_terms,
         client_approver: client.contact_person ? [client.contact_person, client.designation].filter(Boolean).join(' – ') : prev.client_approver,
@@ -137,6 +143,7 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
     } else {
       setFormData((prev) => ({
         ...prev,
+        client_id: null as any,
         account_name: '',
         client_approver: prev.client_approver,
       }));
@@ -178,6 +185,7 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
       const payload: Partial<Project> = {
         project_no: formData.project_no || undefined,
         project_name: formData.project_name,
+        client_id: formData.client_id,
         account_name: formData.account_name,
         year: formData.year,
         project_category: formData.project_category,
