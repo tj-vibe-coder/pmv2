@@ -58,7 +58,7 @@ const REPORT_COMPANY_CONTACT: Record<
     tin: '008-133-926-000',
     tel: 'Tel No. (046) 458-6155',
   },
-  IOCT: { attn: 'Reuel Rivera', email: 'rj.rivera@iocontroltech.com', phone: '+63 977 015 2940' },
+  IOCT: { attn: 'Reuel Rivera', email: 'rj.rivera@iocontroltech.com', phone: '+63 977 015 2940', tin: '697-029-976-00000' },
 };
 
 export interface PurchaseOrderItem {

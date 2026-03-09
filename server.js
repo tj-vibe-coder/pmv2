@@ -107,6 +107,31 @@ function initializeDatabase() {
       console.log('Projects table ready');
       // Add project_no column if missing (SQLite Cloud will ignore if already exists)
       db.run('ALTER TABLE projects ADD COLUMN project_no TEXT', () => {});
+      // Add client_id FK column (links to clients table as single source of truth)
+      db.run('ALTER TABLE projects ADD COLUMN client_id INTEGER', (err) => {
+        if (err && !/duplicate column/i.test(String(err.message || err))) {
+          console.error('Error adding client_id column:', err);
+        }
+        // Backfill: match existing account_name to clients.client_name
+        db.run(
+          `UPDATE projects SET client_id = (SELECT c.id FROM clients c WHERE c.client_name = projects.account_name) WHERE client_id IS NULL AND account_name IS NOT NULL AND account_name != ''`,
+          (bErr) => {
+            if (bErr) { console.error('Error backfilling client_id:', bErr); return; }
+            console.log('client_id backfill done');
+            // Also sync client_approver from clients for linked projects
+            db.run(
+              `UPDATE projects SET client_approver = (
+                SELECT TRIM(
+                  COALESCE(c.contact_person,'')
+                  || CASE WHEN COALESCE(c.contact_person,'') != '' AND COALESCE(c.designation,'') != '' THEN ' – ' ELSE '' END
+                  || COALESCE(c.designation,'')
+                ) FROM clients c WHERE c.id = projects.client_id
+              ) WHERE client_id IS NOT NULL`,
+              (aErr) => { if (aErr) console.error('Error backfilling client_approver:', aErr); else console.log('client_approver backfill done'); }
+            );
+          }
+        );
+      });
     }
     startServer();
   });
@@ -720,40 +745,58 @@ usersRouter.delete('/:id', deleteUserHandler);
 
 app.use('/api/users', usersRouter);
 
-// Get all projects
+// Shared SELECT for project queries: resolves account_name and client_approver from the clients table
+const PROJECT_SELECT = `
+  SELECT p.*,
+    COALESCE(c.client_name, p.account_name) AS account_name,
+    CASE
+      WHEN p.client_id IS NOT NULL
+           AND (COALESCE(c.contact_person,'') != '' OR COALESCE(c.designation,'') != '')
+      THEN TRIM(
+        COALESCE(c.contact_person,'')
+        || CASE WHEN COALESCE(c.contact_person,'') != '' AND COALESCE(c.designation,'') != '' THEN ' – ' ELSE '' END
+        || COALESCE(c.designation,'')
+      )
+      ELSE p.client_approver
+    END AS client_approver,
+    p.client_id
+  FROM projects p
+  LEFT JOIN clients c ON p.client_id = c.id`;
+
+// Get all projects (JOIN clients for canonical name)
 app.get('/api/projects', (req, res) => {
   const { status, year, search, client, category } = req.query;
   
-  let query = 'SELECT * FROM projects WHERE 1=1';
+  let query = `${PROJECT_SELECT} WHERE 1=1`;
   let params = [];
 
   if (status) {
-    query += ' AND project_status = ?';
+    query += ' AND p.project_status = ?';
     params.push(status);
   }
 
   if (client) {
-    query += ' AND account_name = ?';
+    query += ' AND COALESCE(c.client_name, p.account_name) = ?';
     params.push(client);
   }
 
   if (category) {
-    query += ' AND project_category = ?';
+    query += ' AND p.project_category = ?';
     params.push(category);
   }
 
   if (year) {
-    query += ' AND year = ?';
+    query += ' AND p.year = ?';
     params.push(parseInt(year));
   }
 
   if (search) {
-    query += ' AND (project_name LIKE ? OR account_name LIKE ? OR ovp_number LIKE ?)';
+    query += ' AND (p.project_name LIKE ? OR COALESCE(c.client_name, p.account_name) LIKE ? OR p.ovp_number LIKE ?)';
     const searchTerm = `%${search}%`;
     params.push(searchTerm, searchTerm, searchTerm);
   }
 
-  query += ' ORDER BY created_at DESC';
+  query += ' ORDER BY p.created_at DESC';
 
   db.all(query, params, (err, rows) => {
     if (err) {
@@ -779,11 +822,11 @@ app.get('/api/projects/count', (req, res) => {
   });
 });
 
-// Get project by ID
+// Get project by ID (JOIN clients for canonical name)
 app.get('/api/projects/:id', (req, res) => {
   const { id } = req.params;
   
-  db.get('SELECT * FROM projects WHERE id = ?', [id], (err, row) => {
+  db.get(`${PROJECT_SELECT} WHERE p.id = ?`, [id], (err, row) => {
     if (err) {
       console.error('Error fetching project:', err);
       res.status(500).json({ error: 'Failed to fetch project' });
@@ -798,25 +841,34 @@ app.get('/api/projects/:id', (req, res) => {
 // Create new project
 app.post('/api/projects', (req, res) => {
   const projectData = req.body;
-  
-  const columns = Object.keys(projectData).filter(key => key !== 'id');
-  const placeholders = columns.map(() => '?').join(',');
-  const values = columns.map(key => projectData[key]);
-  
-  const query = `INSERT INTO projects (${columns.join(',')}, created_at, updated_at) 
-                 VALUES (${placeholders}, datetime('now'), datetime('now'))`;
 
-  db.run(query, values, function(err) {
-    if (err) {
-      console.error('Error creating project:', err);
-      res.status(500).json({ error: 'Failed to create project' });
-    } else {
-      res.status(201).json({ 
-        id: this.lastID,
-        message: 'Project created successfully' 
-      });
-    }
-  });
+  // If client_id provided, resolve account_name from clients table
+  const doInsert = (data) => {
+    const columns = Object.keys(data).filter(key => key !== 'id');
+    const placeholders = columns.map(() => '?').join(',');
+    const values = columns.map(key => data[key]);
+    const query = `INSERT INTO projects (${columns.join(',')}, created_at, updated_at) VALUES (${placeholders}, datetime('now'), datetime('now'))`;
+    db.run(query, values, function(err) {
+      if (err) {
+        console.error('Error creating project:', err);
+        res.status(500).json({ error: 'Failed to create project' });
+      } else {
+        res.status(201).json({ id: this.lastID, message: 'Project created successfully' });
+      }
+    });
+  };
+
+  if (projectData.client_id) {
+    db.get('SELECT client_name, contact_person, designation FROM clients WHERE id = ?', [projectData.client_id], (err, row) => {
+      if (row) {
+        projectData.account_name = row.client_name;
+        projectData.client_approver = [row.contact_person, row.designation].filter(Boolean).join(' – ').trim() || projectData.client_approver || '';
+      }
+      doInsert(projectData);
+    });
+  } else {
+    doInsert(projectData);
+  }
 });
 
 // Bulk create projects
@@ -938,24 +990,36 @@ app.post('/api/projects/bulk', (req, res) => {
 app.put('/api/projects/:id', (req, res) => {
   const { id } = req.params;
   const projectData = req.body;
-  
-  const columns = Object.keys(projectData).filter(key => key !== 'id');
-  const setClause = columns.map(key => `${key} = ?`).join(',');
-  const values = columns.map(key => projectData[key]);
-  values.push(id);
-  
-  const query = `UPDATE projects SET ${setClause}, updated_at = datetime('now') WHERE id = ?`;
 
-  db.run(query, values, function(err) {
-    if (err) {
-      console.error('Error updating project:', err);
-      res.status(500).json({ error: 'Failed to update project' });
-    } else if (this.changes === 0) {
-      res.status(404).json({ error: 'Project not found' });
-    } else {
-      res.json({ message: 'Project updated successfully' });
-    }
-  });
+  const doUpdate = (data) => {
+    const columns = Object.keys(data).filter(key => key !== 'id');
+    const setClause = columns.map(key => `${key} = ?`).join(',');
+    const values = columns.map(key => data[key]);
+    values.push(id);
+    const query = `UPDATE projects SET ${setClause}, updated_at = datetime('now') WHERE id = ?`;
+    db.run(query, values, function(err) {
+      if (err) {
+        console.error('Error updating project:', err);
+        res.status(500).json({ error: 'Failed to update project' });
+      } else if (this.changes === 0) {
+        res.status(404).json({ error: 'Project not found' });
+      } else {
+        res.json({ message: 'Project updated successfully' });
+      }
+    });
+  };
+
+  if (projectData.client_id) {
+    db.get('SELECT client_name, contact_person, designation FROM clients WHERE id = ?', [projectData.client_id], (err, row) => {
+      if (row) {
+        projectData.account_name = row.client_name;
+        projectData.client_approver = [row.contact_person, row.designation].filter(Boolean).join(' – ').trim() || projectData.client_approver || '';
+      }
+      doUpdate(projectData);
+    });
+  } else {
+    doUpdate(projectData);
+  }
 });
 
 // Delete projects
@@ -1061,18 +1125,20 @@ app.get('/api/projects/unique/categories', (req, res) => {
   });
 });
 
-// Get unique clients
+// Get unique clients (from clients table as single source of truth, plus any unlinked account_name values)
 app.get('/api/projects/unique/clients', (req, res) => {
-  const query = 'SELECT DISTINCT account_name FROM projects WHERE account_name IS NOT NULL AND account_name != "" ORDER BY account_name';
-  
+  const query = `
+    SELECT client_name AS name FROM clients
+    UNION
+    SELECT account_name AS name FROM projects WHERE client_id IS NULL AND account_name IS NOT NULL AND account_name != ''
+    ORDER BY name
+  `;
   db.all(query, [], (err, rows) => {
     if (err) {
       console.error('Error fetching unique clients:', err);
       return res.status(500).json({ error: 'Failed to fetch clients' });
     }
-    
-    const clients = rows.map(row => row.account_name);
-    res.json(clients);
+    res.json(rows.map(row => row.name));
   });
 });
 
@@ -1118,20 +1184,26 @@ app.post('/api/clients', (req, res) => {
   });
 });
 
-// Update client
+// Update client (cascades name change to all linked projects)
 app.put('/api/clients/:id', (req, res) => {
   const { id } = req.params;
   const { client_name, address, payment_terms, contact_person, designation, email_address } = req.body;
   if (!client_name || !client_name.trim()) {
     return res.status(400).json({ error: 'Client name is required' });
   }
+  const trimmedName = client_name.trim();
   const query = `UPDATE clients SET client_name = ?, address = ?, payment_terms = ?, contact_person = ?, designation = ?, email_address = ?, updated_at = datetime('now') WHERE id = ?`;
-  db.run(query, [client_name.trim(), address || '', payment_terms || '', contact_person || '', designation || '', email_address || '', id], function(err) {
+  db.run(query, [trimmedName, address || '', payment_terms || '', contact_person || '', designation || '', email_address || '', id], function(err) {
     if (err) {
       console.error('Error updating client:', err);
       return res.status(500).json({ error: 'Failed to update client' });
     }
     if (this.changes === 0) return res.status(404).json({ error: 'Client not found' });
+    // Cascade: sync account_name and client_approver on all linked projects
+    const approver = [contact_person, designation].filter(Boolean).join(' – ').trim();
+    db.run(`UPDATE projects SET account_name = ?, client_approver = ?, updated_at = datetime('now') WHERE client_id = ?`, [trimmedName, approver, id], (cascadeErr) => {
+      if (cascadeErr) console.error('Error cascading client data to projects:', cascadeErr);
+    });
     res.json({ message: 'Client updated successfully' });
   });
 });
@@ -1468,6 +1540,45 @@ app.put('/api/liquidations/:id', (req, res) => {
         });
       } else {
         update();
+      }
+    });
+  });
+});
+
+app.delete('/api/liquidations/:id', (req, res) => {
+  getCurrentUser(req, (err, user) => {
+    if (err || !user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ success: false, error: 'Invalid id' });
+    const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+    db.get('SELECT id, user_id, status, total_amount, ca_id FROM liquidations WHERE id = ?', [id], (err, row) => {
+      if (err) return res.status(500).json({ success: false, error: 'Database error' });
+      if (!row) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+      const rowUserId = Number(row.user_id);
+      const userId = Number(user.id);
+      if (!isAdmin && rowUserId !== userId) return res.status(403).json({ success: false, error: 'Forbidden' });
+
+      const total = parseFloat(row.total_amount) || 0;
+      const caId = row.ca_id ? parseInt(row.ca_id, 10) : null;
+      const now = Math.floor(Date.now() / 1000);
+
+      const doDelete = () => {
+        db.run('DELETE FROM liquidations WHERE id = ?', [id], function (delErr) {
+          if (delErr) {
+            console.error('Error deleting liquidation:', delErr);
+            return res.status(500).json({ success: false, error: 'Database error' });
+          }
+          res.json({ success: true, message: 'Liquidation deleted' });
+        });
+      };
+
+      if (row.status === 'submitted' && caId && total > 0) {
+        db.run('UPDATE cash_advances SET balance_remaining = balance_remaining + ?, updated_at = ? WHERE id = ?', [total, now, caId], (updateErr) => {
+          if (updateErr) console.error('Error restoring CA balance:', updateErr);
+          doDelete();
+        });
+      } else {
+        doDelete();
       }
     });
   });

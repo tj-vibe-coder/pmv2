@@ -41,6 +41,6 @@ export const loadLogoTransparentBackground = (
 export const ACT_LOGO_PDF_WIDTH = 18;
 export const ACT_LOGO_PDF_HEIGHT = 15;
 
-/** Default IOCT logo size in PDF (mm). Image is 1024×381 — preserve aspect ratio (width 18mm → height ~6.7mm). */
+/** Default IOCT logo size in PDF (mm). Image is 1024×648 — preserve aspect ratio (width 18mm → height ~11.4mm). */
 export const IOCT_LOGO_PDF_WIDTH = 18;
-export const IOCT_LOGO_PDF_HEIGHT = 6.7;
+export const IOCT_LOGO_PDF_HEIGHT = 11.4;

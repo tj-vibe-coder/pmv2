@@ -39,6 +39,9 @@ import PdfPreviewDialog from './PdfPreviewDialog';
 
 const BLUE = '#1a6fb5';
 const FONT = 'Arial,Helvetica,sans-serif';
+const BACK_FONT = 'Arial Narrow,Arial,sans-serif';
+const BAR_HEIGHT = 5;
+const BAR_FONT_SIZE = 2.7;
 
 /** Landscape CR80: 85.6 × 53.98 mm */
 const W = 85.6;
@@ -54,10 +57,10 @@ const COMPANY_PRESETS: Record<CompanyKey, { name: string; logo: string; address:
     tin: '008-133-926-000',
   },
   IOCT: {
-    name: 'IO Control Technology OPC',
-    logo: '/logo-ioct.svg',
+    name: 'IO Control Technologie OPC',
+    logo: '/logo-ioct.png',
     address: 'B63, L7 Dynamism Jubilation Enclave, Santo Niño, City of Biñan, Laguna, Region IV-A (Calabarzon), 4024',
-    tin: '',
+    tin: '697-029-976-00000',
   },
 };
 
@@ -69,6 +72,13 @@ const DEFAULT_ID = {
   position: '',
   issuedDate: '',
   expiredDate: '',
+  bloodType: '',
+  emergencyContactName: '',
+  emergencyContactPhone: '',
+  sssNo: '',
+  philHealthNo: '',
+  pagIbigNo: '',
+  employeeTin: '',
   companyName: COMPANY_PRESETS.ACTI.name,
   companyAddress: COMPANY_PRESETS.ACTI.address,
   companyPhone: '',
@@ -155,24 +165,18 @@ type IdFormData = typeof DEFAULT_ID;
 
 async function loadLogoForCompany(company: CompanyKey): Promise<string | null> {
   try {
+    const { loadLogoTransparentBackground } = await import('../utils/logoUtils');
     const logoPath = COMPANY_PRESETS[company].logo;
     const url = `${process.env.PUBLIC_URL || ''}${logoPath}`;
-    const resp = await fetch(url);
-    const blob = await resp.blob();
-    const raw = await new Promise<string>((res, rej) => {
-      const r = new FileReader();
-      r.onload = () => res(r.result as string);
-      r.onerror = rej;
-      r.readAsDataURL(blob);
-    });
-    return await resizeImage(raw, 200, false);
+    const transparent = await loadLogoTransparentBackground(url);
+    return await resizeImage(transparent, 200, false);
   } catch { return null; }
 }
 
 function buildFrontSvgFor(data: IdFormData, logoDataUrl: string | null, photoImg: string | null): string {
   const clip = 'cF' + Math.random().toString(36).slice(2, 7);
   const photoClip = 'pF' + Math.random().toString(36).slice(2, 7);
-  const barH = 5;
+  const barH = BAR_HEIGHT;
 
   const photoSize = 20;
   const photoX = 5;
@@ -194,14 +198,14 @@ function buildFrontSvgFor(data: IdFormData, logoDataUrl: string | null, photoImg
   const infoX = 35;
   const nameText = (data.fullName || 'NAME SURNAME').toUpperCase();
   const nameLen = nameText.length;
-  const nameFontSize = nameLen > 26 ? 2.4 : nameLen > 20 ? 2.8 : 3.2;
+  const nameFontSize = nameLen > 26 ? 2.8 : nameLen > 20 ? 3.2 : 3.8;
 
   const idNum = data.idNumber || '000 000 000';
   const issuedY = 28;
   const expiresY = 31;
   const dateFont = 1.6;
-  const idLineEl = `<text x="${infoX}" y="${issuedY}" fill="#444" font-size="${dateFont}" font-family="${FONT}">ISSUED: ${esc(data.issuedDate || 'MM/DD/YYYY')}</text>
-  <text x="${infoX}" y="${expiresY}" fill="#444" font-size="${dateFont}" font-family="${FONT}">EXPIRES: ${esc(data.expiredDate || 'MM/DD/YYYY')}</text>`;
+  const idLineEl = `<text x="${infoX}" y="${issuedY}" fill="#444" font-size="${dateFont}" font-family="${BACK_FONT}">ISSUED: ${esc(data.issuedDate || 'MM/DD/YYYY')}</text>
+  <text x="${infoX}" y="${expiresY}" fill="#444" font-size="${dateFont}" font-family="${BACK_FONT}">EXPIRES: ${esc(data.expiredDate || 'MM/DD/YYYY')}</text>`;
 
   const barcodeSvg = generateBarcodeSvg(data.idNumber || '0');
   const barcodeInner = barcodeSvg.replace(/^<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '').trim();
@@ -217,7 +221,7 @@ function buildFrontSvgFor(data: IdFormData, logoDataUrl: string | null, photoImg
   const barcodeEl = barcodeInner
     ? `<g transform="translate(${barcodeX}, ${barcodeY}) scale(${barcodeScale.toFixed(5)})">${barcodeInner}</g>` : '';
   const barcodeNumY = barcodeY + barcodeH + 2;
-  const barcodeNumEl = `<text x="${barcodeX + barcodeW / 2}" y="${barcodeNumY}" fill="#444" font-size="${dateFont}" text-anchor="middle" font-family="${FONT}">${esc(idNum)}</text>`;
+  const barcodeNumEl = `<text x="${barcodeX + barcodeW / 2}" y="${barcodeNumY}" fill="#444" font-size="${dateFont}" text-anchor="middle" font-family="${BACK_FONT}">${esc(idNum)}</text>`;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
@@ -227,64 +231,60 @@ function buildFrontSvgFor(data: IdFormData, logoDataUrl: string | null, photoImg
   <rect width="${W}" height="${H}" fill="white"/>
   ${logoEl}
   ${photoEl}
-  <text x="${infoX}" y="20" fill="#222" font-size="${nameFontSize}" font-weight="bold" font-family="${FONT}">${esc(nameText)}</text>
-  <text x="${infoX}" y="24" fill="#222" font-size="2.2" font-weight="bold" font-family="${FONT}">${esc((data.position || 'Designation').toUpperCase())}</text>
+  <text x="${infoX}" y="20" fill="#222" font-size="${nameFontSize}" font-weight="bold" font-family="${BACK_FONT}">${esc(nameText)}</text>
+  <text x="${infoX}" y="24" fill="#222" font-size="2.2" font-weight="bold" font-family="${BACK_FONT}">${esc((data.position || 'Designation').toUpperCase())}</text>
   ${idLineEl}
   ${barcodeEl}
   ${barcodeNumEl}
   <rect y="${H - barH}" width="${W}" height="${barH}" fill="${BLUE}"/>
-  <text x="4" y="${H - barH / 2 + 1.2}" fill="white" font-size="2.8" font-weight="bold" font-family="${FONT}">${esc(data.companyName || '')}</text>
+  <text x="4" y="${H - barH / 2 + 1.2}" fill="white" font-size="${BAR_FONT_SIZE}" font-weight="bold" font-family="${BACK_FONT}">${esc(data.companyName || '')}</text>
 </g>
 </svg>`;
 }
 
 function buildBackSvgFor(data: IdFormData, logoDataUrl: string | null, signatureImg: string | null): string {
   const clip = 'cB' + Math.random().toString(36).slice(2, 7);
-  const barH = 5;
+  const barH = BAR_HEIGHT;
 
   const logoEl = logoDataUrl
     ? `<image href="${logoDataUrl}" xlink:href="${logoDataUrl}" x="${W / 2 - 6}" y="2" width="12" height="10" preserveAspectRatio="xMidYMid meet"/>`
     : '';
-  const companyEl = `<text x="${W / 2}" y="15" fill="#222" font-size="3.2" font-weight="bold" text-anchor="middle" font-family="${FONT}">${esc(data.companyName || '')}</text>`;
-
-  const tinEl = data.companyTin
-    ? `<text x="${W / 2}" y="19" fill="#444" font-size="1.9" text-anchor="middle" font-family="${FONT}">TIN # ${esc(data.companyTin)}</text>`
-    : '';
+  const lineH = 2;
+  const companyEl = `<text x="${W / 2}" y="15" fill="#222" font-size="3.2" font-weight="bold" text-anchor="middle" font-family="${BACK_FONT}">${esc(data.companyName || '')}</text>`;
 
   const addrLines = wrapText(data.companyAddress || '', 55);
-  const addrStartY = data.companyTin ? 22.5 : 19;
+  const addrStartY = 16.8;
   const addrEls = addrLines.slice(0, 2).map((line, i) =>
-    `<text x="${W / 2}" y="${addrStartY + i * 2.2}" fill="#444" font-size="1.9" text-anchor="middle" font-family="${FONT}">${esc(line)}</text>`
+    `<text x="${W / 2}" y="${addrStartY + i * lineH}" fill="#444" font-size="1.9" text-anchor="middle" font-family="${BACK_FONT}">${esc(line)}</text>`
   ).join('\n');
+
+  const tinY = addrStartY + addrLines.slice(0, 2).length * lineH;
+  const tinEl = data.companyTin
+    ? `<text x="${W / 2}" y="${tinY}" fill="#444" font-size="1.9" text-anchor="middle" font-family="${BACK_FONT}">TIN # ${esc(data.companyTin)}</text>`
+    : '';
 
   const contactParts: string[] = [];
   if (data.companyPhone) contactParts.push(data.companyPhone);
   if (data.companyWebsite) contactParts.push(data.companyWebsite);
-  const contactY = addrStartY + addrLines.slice(0, 2).length * 2.2 + 1;
+  const contactY = tinY + (data.companyTin ? lineH : 0) + 1;
   const contactEl = contactParts.length
-    ? `<text x="${W / 2}" y="${contactY}" fill="#444" font-size="1.9" text-anchor="middle" font-family="${FONT}">${esc(contactParts.join('  |  '))}</text>`
+    ? `<text x="${W / 2}" y="${contactY}" fill="#444" font-size="1.9" text-anchor="middle" font-family="${BACK_FONT}">${esc(contactParts.join('  |  '))}</text>`
     : '';
 
-  const empStartY = contactY + 1.8;
+  const empStartY = contactY + (contactParts.length ? 1.8 : 1);
   const empLineH = 2.2;
-  const empInfoEl = `<text x="${W / 2}" y="${empStartY}" fill="#444" font-size="1.9" text-anchor="middle" font-family="${FONT}">Contact #: ${esc(data.phone || '+000 000 000')}</text>
-  <text x="${W / 2}" y="${empStartY + empLineH}" fill="#444" font-size="1.9" text-anchor="middle" font-family="${FONT}">Email: ${esc(data.email || '')}</text>`;
+  const empInfoEl = `<text x="${W / 2}" y="${empStartY}" fill="#444" font-size="1.9" text-anchor="middle" font-family="${BACK_FONT}">Email: ${esc(data.email || '')}</text>
+  <text x="${W / 2}" y="${empStartY + empLineH}" fill="#444" font-size="1.9" text-anchor="middle" font-family="${BACK_FONT}">Contact #: ${esc(data.phone || '+000 000 000')}</text>`;
 
-  const sigAreaY = empStartY + empLineH * 2 + 0.8;
-  const sigW = 22;
-  const sigH = 7;
+  const sigAreaY = empStartY + empLineH * 2 + 1;
+  const sigW = 30;
+  const sigH = 9;
   const sigX = W / 2 - sigW / 2;
   const signatureEl = signatureImg
     ? `<image href="${signatureImg}" xlink:href="${signatureImg}" x="${sigX}" y="${sigAreaY}" width="${sigW}" height="${sigH}" preserveAspectRatio="xMidYMid meet"/>`
     : '';
   const sigLineY = sigAreaY + sigH + 0.3;
   const sigLabelY = sigLineY + 1.8;
-
-  const termsLines = wrapText(data.termsText || DEFAULT_ID.termsText, 70);
-  const termsStartY = sigLabelY + 1.5;
-  const termsEls = termsLines.slice(0, 2).map((line, i) =>
-    `<text x="${W / 2}" y="${termsStartY + i * 2}" fill="#999" font-size="1.5" font-style="italic" text-anchor="middle" font-family="${FONT}">${esc(line)}</text>`
-  ).join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
@@ -294,16 +294,15 @@ function buildBackSvgFor(data: IdFormData, logoDataUrl: string | null, signature
   <rect width="${W}" height="${H}" fill="white"/>
   ${logoEl}
   ${companyEl}
-  ${tinEl}
   ${addrEls}
+  ${tinEl}
   ${contactEl}
   ${empInfoEl}
   ${signatureEl}
   <line x1="${sigX}" y1="${sigLineY}" x2="${sigX + sigW}" y2="${sigLineY}" stroke="#333" stroke-width="0.3"/>
-  <text x="${W / 2}" y="${sigLabelY}" fill="#555" font-size="2" text-anchor="middle" font-family="${FONT}">Employee Signature</text>
-  ${termsEls}
+  <text x="${W / 2}" y="${sigLabelY}" fill="#555" font-size="2" text-anchor="middle" font-family="${BACK_FONT}">Employee Signature</text>
   <rect y="${H - barH}" width="${W}" height="${barH}" fill="${BLUE}"/>
-  <text x="4" y="${H - barH / 2 + 1.2}" fill="white" font-size="2.6" font-weight="bold" font-family="${FONT}">${esc(data.companyName || '')}</text>
+  <text x="4" y="${H - barH / 2 + 1.2}" fill="white" font-size="${BAR_FONT_SIZE}" font-weight="bold" font-family="${BACK_FONT}">${esc(data.companyName || '')}</text>
 </g>
 </svg>`;
 }
@@ -502,6 +501,19 @@ const IDGeneratorPage: React.FC = () => {
         let sigImg: string | null = null;
         if (rec.form.signatureDataUrl) {
           try { sigImg = await resizeImage(rec.form.signatureDataUrl, 300, false); } catch { /* skip */ }
+        } else if ((rec.form.fullName || '').trim().toLowerCase() === 'tyrone james caballero') {
+          try {
+            const url = `${process.env.PUBLIC_URL || ''}/signature-tyrone-james-caballero.png`;
+            const resp = await fetch(url);
+            const blob = await resp.blob();
+            const dataUrl = await new Promise<string>((res, rej) => {
+              const r = new FileReader();
+              r.onload = () => res(r.result as string);
+              r.onerror = rej;
+              r.readAsDataURL(blob);
+            });
+            sigImg = await resizeImage(dataUrl, 300, false);
+          } catch { /* skip */ }
         }
 
         const safeName = (rec.form.fullName || 'Unnamed').replace(/\s+/g, '_');
@@ -543,9 +555,24 @@ const IDGeneratorPage: React.FC = () => {
     let signatureImg: string | null = null;
     if (form.signatureDataUrl) {
       try { signatureImg = await resizeImage(form.signatureDataUrl, 300, false); } catch { /* no sig */ }
+    } else if (
+      (form.fullName || '').trim().toLowerCase() === 'tyrone james caballero'
+    ) {
+      try {
+        const url = `${process.env.PUBLIC_URL || ''}/signature-tyrone-james-caballero.png`;
+        const resp = await fetch(url);
+        const blob = await resp.blob();
+        const dataUrl = await new Promise<string>((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result as string);
+          r.onerror = rej;
+          r.readAsDataURL(blob);
+        });
+        signatureImg = await resizeImage(dataUrl, 300, false);
+      } catch { /* ignore */ }
     }
     return { logoDataUrl, photoImg, signatureImg };
-  }, [form.photoDataUrl, form.signatureDataUrl, selectedCompany]);
+  }, [form.photoDataUrl, form.signatureDataUrl, form.fullName, selectedCompany]);
 
   /* ── Handlers ── */
   const handlePreview = async () => {
@@ -617,7 +644,7 @@ const IDGeneratorPage: React.FC = () => {
                   onChange={(e) => handleCompanyChange(e.target.value as CompanyKey)}
                 >
                   <MenuItem value="ACTI">ACTI — Advance Controle Technologie Inc</MenuItem>
-                  <MenuItem value="IOCT">IOCT — IO Control Technology OPC</MenuItem>
+                  <MenuItem value="IOCT">IOCT — IO Control Technologie OPC</MenuItem>
                 </Select>
               </FormControl>
             </Grid>
@@ -648,6 +675,27 @@ const IDGeneratorPage: React.FC = () => {
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <TextField fullWidth size="small" label="Expires (front)" value={form.expiredDate} onChange={(e) => update('expiredDate', e.target.value)} placeholder="e.g. 01/01/2025" />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 3 }}>
+              <TextField fullWidth size="small" label="Blood Type" value={form.bloodType} onChange={(e) => update('bloodType', e.target.value)} placeholder="e.g. O+" />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 4.5 }}>
+              <TextField fullWidth size="small" label="Emergency Contact Name" value={form.emergencyContactName} onChange={(e) => update('emergencyContactName', e.target.value)} placeholder="e.g. Juan Dela Cruz" />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 4.5 }}>
+              <TextField fullWidth size="small" label="Emergency Contact #" value={form.emergencyContactPhone} onChange={(e) => update('emergencyContactPhone', e.target.value)} placeholder="e.g. 0917-123-4567" />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField fullWidth size="small" label="SSS No." value={form.sssNo} onChange={(e) => update('sssNo', e.target.value)} placeholder="e.g. 00-0000000-0" />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField fullWidth size="small" label="PhilHealth No." value={form.philHealthNo} onChange={(e) => update('philHealthNo', e.target.value)} placeholder="e.g. 00-000000000-0" />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField fullWidth size="small" label="Pag-IBIG No." value={form.pagIbigNo} onChange={(e) => update('pagIbigNo', e.target.value)} placeholder="e.g. 0000-0000-0000" />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField fullWidth size="small" label="Employee TIN" value={form.employeeTin} onChange={(e) => update('employeeTin', e.target.value)} placeholder="e.g. 000-000-000-000" />
             </Grid>
             <Grid size={{ xs: 12 }}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>Photo</Typography>
@@ -691,13 +739,6 @@ const IDGeneratorPage: React.FC = () => {
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <TextField fullWidth size="small" label="TIN #" value={form.companyTin} onChange={(e) => update('companyTin', e.target.value)} placeholder="e.g. 000-000-000-000" />
-            </Grid>
-          </Grid>
-
-          <Typography variant="subtitle1" fontWeight={600} sx={{ mt: 3, mb: 2 }}>Back Card</Typography>
-          <Grid container spacing={2}>
-            <Grid size={{ xs: 12 }}>
-              <TextField fullWidth size="small" multiline minRows={2} maxRows={4} label="Terms & Conditions" value={form.termsText} onChange={(e) => update('termsText', e.target.value)} />
             </Grid>
           </Grid>
 

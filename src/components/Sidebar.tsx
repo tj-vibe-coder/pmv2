@@ -43,9 +43,9 @@ import {
 const SIDEBAR_WIDTH = 280;
 
 const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
-const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form'];
+const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form', '/expense-monitoring/direct-labor'];
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
-const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator'];
+const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator', '/utilities/acknowledgement-receipt'];
 
 const Sidebar: React.FC = () => {
   const theme = useTheme();
@@ -207,7 +207,7 @@ const Sidebar: React.FC = () => {
               </ListItemIcon>
               <ListItemText
                 primary="Expense Monitoring"
-                secondary="Expenses, CA, liquidation"
+                secondary="Expenses, CA, liquidation, labor"
                 secondaryTypographyProps={{
                   color: 'rgba(255,255,255,0.7)',
                   fontSize: '0.75rem',
@@ -221,7 +221,7 @@ const Sidebar: React.FC = () => {
             <List component="div" disablePadding sx={{ pl: 2 }}>
               <ListItem disablePadding sx={{ mb: 0.5 }}>
                 <ListItemButton
-                  selected={location.pathname === '/expense-monitoring' && !location.pathname.includes('/ca-form') && !location.pathname.includes('/liquidation-form')}
+                  selected={location.pathname === '/expense-monitoring' && !location.pathname.includes('/ca-form') && !location.pathname.includes('/liquidation-form') && !location.pathname.includes('/direct-labor')}
                   onClick={() => navigate('/expense-monitoring')}
                   sx={{
                     borderRadius: 2,
@@ -295,6 +295,33 @@ const Sidebar: React.FC = () => {
                   </ListItemIcon>
                   <ListItemText
                     primary="Liquidation Form"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/expense-monitoring/direct-labor'}
+                  onClick={() => navigate('/expense-monitoring/direct-labor')}
+                  sx={{
+                    borderRadius: 2,
+                    mx: 1,
+                    minHeight: 48,
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(255,255,255,0.15)',
+                      color: 'white',
+                      '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                    },
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                    transition: 'all 0.2s ease-in-out',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                    <BuildIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Direct Labor"
                     primaryTypographyProps={{ fontSize: '0.875rem' }}
                     sx={{ color: 'white' }}
                   />
@@ -788,6 +815,33 @@ const Sidebar: React.FC = () => {
                 <ListItemText
                   primary="ID Generator"
                   primaryTypographyProps={{ fontSize: '0.875rem' }}
+                  sx={{ color: 'white' }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                selected={location.pathname === '/utilities/acknowledgement-receipt'}
+                onClick={() => navigate('/utilities/acknowledgement-receipt')}
+                sx={{
+                  borderRadius: 2,
+                  mx: 1,
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    color: 'white',
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                  },
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                  transition: 'all 0.2s ease-in-out',
+                }}
+              >
+                <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                  <ReceiptIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText
+                  primary="Acknowledgement Receipt"
+                  primaryTypographyProps={{ fontSize: '0.8125rem' }}
                   sx={{ color: 'white' }}
                 />
               </ListItemButton>

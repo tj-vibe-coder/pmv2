@@ -12,6 +12,10 @@ import {
   Grid,
   Divider,
   Checkbox,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import { ArrowBack as ArrowBackIcon, Visibility as VisibilityIcon, PictureAsPdf as PictureAsPdfIcon, FolderOpen as FolderOpenIcon, Delete as DeleteIcon, Download as DownloadIcon } from '@mui/icons-material';
 import jsPDF from 'jspdf';
@@ -20,10 +24,27 @@ import { buildOshProgramPdf, ACTI_OSH_PROFILE } from '../utils/oshProgramPdf';
 
 const EHS_COLORS = { primary: '#2c5aa0' };
 
+type CertCompanyKey = 'ACTI' | 'IOCT';
+const CERT_COMPANY_PRESETS: Record<CertCompanyKey, { name: string; address: string; logo: string; docPrefix: string }> = {
+  ACTI: {
+    name: 'Advance Controle Technologie Inc',
+    address: 'Block 13 Lot 8, Mindanao Ave., Gavino Maderan, Gen. Mariano Alvarez, Cavite, Region IV-A (Calabarzon), 4117',
+    logo: '/logo-acti.png',
+    docPrefix: 'ACT-SC',
+  },
+  IOCT: {
+    name: 'IO Control Technologie OPC',
+    address: 'B63, L7 Dynamism Jubilation Enclave, Santo Niño, City of Biñan, Laguna, Region IV-A (Calabarzon), 4024',
+    logo: '/logo-ioct.png',
+    docPrefix: 'IOCT-SC',
+  },
+};
+
 /** Default values for the editable Safety Certificate (Certificate of Completion template) */
 const DEFAULT_SAFETY_CERTIFICATE = {
-  companyName: 'Advance Controle Technologie Inc',
-  companyAddress: 'Block 13 Lot 8, Mindanao Ave., Gavino Maderan, Gen. Mariano Alvarez, Cavite, Region IV-A (Calabarzon), 4117',
+  company: 'ACTI' as CertCompanyKey,
+  companyName: CERT_COMPANY_PRESETS.ACTI.name,
+  companyAddress: CERT_COMPANY_PRESETS.ACTI.address,
   recipientName: '',
   trainingTitle: 'Mandatory Eight-Hour Safety and Health Training for Workers',
   legalText: 'Pursuant to the provision of Republic Act 11058 otherwise known as "An act strengthening compliance with Occupational Safety and Health Standards and providing penalties for violations thereof" and Department Order 198-18.',
@@ -39,19 +60,20 @@ const DEFAULT_SAFETY_CERTIFICATE = {
 
 const DOC_NO_COUNTER_KEY = 'safetyCertificateDocNoCounter';
 
-/** Generate sequential Doc No. per year, sequence in hex (e.g. ACT-SC-2026-0001). */
-function generateCertificateDocNo(): string {
+/** Generate sequential Doc No. per year, sequence in hex (e.g. ACT-SC-2026-0001 or IOCT-SC-2026-0001). */
+function generateCertificateDocNo(prefix: string = 'ACT-SC'): string {
   const y = new Date().getFullYear();
+  const counterKey = `${DOC_NO_COUNTER_KEY}_${prefix}`;
   let data: Record<string, number> = {};
   try {
-    const raw = localStorage.getItem(DOC_NO_COUNTER_KEY);
+    const raw = localStorage.getItem(counterKey);
     if (raw) data = JSON.parse(raw);
   } catch {}
   const next = (data[String(y)] ?? 0) + 1;
   data[String(y)] = next;
-  localStorage.setItem(DOC_NO_COUNTER_KEY, JSON.stringify(data));
+  localStorage.setItem(counterKey, JSON.stringify(data));
   const hex = next.toString(16).toUpperCase().padStart(4, '0');
-  return `ACT-SC-${y}-${hex}`;
+  return `${prefix}-${y}-${hex}`;
 }
 
 export type SafetyCertificateData = typeof DEFAULT_SAFETY_CERTIFICATE;
@@ -129,7 +151,10 @@ async function drawCertificatePage(doc: jsPDF, c: SafetyCertificateData): Promis
   doc.rect(0, 0, 85, 70, 'F');
   doc.rect(0, h - 55, 75, 55, 'F');
 
-  const docNo = c.docNo?.trim() || generateCertificateDocNo();
+  const companyKey = c.company || 'ACTI';
+  const preset = CERT_COMPANY_PRESETS[companyKey] || CERT_COMPANY_PRESETS.ACTI;
+
+  const docNo = c.docNo?.trim() || generateCertificateDocNo(preset.docPrefix);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(0, 0, 0);
@@ -137,11 +162,11 @@ async function drawCertificatePage(doc: jsPDF, c: SafetyCertificateData): Promis
 
   let contentTop = 28;
   try {
-    const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
-    const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
+    const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
+    const logoUrl = `${process.env.PUBLIC_URL || ''}${preset.logo}`;
     const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-    const logoW = ACT_LOGO_PDF_WIDTH * 1.2;
-    const logoH = ACT_LOGO_PDF_HEIGHT * 1.2;
+    const logoW = (companyKey === 'IOCT' ? IOCT_LOGO_PDF_WIDTH : ACT_LOGO_PDF_WIDTH) * 1.2;
+    const logoH = (companyKey === 'IOCT' ? IOCT_LOGO_PDF_HEIGHT : ACT_LOGO_PDF_HEIGHT) * 1.2;
     doc.addImage(logoDataUrl, 'PNG', w / 2 - logoW / 2, 10, logoW, logoH);
     contentTop = 10 + logoH + CERT.logoGap;
   } catch (_) {}
@@ -315,7 +340,8 @@ const EHSPage: React.FC = () => {
   const handleGenerateAndSave = () => {
     const name = (certificate.recipientName || '').trim();
     if (!name) return;
-    const docNo = certificate.docNo?.trim() || generateCertificateDocNo();
+    const companyPreset = CERT_COMPANY_PRESETS[certificate.company] || CERT_COMPANY_PRESETS.ACTI;
+    const docNo = certificate.docNo?.trim() || generateCertificateDocNo(companyPreset.docPrefix);
     const saved: SavedCertificate = {
       ...certificate,
       docNo,
@@ -452,7 +478,31 @@ const EHSPage: React.FC = () => {
               Editable safety training certificate. Fill in the fields below, then preview or export to PDF.
             </Typography>
             <Grid container spacing={2}>
-              <Grid size={{ xs: 12 }}>
+              <Grid size={{ xs: 12, sm: 4 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Company</InputLabel>
+                  <Select
+                    value={certificate.company || 'ACTI'}
+                    label="Company"
+                    onChange={(e) => {
+                      const key = e.target.value as CertCompanyKey;
+                      const p = CERT_COMPANY_PRESETS[key];
+                      setCertificate((prev) => ({
+                        ...prev,
+                        company: key,
+                        companyName: p.name,
+                        companyAddress: p.address,
+                        awardLocation: p.address,
+                        docNo: '',
+                      }));
+                    }}
+                  >
+                    <MenuItem value="ACTI">Advance Controle Technologie Inc</MenuItem>
+                    <MenuItem value="IOCT">IO Control Technologie OPC</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid size={{ xs: 12, sm: 8 }}>
                 <TextField fullWidth size="small" label="Company name" value={certificate.companyName} onChange={(e) => updateCertificate('companyName', e.target.value)} />
               </Grid>
               <Grid size={{ xs: 12 }}>
@@ -531,7 +581,12 @@ const EHSPage: React.FC = () => {
                     }}
                   >
                     <Checkbox size="small" checked={selectedIds.has(saved.id)} onChange={() => handleToggleSelect(saved.id)} sx={{ p: 0.5 }} />
-                    <Typography variant="body2" sx={{ flex: 1 }}>{saved.recipientName || 'Unnamed'}</Typography>
+                    <Typography variant="body2" sx={{ flex: 1 }}>
+                      {saved.recipientName || 'Unnamed'}
+                      <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                        ({saved.company === 'IOCT' ? 'IOCT' : 'ACTI'})
+                      </Typography>
+                    </Typography>
                     {saved.awardDate && (
                       <Typography variant="caption" color="text.secondary">
                         {new Date(saved.awardDate).toLocaleDateString()}

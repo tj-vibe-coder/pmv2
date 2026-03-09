@@ -23,6 +23,8 @@ import ReportsPage from './components/ReportsPage';
 import UtilitiesPage from './components/UtilitiesPage';
 import EHSPage from './components/EHSPage';
 import IDGeneratorPage from './components/IDGeneratorPage';
+import AcknowledgementReceiptPage from './components/AcknowledgementReceiptPage';
+import DirectLaborPage from './components/DirectLaborPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
 import UsersPage from './components/UsersPage';
 
@@ -189,9 +191,13 @@ function App() {
                 path="liquidation-form" 
                 element={<LiquidationFormPage />}
               />
-              <Route 
-                path="ca-form" 
+              <Route
+                path="ca-form"
                 element={<CAFormPage />}
+              />
+              <Route
+                path="direct-labor"
+                element={<DirectLaborPage />}
               />
             </Route>
             <Route 
@@ -280,6 +286,7 @@ function App() {
               <Route index element={<Navigate to="/utilities/ehs" replace />} />
               <Route path="ehs/:tab?" element={<EHSPage />} />
               <Route path="id-generator" element={<IDGeneratorPage />} />
+              <Route path="acknowledgement-receipt" element={<AcknowledgementReceiptPage />} />
             </Route>
             <Route path="/id-generator" element={<Navigate to="/utilities/id-generator" replace />} />
             <Route 
