@@ -62,21 +62,17 @@ const Header: React.FC = () => {
       }}
     >
       <Toolbar sx={{ minHeight: '80px', px: 3 }}>
-        <Box 
-          sx={{ 
-            display: 'flex', 
-            alignItems: 'center',
-            flexGrow: 1
-          }}
-        >
+        <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1 }}>
+          <Box
+            component="img"
+            src="/logo-ioct-only.svg"
+            alt="IOCT Logo"
+            sx={{ height: 48, mr: 2 }}
+          />
           <Typography
             variant="h5"
             component="div"
-            sx={{
-              fontWeight: 600,
-              color: '#2c5aa0',
-              letterSpacing: '0.5px'
-            }}
+            sx={{ fontWeight: 600, color: '#2c5aa0', letterSpacing: '0.5px' }}
           >
             Project Monitoring System
           </Typography>
