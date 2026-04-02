@@ -24,6 +24,9 @@ scripts/logs/
 # local database
 projects.db
 *.db
+
+# Firebase service account keys
+*firebase-adminsdk*.json
 .env.development.local
 .env.test.local
 .env.production.local

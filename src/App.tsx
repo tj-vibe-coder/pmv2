@@ -27,6 +27,7 @@ import AcknowledgementReceiptPage from './components/AcknowledgementReceiptPage'
 import DirectLaborPage from './components/DirectLaborPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
 import UsersPage from './components/UsersPage';
+import InvestmentTrackerPage from './components/InvestmentTrackerPage';
 
 const theme = createTheme({
   palette: {
@@ -301,8 +302,8 @@ function App() {
                 </ProtectedRoute>
               } 
             />
-            <Route 
-              path="/users" 
+            <Route
+              path="/users"
               element={
                 <ProtectedRoute>
                   <SuperadminRoute>
@@ -311,7 +312,17 @@ function App() {
                     </AppLayout>
                   </SuperadminRoute>
                 </ProtectedRoute>
-              } 
+              }
+            />
+            <Route
+              path="/investment-tracker"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <InvestmentTrackerPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
             />
             <Route 
               path="/" 
