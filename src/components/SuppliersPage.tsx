@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE } from '../config/api';
 import {
   Alert,
   Box,
@@ -400,7 +401,7 @@ const SuppliersPage: React.FC = () => {
     const load = async () => {
       setLoadError(null);
       try {
-        const res = await fetch('/api/suppliers');
+        const res = await fetch(`${API_BASE}/api/suppliers`);
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data) && data.length >= 0) {
@@ -418,7 +419,7 @@ const SuppliersPage: React.FC = () => {
   }, []);
 
   const saveToBackend = (list: Supplier[]) => {
-    fetch('/api/suppliers', {
+    fetch(`${API_BASE}/api/suppliers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(list),
@@ -502,7 +503,7 @@ const SuppliersPage: React.FC = () => {
   const handleDeleteSupplier = async (id: string) => {
     if (!window.confirm('Delete this supplier and all their products?')) return;
     try {
-      const res = await fetch(`/api/suppliers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/api/suppliers/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (!res.ok) {
         const status = res.status;
         const body = await res.json().catch(() => ({}));
@@ -597,7 +598,7 @@ const SuppliersPage: React.FC = () => {
   const handleDeleteProduct = async (supplierId: string, productId: string) => {
     if (!window.confirm('Remove this product?')) return;
     try {
-      const res = await fetch(`/api/supplier-products/${encodeURIComponent(productId)}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/api/supplier-products/${encodeURIComponent(productId)}`, { method: 'DELETE' });
       if (!res.ok) {
         const status = res.status;
         const body = await res.json().catch(() => ({}));
@@ -632,7 +633,7 @@ const SuppliersPage: React.FC = () => {
   const handleReloadFromServer = async () => {
     try {
       setSyncMessage({ type: 'success', text: 'Reloading from database...' });
-      const res = await fetch('/api/suppliers');
+      const res = await fetch(`${API_BASE}/api/suppliers`);
       if (!res.ok) {
         const status = res.status;
         let msg = `Failed to load suppliers (${status}).`;

@@ -115,12 +115,12 @@ export default function LiquidationFormPage() {
   );
   const [formNo, setFormNo] = useState('');
   const [rows, setRows] = useState<LiquidationRow[]>([]);
-  const [draftId, setDraftId] = useState<number | null>(null);
-  const [drafts, setDrafts] = useState<{ id: number; form_no: string; date_of_submission: string; status: string; total_amount: number }[]>([]);
-  const [submittedLiquidations, setSubmittedLiquidations] = useState<{ id: number; form_no: string; date_of_submission: string; status: string; total_amount: number }[]>([]);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<{ id: string; form_no: string; date_of_submission: string; status: string; total_amount: number }[]>([]);
+  const [submittedLiquidations, setSubmittedLiquidations] = useState<{ id: string; form_no: string; date_of_submission: string; status: string; total_amount: number }[]>([]);
   const [isViewingSubmitted, setIsViewingSubmitted] = useState(false);
   const [loadedOptionValue, setLoadedOptionValue] = useState<string>('');
-  const [cashAdvances, setCashAdvances] = useState<{ id: number; amount: number; balance_remaining: number }[]>([]);
+  const [cashAdvances, setCashAdvances] = useState<{ id: string; amount: number; balance_remaining: number }[]>([]);
   const [saving, setSaving] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [caId, setCaId] = useState<number | ''>('');
@@ -130,7 +130,7 @@ export default function LiquidationFormPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canDeleteLiquidation = draftId !== null || loadedOptionValue.startsWith('submitted:');
-  const liquidationToDeleteId = draftId ?? (loadedOptionValue.startsWith('submitted:') ? parseInt(loadedOptionValue.split(':')[1], 10) : null);
+  const liquidationToDeleteId = draftId ?? (loadedOptionValue.startsWith('submitted:') ? loadedOptionValue.split(':')[1] : null);
 
   const handleSort = (key: 'date' | 'amount') => {
     setSortConfig((prev) => {
@@ -184,7 +184,7 @@ export default function LiquidationFormPage() {
       .then((d) => {
         if (d.success && d.liquidations) {
           setDrafts(d.liquidations.filter((l: { status: string }) => l.status === 'draft'));
-          setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { id: number }, b: { id: number }) => b.id - a.id));
+          setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { created_at: number }, b: { created_at: number }) => (b.created_at || 0) - (a.created_at || 0)));
         }
       })
       .catch(() => {});
@@ -250,7 +250,7 @@ export default function LiquidationFormPage() {
           .then((d) => {
             if (d.success && d.liquidations) {
               setDrafts(d.liquidations.filter((l: { status: string }) => l.status === 'draft'));
-              setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { id: number }, b: { id: number }) => b.id - a.id));
+              setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { created_at: number }, b: { created_at: number }) => (b.created_at || 0) - (a.created_at || 0)));
             }
           })
           .catch(() => {});
@@ -264,7 +264,7 @@ export default function LiquidationFormPage() {
     }
   };
 
-  const loadDraft = async (id: number, isSubmitted = false) => {
+  const loadDraft = async (id: string, isSubmitted = false) => {
     if (!token) return;
     const res = await fetch(`${API_BASE}/api/liquidations/${id}`, { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json().catch(() => ({}));
@@ -323,7 +323,7 @@ export default function LiquidationFormPage() {
       .then((d) => {
         if (d.success && d.liquidations) {
           setDrafts(d.liquidations.filter((l: { status: string }) => l.status === 'draft'));
-          setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { id: number }, b: { id: number }) => b.id - a.id));
+          setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { created_at: number }, b: { created_at: number }) => (b.created_at || 0) - (a.created_at || 0)));
         }
       })
       .catch(() => {});
@@ -331,7 +331,7 @@ export default function LiquidationFormPage() {
 
   const handleDeleteLiquidation = async () => {
     const id = liquidationToDeleteId;
-    if (!token || id == null || isNaN(Number(id))) return;
+    if (!token || id == null || String(id).trim() === '') return;
     setIsDeleting(true);
     try {
       const res = await fetch(`${API_BASE}/api/liquidations/${id}`, {
@@ -453,7 +453,7 @@ export default function LiquidationFormPage() {
           .then((d) => {
             if (d.success && d.liquidations) {
               setDrafts(d.liquidations.filter((l: { status: string }) => l.status === 'draft'));
-              setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { id: number }, b: { id: number }) => b.id - a.id));
+              setSubmittedLiquidations(d.liquidations.filter((l: { status: string }) => l.status === 'submitted').sort((a: { created_at: number }, b: { created_at: number }) => (b.created_at || 0) - (a.created_at || 0)));
             }
           })
           .catch(() => {});
@@ -767,9 +767,9 @@ export default function LiquidationFormPage() {
                   setSubmitSuccess(null);
                   return;
                 }
-                const parts = raw.split(':');
-                const id = Number(parts[1]);
-                const isSubmitted = parts[0] === 'submitted';
+                const colonIdx = raw.indexOf(':');
+                const id = colonIdx !== -1 ? raw.slice(colonIdx + 1) : '';
+                const isSubmitted = raw.startsWith('submitted:');
                 if (id) loadDraft(id, isSubmitted);
               }}
               sx={{ minWidth: 200, '& .MuiSelect-select': { py: 0.75 } }}

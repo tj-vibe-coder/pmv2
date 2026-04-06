@@ -17,6 +17,7 @@ import {
   VisibilityOff as VisibilityOffIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import { API_BASE } from '../config/api';
 import { LoginCredentials } from '../types/User';
 
 interface RegistrationData extends LoginCredentials {
@@ -105,7 +106,7 @@ const LoginPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/auth/register', {
+      const response = await fetch(`${API_BASE}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,6 +1,7 @@
 import { Project, BillingStatus, ProjectFilters, ProjectSummary, YearSummary } from '../types/Project';
+import { API_BASE } from '../config/api';
 
-const API_BASE_URL = '/api';
+const API_BASE_URL = `${API_BASE}/api`;
 
 class DataService {
 

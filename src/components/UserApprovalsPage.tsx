@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import HowToRegIcon from '@mui/icons-material/HowToReg';
 import { useAuth } from '../contexts/AuthContext';
+import { API_BASE } from '../config/api';
 
 interface PendingUser {
   id: number;
@@ -37,7 +38,7 @@ const UserApprovalsPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/users/pending', {
+      const res = await fetch(`${API_BASE}/api/users/pending`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
@@ -62,7 +63,7 @@ const UserApprovalsPage: React.FC = () => {
     if (!token) return;
     setApprovingId(id);
     try {
-      const res = await fetch(`/api/users/${id}/approve`, {
+      const res = await fetch(`${API_BASE}/api/users/${id}/approve`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
