@@ -28,6 +28,8 @@ import DirectLaborPage from './components/DirectLaborPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
 import UsersPage from './components/UsersPage';
 import InvestmentTrackerPage from './components/InvestmentTrackerPage';
+import PayrollDashboard from './components/payroll/PayrollDashboard';
+import PayrollGuard from './components/payroll/PayrollGuard';
 
 const theme = createTheme({
   palette: {
@@ -320,6 +322,18 @@ function App() {
                 <ProtectedRoute>
                   <AppLayout>
                     <InvestmentTrackerPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/payroll"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <PayrollGuard>
+                      <PayrollDashboard />
+                    </PayrollGuard>
                   </AppLayout>
                 </ProtectedRoute>
               }

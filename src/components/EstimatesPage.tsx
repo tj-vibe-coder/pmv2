@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE } from '../config/api';
 import {
   Box,
   Typography,
@@ -94,7 +95,7 @@ const EstimatesPage: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch('/api/suppliers');
+        const res = await fetch(`${API_BASE}/api/suppliers`);
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data)) {

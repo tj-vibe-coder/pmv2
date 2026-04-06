@@ -39,7 +39,9 @@ import {
   Badge as BadgeIcon,
   Build as BuildIcon,
   TrendingUp as TrendingUpIcon,
+  Payments as PaymentsIcon,
 } from '@mui/icons-material';
+import { isPayrollAuthorized } from '../config/payrollAccess';
 
 const SIDEBAR_WIDTH = 280;
 
@@ -395,6 +397,38 @@ const Sidebar: React.FC = () => {
               />
             </ListItemButton>
           </ListItem>
+
+          {/* Payroll — only visible to TJC and RJR */}
+          {isPayrollAuthorized(user?.username) && (
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                selected={location.pathname === '/payroll'}
+                onClick={() => navigate('/payroll')}
+                sx={{
+                  borderRadius: 2,
+                  mx: 1,
+                  minHeight: 56,
+                  '&.Mui-selected': {
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    color: 'white',
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                  },
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                  transition: 'all 0.2s ease-in-out',
+                }}
+              >
+                <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
+                  <PaymentsIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="Payroll"
+                  secondary="Payroll runs & employee pay"
+                  secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                  sx={{ color: 'white' }}
+                />
+              </ListItemButton>
+            </ListItem>
+          )}
 
           {/* Supply Chain (collapsible parent) */}
           <ListItem disablePadding sx={{ mb: 0.5 }}>

@@ -6,7 +6,20 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+const ALLOWED_ORIGINS = [
+  'https://pmv2-851ae.web.app',
+  'https://pmv2-851ae.firebaseapp.com',
+  'http://localhost:3000',
+  // Add your Render Static Site URL here once created, e.g.:
+  // 'https://pmv2-frontend.onrender.com',
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -1049,21 +1062,222 @@ app.put('/api/investments/target', async (req, res) => {
   }
 });
 
+// ========== PAYROLL ROUTES ==========
+// Restricted to TJC and RJR usernames only.
+
+const PAYROLL_USERS = ['TJC', 'RJR'];
+
+async function requirePayrollAccess(req, res) {
+  const user = await getCurrentUser(req);
+  if (!user) { res.status(401).json({ error: 'Unauthorized' }); return null; }
+  if (!PAYROLL_USERS.includes(user.username)) { res.status(403).json({ error: 'Payroll access restricted' }); return null; }
+  return user;
+}
+
+// ── Employees ──────────────────────────────────────────────────────────────
+app.get('/api/payroll/employees', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('payroll_employees').orderBy('name').get();
+    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch employees' }); }
+});
+
+app.post('/api/payroll/employees', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const data = { ...req.body, createdAt: new Date().toISOString() };
+    const ref = await db.collection('payroll_employees').add(data);
+    res.status(201).json({ id: ref.id, ...data });
+  } catch (err) { res.status(500).json({ error: 'Failed to create employee' }); }
+});
+
+app.put('/api/payroll/employees/:id', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const ref = db.collection('payroll_employees').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Employee not found' });
+    await ref.update({ ...req.body, updatedAt: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update employee' }); }
+});
+
+// ── Payroll Runs ───────────────────────────────────────────────────────────
+app.get('/api/payroll/runs', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('payroll_runs').orderBy('createdAt', 'desc').get();
+    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch payroll runs' }); }
+});
+
+app.post('/api/payroll/runs', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const data = { ...req.body, status: 'DRAFT', createdBy: user.username, createdAt: new Date().toISOString() };
+    const ref = await db.collection('payroll_runs').add(data);
+    res.status(201).json({ id: ref.id, ...data });
+  } catch (err) { res.status(500).json({ error: 'Failed to create payroll run' }); }
+});
+
+app.post('/api/payroll/runs/:id/approve', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const ref = db.collection('payroll_runs').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
+    await ref.update({ status: 'APPROVED', approvedBy: user.username, approvedAt: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to approve run' }); }
+});
+
+app.post('/api/payroll/runs/:id/pay', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const ref = db.collection('payroll_runs').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
+    await ref.update({ status: 'PAID', paidAt: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to mark run as paid' }); }
+});
+
+// ── DTR Entries ────────────────────────────────────────────────────────────
+app.get('/api/payroll/runs/:runId/dtr', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('payroll_runs').doc(req.params.runId).collection('dtrEntries').get();
+    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch DTR entries' }); }
+});
+
+app.post('/api/payroll/runs/:runId/dtr', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { entries } = req.body;
+  if (!Array.isArray(entries)) return res.status(400).json({ error: 'entries must be an array' });
+  try {
+    const col = db.collection('payroll_runs').doc(req.params.runId).collection('dtrEntries');
+    const batch = db.batch();
+    entries.forEach(entry => {
+      const ref = entry.id ? col.doc(entry.id) : col.doc();
+      batch.set(ref, entry, { merge: true });
+    });
+    await batch.commit();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to save DTR entries' }); }
+});
+
+// ── Payslips ───────────────────────────────────────────────────────────────
+app.get('/api/payroll/runs/:runId/payslips', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('payroll_runs').doc(req.params.runId).collection('payslips').get();
+    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch payslips' }); }
+});
+
+app.post('/api/payroll/runs/:runId/payslips', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { payslips } = req.body;
+  if (!Array.isArray(payslips)) return res.status(400).json({ error: 'payslips must be an array' });
+  try {
+    const col = db.collection('payroll_runs').doc(req.params.runId).collection('payslips');
+    const batch = db.batch();
+    payslips.forEach(slip => {
+      const ref = slip.employeeId ? col.doc(slip.employeeId) : col.doc();
+      batch.set(ref, slip, { merge: true });
+    });
+    await batch.commit();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to save payslips' }); }
+});
+
+// ── Contribution Settings ──────────────────────────────────────────────────
+app.get('/api/payroll/settings', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const doc = await db.collection('payroll_settings').doc('contribution_rates').get();
+    res.json(doc.exists ? doc.data() : {});
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch settings' }); }
+});
+
+app.put('/api/payroll/settings', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    await db.collection('payroll_settings').doc('contribution_rates').set({
+      ...req.body,
+      updatedBy: user.username,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to save settings' }); }
+});
+
+// ── Holidays ───────────────────────────────────────────────────────────────
+app.get('/api/payroll/holidays', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { year } = req.query;
+  try {
+    let q = db.collection('payroll_holidays');
+    if (year) q = q.where('year', '==', parseInt(year));
+    const snap = await q.orderBy('date').get();
+    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch holidays' }); }
+});
+
+app.post('/api/payroll/holidays', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { date, name, type } = req.body;
+  if (!date || !name || !type) return res.status(400).json({ error: 'date, name, type required' });
+  try {
+    const year = parseInt(date.split('-')[0]);
+    const ref = await db.collection('payroll_holidays').add({ date, name, type, year, createdBy: user.username });
+    res.status(201).json({ id: ref.id, date, name, type, year });
+  } catch (err) { res.status(500).json({ error: 'Failed to add holiday' }); }
+});
+
+app.put('/api/payroll/holidays/:id', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const ref = db.collection('payroll_holidays').doc(req.params.id);
+    if (!(await ref.get()).exists) return res.status(404).json({ error: 'Holiday not found' });
+    await ref.update({ ...req.body, updatedBy: user.username });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update holiday' }); }
+});
+
+app.delete('/api/payroll/holidays/:id', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    await db.collection('payroll_holidays').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete holiday' }); }
+});
+
+app.post('/api/payroll/holidays/bulk', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { holidays, year } = req.body;
+  if (!Array.isArray(holidays)) return res.status(400).json({ error: 'holidays must be an array' });
+  try {
+    // Delete existing for the year first to avoid duplicates
+    const existing = await db.collection('payroll_holidays').where('year', '==', year).get();
+    const batch = db.batch();
+    existing.docs.forEach(d => batch.delete(d.ref));
+    holidays.forEach(h => {
+      const ref = db.collection('payroll_holidays').doc();
+      batch.set(ref, { ...h, year, createdBy: user.username });
+    });
+    await batch.commit();
+    res.json({ success: true, count: holidays.length });
+  } catch (err) { res.status(500).json({ error: 'Failed to bulk save holidays' }); }
+});
+
 // ========== HEALTH CHECK ==========
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', database: 'Firebase Firestore', timestamp: new Date().toISOString() });
 });
 
-// Production: serve React build
-const buildPath = path.join(__dirname, 'build');
-const { existsSync } = require('fs');
-if (existsSync(buildPath)) {
-  app.use(express.static(buildPath));
-  app.use((req, res, next) => {
-    if (req.path.startsWith('/api')) return next();
-    res.sendFile(path.join(buildPath, 'index.html'));
-  });
-}
 
 function startServer() {
   const server = app.listen(PORT, () => {
