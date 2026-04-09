@@ -1278,6 +1278,15 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', database: 'Firebase Firestore', timestamp: new Date().toISOString() });
 });
 
+// ========== STATIC FILES & SPA ROUTING ==========
+
+// Serve static files from the React app
+app.use(express.static(path.join(__dirname, 'build')));
+
+// Any request that doesn't match the ones above, send back index.html
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+});
 
 function startServer() {
   const server = app.listen(PORT, () => {
