@@ -1284,7 +1284,7 @@ app.get('/api/health', (req, res) => {
 app.use(express.static(path.join(__dirname, 'build')));
 
 // Any request that doesn't match the ones above, send back index.html
-app.get('*', (req, res) => {
+app.get(['/', '/*splat'], (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
