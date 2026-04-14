@@ -1288,6 +1288,16 @@ app.get(['/', '/*splat'], (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
+// ========== GLOBAL ERROR HANDLER ==========
+// Must be defined after all routes. Returns JSON for all unhandled errors.
+// eslint-disable-next-line no-unused-vars
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled server error:', err);
+  if (!res.headersSent) {
+    res.status(err.status || 500).json({ success: false, error: err.message || 'Internal server error' });
+  }
+});
+
 function startServer() {
   const server = app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
