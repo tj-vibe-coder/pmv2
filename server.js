@@ -10,8 +10,8 @@ const ALLOWED_ORIGINS = [
   'https://pmv2-851ae.web.app',
   'https://pmv2-851ae.firebaseapp.com',
   'http://localhost:3000',
-  // Add your Render Static Site URL here once created, e.g.:
-  // 'https://pmv2-frontend.onrender.com',
+  'http://localhost:3001',
+  'https://ioct.onrender.com',
 ];
 app.use(cors({
   origin: (origin, callback) => {
@@ -79,7 +79,7 @@ async function getCurrentUser(req) {
 // ========== AUTH ROUTES ==========
 
 app.post('/api/auth/login', async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password } = req.body || {};
   if (!username || !password) return res.json({ success: false, error: 'Username and password are required' });
   try {
     const snap = await db.collection('users').where('username', '==', username).limit(1).get();
@@ -990,7 +990,7 @@ app.post('/api/investments', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  const { date, investor, amount, category, description } = req.body;
+  const { date, investor, amount, category, description } = req.body || {};
   if (!date || !investor || !amount || !category) return res.status(400).json({ success: false, error: 'date, investor, amount, and category are required' });
   try {
     const now = new Date().toISOString();
@@ -1006,7 +1006,7 @@ app.put('/api/investments/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  const { date, investor, amount, category, description } = req.body;
+  const { date, investor, amount, category, description } = req.body || {};
   if (!date || !investor || !amount || !category) return res.status(400).json({ success: false, error: 'date, investor, amount, and category are required' });
   try {
     const ref = db.collection('investments').doc(req.params.id);
