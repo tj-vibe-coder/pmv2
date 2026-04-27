@@ -60,7 +60,7 @@ export interface SavedDeliveryReceipt {
   deliveryNoteNo: string;
   despatchDate: string;
   deliveryMethod: string;
-  projectId: number | '';
+  projectId: string | '';
   poNumber: string;
   shippingName: string;
   shippingAddress: string;
@@ -115,8 +115,8 @@ function parseDRNumber(deliveryNoteNo: string): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
-function getNextDRNumber(projectId: number | '', savedDRs: SavedDeliveryReceipt[]): number {
-  const drsForProject = savedDRs.filter((dr) => Number(dr.projectId) === Number(projectId));
+function getNextDRNumber(projectId: string | '', savedDRs: SavedDeliveryReceipt[]): number {
+  const drsForProject = savedDRs.filter((dr) => String(dr.projectId) === String(projectId));
   const max = Math.max(0, ...drsForProject.map((dr) => parseDRNumber(dr.deliveryNoteNo || '')));
   return max + 1;
 }
@@ -166,7 +166,7 @@ const DeliveryPage: React.FC = () => {
   const [deliveryNoteNo, setDeliveryNoteNo] = useState('');
   const [despatchDate, setDespatchDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [deliveryMethod, setDeliveryMethod] = useState('Physical');
-  const [projectId, setProjectId] = useState<number | ''>('');
+  const [projectId, setProjectId] = useState<string | ''>('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [poNumber, setPoNumber] = useState('');
   const [shippingName, setShippingName] = useState('');
@@ -199,9 +199,9 @@ const DeliveryPage: React.FC = () => {
 
   // Prefill from Order when "Link to Order" is selected or URL has ?orderId= (optional ?itemIds=id1,id2 for selected items only)
   const applyOrderPrefill = (order: OrderRecord, projectList: Project[], selectedItemIds?: string[]) => {
-    const pid = order.projectId ?? '';
+    const pid = order.projectId != null ? String(order.projectId) : '';
     setProjectId(pid);
-    const p = projectList.find((x) => x.id === Number(pid));
+    const p = projectList.find((x) => String(x.id) === pid);
     const orderOrProjectPo = order.poNumber || (p?.po_number ?? '');
     const firstItemPo = order.items?.[0]?.poNumber;
     setPoNumber(orderOrProjectPo || (firstItemPo ?? ''));
@@ -243,11 +243,11 @@ const DeliveryPage: React.FC = () => {
   }, [orderIdFromUrl, itemIdsFromUrl, projects, setSearchParams]);
 
   // When project changes (user selects from dropdown), sync PO, shipping, DR number from the selected project
-  const handleProjectChange = (newProjectId: number | '') => {
+  const handleProjectChange = (newProjectId: string | '') => {
     setProjectId(newProjectId);
     setLinkedOrderId(''); // clear order link when switching project
     if (newProjectId === '') return;
-    const p = projects.find((x) => x.id === Number(newProjectId));
+    const p = projects.find((x) => String(x.id) === newProjectId);
     if (p) {
       const projNo = String(p.project_no || p.item_no || p.id);
       const nextNum = getNextDRNumber(newProjectId, savedList);
@@ -337,7 +337,7 @@ const DeliveryPage: React.FC = () => {
 
   const filteredSavedList = projectId === ''
     ? savedList
-    : savedList.filter((dr) => Number(dr.projectId) === Number(projectId));
+    : savedList.filter((dr) => String(dr.projectId) === String(projectId));
 
   const handleClearDR = () => {
     setDeliveryNoteNo('');
@@ -650,11 +650,11 @@ const DeliveryPage: React.FC = () => {
               <Select
                 value={projectId === '' ? '' : projectId}
                 label="Project (optional)"
-                onChange={(e) => handleProjectChange(String(e.target.value) === '' ? '' : Number(e.target.value))}
+                onChange={(e) => handleProjectChange(String(e.target.value) === '' ? '' : String(e.target.value))}
               >
                 <MenuItem value="">— None —</MenuItem>
                 {projects.map((p) => (
-                  <MenuItem key={p.id} value={p.id}>
+                  <MenuItem key={p.id} value={String(p.id)}>
                     {p.project_name || p.account_name || `Project ${p.id}`}
                   </MenuItem>
                 ))}

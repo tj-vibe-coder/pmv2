@@ -45,7 +45,7 @@ interface LiquidationRow {
   id: string;
   date: string;
   category: string;
-  projectId: number | '';
+  projectId: string | '';
   projectName: string;
   projectNo: string;
   particulars: string;
@@ -66,14 +66,14 @@ const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
 });
 
 const PROJECT_EXPENSES_KEY = 'projectExpenses';
-function addLiquidationRowsToProjectExpenses(rows: LiquidationRow[], liquidationId?: number, formNo?: string): void {
+function addLiquidationRowsToProjectExpenses(rows: LiquidationRow[], liquidationId?: string, formNo?: string): void {
   try {
     const raw = localStorage.getItem(PROJECT_EXPENSES_KEY);
     const existing = raw ? JSON.parse(raw) : [];
     const toAdd = rows.filter((r) => {
       const pid = r.projectId;
       const amt = Number(r.amount);
-      return pid !== '' && pid !== null && pid !== undefined && !isNaN(Number(pid)) && amt > 0;
+      return pid !== '' && pid !== null && pid !== undefined && amt > 0;
     });
     // Build set of already-synced keys to avoid duplicates
     const syncedKeys = new Set(
@@ -82,8 +82,8 @@ function addLiquidationRowsToProjectExpenses(rows: LiquidationRow[], liquidation
     const now = new Date().toISOString();
     let added = 0;
     toAdd.forEach((r) => {
-      const pid = Number(r.projectId);
-      if (isNaN(pid)) return;
+      const pid = r.projectId;
+      if (!pid) return;
       if (liquidationId && syncedKeys.has(`${liquidationId}:${r.id}`)) return;
       existing.unshift({
         id: `exp-liq-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -123,7 +123,7 @@ export default function LiquidationFormPage() {
   const [cashAdvances, setCashAdvances] = useState<{ id: string; amount: number; balance_remaining: number }[]>([]);
   const [saving, setSaving] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
-  const [caId, setCaId] = useState<number | ''>('');
+  const [caId, setCaId] = useState<string | ''>('');
   const [sortConfig, setSortConfig] = useState<{ key: 'date' | 'amount'; direction: 'asc' | 'desc' } | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -297,7 +297,8 @@ export default function LiquidationFormPage() {
         : raw.map((r: Record<string, unknown>) => {
             const base = newRow(String(r.projectName ?? ''), String(r.projectNo ?? ''));
             const pidValue = r.projectId;
-            const projectId: number | '' = pidValue !== undefined && pidValue !== null && pidValue !== '' ? (typeof pidValue === 'number' ? pidValue : isNaN(Number(pidValue)) ? '' : Number(pidValue)) : '';
+            // Firestore IDs are strings; accept any non-empty value as-is
+            const projectId: string | '' = pidValue !== undefined && pidValue !== null && pidValue !== '' ? String(pidValue) : '';
             return {
               id: typeof r.id === 'string' && r.id ? String(r.id) : base.id,
               date: String(r.date ?? new Date().toISOString().slice(0, 10)),
@@ -485,14 +486,14 @@ export default function LiquidationFormPage() {
     );
   };
 
-  const setRowProject = (id: string, projectId: number | '') => {
+  const setRowProject = (id: string, projectId: string | '') => {
     if (projectId === '') {
       updateRow(id, 'projectId', '');
       updateRow(id, 'projectName', '');
       updateRow(id, 'projectNo', '');
       return;
     }
-    const p = projects.find((x) => x.id === projectId);
+    const p = projects.find((x) => String(x.id) === projectId);
     if (!p) return;
     setRows((prev) =>
       prev.map((r) =>
@@ -909,8 +910,8 @@ export default function LiquidationFormPage() {
                 value={caId === '' ? '' : caId}
                 onChange={(e) => {
                   const v = e.target.value;
-                  if (typeof v === 'string' && v === '') setCaId('');
-                  else setCaId(Number(v));
+                  if (v === '' || v == null) setCaId('');
+                  else setCaId(String(v));
                 }}
                 disabled={isViewingSubmitted}
                 sx={{ bgcolor: 'background.paper', minHeight: 40 }}
@@ -1049,19 +1050,19 @@ export default function LiquidationFormPage() {
                       </Select>
                     </TableCell>
                     <TableCell>
-                      <Select<number | ''>
+                      <Select<string | ''>
                         size="small"
-                        value={row.projectId === '' ? '' : row.projectId}
+                        value={row.projectId === '' ? '' : String(row.projectId)}
                         displayEmpty
                         onChange={(e) => {
                           const val = e.target.value;
-                          setRowProject(row.id, val === '' ? '' : Number(val));
+                          setRowProject(row.id, val === '' ? '' : String(val));
                         }}
                         disabled={isViewingSubmitted}
                         sx={{ minWidth: 200, width: '100%', '& .MuiSelect-select': { py: 0.75 } }}
-                        renderValue={(v: number | '') => {
+                        renderValue={(v: string | '') => {
                           if (v === '' || v === undefined) return <em>Select project</em>;
-                          const p = projects.find((x) => x.id === v);
+                          const p = projects.find((x) => String(x.id) === v);
                           return p?.project_name || row.projectName || '—';
                         }}
                       >
@@ -1069,7 +1070,7 @@ export default function LiquidationFormPage() {
                           <em>Select project</em>
                         </MenuItem>
                         {projects.map((p) => (
-                          <MenuItem key={p.id} value={p.id}>
+                          <MenuItem key={p.id} value={String(p.id)}>
                             {p.project_name || `Project ${p.id}`}
                             {(p.po_number || p.project_no) ? ` (${p.po_number || p.project_no})` : ''}
                           </MenuItem>

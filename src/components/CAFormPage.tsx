@@ -37,25 +37,25 @@ interface BreakdownItem {
 }
 
 interface ProjectOption {
-  id: number;
+  id: string;
   project_name: string;
   project_no?: string;
 }
 
 interface CashAdvanceRow {
-  id: number;
-  user_id: number;
+  id: string;
+  user_id: string;
   amount: number;
   balance_remaining: number;
   status: string;
   purpose: string | null;
   breakdown: string | null;
-  project_id: number | null;
+  project_id: string | null;
   project_name?: string | null;
   project_no?: string | null;
   requested_at: number | null;
   approved_at: number | null;
-  approved_by: number | null;
+  approved_by: string | null;
   created_at: number;
   updated_at: number;
   username?: string;
@@ -72,7 +72,7 @@ export default function CAFormPage() {
   const [dateRequested, setDateRequested] = useState(() => new Date().toISOString().slice(0, 10));
   const [breakdown, setBreakdown] = useState<BreakdownItem[]>([{ category: 'Materials', description: '', amount: '' }]);
   const [submitting, setSubmitting] = useState(false);
-  const [actionId, setActionId] = useState<number | null>(null);
+  const [actionId, setActionId] = useState<string | null>(null);
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
   const [pdfPreviewBlob, setPdfPreviewBlob] = useState<Blob | null>(null);
   const [pdfPreviewTitle, setPdfPreviewTitle] = useState('');
@@ -112,7 +112,7 @@ export default function CAFormPage() {
     fetch(`${API_BASE}/api/projects`)
       .then((res) => res.json())
       .then((data) => {
-        if (Array.isArray(data)) setProjects(data.map((p: { id: number; project_name?: string; project_no?: string }) => ({ id: p.id, project_name: p.project_name || '', project_no: p.project_no || '' })));
+        if (Array.isArray(data)) setProjects(data.map((p: { id: string | number; project_name?: string; project_no?: string }) => ({ id: String(p.id), project_name: p.project_name || '', project_no: p.project_no || '' })));
       })
       .catch(() => {});
   }, []);
@@ -130,7 +130,7 @@ export default function CAFormPage() {
     title?: string;
     preparedByName: string;
     documentNo?: string;
-    previousCAs?: { id: number; amount: number; balance_remaining: number; requested_at?: number | null }[];
+    previousCAs?: { id: string; amount: number; balance_remaining: number; requested_at?: number | null }[];
   }) => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const margin = 16;
@@ -369,7 +369,7 @@ export default function CAFormPage() {
     }
   };
 
-  const handleApproveReject = async (id: number, status: 'approved' | 'rejected') => {
+  const handleApproveReject = async (id: string, status: 'approved' | 'rejected') => {
     const token = localStorage.getItem('netpacific_token');
     if (!token) return;
     setActionId(id);
@@ -390,7 +390,7 @@ export default function CAFormPage() {
     }
   };
 
-  const handleDelete = async (id: number, status?: string) => {
+  const handleDelete = async (id: string, status?: string) => {
     const message = status === 'approved' || status === 'rejected'
       ? 'This request is already ' + status + '. Delete the record anyway? This cannot be undone.'
       : 'Delete this cash advance request? This cannot be undone.';
@@ -668,7 +668,7 @@ export default function CAFormPage() {
                       >
                         <PictureAsPdfIcon fontSize="small" />
                       </IconButton>
-                      {(isAdmin || (ca.status === 'pending' && Number(ca.user_id) === Number(user?.id))) && (
+                      {(isAdmin || (ca.status === 'pending' && String(ca.user_id) === String(user?.id))) && (
                         <Button
                           size="small"
                           startIcon={<DeleteIcon />}
