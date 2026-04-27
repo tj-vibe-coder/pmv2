@@ -55,7 +55,7 @@ type WorkerType = (typeof WORKER_TYPES)[number];
 
 export interface DirectLaborEntry {
   id: string;
-  projectId: number;
+  projectId: string;
   projectName: string;
   workerName: string;
   workerType: WorkerType;
@@ -128,12 +128,12 @@ export default function DirectLaborPage() {
 
   // Filters
   const [filterYear, setFilterYear] = useState<number>(0);
-  const [filterProjectId, setFilterProjectId] = useState<number | ''>('');
+  const [filterProjectId, setFilterProjectId] = useState<string | ''>('');
   const [filterWorkerType, setFilterWorkerType] = useState<WorkerType | ''>('');
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'date', direction: 'desc' });
 
   // Form fields
-  const [formProjectId, setFormProjectId] = useState<number | ''>('');
+  const [formProjectId, setFormProjectId] = useState<string | ''>('');
   const [formWorkerName, setFormWorkerName] = useState('');
   const [formWorkerType, setFormWorkerType] = useState<WorkerType>('Direct Labor');
   const [formRole, setFormRole] = useState('');
@@ -154,7 +154,7 @@ export default function DirectLaborPage() {
   const filteredEntries = useMemo(() => {
     let result = entries;
     if (filterYear !== 0) result = result.filter((e) => e.date?.startsWith(String(filterYear)));
-    if (filterProjectId !== '') result = result.filter((e) => e.projectId === filterProjectId);
+    if (filterProjectId !== '') result = result.filter((e) => String(e.projectId) === filterProjectId);
     if (filterWorkerType !== '') result = result.filter((e) => e.workerType === filterWorkerType);
     return result;
   }, [entries, filterYear, filterProjectId, filterWorkerType]);
@@ -280,7 +280,7 @@ export default function DirectLaborPage() {
   };
 
   const handleSave = () => {
-    const pid = formProjectId === '' ? null : Number(formProjectId);
+    const pid = formProjectId === '' ? null : String(formProjectId);
     if (pid == null) return;
     const hours = isThirdParty ? 0 : (Number(formHoursWorked) || 0);
     const daily = isThirdParty ? 0 : (Number(formDailyRate) || 0);
@@ -288,7 +288,7 @@ export default function DirectLaborPage() {
     const otRate = isThirdParty ? 0 : (Number(formOvertimeRate) || 0);
     const amount = isThirdParty ? (Number(formDirectAmount) || 0) : computeAmount(hours, daily, otHours, otRate);
     if (amount <= 0) return;
-    const project = projects.find((p) => p.id === pid);
+    const project = projects.find((p) => String(p.id) === pid);
 
     if (editingId) {
       const updated = entries.map((e) =>
@@ -373,14 +373,12 @@ export default function DirectLaborPage() {
         </FormControl>
         <FormControl size="small" sx={{ minWidth: 200 }}>
           <InputLabel>Project</InputLabel>
-          <Select
-            value={filterProjectId === '' ? '' : filterProjectId}
-            onChange={(e) => { const v = String(e.target.value); setFilterProjectId(v === '' ? '' : Number(v)); }}
+          <Select value={filterProjectId === '' ? '' : filterProjectId} onChange={(e) => { const v = String(e.target.value); setFilterProjectId(v === '' ? '' : v); }}
             label="Project"
           >
             <MenuItem value="">All projects</MenuItem>
             {projects.map((p) => (
-              <MenuItem key={p.id} value={p.id}>{p.project_name}</MenuItem>
+              <MenuItem key={p.id} value={String(p.id)}>{p.project_name}</MenuItem>
             ))}
           </Select>
         </FormControl>
@@ -643,10 +641,10 @@ export default function DirectLaborPage() {
               <Grid item xs={12}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Project</InputLabel>
-                  <Select label="Project" value={formProjectId} onChange={(e) => { const v = String(e.target.value); setFormProjectId(v === '' ? '' : Number(v)); }}>
+                  <Select label="Project" value={formProjectId} onChange={(e) => { const v = String(e.target.value); setFormProjectId(v === '' ? '' : v); }}>
                     <MenuItem value="">— Select project —</MenuItem>
                     {projects.map((p) => (
-                      <MenuItem key={p.id} value={p.id}>{p.project_name}</MenuItem>
+                      <MenuItem key={p.id} value={String(p.id)}>{p.project_name}</MenuItem>
                     ))}
                   </Select>
                 </FormControl>

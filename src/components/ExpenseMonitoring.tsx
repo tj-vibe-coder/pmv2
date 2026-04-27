@@ -63,7 +63,7 @@ const EXPENSE_CATEGORIES = [
 
 export interface ProjectExpense {
   id: string;
-  projectId: number;
+  projectId: string;
   projectName: string;
   description: string;
   amount: number;
@@ -74,7 +74,7 @@ export interface ProjectExpense {
   sourcePoId?: string;
   sourcePoItemId?: string;
   /** When synced from Liquidation, avoid duplicate sync */
-  sourceLiquidationId?: number;
+  sourceLiquidationId?: string;
   sourceLiquidationRowId?: string;
 }
 
@@ -147,12 +147,12 @@ const ExpenseMonitoring: React.FC = () => {
   
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [selectedYear, setSelectedYear] = useState<number>(0);
-  const [selectedProjectId, setSelectedProjectId] = useState<number | ''>('');
+  const [selectedProjectId, setSelectedProjectId] = useState<string | ''>('');
   const [loading, setLoading] = useState(true);
   const [addExpenseOpen, setAddExpenseOpen] = useState(false);
-  const [budgets, setBudgets] = useState<Record<number, number>>({});
+  const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [expenses, setExpenses] = useState<ProjectExpense[]>([]);
-  const [expenseProjectId, setExpenseProjectId] = useState<number | ''>('');
+  const [expenseProjectId, setExpenseProjectId] = useState<string | ''>('');
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [expenseDescription, setExpenseDescription] = useState('');
@@ -192,16 +192,17 @@ const ExpenseMonitoring: React.FC = () => {
   }, [expenses, selectedYear]);
 
   const spentByProject = useMemo(() => {
-    const map: Record<number, number> = {};
+    const map: Record<string, number> = {};
     expensesInYear.forEach((e) => {
-      map[e.projectId] = (map[e.projectId] || 0) + e.amount;
+      const key = String(e.projectId);
+      map[key] = (map[key] || 0) + e.amount;
     });
     return map;
   }, [expensesInYear]);
 
   const projectsForView = useMemo(() => {
     if (selectedProjectId === '') return allProjects;
-    const p = allProjects.find((x) => x.id === selectedProjectId);
+    const p = allProjects.find((x) => String(x.id) === selectedProjectId);
     return p ? [p] : [];
   }, [allProjects, selectedProjectId]);
 
@@ -210,8 +211,8 @@ const ExpenseMonitoring: React.FC = () => {
       id: String(p.id),
       name: p.project_name,
       color: PIE_COLORS[i % PIE_COLORS.length],
-      budget: budgets[p.id] ?? 0,
-      spent: spentByProject[p.id] ?? 0,
+      budget: budgets[String(p.id)] ?? 0,
+      spent: spentByProject[String(p.id)] ?? 0,
     }));
   }, [projectsForView, budgets, spentByProject]);
 
@@ -225,7 +226,7 @@ const ExpenseMonitoring: React.FC = () => {
     const totalRemaining = totalBudget - totalSpent;
     const spentPercentage = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
     const overBudgetCount = selectedProjectId === ''
-      ? allProjects.filter((p) => (budgets[p.id] ?? 0) > 0 && (spentByProject[p.id] ?? 0) > (budgets[p.id] ?? 0)).length
+      ? allProjects.filter((p) => (budgets[String(p.id)] ?? 0) > 0 && (spentByProject[String(p.id)] ?? 0) > (budgets[String(p.id)] ?? 0)).length
       : (totalBudget > 0 && totalSpent > totalBudget ? 1 : 0);
     const remainingPct = totalBudget > 0 ? (totalRemaining / totalBudget) * 100 : 100;
     const statusColor = totalRemaining < 0 ? 'red' : remainingPct <= 20 ? 'yellow' : 'green';
@@ -258,7 +259,7 @@ const ExpenseMonitoring: React.FC = () => {
   const monthlyExpenseData = useMemo((): MonthlyExpense[] => {
     const byMonth: Record<string, number> = {};
     expensesInYear.forEach((e) => {
-      if (selectedProjectId !== '' && e.projectId !== selectedProjectId) return;
+      if (selectedProjectId !== '' && String(e.projectId) !== selectedProjectId) return;
       const month = e.date ? e.date.slice(0, 7) : '';
       if (month) byMonth[month] = (byMonth[month] || 0) + e.amount;
     });
@@ -267,7 +268,7 @@ const ExpenseMonitoring: React.FC = () => {
       .map(([month, total]) => ({ month, total, categories: {} }));
   }, [expensesInYear, selectedProjectId]);
 
-  const expensesForProject = (projectId: number) => expenses.filter((e) => e.projectId === projectId);
+  const expensesForProject = (projectId: string) => expenses.filter((e) => String(e.projectId) === projectId);
 
   const handleSyncFromPO = () => {
     const pos = loadPOs();
@@ -285,7 +286,7 @@ const ExpenseMonitoring: React.FC = () => {
       const pid = po.projectId;
       if (pid == null) continue;
 
-      const project = allProjects.find((p) => p.id === pid);
+      const project = allProjects.find((p) => String(p.id) === String(pid));
       const projectName = project?.project_name ?? po.projectName ?? '—';
       const orderDate = po.orderDate || new Date().toISOString().slice(0, 10);
 
@@ -308,7 +309,7 @@ const ExpenseMonitoring: React.FC = () => {
 
           newExpenses.push({
             id: `exp-po-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            projectId: pid,
+            projectId: String(pid),
             projectName,
             description: `PO ${po.poNumber} · MRF ${mrfRequestNo}: ${desc}`,
             amount: amt,
@@ -328,7 +329,7 @@ const ExpenseMonitoring: React.FC = () => {
 
         newExpenses.push({
           id: `exp-po-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          projectId: pid,
+          projectId: String(pid),
           projectName,
           description: `PO ${po.poNumber} (${po.supplierName || '—'})`,
           amount: total,
@@ -382,15 +383,15 @@ const ExpenseMonitoring: React.FC = () => {
         try { rows = JSON.parse(liq.rows_json || '[]'); } catch (_) { continue; }
 
         for (const row of rows) {
-          const pid = Number(row.projectId);
-          if (!pid || isNaN(pid)) continue;
+          const pid = row.projectId != null && row.projectId !== '' ? String(row.projectId) : '';
+          if (!pid) continue;
           const amt = Number(row.amount);
           if (!amt || amt <= 0) continue;
 
           const key = `${liq.id}:${row.id}`;
           if (syncedKeys.has(key)) continue;
 
-          const project = allProjects.find((p) => p.id === pid);
+          const project = allProjects.find((p) => String(p.id) === pid);
           const projectName = row.projectName || project?.project_name || '—';
 
           newExpenses.push({
@@ -431,11 +432,11 @@ const ExpenseMonitoring: React.FC = () => {
   };
 
   const handleAddExpense = () => {
-    const pid = expenseProjectId === '' ? null : Number(expenseProjectId);
+    const pid = expenseProjectId === '' ? null : String(expenseProjectId);
     const amount = Number(expenseAmount) || 0;
     if (pid == null) return;
     if (amount <= 0) return;
-    const project = allProjects.find((p) => p.id === pid);
+    const project = allProjects.find((p) => String(p.id) === pid);
     const newExpense: ProjectExpense = {
       id: `exp-${Date.now()}`,
       projectId: pid,
@@ -547,12 +548,12 @@ const ExpenseMonitoring: React.FC = () => {
           <InputLabel>Project</InputLabel>
           <Select
             value={selectedProjectId === '' ? '' : selectedProjectId}
-            onChange={(e) => { const v = String(e.target.value); setSelectedProjectId(v === '' ? '' : Number(v)); }}
+            onChange={(e) => { const v = String(e.target.value); setSelectedProjectId(v === '' ? '' : v); }}
             label="Project"
           >
             <MenuItem value="">All projects</MenuItem>
             {allProjects.map((p) => (
-              <MenuItem key={p.id} value={p.id}>{p.project_name}</MenuItem>
+              <MenuItem key={p.id} value={String(p.id)}>{p.project_name}</MenuItem>
             ))}
           </Select>
         </FormControl>
@@ -825,10 +826,10 @@ const ExpenseMonitoring: React.FC = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  (selectedProjectId === '' ? expensesInYear : expensesInYear.filter((e) => e.projectId === selectedProjectId))
+                  (selectedProjectId === '' ? expensesInYear : expensesInYear.filter((e) => String(e.projectId) === selectedProjectId))
                     .slice(0, 50)
                     .map((expense) => {
-                      const project = allProjects.find((p) => p.id === expense.projectId);
+                      const project = allProjects.find((p) => String(p.id) === String(expense.projectId));
                       const projectNo = project?.project_no || String(project?.item_no ?? project?.id ?? '');
                       const poNumber = project?.po_number ?? '—';
                       return (
@@ -866,11 +867,11 @@ const ExpenseMonitoring: React.FC = () => {
                   <Select
                     label="Project"
                     value={expenseProjectId}
-                    onChange={(e) => { const v = String(e.target.value); setExpenseProjectId(v === '' ? '' : Number(v)); }}
+                    onChange={(e) => { const v = String(e.target.value); setExpenseProjectId(v === '' ? '' : v); }}
                   >
                     <MenuItem value="">— Select project —</MenuItem>
                     {allProjects.map((project) => (
-                      <MenuItem key={project.id} value={project.id}>
+                      <MenuItem key={project.id} value={String(project.id)}>
                         {project.project_name}
                       </MenuItem>
                     ))}
@@ -948,7 +949,7 @@ const ExpenseMonitoring: React.FC = () => {
         <DialogContent sx={{ pt: 2 }}>
           {expensesDialogProject && (
             <>
-              {expensesForProject(expensesDialogProject.id).length === 0 ? (
+              {expensesForProject(String(expensesDialogProject.id)).length === 0 ? (
                 <Typography color="text.secondary" sx={{ py: 2 }}>No expenses for this project yet.</Typography>
               ) : (
                 <TableContainer>
@@ -962,7 +963,7 @@ const ExpenseMonitoring: React.FC = () => {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {expensesForProject(expensesDialogProject.id).map((e) => (
+                      {expensesForProject(String(expensesDialogProject.id)).map((e) => (
                         <TableRow key={e.id}>
                           <TableCell>{e.date}</TableCell>
                           <TableCell>{e.description}</TableCell>
@@ -984,7 +985,7 @@ const ExpenseMonitoring: React.FC = () => {
               variant="outlined"
               startIcon={<AddIcon />}
               onClick={() => {
-                setExpenseProjectId(expensesDialogProject.id);
+                setExpenseProjectId(String(expensesDialogProject.id));
                 setExpenseAmount('');
                 setExpenseDate(new Date().toISOString().slice(0, 10));
                 setExpenseDescription('');

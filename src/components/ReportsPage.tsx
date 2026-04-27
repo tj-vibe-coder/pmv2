@@ -87,7 +87,7 @@ const ReportsPage: React.FC = () => {
       setProjects(list);
       const projectId = searchParams.get('projectId');
       if (projectId && list.length > 0) {
-        const proj = list.find((p: Project) => p.id === Number(projectId));
+        const proj = list.find((p: Project) => String(p.id) === projectId);
         if (proj) setSelectedProject(proj);
       }
       setLoading(false);

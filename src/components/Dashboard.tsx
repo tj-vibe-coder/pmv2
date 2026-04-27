@@ -53,10 +53,10 @@ import AddProjectDialog from './AddProjectDialog';
 import { getBudgets } from '../utils/projectBudgetStorage';
 
 const PROJECT_EXPENSES_KEY = 'projectExpenses';
-function loadProjectExpenses(): { projectId: number; amount: number }[] {
+function loadProjectExpenses(): { projectId: string; amount: number }[] {
   try {
     const raw = localStorage.getItem(PROJECT_EXPENSES_KEY);
-    if (raw) return JSON.parse(raw).map((e: { projectId: number; amount: number }) => ({ projectId: e.projectId, amount: e.amount }));
+    if (raw) return JSON.parse(raw).map((e: { projectId: string | number; amount: number }) => ({ projectId: String(e.projectId), amount: e.amount }));
   } catch (_) {}
   return [];
 }
@@ -79,7 +79,7 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: externalRefreshTrigger = 0 }) => {
   const [filters, setFilters] = useState<ProjectFilters>({});
-  const [selectedProjects, setSelectedProjects] = useState<Set<number>>(new Set());
+  const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [exportMenuAnchor, setExportMenuAnchor] = useState<null | HTMLElement>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -223,14 +223,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
   const projectHealthMap = useMemo(() => {
     const budgets = getBudgets();
     const expenses = loadProjectExpenses();
-    const spentByProject: Record<number, number> = {};
+    const spentByProject: Record<string, number> = {};
     expenses.forEach((e) => {
       spentByProject[e.projectId] = (spentByProject[e.projectId] || 0) + e.amount;
     });
-    const map: Record<number, { label: string; color: 'success' | 'warning' | 'error' | 'default' }> = {};
+    const map: Record<string, { label: string; color: 'success' | 'warning' | 'error' | 'default' }> = {};
     filteredProjects.forEach((p) => {
-      const budget = budgets[p.id] ?? 0;
-      const spent = spentByProject[p.id] ?? 0;
+      const budget = (budgets as Record<string, number>)[String(p.id)] ?? 0;
+      const spent = spentByProject[String(p.id)] ?? 0;
       const remaining = budget - spent;
       const remainingPct = budget > 0 ? (remaining / budget) * 100 : 100;
       if (budget <= 0) {
@@ -262,7 +262,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
   };
   
   // Handle project selection
-  const handleProjectSelection = (projectId: number, isSelected: boolean) => {
+  const handleProjectSelection = (projectId: string, isSelected: boolean) => {
     const newSelected = new Set(selectedProjects);
     if (isSelected) {
       newSelected.add(projectId);
@@ -275,7 +275,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
 
   const handleSelectAll = (isSelected: boolean) => {
     if (isSelected) {
-      setSelectedProjects(new Set(filteredProjects.map(p => p.id)));
+      setSelectedProjects(new Set(filteredProjects.map(p => String(p.id))));
       setShowBulkActions(true);
     } else {
       setSelectedProjects(new Set());
@@ -430,9 +430,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     setIsDeleting(true);
     
     try {
-      const selectedProjectIds = Array.from(selectedProjects);
+      const selectedProjectIds = Array.from(selectedProjects) as string[];
       const selectedProjectNames = filteredProjects
-        .filter(p => selectedProjectIds.includes(p.id))
+        .filter(p => selectedProjectIds.includes(String(p.id)))
         .map(p => p.project_name);
       
       console.log('Deleting projects with IDs:', selectedProjectIds);
@@ -442,7 +442,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       await new Promise(resolve => setTimeout(resolve, 500));
       
       // Actually delete the projects from the data service
-      const deleteResult = await dataService.deleteProjects(selectedProjectIds);
+      const deleteResult = await dataService.deleteProjects(selectedProjectIds.map(id => Number(id)));
       
       if (deleteResult.success) {
         // Clear selection and close dialog
@@ -1209,8 +1209,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                   <TableCell padding="checkbox">
                     <Checkbox
                       size="small"
-                      checked={selectedProjects.has(project.id)}
-                      onChange={(e) => handleProjectSelection(project.id, e.target.checked)}
+                      checked={selectedProjects.has(String(project.id))}
+                      onChange={(e) => handleProjectSelection(String(project.id), e.target.checked)}
                     />
                   </TableCell>
                   <TableCell>
@@ -1334,7 +1334,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
               </Typography>
               <Box sx={{ pl: 2 }}>
                 {filteredProjects
-                  .filter(p => selectedProjects.has(p.id))
+                  .filter(p => selectedProjects.has(String(p.id)))
                   .map(project => (
                     <Typography key={project.id} variant="body2" sx={{ mb: 0.5 }}>
                       • {project.project_no || (project.item_no ?? project.id)} – {project.project_name}
