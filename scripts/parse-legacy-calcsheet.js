@@ -178,14 +178,19 @@ function parseQuotationSheet(ws, kind, warnings) {
     if (labelA.includes('general req')) generalReqtsSubtotal = valF;
     else if (labelA.includes('supply of components') || labelA.includes('b.supply')) componentsSubtotal = valF;
     else if (labelA.includes('engineering services') || labelA.includes('c.engineering')) servicesSubtotal = valF;
-    if (labelF.includes('total price')) {
-      if (labelF.includes('vat-ex')) subtotal = valG;
-      else if (labelF.includes('vat-in')) grandTotal = valG;
-    } else if (labelF.includes('discount') && !labelF.includes('discounted')) {
+    // The "TOTAL PRICE, PHP (VAT-EX/IN)" label can land in col A or col F
+    // depending on the sheet's merged-cell layout. Check both columns and
+    // make sure the bare "vat" branch below also excludes vat-ex/vat-in
+    // suffixes so it doesn't accidentally swallow a VAT-IN total-price row.
+    const labelEither = labelA + ' ' + labelF;
+    if (labelEither.includes('total price')) {
+      if (labelEither.includes('vat-ex')) subtotal = valG;
+      else if (labelEither.includes('vat-in')) grandTotal = valG;
+    } else if (labelEither.includes('discount') && !labelEither.includes('discounted')) {
       discount = valG;
     } else if (
       (labelF.includes('vat') && !labelF.includes('vat-ex') && !labelF.includes('vat-in')) ||
-      labelA.includes('vat')
+      (labelA.includes('vat') && !labelA.includes('vat-ex') && !labelA.includes('vat-in'))
     ) {
       vat = valG;
     }

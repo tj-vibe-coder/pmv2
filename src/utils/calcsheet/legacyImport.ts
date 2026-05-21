@@ -326,16 +326,23 @@ function readSummaryTotals(
     else if (labelA.includes('supply of components') || labelA.includes('b.supply')) componentsSubtotal = valF;
     else if (labelA.includes('engineering services') || labelA.includes('c.engineering')) servicesSubtotal = valF;
 
-    if (labelF.includes('total price')) {
-      if (labelF.includes('vat-ex')) subtotal = valG;
-      else if (labelF.includes('vat-in')) grandTotal = valG;
-    } else if (labelF.includes('discount') && !labelF.includes('discounted')) {
+    // "TOTAL PRICE, PHP (VAT-EX/IN)" can land with the label in col A OR col F
+    // depending on the sheet's merged-cell layout. The IOCT sheet on some
+    // workbooks puts the label in col A, while ACTI puts it in col F. Check
+    // both columns and prefer the total-price interpretation over the bare
+    // "vat" match below (which would otherwise capture the row's value as the
+    // VAT amount).
+    const labelEither = `${labelA} ${labelF}`;
+    if (labelEither.includes('total price')) {
+      if (labelEither.includes('vat-ex')) subtotal = valG;
+      else if (labelEither.includes('vat-in')) grandTotal = valG;
+    } else if (labelEither.includes('discount') && !labelEither.includes('discounted')) {
       discount = valG;
     } else if (
+      // Plain "12% VAT" row — must NOT match "vat-ex" or "vat-in" in either column.
       (labelF.includes('vat') && !labelF.includes('vat-ex') && !labelF.includes('vat-in')) ||
-      labelA.includes('vat')
+      (labelA.includes('vat') && !labelA.includes('vat-ex') && !labelA.includes('vat-in'))
     ) {
-      // 12% VAT label can land in col A or col F; value in col G
       vat = valG;
     }
   }
