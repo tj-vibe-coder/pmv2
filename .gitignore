@@ -34,3 +34,27 @@ projects.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# graphify auto-generated output
+/graphify-out/
+
+# Functions subdirectory
+/functions/node_modules
+/functions/.env
+
+# Firebase deploy cache
+/.firebase/
+
+# Claude Code workspace settings
+/.claude/
+
+# Firestore backups (large, local-only)
+/backups/
+
+# Legacy import preview artifacts
+/scripts/legacy-import-preview.json
+/scripts/legacy-import-preview-*.json
+
+# Misc backup artifacts
+*.bak-jpeg
+*.bak-*

@@ -30,6 +30,14 @@ import UsersPage from './components/UsersPage';
 import InvestmentTrackerPage from './components/InvestmentTrackerPage';
 import PayrollDashboard from './components/payroll/PayrollDashboard';
 import PayrollGuard from './components/payroll/PayrollGuard';
+import CalcsheetProjects from './components/calcsheet/CalcsheetProjects';
+import CalcsheetLegacyImport from './components/calcsheet/CalcsheetLegacyImport';
+import CalcsheetProjectDetail from './components/calcsheet/CalcsheetProjectDetail';
+import CalcsheetQuotationEditor from './components/calcsheet/CalcsheetQuotationEditor';
+import CalcsheetCompareView from './components/calcsheet/CalcsheetCompareView';
+import CalcsheetClients from './components/calcsheet/CalcsheetClients';
+import CalcsheetPresets from './components/calcsheet/CalcsheetPresets';
+import { useQuotationStore } from './store/quotationStore';
 
 const theme = createTheme({
   palette: {
@@ -98,6 +106,13 @@ const theme = createTheme({
     },
   },
 });
+
+// Hydrates the Calcsheet store from the API once on mount
+const CalcsheetInit: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const init = useQuotationStore((s) => s.init);
+  React.useEffect(() => { init(); }, [init]);
+  return <>{children}</>;
+};
 
 // Protected Route component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -338,13 +353,111 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            <Route 
-              path="/" 
+            {/* ===== CALCSHEET ===== */}
+            <Route
+              path="/calcsheet"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <Navigate to="/calcsheet/projects" replace />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/calcsheet/projects"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <CalcsheetProjects />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/calcsheet/import-legacy"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <CalcsheetLegacyImport />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/calcsheet/projects/:id"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <CalcsheetProjectDetail />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/calcsheet/projects/:id/compare"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <CalcsheetCompareView />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/calcsheet/quotations/:id"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <CalcsheetQuotationEditor />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/calcsheet/clients"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <CalcsheetClients />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/calcsheet/presets"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <CalcsheetPresets />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/"
               element={
                 <ProtectedRoute>
                   <Navigate to="/dashboard" replace />
                 </ProtectedRoute>
-              } 
+              }
             />
           </Routes>
         </Router>

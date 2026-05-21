@@ -32,6 +32,7 @@ import {
   PictureAsPdf as PictureAsPdfIcon,
   Cloud as CloudIcon,
   RequestQuote as EstimateIcon,
+  Calculate as CalculateIcon,
   HowToReg as HowToRegIcon,
   Group as GroupIcon,
   AccountBalance as AccountBalanceIcon,
@@ -429,6 +430,36 @@ const Sidebar: React.FC = () => {
               </ListItemButton>
             </ListItem>
           )}
+
+          {/* Calcsheet */}
+          <ListItem disablePadding sx={{ mb: 0.5 }}>
+            <ListItemButton
+              selected={location.pathname.startsWith('/calcsheet')}
+              onClick={() => navigate('/calcsheet/projects')}
+              sx={{
+                borderRadius: 2,
+                mx: 1,
+                minHeight: 56,
+                '&.Mui-selected': {
+                  backgroundColor: 'rgba(255,255,255,0.15)',
+                  color: 'white',
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.2)' },
+                },
+                '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                transition: 'all 0.2s ease-in-out',
+              }}
+            >
+              <ListItemIcon sx={{ color: 'inherit', minWidth: 40 }}>
+                <CalculateIcon />
+              </ListItemIcon>
+              <ListItemText
+                primary="Calcsheet"
+                secondary="Quotations & estimates"
+                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                sx={{ color: 'white' }}
+              />
+            </ListItemButton>
+          </ListItem>
 
           {/* Supply Chain (collapsible parent) */}
           <ListItem disablePadding sx={{ mb: 0.5 }}>

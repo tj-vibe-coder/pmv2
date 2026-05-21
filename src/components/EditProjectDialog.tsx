@@ -53,7 +53,7 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
   const [formData, setFormData] = useState({
     project_no: '',
     project_name: '',
-    client_id: null as number | null,
+    client_id: null as string | null,
     account_name: '',
     year: new Date().getFullYear(),
     project_category: '',
@@ -119,7 +119,7 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
     if (open && project && clients.length > 0) {
       const client = (project.client_id
         ? clients.find((c) => c.id === project.client_id)
-        : clients.find((c) => c.client_name === project.account_name)
+        : clients.find((c) => c.name === project.account_name)
       ) || null;
       setSelectedClient(client);
     } else if (!open) {
@@ -128,16 +128,16 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
   }, [open, project, clients]);
 
   const handleClientSelect = (clientId: string) => {
-    const id = clientId ? Number(clientId) : 0;
-    const client = clients.find((c) => c.id === id) || null;
+    const client = clientId ? (clients.find((c) => c.id === clientId) || null) : null;
     setSelectedClient(client);
     if (client) {
+      const primary = (client.contacts || []).find((c) => c.isPrimary) || (client.contacts || [])[0];
       setFormData((prev) => ({
         ...prev,
         client_id: client.id,
-        account_name: client.client_name,
-        payment_terms: client.payment_terms || prev.payment_terms,
-        client_approver: client.contact_person ? [client.contact_person, client.designation].filter(Boolean).join(' – ') : prev.client_approver,
+        account_name: client.name,
+        payment_terms: client.paymentTerms || prev.payment_terms,
+        client_approver: primary ? [primary.name, primary.position].filter(Boolean).join(' – ') : prev.client_approver,
         project_location: client.address || prev.project_location,
       }));
     } else {
@@ -289,42 +289,45 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
                 </MenuItem>
                 {clients.map((c) => (
                   <MenuItem key={c.id} value={c.id}>
-                    {c.client_name}
+                    {c.name}
                   </MenuItem>
                 ))}
               </TextField>
             </Grid>
-            {selectedClient && (
-              <Grid size={{ xs: 12 }}>
-                <Paper variant="outlined" sx={{ p: 2, backgroundColor: '#f8fafc' }}>
-                  <Typography variant="subtitle2" color="textSecondary" sx={{ mb: 1 }}>
-                    Client details
-                  </Typography>
-                  <Grid container spacing={1.5}>
-                    {selectedClient.address && (
-                      <Grid size={{ xs: 12 }}>
-                        <Typography variant="body2"><strong>Address:</strong> {selectedClient.address}</Typography>
-                      </Grid>
-                    )}
-                    {selectedClient.payment_terms && (
-                      <Grid size={{ xs: 12 }}>
-                        <Typography variant="body2"><strong>Payment terms:</strong> {selectedClient.payment_terms}</Typography>
-                      </Grid>
-                    )}
-                    {(selectedClient.contact_person || selectedClient.designation) && (
-                      <Grid size={{ xs: 12 }}>
-                        <Typography variant="body2"><strong>Contact:</strong> {[selectedClient.contact_person, selectedClient.designation].filter(Boolean).join(' – ')}</Typography>
-                      </Grid>
-                    )}
-                    {selectedClient.email_address && (
-                      <Grid size={{ xs: 12 }}>
-                        <Typography variant="body2"><strong>Email:</strong> {selectedClient.email_address}</Typography>
-                      </Grid>
-                    )}
-                  </Grid>
-                </Paper>
-              </Grid>
-            )}
+            {selectedClient && (() => {
+              const primary = (selectedClient.contacts || []).find((c) => c.isPrimary) || (selectedClient.contacts || [])[0];
+              return (
+                <Grid size={{ xs: 12 }}>
+                  <Paper variant="outlined" sx={{ p: 2, backgroundColor: '#f8fafc' }}>
+                    <Typography variant="subtitle2" color="textSecondary" sx={{ mb: 1 }}>
+                      Client details
+                    </Typography>
+                    <Grid container spacing={1.5}>
+                      {selectedClient.address && (
+                        <Grid size={{ xs: 12 }}>
+                          <Typography variant="body2"><strong>Address:</strong> {selectedClient.address}</Typography>
+                        </Grid>
+                      )}
+                      {selectedClient.paymentTerms && (
+                        <Grid size={{ xs: 12 }}>
+                          <Typography variant="body2"><strong>Payment terms:</strong> {selectedClient.paymentTerms}</Typography>
+                        </Grid>
+                      )}
+                      {primary && (primary.name || primary.position) && (
+                        <Grid size={{ xs: 12 }}>
+                          <Typography variant="body2"><strong>Contact:</strong> {[primary.name, primary.position].filter(Boolean).join(' – ')}</Typography>
+                        </Grid>
+                      )}
+                      {primary?.email && (
+                        <Grid size={{ xs: 12 }}>
+                          <Typography variant="body2"><strong>Email:</strong> {primary.email}</Typography>
+                        </Grid>
+                      )}
+                    </Grid>
+                  </Paper>
+                </Grid>
+              );
+            })()}
             <Grid size={{ xs: 12, md: 6 }}>
               <TextField fullWidth label="Year" type="number" value={formData.year} onChange={handleInputChange('year')} variant="outlined" size="small" inputProps={{ min: 2000, max: 2030 }} />
             </Grid>

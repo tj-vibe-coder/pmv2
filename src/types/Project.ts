@@ -8,7 +8,8 @@ export interface Project {
   po_number: string;
   po_date: number | null;
   client_status: string;
-  client_id?: number | null;
+  client_id?: string | null;
+  client_contact_id?: string | null;  // optional: which ClientContact is the project's approver
   account_name: string;
   project_name: string;
   project_category: string;
