@@ -12,6 +12,9 @@ import type {
 import { seedClients, seedSalesContacts } from '../data/quotationClients';
 import { seedLaborPresets, starterGeneralReqts } from '../data/quotationPresets';
 import { quotationCode } from '../utils/calcsheet/codes';
+import { getOneDriveTokenStore } from '../services/onedriveTokenStore';
+import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
+import { ensureProposalFolder, ensureExecutionFolder, moveProposalToExecution } from '../services/onedriveFolderService';
 
 // API base — talks to pmv2's Express server
 const API_BASE = process.env.REACT_APP_API_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
@@ -60,7 +63,7 @@ interface Actions {
   deleteClient: (id: ID) => Promise<void>;
 
   // Projects
-  addProject: (p: Omit<Project, 'id' | 'code' | 'createdAt' | 'updatedAt'>) => Promise<Project>;
+  addProject: (p: Omit<Project, 'id' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string }) => Promise<Project>;
   updateProject: (id: ID, patch: Partial<Project>) => Promise<void>;
   deleteProject: (id: ID) => Promise<void>;
 
@@ -88,6 +91,12 @@ const blankQuotation = (
   kind: QuotationKind,
   recipientId: ID | null,
   id: string,
+  // Default name to pre-fill the Prepared by / Authorized by Autocomplete fields.
+  // Caller passes the project's account-manager name (resolved from
+  // `project.salesContactId` against `salesContacts`). Both fields remain
+  // editable inline on the quotation; this only sets the seed value so the
+  // PDF "Prepared by:" defaults to the AM without manual intervention.
+  defaultSignatoryName: string = '',
 ): Quotation => ({
   id,
   projectId,
@@ -95,7 +104,7 @@ const blankQuotation = (
   revision: '00',
   recipientId,
   validityDays: 30,
-  paymentTerms: '30% DP, 70% Progress Billing',
+  paymentTerms: '30% Downpayment, 70% Progress Billing',
   deliveryTerms: 'Delivery is 1-2 weeks, upon receipt of a technically and commercially clarified purchase order.',
   warrantyMonths: 12,
   productMarkupPct: 30,
@@ -109,8 +118,8 @@ const blankQuotation = (
   services: [],
   manpower: [],
   servicesFromManpower: true,
-  preparedBy: '',
-  authorizedBy: 'Renzel Punongbayan',
+  preparedBy: defaultSignatoryName,
+  authorizedBy: defaultSignatoryName,
   createdAt: now(),
   updatedAt: now(),
 });
@@ -157,7 +166,9 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
     return saved;
   },
   updateClient: async (id, patch) => {
-    await api('PUT', `/api/clients/${id}`, patch);
+    const cleaned: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) if (v !== undefined) cleaned[k] = v;
+    await api('PUT', `/api/clients/${id}`, cleaned);
     set({ clients: get().clients.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
   },
   deleteClient: async (id) => {
@@ -170,25 +181,122 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
   addProject: async (p) => {
     const customer = get().clients.find((c) => c.id === p.customerId);
     const seq = await api<{ seq: number }>('POST', '/seq/increment').then((r) => r.seq).catch(() => get().seq);
+    const { code: codeOverride, ...rest } = p;
     const project: Project = {
       id: nanoid(8),
-      code: quotationCode(seq, customer?.code ?? 'XXX', '00', new Date(p.date)),
+      code: (codeOverride || '').trim() || quotationCode(seq, customer?.code ?? 'XXX', '00', new Date(p.date)),
       createdAt: now(),
       updatedAt: now(),
-      ...p,
+      ...rest,
     };
     const res = await api<{ project: Project }>('POST', '/projects', project);
     const saved = res.project ?? project;
     set({ projects: [...get().projects, saved], seq: seq + 1 });
+
+    // Fire-and-forget: create proposal folder in corporate OneDrive. Best-effort —
+    // never blocks project creation and never throws.
+    if (isCorporateOneDriveConfigured()) {
+      (async () => {
+        try {
+          const odStore = getOneDriveTokenStore();
+          if (!odStore.isAuthenticated) return;
+          const token = await odStore.getToken();
+          if (!token) return;
+          const ref = await ensureProposalFolder(token, saved);
+          await api('PUT', `/projects/${saved.id}`, {
+            proposalFolderId: ref.id,
+            proposalFolderUrl: ref.webUrl,
+          });
+          set({
+            projects: get().projects.map((proj) =>
+              proj.id === saved.id
+                ? { ...proj, proposalFolderId: ref.id, proposalFolderUrl: ref.webUrl }
+                : proj,
+            ),
+          });
+          // eslint-disable-next-line no-console
+          console.info('[OneDrive] proposal folder created', ref.webUrl);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[OneDrive] proposal folder creation failed (non-blocking)', err);
+        }
+      })();
+    }
+
     return saved;
   },
   updateProject: async (id, patch) => {
-    await api('PUT', `/projects/${id}`, patch);
+    const cleaned: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) if (v !== undefined) cleaned[k] = v;
+    const prev = get().projects.find((p) => p.id === id);
+    await api('PUT', `/projects/${id}`, cleaned);
     set({
       projects: get().projects.map((p) =>
         p.id === id ? { ...p, ...patch, updatedAt: now() } : p,
       ),
     });
+
+    // If status transitioned to 'won' (and wasn't already), promote the project's
+    // OneDrive folder to the execution location. Preferred path: MOVE the existing
+    // proposal folder so all proposal-phase files travel with the project (single
+    // source of truth) and leave a .url shortcut in the original proposal location.
+    // Fallback for legacy projects without a proposal folder: create a fresh
+    // execution folder. Best-effort, fire-and-forget.
+    if (patch.status === 'won' && prev && prev.status !== 'won' && isCorporateOneDriveConfigured()) {
+      const next: Project = { ...prev, ...patch };
+      (async () => {
+        try {
+          const odStore = getOneDriveTokenStore();
+          if (!odStore.isAuthenticated) return;
+          const token = await odStore.getToken();
+          if (!token) return;
+
+          if (next.proposalFolderId) {
+            // Move path: physically relocate the proposal folder to executions, drop
+            // a shortcut behind. The folder's ID is preserved.
+            const { moved } = await moveProposalToExecution(token, {
+              code: next.code,
+              name: next.name,
+              proposalFolderId: next.proposalFolderId,
+            });
+            const patchFields = {
+              // Same folder, new location → both fields point to the same URL/ID.
+              proposalFolderUrl: moved.webUrl,
+              executionFolderId: moved.id,
+              executionFolderUrl: moved.webUrl,
+            };
+            await api('PUT', `/projects/${id}`, patchFields);
+            set({
+              projects: get().projects.map((proj) =>
+                proj.id === id ? { ...proj, ...patchFields } : proj,
+              ),
+            });
+            // eslint-disable-next-line no-console
+            console.info('[OneDrive] proposal folder promoted to execution', moved.webUrl);
+          } else {
+            // Fallback: no proposal folder yet (legacy projects). Create a fresh one
+            // at the execution location.
+            const ref = await ensureExecutionFolder(token, next);
+            await api('PUT', `/projects/${id}`, {
+              executionFolderId: ref.id,
+              executionFolderUrl: ref.webUrl,
+            });
+            set({
+              projects: get().projects.map((proj) =>
+                proj.id === id
+                  ? { ...proj, executionFolderId: ref.id, executionFolderUrl: ref.webUrl }
+                  : proj,
+              ),
+            });
+            // eslint-disable-next-line no-console
+            console.info('[OneDrive] execution folder created (no prior proposal)', ref.webUrl);
+          }
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[OneDrive] execution promotion failed (non-blocking)', err);
+        }
+      })();
+    }
   },
   deleteProject: async (id) => {
     await api('DELETE', `/projects/${id}`);
@@ -201,14 +309,28 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
   // ── Quotations ─────────────────────────────────────────────────────────────
 
   createQuotation: async (projectId, kind, recipientId) => {
-    const q = blankQuotation(projectId, kind, recipientId, nanoid(8));
+    // Resolve the project's account manager (salesContact) name and seed it into
+    // both signatory fields. Editor remains editable; this just gives a sensible
+    // default so the PDF "Prepared by:" starts populated with the AM.
+    const project = get().projects.find((p) => p.id === projectId);
+    const amName = project?.salesContactId
+      ? (get().salesContacts.find((sc) => sc.id === project.salesContactId)?.name ?? '')
+      : '';
+    const q = blankQuotation(projectId, kind, recipientId, nanoid(8), amName);
     const res = await api<{ quotation: Quotation }>('POST', '/quotations', q);
     const saved = res.quotation ?? q;
     set({ quotations: [...get().quotations, saved] });
     return saved;
   },
   updateQuotation: async (id, patch) => {
-    await api('PUT', `/quotations/${id}`, patch);
+    // Firestore rejects `undefined` values with a 500. Substitute null (to
+    // clear the field) so callers can safely send "I have no value here".
+    // Undefined keys are dropped entirely when they would just be left alone.
+    const cleaned: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) {
+      if (v !== undefined) cleaned[k] = v;
+    }
+    await api('PUT', `/quotations/${id}`, cleaned);
     set({
       quotations: get().quotations.map((q) =>
         q.id === id ? { ...q, ...patch, updatedAt: now() } : q,

@@ -1,8 +1,8 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
-  Alert, AlertTitle, Box, Button, Chip, Divider, FormControlLabel, ListSubheader, MenuItem, Paper,
-  Stack, Switch, TableCell, TableRow, TextField, Typography,
+  Alert, AlertTitle, Autocomplete, Box, Button, Chip, Divider, FormControlLabel, ListSubheader, MenuItem, Paper,
+  Snackbar, Stack, Switch, TableCell, TableRow, TextField, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import HistoryIcon from '@mui/icons-material/History';
@@ -11,29 +11,38 @@ import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import { useNavigate } from 'react-router-dom';
 import { nanoid } from 'nanoid';
+import SaveIcon from '@mui/icons-material/Save';
+import UndoIcon from '@mui/icons-material/Undo';
 import { useQuotationStore } from '../../store/quotationStore';
 import {
   PHP, computeTotals, componentLineTotal,
   componentSellingUnit, lineGeneralTotal, manpowerCost, manpowerTotalCost,
 } from '../../utils/calcsheet/calc';
 import type {
-  ComponentLine, GeneralReqLine, ManpowerEntry, ServiceLine,
+  ComponentLine, GeneralReqLine, ManpowerEntry, Quotation, ServiceLine,
 } from '../../types/Quotation';
 import { EditableTable } from './EditableTable';
 import type { Column } from './EditableTable';
 import { exportQuotationPdf } from '../../utils/calcsheet/pdfExport';
 import { exportQuotationXlsx } from '../../utils/calcsheet/xlsxExport';
+import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
+import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
+import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
 
 const id = () => nanoid(6);
 
 const PAYMENT_TERM_OPTIONS = [
-  '30% DP, 70% Progress Billing',
-  '30% DP, 60% Progress Billing, 10% Retention',
-  '20% DP, 80% Progress Billing',
-  '20% DP, 70% Progress Billing, 10% Retention',
-  '50% DP, 50% Progress Billing',
-  '50% DP, 50% Upon Completion',
+  '30% Downpayment, 70% Progress Billing',
+  '30% Downpayment, 60% Progress Billing, 10% Retention',
+  '20% Downpayment, 80% Progress Billing',
+  '20% Downpayment, 70% Progress Billing, 10% Retention',
+  '50% Downpayment, 50% Progress Billing',
+  '50% Downpayment, 50% Upon Completion',
   '100% Upon Completion',
+  // "Pay-when-paid" — IOCT/ACTI invoice the customer in lockstep with the
+  // end-user paying them. Common in subcontracted automation work where the
+  // customer is themselves billing a downstream owner.
+  'Back-to-back with end-user payment terms',
 ];
 const CUSTOM_PAYMENT = '__custom__';
 
@@ -94,29 +103,133 @@ function BreakdownCard({ label, color, cost, contingency, contingencyPct, markup
 export default function QuotationEditor() {
   const { id: qid = '' } = useParams();
   const navigate = useNavigate();
-  const quotation = useQuotationStore((s) => s.quotations.find((q) => q.id === qid));
-  const project = useQuotationStore((s) => quotation ? s.projects.find((p) => p.id === quotation.projectId) : undefined);
+  // `saved` is the persisted version from the store. `draft` is the in-progress
+  // edit state that's only pushed to the server when the user clicks Save.
+  // Every keystroke used to fire a PUT; now edits accumulate locally first.
+  const saved = useQuotationStore((s) => s.quotations.find((q) => q.id === qid));
+  const project = useQuotationStore((s) => saved ? s.projects.find((p) => p.id === saved.projectId) : undefined);
   const clients = useQuotationStore((s) => s.clients);
+  const salesContacts = useQuotationStore((s) => s.salesContacts);
   const presets = useQuotationStore((s) => s.laborPresets);
   const update = useQuotationStore((s) => s.updateQuotation);
   const duplicateQuotation = useQuotationStore((s) => s.duplicateQuotation);
 
-  const totals = useMemo(() => quotation ? computeTotals(quotation) : null, [quotation]);
+  const [draft, setDraft] = useState<Quotation | undefined>(saved);
 
-  if (!quotation || !project || !totals) {
+  // Re-init the draft when the URL points at a different quotation OR when the
+  // saved record changes via some path we don't control (e.g. another browser
+  // tab saving). Compare by id and updatedAt so we don't clobber the in-flight
+  // draft while the user is editing the same quotation.
+  useEffect(() => {
+    if (!saved) return;
+    if (!draft || draft.id !== saved.id) {
+      setDraft(saved);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved?.id]);
+
+  const totals = useMemo(() => draft ? computeTotals(draft) : null, [draft]);
+
+  // Margin summary: separates true markup (= profit on a clean run) from the
+  // contingency reserve (= buffer for overruns; not earned profit). Total
+  // margin excludes contingency — contingency is reported as a separate line
+  // so the user can see the cushion without conflating it with earnings.
+  //
+  // Stack on the selling-price side (subtotal): cost → +contingency → +markup.
+  // markupOnly per category = subtotal − withContingency.
+  // Components have no contingency, so componentsWithContingency === cost.
+  // Services bypass cost/contingency entirely when entered as flat amounts
+  // (servicesFromManpower=false) — in that case there's no markup either.
+  const marginSummary = useMemo(() => {
+    if (!draft || !totals) return null;
+    const servicesFromMP = !!draft.servicesFromManpower;
+    const markupOnly =
+      (totals.generalReqtsSubtotal - totals.generalReqtsWithContingency) +
+      (totals.componentsSubtotal - totals.componentsCost) +
+      (servicesFromMP
+        ? totals.servicesSubtotal - totals.laborWithContingency
+        : 0);
+    const contingency =
+      (totals.generalReqtsWithContingency - totals.generalReqtsCost) +
+      (servicesFromMP ? totals.laborWithContingency - totals.laborCost : 0);
+    const subtotal =
+      totals.generalReqtsSubtotal +
+      totals.componentsSubtotal +
+      totals.servicesSubtotal;
+    const pct = subtotal > 0 ? (markupOnly / subtotal) * 100 : 0;
+    const contingencyPct = subtotal > 0 ? (contingency / subtotal) * 100 : 0;
+    return { value: markupOnly, subtotal, pct, contingency, contingencyPct };
+  }, [draft, totals]);
+
+  const isDirty = useMemo(() => {
+    if (!draft || !saved) return false;
+    if (draft.id !== saved.id) return false;
+    return JSON.stringify(draft) !== JSON.stringify(saved);
+  }, [draft, saved]);
+
+  // Warn the user before closing/reloading the tab if there are unsaved changes.
+  useEffect(() => {
+    if (!isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty]);
+
+  const [saving, setSaving] = useState(false);
+
+  // OneDrive auto-upload on export. Hooks must be declared unconditionally —
+  // keep these above the early-return guard below.
+  const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const [toast, setToast] = useState<{ msg: string; sev: 'success' | 'warning' | 'info' } | null>(null);
+
+  if (!saved || !draft || !project || !totals) {
     return <Typography>Quotation not found. <Link to="/calcsheet/projects">Back</Link></Typography>;
   }
+  // Alias for downstream code that previously referenced `quotation` directly.
+  // All field/row operations below mutate `draft` (via setDraft); reads see the
+  // live draft so totals/labels update immediately as the user types.
+  const quotation = draft;
   const recipient = clients.find((c) => c.id === quotation.recipientId);
   const customer = clients.find((c) => c.id === project.customerId);
   const issuer = quotation.kind;
   const isLegacy = quotation.formulaVersion === 'legacy';
 
-  const setField = <K extends keyof typeof quotation>(k: K, v: any) => {
+  const setField = <K extends keyof Quotation>(k: K, v: any) => {
     if (isLegacy) return;
-    update(quotation.id, { [k]: v } as any);
+    setDraft((d) => d ? ({ ...d, [k]: v } as Quotation) : d);
+  };
+
+  const handleSave = async () => {
+    if (!isDirty || saving) return;
+    setSaving(true);
+    try {
+      // Send the full draft as the patch — the store's updateQuotation handles
+      // PUT to the server and updates local state on success.
+      await update(quotation.id, draft);
+      setToast({ msg: 'Saved', sev: 'success' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setToast({ msg: `Save failed: ${msg}`, sev: 'warning' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDiscard = () => {
+    if (!saved) return;
+    setDraft(saved);
   };
 
   const handleDuplicateToRevise = async () => {
+    if (isDirty) {
+      const proceed = window.confirm(
+        'You have unsaved changes. Duplicating now uses the last saved version — your draft edits will be lost.\n\nDuplicate anyway?'
+      );
+      if (!proceed) return;
+    }
     const copy = await duplicateQuotation(quotation.id);
     if (copy) navigate(`/calcsheet/quotations/${copy.id}`);
   };
@@ -285,7 +398,52 @@ export default function QuotationEditor() {
 
   const isCustomPayment = !PAYMENT_TERM_OPTIONS.includes(quotation.paymentTerms);
 
-  const exportPdf = () => exportQuotationPdf(quotation, project, recipient ?? null, customer ?? null);
+  // OneDrive auto-upload on export. The PDF is always saved locally first;
+  // upload to the project's OneDrive folder is best-effort (gated on:
+  // corporate config present + signed in + project has a folder linked).
+  // (Hook declarations live higher up to satisfy rules-of-hooks ordering.)
+
+  const exportPdf = async () => {
+    try {
+      const { blob, filename } = await exportQuotationPdf(
+        quotation, project, recipient ?? null, customer ?? null, salesContacts,
+      );
+
+      // Use whichever folder is current. After promotion to 'won', the move
+      // preserves the drive item id; either field references the same physical
+      // folder. Prefer executionFolderId when the project is won, else proposal.
+      const folderId = (project.status === 'won' && project.executionFolderId)
+        ? project.executionFolderId
+        : project.proposalFolderId;
+
+      if (!isCorporateOneDriveConfigured() || !oneDriveSignedIn || !folderId) {
+        setToast({ msg: `Saved ${filename}`, sev: 'info' });
+        return;
+      }
+
+      // Fire upload; show success/failure toast but never block the local save.
+      setToast({ msg: `Saved ${filename} · uploading to OneDrive…`, sev: 'info' });
+      try {
+        const token = await getOneDriveToken();
+        if (!token) {
+          setToast({ msg: `Saved ${filename} · OneDrive upload skipped (no token)`, sev: 'warning' });
+          return;
+        }
+        const driveId = await resolveCorporateDriveId(token);
+        await uploadFileToFolderById(token, driveId, folderId, filename, blob);
+        setToast({ msg: `Saved ${filename} · uploaded to OneDrive ✓`, sev: 'success' });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setToast({ msg: `Saved ${filename} · OneDrive upload failed: ${msg}`, sev: 'warning' });
+        // eslint-disable-next-line no-console
+        console.warn('[OneDrive] PDF upload failed (non-blocking)', err);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setToast({ msg: `Export failed: ${msg}`, sev: 'warning' });
+    }
+  };
+
   const exportXlsx = () => exportQuotationXlsx(quotation, project, recipient ?? null, customer ?? null);
 
   return (
@@ -312,10 +470,58 @@ export default function QuotationEditor() {
           <Typography variant="body2" color="text.secondary">
             Recipient: {recipient?.name ?? '— not set —'}
           </Typography>
+          {isDirty && !isLegacy && (
+            <Chip
+              size="small"
+              label="Unsaved changes"
+              color="warning"
+              variant="outlined"
+              sx={{ alignSelf: 'flex-start', mt: 0.5 }}
+            />
+          )}
         </Stack>
-        <Stack direction="row" spacing={1}>
-          <Button startIcon={<PictureAsPdfIcon />} variant="contained" onClick={exportPdf}>Export PDF</Button>
-          <Button startIcon={<GridOnIcon />} variant="outlined" onClick={exportXlsx}>Export Excel</Button>
+        <Stack direction="row" spacing={1} alignItems="center">
+          {!isLegacy && (
+            <>
+              <Button
+                startIcon={<SaveIcon />}
+                variant="contained"
+                color="primary"
+                onClick={handleSave}
+                disabled={!isDirty || saving}
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
+              <Button
+                startIcon={<UndoIcon />}
+                variant="outlined"
+                color="inherit"
+                size="small"
+                onClick={handleDiscard}
+                disabled={!isDirty || saving}
+              >
+                Discard
+              </Button>
+            </>
+          )}
+          <Button
+            startIcon={<PictureAsPdfIcon />}
+            variant={isLegacy ? 'contained' : 'outlined'}
+            onClick={exportPdf}
+            disabled={isDirty}
+            title={isDirty ? 'Save changes before exporting' : undefined}
+          >
+            Export PDF
+          </Button>
+          <Button
+            startIcon={<GridOnIcon />}
+            variant="outlined"
+            onClick={exportXlsx}
+            disabled={isDirty}
+            title={isDirty ? 'Save changes before exporting' : undefined}
+          >
+            Export Excel
+          </Button>
           <Button component={Link} to={`/calcsheet/projects/${project.id}`} variant="text" size="small">← Project</Button>
         </Stack>
       </Stack>
@@ -430,20 +636,64 @@ export default function QuotationEditor() {
             disabled={isLegacy}
             sx={{ gridColumn: 'span 2' }}
           />
-          <TextField
-            label="Commercially prepared by"
-            value={quotation.preparedBy ?? ''}
-            onChange={(e) => setField('preparedBy', e.target.value)}
-            placeholder="e.g. Reuel Joshua T. Rivera"
-            disabled={isLegacy}
-          />
-          <TextField
-            label="Authorized by"
-            value={quotation.authorizedBy ?? ''}
-            onChange={(e) => setField('authorizedBy', e.target.value)}
-            placeholder="e.g. Renzel Punongbayan"
-            disabled={isLegacy}
-          />
+          {(() => {
+            const staffOption = (props: any, option: string) => {
+              const c = salesContacts.find((x) => x.name === option);
+              const sub = [c?.position, c?.phone, c?.email].filter(Boolean).join(' · ');
+              return (
+                <li {...props} key={option}>
+                  <Box>
+                    <Typography variant="body2">{option}</Typography>
+                    {sub && (
+                      <Typography variant="caption" color="text.secondary">{sub}</Typography>
+                    )}
+                  </Box>
+                </li>
+              );
+            };
+            const helperFor = (name: string | undefined) => {
+              const c = name ? salesContacts.find((x) => x.name === name) : undefined;
+              return c ? [c.position, c.phone, c.email].filter(Boolean).join(' · ') : ' ';
+            };
+            return (
+              <>
+                <Autocomplete
+                  freeSolo
+                  options={salesContacts.map((c) => c.name).filter(Boolean)}
+                  value={quotation.preparedBy ?? ''}
+                  onChange={(_, v) => setField('preparedBy', v ?? '')}
+                  onInputChange={(_, v, reason) => { if (reason === 'input') setField('preparedBy', v); }}
+                  disabled={isLegacy}
+                  renderOption={staffOption}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Commercially prepared by"
+                      placeholder="Pick a team member or type a custom name"
+                      helperText={helperFor(quotation.preparedBy)}
+                    />
+                  )}
+                />
+                <Autocomplete
+                  freeSolo
+                  options={salesContacts.map((c) => c.name).filter(Boolean)}
+                  value={quotation.authorizedBy ?? ''}
+                  onChange={(_, v) => setField('authorizedBy', v ?? '')}
+                  onInputChange={(_, v, reason) => { if (reason === 'input') setField('authorizedBy', v); }}
+                  disabled={isLegacy}
+                  renderOption={staffOption}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Authorized by"
+                      placeholder="Pick a team member or type a custom name"
+                      helperText={helperFor(quotation.authorizedBy)}
+                    />
+                  )}
+                />
+              </>
+            );
+          })()}
         </Box>
       </Paper>
 
@@ -646,16 +896,19 @@ export default function QuotationEditor() {
           </>}
         </Box>
         <Stack direction="row" spacing={2} justifyContent="flex-end">
-          <Box sx={{ p: 2, border: '1px solid', borderColor: 'success.light', borderRadius: 1, bgcolor: 'rgba(46,125,50,0.05)', textAlign: 'right', minWidth: 220 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>Total Margin (all categories)</Typography>
+          <Box sx={{ p: 2, border: '1px solid', borderColor: 'success.light', borderRadius: 1, bgcolor: 'rgba(46,125,50,0.05)', textAlign: 'right', minWidth: 240 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>Total Margin (markup only)</Typography>
             <Typography variant="h6" sx={{ fontFamily: 'monospace', color: 'success.dark', fontWeight: 700 }}>
-              {PHP(
-                (totals.generalReqtsSubtotal - totals.generalReqtsCost) +
-                (totals.componentsSubtotal - totals.componentsCost) +
-                (totals.servicesSubtotal - totals.laborCost),
-              )}
+              {PHP(marginSummary?.value ?? 0)}
             </Typography>
-            <Typography variant="caption" color="text.secondary">Contingency + markup combined</Typography>
+            <Typography variant="caption" sx={{ display: 'block', color: 'success.dark', fontWeight: 600 }}>
+              {(marginSummary?.pct ?? 0).toFixed(1)}% margin
+            </Typography>
+            {marginSummary && marginSummary.contingency > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                + Contingency reserve: {PHP(marginSummary.contingency)} ({marginSummary.contingencyPct.toFixed(1)}%)
+              </Typography>
+            )}
           </Box>
           <Box sx={{ p: 2, bgcolor: 'primary.main', borderRadius: 1, textAlign: 'right', minWidth: 220 }}>
             <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.75)', display: 'block', mb: 0.5 }}>GRAND TOTAL</Typography>
@@ -695,20 +948,34 @@ export default function QuotationEditor() {
             subtotal={totals.servicesSubtotal}
           />
           <Box sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'grey.50' }}>
-            <Typography variant="caption" color="text.secondary">Total Margin (all categories)</Typography>
+            <Typography variant="caption" color="text.secondary">Total Margin (markup only)</Typography>
             <Typography variant="h6" sx={{ fontFamily: 'monospace', color: 'success.main', mt: 0.5, fontWeight: 700 }}>
-              {PHP(
-                (totals.generalReqtsSubtotal - totals.generalReqtsCost) +
-                (totals.componentsSubtotal - totals.componentsCost) +
-                (totals.servicesSubtotal - totals.laborCost),
-              )}
+              {PHP(marginSummary?.value ?? 0)}
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-              Contingency + markup combined
+            <Typography variant="caption" sx={{ display: 'block', color: 'success.main', fontWeight: 600 }}>
+              {(marginSummary?.pct ?? 0).toFixed(1)}% margin
             </Typography>
+            {marginSummary && marginSummary.contingency > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                Contingency reserve: {PHP(marginSummary.contingency)} ({marginSummary.contingencyPct.toFixed(1)}%)
+              </Typography>
+            )}
           </Box>
         </Box>
       </Paper>
+
+      <Snackbar
+        open={!!toast}
+        autoHideDuration={toast?.sev === 'success' ? 3500 : 6000}
+        onClose={() => setToast(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {toast ? (
+          <Alert onClose={() => setToast(null)} severity={toast.sev} variant="filled" sx={{ width: '100%' }}>
+            {toast.msg}
+          </Alert>
+        ) : undefined}
+      </Snackbar>
     </Stack>
   );
 }

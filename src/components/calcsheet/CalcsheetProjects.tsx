@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton,
-  InputAdornment, MenuItem, Paper, Stack, Switch, FormControlLabel, Table, TableBody,
-  TableCell, TableHead, TableRow, TableSortLabel, TextField, Typography, Tooltip,
+  Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton,
+  InputAdornment, LinearProgress, MenuItem, Paper, Snackbar, Stack, Switch, FormControlLabel,
+  Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, TextField, Typography, Tooltip,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -10,11 +10,16 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import HistoryIcon from '@mui/icons-material/History';
+import CloudSyncIcon from '@mui/icons-material/CloudSync';
 import { Link } from 'react-router-dom';
 import { useQuotationStore } from '../../store/quotationStore';
-import type { ProjectStatus } from '../../types/Quotation';
+import type { ProjectStatus, Project } from '../../types/Quotation';
 import { format } from 'date-fns';
 import { PHP, computeTotals } from '../../utils/calcsheet/calc';
+import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes';
+import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
+import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
+import { ensureProposalFolder, ensureExecutionFolder } from '../../services/onedriveFolderService';
 
 const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error'> = {
   draft: 'default', sent: 'primary', won: 'success', lost: 'error',
@@ -26,17 +31,126 @@ type SortDir = 'asc' | 'desc';
 const empty = {
   name: '', location: '', date: format(new Date(), 'yyyy-MM-dd'),
   customerId: '', partnerId: '', salesContactId: '', status: 'draft' as ProjectStatus,
+  code: '',
 };
 
 export default function Projects() {
   const projects = useQuotationStore((s) => s.projects);
   const clients = useQuotationStore((s) => s.clients);
-  const sales = useQuotationStore((s) => s.salesContacts);
   const quotations = useQuotationStore((s) => s.quotations);
   const addProject = useQuotationStore((s) => s.addProject);
   const deleteProject = useQuotationStore((s) => s.deleteProject);
+  const updateProject = useQuotationStore((s) => s.updateProject);
+
+  // OneDrive bulk auto-link
+  const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const [bulkLinkDialogOpen, setBulkLinkDialogOpen] = useState(false);
+  const [bulkLinkProgress, setBulkLinkProgress] = useState<{
+    running: boolean;
+    done: number;
+    total: number;
+    linked: number;
+    created: number;
+    failed: number;
+    currentCode: string;
+    failures: string[];
+  } | null>(null);
+  const [bulkLinkSummary, setBulkLinkSummary] = useState<string>('');
+
+  // Projects that don't yet have a proposal folder linked. (We don't try to
+  // auto-link execution folders here — those are derived from proposal folders
+  // via the promote-to-execution flow when status flips to 'won'.)
+  const unlinkedProjects = useMemo<Project[]>(
+    () => projects.filter((p) => !p.proposalFolderId),
+    [projects],
+  );
+
+  const runBulkAutoLink = async () => {
+    if (!oneDriveSignedIn) {
+      await oneDriveLogin();
+      // loginRedirect navigates away; this code path won't actually continue.
+      return;
+    }
+    const token = await getOneDriveToken();
+    if (!token) {
+      setBulkLinkSummary('Could not get OneDrive token. Sign in again.');
+      setBulkLinkDialogOpen(false);
+      return;
+    }
+    setBulkLinkDialogOpen(false);
+    const targets = unlinkedProjects;
+    const progress = {
+      running: true,
+      done: 0,
+      total: targets.length,
+      linked: 0,
+      created: 0,
+      failed: 0,
+      currentCode: '',
+      failures: [] as string[],
+    };
+    setBulkLinkProgress({ ...progress });
+
+    // Sequential to avoid hammering Graph; each project does 2-3 API calls.
+    for (const p of targets) {
+      progress.currentCode = p.code;
+      setBulkLinkProgress({ ...progress });
+      try {
+        const ref = await ensureProposalFolder(token, p);
+        await updateProject(p.id, {
+          proposalFolderId: ref.id,
+          proposalFolderUrl: ref.webUrl,
+        });
+        if (ref.matchedExisting) progress.linked++;
+        else progress.created++;
+        // Bonus: if the project is already won, also resolve the execution folder.
+        if (p.status === 'won' && !p.executionFolderId) {
+          try {
+            const exRef = await ensureExecutionFolder(token, p);
+            await updateProject(p.id, {
+              executionFolderId: exRef.id,
+              executionFolderUrl: exRef.webUrl,
+            });
+          } catch (exErr) {
+            // Non-fatal — proposal folder still landed.
+            // eslint-disable-next-line no-console
+            console.warn(`[OneDrive] bulk auto-link execution failed for ${p.code}`, exErr);
+          }
+        }
+      } catch (err) {
+        progress.failed++;
+        const msg = err instanceof Error ? err.message : String(err);
+        progress.failures.push(`${p.code}: ${msg}`);
+        // eslint-disable-next-line no-console
+        console.warn(`[OneDrive] bulk auto-link failed for ${p.code}`, err);
+      }
+      progress.done++;
+      setBulkLinkProgress({ ...progress });
+    }
+    progress.running = false;
+    progress.currentCode = '';
+    setBulkLinkProgress({ ...progress });
+    const summary = `Done: ${progress.linked} linked to existing, ${progress.created} created, ${progress.failed} failed.`;
+    setBulkLinkSummary(summary);
+  };
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(empty);
+  // tracks whether the location/code fields were auto-filled — so customer
+  // changes can replace them, but manual edits lock them in
+  const [locationAutoFilled, setLocationAutoFilled] = useState(false);
+  const [codeManuallyEdited, setCodeManuallyEdited] = useState(false);
+
+  // helper: compute the auto code given a customerId + date string.
+  // We derive the next sequence from the actual project codes — the stored
+  // `seq` counter is unreliable because legacy imports and manual code
+  // assignments don't update it (data has codes up to 036 while the counter
+  // might say 7). Computing from data on every render keeps the preview
+  // honest. The actual server-side increment uses the same derivation.
+  const computeCode = (customerId: string, date: string) => {
+    const customer = clients.find((c) => c.id === customerId);
+    const seq = nextProjectSequence(projects.map((p) => p.code));
+    return quotationCode(seq, customer?.code ?? 'XXX', '00', new Date(date));
+  };
 
   // ── filter + sort state ────────────────────────────────────────────────────
   const [search, setSearch] = useState('');
@@ -48,7 +162,7 @@ export default function Projects() {
   const [sortKey, setSortKey] = useState<SortKey>('code');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
 
-  const startNew = () => { setForm(empty); setOpen(true); };
+  const startNew = () => { setForm(empty); setLocationAutoFilled(false); setCodeManuallyEdited(false); setOpen(true); };
   const save = async () => {
     if (!form.name || !form.customerId) return;
     await addProject({
@@ -59,6 +173,7 @@ export default function Projects() {
       partnerId: form.partnerId || null,
       salesContactId: form.salesContactId || null,
       status: form.status,
+      code: form.code || undefined,
     });
     setOpen(false);
   };
@@ -126,6 +241,34 @@ export default function Projects() {
     else { setSortKey(key); setSortDir(key === 'date' || key === 'grandTotal' ? 'desc' : 'asc'); }
   };
 
+  // ── scroll-position memory + last-clicked row highlight ────────────────────
+  const SCROLL_KEY = 'calcsheet-projects-scroll';
+  const LAST_KEY = 'calcsheet-projects-last';
+  const saveScroll = (projectId?: string) => {
+    sessionStorage.setItem(SCROLL_KEY, String(window.scrollY));
+    if (projectId) sessionStorage.setItem(LAST_KEY, projectId);
+  };
+
+  // The most recently clicked project id — persists across visits to the
+  // detail page so the user can see at-a-glance which row they just came
+  // back from. Cleared automatically when they click a different row.
+  const [lastClickedId, setLastClickedId] = useState<string>(() =>
+    sessionStorage.getItem(LAST_KEY) || '',
+  );
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem(SCROLL_KEY);
+    if (!saved) return;
+    sessionStorage.removeItem(SCROLL_KEY);
+    const top = parseInt(saved, 10);
+    // Double-rAF: first frame commits layout, second frame is safe to scroll
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top, behavior: 'instant' as ScrollBehavior });
+      });
+    });
+  }, []);
+
   const clearFilters = () => {
     setSearch(''); setStatusFilter('all'); setCustomerFilter('all');
     setYearFilter('all'); setLegacyFilter('all'); setOngoingOnly(false);
@@ -151,6 +294,19 @@ export default function Projects() {
       <Stack direction="row" alignItems="center" justifyContent="space-between">
         <Typography variant="h5" sx={{ fontWeight: 600 }}>Projects</Typography>
         <Stack direction="row" spacing={1}>
+          {isCorporateOneDriveConfigured() && unlinkedProjects.length > 0 && (
+            <Tooltip title={`Scan OneDrive and link the ${unlinkedProjects.length} project${unlinkedProjects.length === 1 ? '' : 's'} with no folder yet`}>
+              <Button
+                variant="outlined"
+                color="info"
+                startIcon={<CloudSyncIcon />}
+                onClick={() => setBulkLinkDialogOpen(true)}
+                disabled={bulkLinkProgress?.running}
+              >
+                Auto-link OneDrive ({unlinkedProjects.length})
+              </Button>
+            </Tooltip>
+          )}
           <Button
             component={Link}
             to="/calcsheet/import-legacy"
@@ -165,6 +321,76 @@ export default function Projects() {
           </Button>
         </Stack>
       </Stack>
+
+      {/* Bulk auto-link progress */}
+      {bulkLinkProgress && bulkLinkProgress.running && (
+        <Paper sx={{ p: 2 }}>
+          <Stack spacing={1}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              Auto-linking OneDrive folders… {bulkLinkProgress.done} / {bulkLinkProgress.total}
+              {bulkLinkProgress.currentCode && ` · ${bulkLinkProgress.currentCode}`}
+            </Typography>
+            <LinearProgress
+              variant="determinate"
+              value={bulkLinkProgress.total ? (bulkLinkProgress.done / bulkLinkProgress.total) * 100 : 0}
+            />
+            <Typography variant="caption" color="text.secondary">
+              Linked to existing: {bulkLinkProgress.linked} · Newly created: {bulkLinkProgress.created} · Failed: {bulkLinkProgress.failed}
+            </Typography>
+          </Stack>
+        </Paper>
+      )}
+      {bulkLinkProgress && !bulkLinkProgress.running && bulkLinkProgress.failures.length > 0 && (
+        <Alert severity="warning" onClose={() => setBulkLinkProgress(null)}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>{bulkLinkProgress.failed} project{bulkLinkProgress.failed === 1 ? '' : 's'} failed:</Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2, fontSize: '0.8rem' }}>
+            {bulkLinkProgress.failures.slice(0, 10).map((f, i) => <li key={i}>{f}</li>)}
+            {bulkLinkProgress.failures.length > 10 && <li>… and {bulkLinkProgress.failures.length - 10} more (see console)</li>}
+          </Box>
+        </Alert>
+      )}
+
+      <Dialog open={bulkLinkDialogOpen} onClose={() => setBulkLinkDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Auto-link OneDrive folders</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            For each of the <strong>{unlinkedProjects.length}</strong> project{unlinkedProjects.length === 1 ? '' : 's'} without
+            a OneDrive folder linked yet, the system will:
+          </Typography>
+          <Box component="ol" sx={{ pl: 3, my: 0, fontSize: '0.875rem', color: 'text.secondary' }}>
+            <li>Look in <code>{/* eslint-disable-next-line */}'00 Proposal/IO Proposal'</code> for a folder whose name starts with the project's PCS code</li>
+            <li>If exactly one match is found, link to it (no folder created)</li>
+            <li>If no match, create a new folder using the canonical name</li>
+            <li>For projects already marked <strong>won</strong>, also link or create the execution folder</li>
+          </Box>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+            Existing folders are <strong>never modified or deleted</strong>. Worst-case outcome is an extra empty
+            folder which you can delete manually. This may take a minute or two.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkLinkDialogOpen(false)}>Cancel</Button>
+          <Button variant="contained" startIcon={<CloudSyncIcon />} onClick={runBulkAutoLink}>
+            Start
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Snackbar
+        open={!!bulkLinkSummary}
+        autoHideDuration={8000}
+        onClose={() => setBulkLinkSummary('')}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setBulkLinkSummary('')}
+          severity={bulkLinkProgress?.failed ? 'warning' : 'success'}
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {bulkLinkSummary}
+        </Alert>
+      </Snackbar>
 
       {/* Filter bar */}
       <Paper sx={{ p: 1.5 }} variant="outlined">
@@ -254,20 +480,39 @@ export default function Projects() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {sorted.map(({ p, customer, partner, totals, hasLegacy }) => (
-              <TableRow key={p.id} hover>
-                <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+            {sorted.map(({ p, customer, partner, totals, hasLegacy }) => {
+              const isLast = p.id === lastClickedId;
+              const onRowClick = () => { setLastClickedId(p.id); saveScroll(p.id); };
+              return (
+              <TableRow
+                key={p.id}
+                hover
+                sx={isLast ? {
+                  // Soft highlight + accent border on the most recently visited row.
+                  // sessionStorage-backed so it survives the round-trip into the
+                  // project detail page during folder-backfill workflows.
+                  bgcolor: 'rgba(25, 118, 210, 0.08)',
+                  borderLeft: '3px solid',
+                  borderLeftColor: 'primary.main',
+                } : undefined}
+              >
+                <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
                   <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Link to={`/calcsheet/projects/${p.id}`} style={{ color: 'inherit' }}>{p.code}</Link>
+                    <Link to={`/calcsheet/projects/${p.id}`} style={{ color: 'inherit' }} onClick={onRowClick}>{p.code}</Link>
                     {hasLegacy && (
                       <Tooltip title="Has legacy quotation(s)">
                         <HistoryIcon fontSize="inherit" color="warning" sx={{ fontSize: '0.85rem' }} />
                       </Tooltip>
                     )}
+                    {isLast && (
+                      <Tooltip title="Last visited">
+                        <Chip size="small" label="Last" color="primary" variant="outlined" sx={{ height: 16, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />
+                      </Tooltip>
+                    )}
                   </Stack>
                 </TableCell>
                 <TableCell>
-                  <Link to={`/calcsheet/projects/${p.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>
+                  <Link to={`/calcsheet/projects/${p.id}`} style={{ color: 'inherit', textDecoration: 'none' }} onClick={onRowClick}>
                     <Box>
                       <Typography variant="body2" sx={{ fontWeight: 500 }}>{p.name}</Typography>
                       {p.location && <Typography variant="caption" color="text.secondary">{p.location}</Typography>}
@@ -297,7 +542,8 @@ export default function Projects() {
                   <IconButton size="small" onClick={() => deleteProject(p.id)}><DeleteIcon fontSize="small" /></IconButton>
                 </TableCell>
               </TableRow>
-            ))}
+              );
+            })}
             {sorted.length === 0 && (
               <TableRow>
                 <TableCell colSpan={8} align="center" sx={{ color: 'text.secondary', py: 4 }}>
@@ -316,25 +562,93 @@ export default function Projects() {
         <DialogContent>
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mt: 1 }}>
             <TextField label="Project name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ gridColumn: 'span 2' }} />
-            <TextField label="Location" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} sx={{ gridColumn: 'span 2' }} />
-            <TextField label="Date" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} InputLabelProps={{ shrink: true }} />
-            <TextField select label="Status" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}>
-              <MenuItem value="draft">Draft</MenuItem>
-              <MenuItem value="sent">Sent</MenuItem>
-              <MenuItem value="won">Won</MenuItem>
-              <MenuItem value="lost">Lost</MenuItem>
-            </TextField>
-            <TextField select label="Customer" value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })}>
+            {/* Customer first so location can auto-fill from it */}
+            <TextField
+              select
+              label="Customer"
+              value={form.customerId}
+              onChange={(e) => {
+                const newCustomerId = e.target.value;
+                const selectedClient = clients.find((c) => c.id === newCustomerId);
+                const newLocation =
+                  (locationAutoFilled || form.location === '')
+                    ? (selectedClient?.address ?? form.location)
+                    : form.location;
+                const didAutoFill = !!selectedClient?.address && newLocation === selectedClient?.address;
+                setLocationAutoFilled(didAutoFill);
+                const newCode = codeManuallyEdited ? form.code : computeCode(newCustomerId, form.date);
+                setForm((prev) => ({ ...prev, customerId: newCustomerId, location: newLocation, code: newCode }));
+              }}
+            >
               {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
             </TextField>
             <TextField select label="Partner (optional)" value={form.partnerId} onChange={(e) => setForm({ ...form, partnerId: e.target.value })}>
               <MenuItem value="">— none —</MenuItem>
               {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
             </TextField>
-            <TextField select label="Sales contact" value={form.salesContactId} onChange={(e) => setForm({ ...form, salesContactId: e.target.value })} sx={{ gridColumn: 'span 2' }}>
-              <MenuItem value="">— none —</MenuItem>
-              {sales.map((s) => <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>)}
+            <TextField
+              label="Location"
+              value={form.location}
+              onChange={(e) => { setLocationAutoFilled(false); setForm({ ...form, location: e.target.value }); }}
+              sx={{ gridColumn: 'span 2' }}
+              helperText={locationAutoFilled ? 'Auto-filled from client — edit freely' : undefined}
+            />
+            <TextField
+              label="Date"
+              type="date"
+              value={form.date}
+              onChange={(e) => {
+                const newDate = e.target.value;
+                const newCode = codeManuallyEdited ? form.code : computeCode(form.customerId, newDate);
+                setForm({ ...form, date: newDate, code: newCode });
+              }}
+              InputLabelProps={{ shrink: true }}
+            />
+            <TextField select label="Status" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}>
+              <MenuItem value="draft">Draft</MenuItem>
+              <MenuItem value="sent">Sent</MenuItem>
+              <MenuItem value="won">Won</MenuItem>
+              <MenuItem value="lost">Lost</MenuItem>
             </TextField>
+            <TextField
+              select
+              label="Sales / account contact"
+              value={form.salesContactId}
+              onChange={(e) => setForm({ ...form, salesContactId: e.target.value })}
+              sx={{ gridColumn: 'span 2' }}
+            >
+              <MenuItem value="">— none —</MenuItem>
+              <MenuItem value="Tyrone James Caballero">Tyrone James Caballero</MenuItem>
+              <MenuItem value="Renzel Punongbayan">Renzel Punongbayan</MenuItem>
+              <MenuItem value="Reuel Joshua Rivera">Reuel Joshua Rivera</MenuItem>
+              <MenuItem value="Nylle Harold Managa">Nylle Harold Managa</MenuItem>
+            </TextField>
+            {/* Project code — editable, auto-filled from customer + date */}
+            <TextField
+              label="Project code (optional)"
+              value={form.code}
+              onChange={(e) => { setCodeManuallyEdited(true); setForm({ ...form, code: e.target.value }); }}
+              onFocus={() => {
+                // auto-fill on first focus if still empty
+                if (!form.code && form.customerId && form.date) {
+                  setForm((prev) => ({ ...prev, code: computeCode(form.customerId, form.date) }));
+                }
+              }}
+              placeholder={
+                form.customerId && form.date
+                  ? computeCode(form.customerId, form.date)
+                  : 'Auto-generated once customer & date are set'
+              }
+              helperText={
+                codeManuallyEdited
+                  ? 'Using your custom code. Clear the field to revert to auto-generation.'
+                  : form.code
+                  ? 'Auto-generated from customer & date — edit to override'
+                  : 'Leave blank — code will be auto-generated from the customer code and date'
+              }
+              inputProps={{ style: { fontFamily: 'monospace' } }}
+              sx={{ gridColumn: 'span 2' }}
+            />
           </Box>
         </DialogContent>
         <DialogActions>

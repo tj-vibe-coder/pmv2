@@ -1353,29 +1353,56 @@ app.post('/api/payroll/holidays/bulk', async (req, res) => {
 app.get('/api/calcsheet/projects', async (req, res) => {
   try {
     const snap = await db.collection('calcsheet_projects').orderBy('createdAt', 'desc').get();
-    const projects = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Drop any stale stored `id` field; the Firestore doc.id is authoritative.
+    // Without the explicit strip, `{ id: d.id, ...d.data() }` would let the spread
+    // overwrite d.id with whatever stored.id holds — and broken docs from before
+    // the POST fix have a wrong stored id, which would make the client target the
+    // wrong document on subsequent updates/deletes.
+    const projects = snap.docs.map((d) => {
+      const { id: _stored, ...data } = d.data();
+      return { ...data, id: d.id };
+    });
     res.json({ success: true, projects });
-  } catch (err) { res.status(500).json({ error: 'Failed to get projects' }); }
+  } catch (err) {
+    console.error('[calcsheet] get projects failed:', err);
+    res.status(500).json({ error: 'Failed to get projects' });
+  }
 });
 
 app.post('/api/calcsheet/projects', async (req, res) => {
   try {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const data = { ...req.body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    // Strip any client-supplied `id` from the body — Firestore's auto-generated
+    // ref.id is the canonical project ID. Without this strip, the `...data` spread
+    // below would overwrite ref.id with the client's nanoid in the response,
+    // leaving the client with an ID that doesn't address the stored document
+    // (subsequent PUTs would 500 with "Failed to update project").
+    const { id: _ignored, ...body } = req.body || {};
+    const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     const ref = await db.collection('calcsheet_projects').add(data);
-    res.json({ success: true, project: { id: ref.id, ...data } });
-  } catch (err) { res.status(500).json({ error: 'Failed to create project' }); }
+    res.json({ success: true, project: { ...data, id: ref.id } });
+  } catch (err) {
+    console.error('[calcsheet] create project failed:', err);
+    res.status(500).json({ error: 'Failed to create project' });
+  }
 });
 
 app.put('/api/calcsheet/projects/:id', async (req, res) => {
   try {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const update = { ...req.body, updatedAt: new Date().toISOString() };
+    // Defensively drop `id` from the update body — it's the doc identifier (from
+    // the URL param) and storing it inside the document is just dead data that
+    // can mask the real ID during debugging.
+    const { id: _ignored, ...body } = req.body || {};
+    const update = { ...body, updatedAt: new Date().toISOString() };
     await db.collection('calcsheet_projects').doc(req.params.id).update(update);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to update project' }); }
+  } catch (err) {
+    console.error('[calcsheet] update project failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to update project' });
+  }
 });
 
 app.delete('/api/calcsheet/projects/:id', async (req, res) => {
@@ -1398,29 +1425,45 @@ app.get('/api/calcsheet/quotations', async (req, res) => {
     let query = db.collection('calcsheet_quotations');
     if (projectId) query = query.where('projectId', '==', projectId);
     const snap = await query.orderBy('createdAt', 'desc').get();
-    const quotations = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Strip any stale stored `id` so the spread can't overwrite d.id. See the
+    // identical fix applied to calcsheet_projects above for the full explanation.
+    const quotations = snap.docs.map((d) => {
+      const { id: _stored, ...data } = d.data();
+      return { ...data, id: d.id };
+    });
     res.json({ success: true, quotations });
-  } catch (err) { res.status(500).json({ error: 'Failed to get quotations' }); }
+  } catch (err) {
+    console.error('[calcsheet] get quotations failed:', err);
+    res.status(500).json({ error: 'Failed to get quotations' });
+  }
 });
 
 app.post('/api/calcsheet/quotations', async (req, res) => {
   try {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const data = { ...req.body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const { id: _ignored, ...body } = req.body || {};
+    const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     const ref = await db.collection('calcsheet_quotations').add(data);
-    res.json({ success: true, quotation: { id: ref.id, ...data } });
-  } catch (err) { res.status(500).json({ error: 'Failed to create quotation' }); }
+    res.json({ success: true, quotation: { ...data, id: ref.id } });
+  } catch (err) {
+    console.error('[calcsheet] create quotation failed:', err);
+    res.status(500).json({ error: 'Failed to create quotation' });
+  }
 });
 
 app.put('/api/calcsheet/quotations/:id', async (req, res) => {
   try {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const update = { ...req.body, updatedAt: new Date().toISOString() };
+    const { id: _ignored, ...body } = req.body || {};
+    const update = { ...body, updatedAt: new Date().toISOString() };
     await db.collection('calcsheet_quotations').doc(req.params.id).update(update);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to update quotation' }); }
+  } catch (err) {
+    console.error('[calcsheet] update quotation failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to update quotation' });
+  }
 });
 
 app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
@@ -1487,24 +1530,53 @@ app.delete('/api/calcsheet/presets/:id', async (req, res) => {
 });
 
 // ── Sequence counter (for quotation code generation) ─────────────────────────
+// The next sequence is always derived from the actual project codes — never
+// trust the `calcsheet_meta/seq` doc as the source of truth. Historical reason:
+// legacy bulk imports (and manual code re-assignments) wrote codes directly to
+// `calcsheet_projects` without updating the meta counter, so the counter drifted
+// far behind the real data (e.g. counter at 7, actual max at 036). Computing
+// from data on every request keeps the next number correct regardless of how
+// codes get into the system.
+
+// Helper: parse the 3-digit SEQ portion of PCS{YYMM}{SEQ}-{CLI}-{REV} codes
+// across all calcsheet projects and return the next global sequence number.
+async function computeNextProjectSeq() {
+  const snap = await db.collection('calcsheet_projects').get();
+  let max = 0;
+  for (const d of snap.docs) {
+    const code = (d.data() || {}).code || '';
+    const m = String(code).match(/^PCS\d{4}(\d{3})-/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  return max + 1;
+}
 
 app.get('/api/calcsheet/seq', async (req, res) => {
   try {
-    const doc = await db.collection('calcsheet_meta').doc('seq').get();
-    res.json({ success: true, seq: doc.exists ? doc.data().value : 1 });
-  } catch (err) { res.status(500).json({ error: 'Failed to get seq' }); }
+    const next = await computeNextProjectSeq();
+    res.json({ success: true, seq: next });
+  } catch (err) {
+    console.error('[calcsheet] get seq failed:', err);
+    res.status(500).json({ error: 'Failed to get seq' });
+  }
 });
 
 app.post('/api/calcsheet/seq/increment', async (req, res) => {
   try {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const ref = db.collection('calcsheet_meta').doc('seq');
-    const doc = await ref.get();
-    const current = doc.exists ? doc.data().value : 1;
-    await ref.set({ value: current + 1 });
-    res.json({ success: true, seq: current });
-  } catch (err) { res.status(500).json({ error: 'Failed to increment seq' }); }
+    // Compute next from data, then update the meta doc as a debug breadcrumb
+    // (not the source of truth). The data-derived value is what we return.
+    const next = await computeNextProjectSeq();
+    db.collection('calcsheet_meta').doc('seq').set({ value: next, updatedAt: new Date().toISOString() }).catch(() => null);
+    res.json({ success: true, seq: next });
+  } catch (err) {
+    console.error('[calcsheet] increment seq failed:', err);
+    res.status(500).json({ error: 'Failed to increment seq' });
+  }
 });
 
 // ── Legacy import (bulk-import historical calcsheets as formulaVersion='legacy') ─

@@ -1,0 +1,561 @@
+/**
+ * OneDrive folder service for the corporate shared library.
+ *
+ * Targets the OneDrive for Business drive owned by `onedriveConfig.driveOwner`
+ * (e.g. `projects@iocontroltech.com`). The signed-in user must have at least
+ * read/write access shared from that owner — the `Files.ReadWrite.All` delegated
+ * scope grants the necessary breadth on the Graph side.
+ *
+ * Endpoints used (Microsoft Graph v1.0):
+ *   GET  /users/{owner}/drive
+ *   GET  /drives/{driveId}/root:/{path}
+ *   POST /drives/{driveId}/root:/{parentPath}:/children   (create folder)
+ *   PUT  /drives/{driveId}/root:/{folderPath}/{filename}:/content   (upload file)
+ *
+ * All operations are idempotent: if a folder by `name` already exists at
+ * `parentPath`, the existing item is returned rather than failing.
+ */
+
+import { onedriveConfig } from '../config/onedriveConfig';
+
+const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
+
+export interface DriveItemRef {
+  id: string;
+  webUrl: string;
+  name?: string;
+}
+
+const DRIVE_ID_CACHE_KEY = 'ioct.onedrive.driveId.v1';
+
+/**
+ * Resolve the driveId for the corporate shared OneDrive owner (cached in localStorage).
+ * Subsequent calls hit the cache; pass `force=true` to refresh.
+ */
+export async function resolveCorporateDriveId(
+  token: string,
+  ownerEmail = onedriveConfig.driveOwner,
+  force = false,
+): Promise<string> {
+  if (!ownerEmail) throw new Error('OneDrive driveOwner is not configured');
+
+  if (!force) {
+    try {
+      const cached = localStorage.getItem(DRIVE_ID_CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached) as { owner: string; driveId: string };
+        if (parsed.owner === ownerEmail && parsed.driveId) return parsed.driveId;
+      }
+    } catch {
+      // ignore cache parse errors
+    }
+  }
+
+  const url = `${GRAPH_BASE}/users/${encodeURIComponent(ownerEmail)}/drive`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Drive lookup failed (${res.status}): ${errText.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const driveId = data?.id;
+  if (!driveId) throw new Error('Drive response had no id');
+
+  try {
+    localStorage.setItem(DRIVE_ID_CACHE_KEY, JSON.stringify({ owner: ownerEmail, driveId }));
+  } catch {
+    // localStorage may be unavailable; non-fatal
+  }
+  return driveId;
+}
+
+/** URL-encode each segment of a path, preserving the slashes. */
+function encodePath(path: string): string {
+  return path
+    .split('/')
+    .filter((seg) => seg.length > 0)
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+}
+
+/**
+ * Look up a single drive item by its full path under the drive root. Returns null on 404.
+ */
+async function getItemByPath(
+  token: string,
+  driveId: string,
+  path: string,
+): Promise<DriveItemRef | null> {
+  const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(path)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Lookup failed (${res.status}) at "${path}": ${errText.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return { id: data.id, webUrl: data.webUrl || '', name: data.name };
+}
+
+/**
+ * List child folders directly under `parentPath` whose names start with `prefix`
+ * (case-insensitive). Used to find historical OneDrive folders whose names don't
+ * match the canonical "PCS{code} {name}" convention but share the PCS code part —
+ * e.g. project `PCS2602003-REP-00` (code prefix `PCS2602003-`) matches the
+ * existing folder `PCS2602003-REPCO Network Configuration`.
+ *
+ * Files are filtered out — only folders are returned. Empty array on no match.
+ */
+export async function listFoldersWithPrefix(
+  token: string,
+  driveId: string,
+  parentPath: string,
+  prefix: string,
+): Promise<DriveItemRef[]> {
+  if (!prefix) return [];
+  const normalizedPrefix = prefix.toLowerCase();
+  const url = parentPath
+    ? `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(parentPath)}:/children?$top=500&$select=id,name,webUrl,folder`
+    : `${GRAPH_BASE}/drives/${driveId}/root/children?$top=500&$select=id,name,webUrl,folder`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`List children failed (${res.status}) at "${parentPath}": ${errText.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const items = Array.isArray(data?.value) ? data.value : [];
+  return items
+    .filter((it: { name?: string; folder?: unknown }) =>
+      !!it.folder &&
+      typeof it.name === 'string' &&
+      it.name.toLowerCase().startsWith(normalizedPrefix),
+    )
+    .map((it: { id: string; name: string; webUrl?: string }) => ({
+      id: it.id,
+      webUrl: it.webUrl || '',
+      name: it.name,
+    }));
+}
+
+/**
+ * Resolve any OneDrive folder URL — long Documents-path URL OR short `:f:/p/...`
+ * share link — to a drive item. Uses Graph's /shares/{encoded-url}/driveItem
+ * endpoint, which transparently handles both forms.
+ *
+ * URL encoding per Microsoft Graph docs: base64-url encode the sharing URL,
+ * prefix with `u!`. Strip any trailing `=` padding and replace `+` → `-`, `/` → `_`.
+ *
+ * Use case: "Link existing folder" — the user pastes a OneDrive URL of a folder
+ * they want to associate with a calcsheet project (e.g. a historical folder
+ * whose name doesn't match the canonical PCS… convention).
+ */
+export async function resolveSharingUrl(
+  token: string,
+  sharingUrl: string,
+): Promise<DriveItemRef & { isFolder: boolean }> {
+  if (!sharingUrl) throw new Error('Empty URL');
+  const trimmed = sharingUrl.trim();
+  // base64url-encode the URL
+  const b64 = btoa(unescape(encodeURIComponent(trimmed)))
+    .replace(/=+$/, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+  const encoded = `u!${b64}`;
+  const url = `${GRAPH_BASE}/shares/${encoded}/driveItem`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Could not resolve OneDrive URL (${res.status}): ${errText.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return {
+    id: data.id,
+    webUrl: data.webUrl || trimmed,
+    name: data.name,
+    isFolder: !!data.folder,
+  };
+}
+
+/**
+ * Verify a drive item by ID still exists. Returns true if the item is reachable,
+ * false on 404 (deleted/moved-out-of-scope), and throws on any other error.
+ * Used to detect stale folder URLs stored on calcsheet projects when the user
+ * has deleted the folder in OneDrive directly.
+ */
+export async function verifyDriveItem(
+  token: string,
+  driveId: string,
+  itemId: string,
+): Promise<boolean> {
+  if (!itemId) return false;
+  const url = `${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(itemId)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 404 || res.status === 410) return false;
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Item verify failed (${res.status}): ${errText.slice(0, 300)}`);
+  }
+  return true;
+}
+
+/**
+ * Idempotent folder creation. If a folder by `name` already exists at `parentPath`,
+ * the existing item is returned. Otherwise the folder is created (and returned).
+ *
+ * - `parentPath` is a slash-separated path under the drive root, e.g.
+ *   `"00 Proposal/IO Proposal"`. Use `""` for the drive root itself.
+ * - `name` must not contain `/` or `\`.
+ */
+export async function ensureFolder(
+  token: string,
+  driveId: string,
+  parentPath: string,
+  name: string,
+): Promise<DriveItemRef> {
+  if (!name || /[\\/]/.test(name)) {
+    throw new Error(`Invalid folder name: "${name}"`);
+  }
+
+  const fullPath = parentPath ? `${parentPath}/${name}` : name;
+
+  // Fast path: lookup-first avoids a 409 on the common case where the folder already exists.
+  const existing = await getItemByPath(token, driveId, fullPath);
+  if (existing) return existing;
+
+  // Create. conflictBehavior=fail so that if two concurrent calls race, we surface the
+  // 409 and re-fetch (rather than silently renaming or replacing).
+  const createUrl = parentPath
+    ? `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(parentPath)}:/children`
+    : `${GRAPH_BASE}/drives/${driveId}/root/children`;
+
+  const res = await fetch(createUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name,
+      folder: {},
+      '@microsoft.graph.conflictBehavior': 'fail',
+    }),
+  });
+
+  if (res.status === 409) {
+    // Race: another caller created it; fetch and return.
+    const after = await getItemByPath(token, driveId, fullPath);
+    if (after) return after;
+    throw new Error(`Folder creation reported conflict but lookup failed for "${fullPath}"`);
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Folder create failed (${res.status}) at "${fullPath}": ${errText.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  return { id: data.id, webUrl: data.webUrl || '', name: data.name };
+}
+
+/**
+ * Upload a single file directly into a folder identified by its drive item ID.
+ * Preferred over `uploadFileToFolder` (path-based) when the caller already has
+ * the folder's ID, since it survives folder moves/renames between proposal and
+ * execution locations.
+ *
+ * Endpoint: PUT /drives/{driveId}/items/{parentId}:/{filename}:/content
+ * Up to 250 MB; for larger payloads use a resumable upload session.
+ */
+export async function uploadFileToFolderById(
+  token: string,
+  driveId: string,
+  parentFolderId: string,
+  filename: string,
+  blob: Blob,
+): Promise<DriveItemRef> {
+  if (!parentFolderId) throw new Error('Missing parent folder id');
+  if (!filename || /[\\/]/.test(filename)) {
+    throw new Error(`Invalid filename: "${filename}"`);
+  }
+  const url = `${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(parentFolderId)}:/${encodeURIComponent(filename)}:/content`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': blob.type || 'application/octet-stream',
+    },
+    body: blob,
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Upload failed (${res.status}) for "${filename}": ${errText.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return { id: data.id, webUrl: data.webUrl || '', name: data.name };
+}
+
+/**
+ * Upload a single file to `folderPath` under the drive root. The file is created
+ * (or overwritten — Graph default is `replace`) at `${folderPath}/${filename}`.
+ *
+ * Uses the simple PUT endpoint, which supports files up to 250 MB. Quotation PDFs
+ * and XLSX exports are well under that. For larger files, a resumable upload session
+ * would be required.
+ */
+export async function uploadFileToFolder(
+  token: string,
+  driveId: string,
+  folderPath: string,
+  filename: string,
+  blob: Blob,
+): Promise<DriveItemRef> {
+  if (!filename || /[\\/]/.test(filename)) {
+    throw new Error(`Invalid filename: "${filename}"`);
+  }
+  const itemPath = folderPath ? `${folderPath}/${filename}` : filename;
+  const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(itemPath)}:/content`;
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': blob.type || 'application/octet-stream',
+    },
+    body: blob,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Upload failed (${res.status}) for "${itemPath}": ${errText.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return { id: data.id, webUrl: data.webUrl || '', name: data.name };
+}
+
+// ---------------------------------------------------------------------------
+// High-level wrappers used by the calcsheet store/UI
+// ---------------------------------------------------------------------------
+
+/**
+ * The PCS code portion used for prefix-matching against existing OneDrive folder
+ * names. Same value the canonical folder name starts with — e.g. `PCS2602003-`
+ * for project code `PCS2602003-REP-00`. Used by auto-detect to find historical
+ * folders whose names diverge from the canonical convention.
+ */
+export function projectCodePrefix(project: { code: string }): string {
+  // Strip the "-REV" suffix and the customer-code segment so the prefix matches
+  // both canonical (`PCS2602003-REP …`) and historical (`PCS2602003-REPCO …`,
+  // `PCS2602003 - REP …`) naming variants. The first 10 chars `PCS{YYMM}{SEQ}`
+  // are stable across formats.
+  const m = project.code.match(/^(PCS\d{7})/);
+  return m ? m[1] : project.code.split('-')[0];
+}
+
+/** Build the canonical folder name for a calcsheet project's OneDrive folder. */
+export function projectFolderName(project: { code: string; name: string }): string {
+  // Strip the "-REV" suffix from the project code so the folder stays stable across revisions.
+  // PCS2602001-ICI-00 → PCS2602001-ICI
+  const codeNoRev = project.code.replace(/-\d{2}$/, '');
+  const safeName = sanitizeForOneDrive(project.name || '');
+  return `${codeNoRev} ${safeName}`.trim();
+}
+
+/**
+ * Remove characters that OneDrive/SharePoint disallow or treat specially in item names:
+ *   < > : " / \ | ? *
+ * Also collapses repeated whitespace and trims.
+ */
+export function sanitizeForOneDrive(input: string): string {
+  return input
+    .replace(/[<>:"/\\|?*]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Look up an existing folder by PCS code prefix under `parentPath`. Returns the
+ * unique match (intended for auto-detect of historical folders), or null when
+ * there are 0 or >1 matches. The caller decides what to do with the ambiguous
+ * cases — typically fall through to creating a canonical-named folder, and let
+ * the user reconcile manually via the "Link existing" dialog if needed.
+ */
+async function findUniquePrefixMatch(
+  token: string,
+  driveId: string,
+  parentPath: string,
+  project: { code: string },
+): Promise<DriveItemRef | null> {
+  const prefix = projectCodePrefix(project);
+  if (!prefix) return null;
+  const matches = await listFoldersWithPrefix(token, driveId, parentPath, prefix);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/**
+ * Create (or look up) the proposal folder for a project.
+ *
+ * Resolution order:
+ *   1. Exact canonical name match (`ensureFolder` does this internally) — newest
+ *      and most common case.
+ *   2. Prefix match on the PCS code part (handles historical folders whose names
+ *      diverge from canonical convention — `PCS2602003-REPCO …` vs the canonical
+ *      `PCS2602003-REP …`). Only auto-links when there's exactly one match;
+ *      ambiguous cases fall through to step 3 and the user can use "Link
+ *      existing" to disambiguate.
+ *   3. Create fresh with canonical name.
+ *
+ * The `matchedExisting` flag on the return value tells the caller whether they
+ * linked to an existing folder vs created a new one — useful for toasts.
+ */
+export async function ensureProposalFolder(
+  token: string,
+  project: { code: string; name: string },
+): Promise<DriveItemRef & { parentPath: string; folderName: string; matchedExisting: boolean }> {
+  return ensureInRoot(token, project, onedriveConfig.proposalRoot);
+}
+
+/** Create (or look up) the execution folder for a project (status='won' transition). */
+export async function ensureExecutionFolder(
+  token: string,
+  project: { code: string; name: string },
+): Promise<DriveItemRef & { parentPath: string; folderName: string; matchedExisting: boolean }> {
+  return ensureInRoot(token, project, onedriveConfig.executionRoot);
+}
+
+async function ensureInRoot(
+  token: string,
+  project: { code: string; name: string },
+  root: string,
+): Promise<DriveItemRef & { parentPath: string; folderName: string; matchedExisting: boolean }> {
+  const driveId = await resolveCorporateDriveId(token);
+  const canonical = projectFolderName(project);
+
+  // Step 1: exact canonical name. ensureFolder does a lookup-first, but it
+  // will create on 404 — we want to know whether we matched or not, so we
+  // do the lookup explicitly here and only create when both 1 and 2 miss.
+  const exactPath = root ? `${root}/${canonical}` : canonical;
+  const exact = await (async () => {
+    try {
+      const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(exactPath)}`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.status === 404) return null;
+      if (!res.ok) return null;
+      const data = await res.json();
+      return { id: data.id, webUrl: data.webUrl || '', name: data.name } as DriveItemRef;
+    } catch {
+      return null;
+    }
+  })();
+  if (exact) {
+    return { ...exact, parentPath: root, folderName: exact.name || canonical, matchedExisting: true };
+  }
+
+  // Step 2: prefix match for historical folders with non-canonical names.
+  const prefixMatch = await findUniquePrefixMatch(token, driveId, root, project).catch(() => null);
+  if (prefixMatch) {
+    return { ...prefixMatch, parentPath: root, folderName: prefixMatch.name || canonical, matchedExisting: true };
+  }
+
+  // Step 3: create fresh with canonical name.
+  const created = await ensureFolder(token, driveId, root, canonical);
+  return { ...created, parentPath: root, folderName: canonical, matchedExisting: false };
+}
+
+/**
+ * Move a drive item to a new parent path. The item's ID is preserved; only its
+ * parentReference and webUrl change. Returns the updated item.
+ *
+ * If `newName` is provided, the item is also renamed as part of the same PATCH.
+ */
+export async function moveItem(
+  token: string,
+  driveId: string,
+  itemId: string,
+  newParentPath: string,
+  newName?: string,
+): Promise<DriveItemRef> {
+  const parent = await getItemByPath(token, driveId, newParentPath);
+  if (!parent) {
+    throw new Error(`Move target parent not found: "${newParentPath}"`);
+  }
+  const body: Record<string, unknown> = { parentReference: { id: parent.id } };
+  if (newName) body.name = newName;
+
+  const res = await fetch(`${GRAPH_BASE}/drives/${driveId}/items/${itemId}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Move failed (${res.status}) item ${itemId} → "${newParentPath}": ${errText.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return { id: data.id, webUrl: data.webUrl || '', name: data.name };
+}
+
+/**
+ * Create a Windows-format `.url` shortcut file at `parentPath` that opens `targetUrl`
+ * when double-clicked. Used as a breadcrumb in the original proposal location after
+ * a project's folder has been promoted to the execution location.
+ *
+ * `shortcutName` should end with `.url`.
+ */
+export async function createUrlShortcut(
+  token: string,
+  driveId: string,
+  parentPath: string,
+  shortcutName: string,
+  targetUrl: string,
+): Promise<DriveItemRef> {
+  const content = `[InternetShortcut]\r\nURL=${targetUrl}\r\n`;
+  const blob = new Blob([content], { type: 'text/plain' });
+  return uploadFileToFolder(token, driveId, parentPath, shortcutName, blob);
+}
+
+/**
+ * Promote a project's proposal folder to the execution location: physically moves
+ * the folder from `proposalRoot` → `executionRoot`, then drops a `.url` shortcut
+ * file in the original proposal location pointing to the moved folder's new web URL.
+ *
+ * Idempotent-ish: if the project's folder is already at the execution root (e.g.
+ * because the user toggled status won → lost → won), the move is a no-op via the
+ * normal Graph PATCH (same parentReference is accepted).
+ *
+ * Returns both refs so the caller can persist the new IDs/URLs on the project.
+ */
+export async function moveProposalToExecution(
+  token: string,
+  project: { code: string; name: string; proposalFolderId: string },
+): Promise<{ moved: DriveItemRef; shortcut: DriveItemRef | null }> {
+  const driveId = await resolveCorporateDriveId(token);
+  const folderName = projectFolderName(project);
+
+  const moved = await moveItem(token, driveId, project.proposalFolderId, onedriveConfig.executionRoot);
+
+  // Drop a shortcut in the original proposal location. If a shortcut by this name
+  // already exists (re-won after lost), uploadFileToFolder will overwrite it — that's
+  // fine since the target URL hasn't changed.
+  let shortcut: DriveItemRef | null = null;
+  try {
+    const shortcutName = `${folderName} (moved to Execution).url`;
+    shortcut = await createUrlShortcut(
+      token,
+      driveId,
+      onedriveConfig.proposalRoot,
+      shortcutName,
+      moved.webUrl,
+    );
+  } catch (err) {
+    // Shortcut is a nice-to-have. The folder move is the meaningful operation;
+    // if the shortcut fails (e.g. permission issue on the proposal root) we
+    // still return success on the move.
+    // eslint-disable-next-line no-console
+    console.warn('[OneDrive] proposal shortcut creation failed (non-fatal)', err);
+  }
+
+  return { moved, shortcut };
+}

@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, IconButton, LinearProgress, MenuItem, Paper, Stack, Switch, Table,
+  Divider, FormControlLabel, IconButton, LinearProgress, MenuItem, Paper, Stack, Switch, Table,
   TableBody, TableCell, TableHead, TableRow, TextField, Typography,
 } from '@mui/material';
 import { nanoid } from 'nanoid';
@@ -14,6 +14,9 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import HistoryIcon from '@mui/icons-material/History';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import FolderIcon from '@mui/icons-material/Folder';
+import CloudIcon from '@mui/icons-material/Cloud';
+import CloudOffIcon from '@mui/icons-material/CloudOff';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
 import type { Quotation, QuotationKind } from '../../types/Quotation';
@@ -21,6 +24,21 @@ import { parseLegacyWorkbook } from '../../utils/calcsheet/legacyImport';
 import type { ParsedProject, ParsedQuotation } from '../../utils/calcsheet/legacyImport';
 import { parseLegacyPdf } from '../../utils/calcsheet/legacyPdfImport';
 import type { ParsedLegacyPdf } from '../../utils/calcsheet/legacyPdfImport';
+import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
+import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
+import {
+  ensureProposalFolder,
+  ensureExecutionFolder,
+  moveProposalToExecution,
+  resolveCorporateDriveId,
+  verifyDriveItem,
+  resolveSharingUrl,
+  listFoldersWithPrefix,
+  projectCodePrefix,
+  type DriveItemRef,
+} from '../../services/onedriveFolderService';
+import { onedriveConfig } from '../../config/onedriveConfig';
+import LinkIcon from '@mui/icons-material/Link';
 
 export default function ProjectDetail() {
   const { id = '' } = useParams();
@@ -34,6 +52,251 @@ export default function ProjectDetail() {
   const duplicateQuotation = useQuotationStore((s) => s.duplicateQuotation);
   const importQuotation = useQuotationStore((s) => s.importQuotation);
   const updateProject = useQuotationStore((s) => s.updateProject);
+
+  // OneDrive corporate folder integration
+  const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const [oneDriveBusy, setOneDriveBusy] = useState<'proposal' | 'execution' | null>(null);
+  const [oneDriveErr, setOneDriveErr] = useState<string>('');
+  // Non-error info message shown next to the OneDrive buttons. Used to tell the
+  // user when auto-detect matched an existing historical folder (instead of
+  // creating a new one) so they don't think the system silently misbehaved.
+  const [oneDriveInfo, setOneDriveInfo] = useState<string>('');
+
+  const createProposalFolderManually = async () => {
+    if (!project) return;
+    setOneDriveBusy('proposal');
+    setOneDriveErr('');
+    setOneDriveInfo('');
+    try {
+      const token = await getOneDriveToken();
+      if (!token) {
+        setOneDriveErr('Not signed in to OneDrive.');
+        return;
+      }
+      const ref = await ensureProposalFolder(token, project);
+      await updateProject(project.id, {
+        proposalFolderId: ref.id,
+        proposalFolderUrl: ref.webUrl,
+      });
+      if (ref.matchedExisting) {
+        setOneDriveInfo(`Linked to existing folder: "${ref.folderName}"`);
+      }
+    } catch (e) {
+      setOneDriveErr(e instanceof Error ? e.message : 'Failed to create proposal folder');
+    } finally {
+      setOneDriveBusy(null);
+    }
+  };
+
+  /**
+   * Verify a stored OneDrive folder still exists, then either open it or, if it
+   * was deleted out-of-band (via OneDrive web/Finder), clear the stale URL on
+   * the project so the button reverts to "Create…". Best-effort: if the verify
+   * itself fails (network/auth blip), fall through to opening the URL so we
+   * don't block the user on a folder that's probably fine.
+   */
+  const openFolderOrSelfHeal = async (which: 'proposal' | 'execution') => {
+    if (!project) return;
+    const folderUrl = which === 'proposal' ? project.proposalFolderUrl : project.executionFolderUrl;
+    const folderId = which === 'proposal' ? project.proposalFolderId : project.executionFolderId;
+    if (!folderUrl) return;
+
+    // No id to verify against — just open.
+    if (!folderId) {
+      window.open(folderUrl, '_blank', 'noopener');
+      return;
+    }
+
+    try {
+      const token = await getOneDriveToken();
+      if (!token) {
+        // Not signed in — just open and let OneDrive prompt for sign-in.
+        window.open(folderUrl, '_blank', 'noopener');
+        return;
+      }
+      const driveId = await resolveCorporateDriveId(token);
+      const exists = await verifyDriveItem(token, driveId, folderId);
+      if (exists) {
+        window.open(folderUrl, '_blank', 'noopener');
+        return;
+      }
+      // Self-heal: folder was deleted in OneDrive. Clear stored URL/id so the
+      // button reverts to "Create proposal/execution folder".
+      //
+      // Special case: after a project is promoted (status → 'won'), the move
+      // preserves the drive item's id, so proposalFolderId === executionFolderId
+      // and both refs point at the same physical folder. If that single folder
+      // is deleted, clearing only one side leaves the other side stale — which
+      // makes the button mislabel itself "Promote to execution" and then the
+      // promote operation 404s on the non-existent source. So when the two refs
+      // share an id, clear both atomically.
+      const sharedId =
+        project.proposalFolderId &&
+        project.executionFolderId &&
+        project.proposalFolderId === project.executionFolderId;
+      const patch = sharedId
+        ? { proposalFolderId: '', proposalFolderUrl: '', executionFolderId: '', executionFolderUrl: '' }
+        : which === 'proposal'
+          ? { proposalFolderId: '', proposalFolderUrl: '' }
+          : { executionFolderId: '', executionFolderUrl: '' };
+      await updateProject(project.id, patch);
+      setOneDriveErr(`The ${which} folder no longer exists in OneDrive. Click "Create ${which} folder" to make a new one.`);
+    } catch (err) {
+      // Verify failed for some non-404 reason — open the link anyway so the
+      // user isn't blocked. They'll see the OneDrive error directly if it's broken.
+      // eslint-disable-next-line no-console
+      console.warn(`[OneDrive] verify ${which} folder failed, opening anyway`, err);
+      window.open(folderUrl, '_blank', 'noopener');
+    }
+  };
+
+  // "Link existing folder" — the dialog auto-scans OneDrive for folders whose
+  // name starts with this project's PCS code and lists them as one-click
+  // suggestions. Falls back to manual URL paste at the bottom for edge cases
+  // (folders renamed beyond recognition, missing PCS code prefix, etc.).
+  const [linkDialogOpen, setLinkDialogOpen] = useState<null | 'proposal' | 'execution'>(null);
+  const [linkUrl, setLinkUrl] = useState('');
+  const [linkErr, setLinkErr] = useState('');
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkSuggestions, setLinkSuggestions] = useState<DriveItemRef[]>([]);
+  const [linkSuggestionsLoading, setLinkSuggestionsLoading] = useState(false);
+
+  const fetchSuggestions = async (kind: 'proposal' | 'execution') => {
+    if (!project) return;
+    setLinkSuggestionsLoading(true);
+    setLinkSuggestions([]);
+    try {
+      const token = await getOneDriveToken();
+      if (!token) {
+        setLinkErr('Not signed in to OneDrive — can\'t fetch suggestions. Paste a URL below instead.');
+        return;
+      }
+      const driveId = await resolveCorporateDriveId(token);
+      const root = kind === 'proposal' ? onedriveConfig.proposalRoot : onedriveConfig.executionRoot;
+      const prefix = projectCodePrefix(project);
+      const matches = await listFoldersWithPrefix(token, driveId, root, prefix);
+      setLinkSuggestions(matches);
+    } catch (e) {
+      // Don't set the error red — fall back to URL input silently with a hint.
+      // eslint-disable-next-line no-console
+      console.warn('[OneDrive] suggestion fetch failed', e);
+    } finally {
+      setLinkSuggestionsLoading(false);
+    }
+  };
+
+  const openLinkDialog = (kind: 'proposal' | 'execution') => {
+    setLinkUrl('');
+    setLinkErr('');
+    setLinkSuggestions([]);
+    setLinkDialogOpen(kind);
+    void fetchSuggestions(kind);
+  };
+
+  const linkToSuggestion = async (ref: DriveItemRef) => {
+    if (!project || !linkDialogOpen) return;
+    setLinkBusy(true);
+    setLinkErr('');
+    try {
+      const patch = linkDialogOpen === 'proposal'
+        ? { proposalFolderId: ref.id, proposalFolderUrl: ref.webUrl }
+        : { executionFolderId: ref.id, executionFolderUrl: ref.webUrl };
+      await updateProject(project.id, patch);
+      setLinkDialogOpen(null);
+    } catch (e) {
+      setLinkErr(e instanceof Error ? e.message : 'Failed to link folder');
+    } finally {
+      setLinkBusy(false);
+    }
+  };
+
+  const submitLinkDialog = async () => {
+    if (!project || !linkDialogOpen) return;
+    setLinkErr('');
+    setLinkBusy(true);
+    try {
+      const token = await getOneDriveToken();
+      if (!token) {
+        setLinkErr('Not signed in to OneDrive.');
+        return;
+      }
+      const ref = await resolveSharingUrl(token, linkUrl);
+      if (!ref.isFolder) {
+        setLinkErr('That URL points to a file, not a folder. Paste a folder URL.');
+        return;
+      }
+      const patch = linkDialogOpen === 'proposal'
+        ? { proposalFolderId: ref.id, proposalFolderUrl: ref.webUrl }
+        : { executionFolderId: ref.id, executionFolderUrl: ref.webUrl };
+      await updateProject(project.id, patch);
+      setLinkDialogOpen(null);
+    } catch (e) {
+      setLinkErr(e instanceof Error ? e.message : 'Failed to resolve URL');
+    } finally {
+      setLinkBusy(false);
+    }
+  };
+
+  const createExecutionFolderManually = async () => {
+    if (!project) return;
+    setOneDriveBusy('execution');
+    setOneDriveErr('');
+    setOneDriveInfo('');
+    try {
+      const token = await getOneDriveToken();
+      if (!token) {
+        setOneDriveErr('Not signed in to OneDrive.');
+        return;
+      }
+      // Preferred path: move the existing proposal folder so files travel with the
+      // project (single source of truth). Fallback: create a fresh execution folder
+      // when there's no proposal folder to move OR when the stored proposal folder
+      // has been deleted externally (the move would 404).
+      let proposalGone = !project.proposalFolderId;
+      if (project.proposalFolderId) {
+        try {
+          const driveId = await resolveCorporateDriveId(token);
+          proposalGone = !(await verifyDriveItem(token, driveId, project.proposalFolderId));
+        } catch {
+          // If verify itself errors, optimistically try the move; moveItem will
+          // throw a clearer error if the source is genuinely gone.
+          proposalGone = false;
+        }
+      }
+
+      if (!proposalGone && project.proposalFolderId) {
+        const { moved } = await moveProposalToExecution(token, {
+          code: project.code,
+          name: project.name,
+          proposalFolderId: project.proposalFolderId,
+        });
+        await updateProject(project.id, {
+          proposalFolderUrl: moved.webUrl,
+          executionFolderId: moved.id,
+          executionFolderUrl: moved.webUrl,
+        });
+      } else {
+        // Either no proposal folder ever existed, or it was deleted out-of-band.
+        // Create a fresh execution folder and clear any stale proposal refs so
+        // future clicks don't try to re-promote a ghost.
+        const ref = await ensureExecutionFolder(token, project);
+        await updateProject(project.id, {
+          proposalFolderId: '',
+          proposalFolderUrl: '',
+          executionFolderId: ref.id,
+          executionFolderUrl: ref.webUrl,
+        });
+        if (ref.matchedExisting) {
+          setOneDriveInfo(`Linked to existing folder: "${ref.folderName}"`);
+        }
+      }
+    } catch (e) {
+      setOneDriveErr(e instanceof Error ? e.message : 'Failed to create execution folder');
+    } finally {
+      setOneDriveBusy(null);
+    }
+  };
+
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<QuotationKind>('IOCT');
   const [recipientId, setRecipientId] = useState('');
@@ -51,6 +314,11 @@ export default function ProjectDetail() {
   const [legacySelect, setLegacySelect] = useState<{ IOCT: boolean; ACTI: boolean }>({ IOCT: false, ACTI: false });
   const [legacyRevisions, setLegacyRevisions] = useState<{ IOCT: string; ACTI: string }>({ IOCT: '00', ACTI: '00' });
   const [legacyRecipient, setLegacyRecipient] = useState<{ IOCT: string; ACTI: string }>({ IOCT: '', ACTI: '' });
+  // Per-kind VAT inclusion: true → use the VAT-IN grand total from the workbook
+  // (default — what was actually issued); false → drop VAT and use the VAT-EX
+  // subtotal as the grand total. Lets the user record a VAT-EX quotation when
+  // the workbook was authored VAT-IN (or vice-versa) without editing the file.
+  const [legacyIncludeVat, setLegacyIncludeVat] = useState<{ IOCT: boolean; ACTI: boolean }>({ IOCT: true, ACTI: true });
   const [legacyError, setLegacyError] = useState<string>('');
   const [legacyImporting, setLegacyImporting] = useState(false);
 
@@ -157,6 +425,13 @@ export default function ProjectDetail() {
         IOCT: project.partnerId ?? project.customerId ?? '',
         ACTI: project.customerId ?? '',
       });
+      // Default VAT inclusion: keep VAT only when the workbook actually has a
+      // non-zero VAT amount for that kind. Otherwise default to VAT-EX so the
+      // user doesn't have to flip a switch on every import.
+      setLegacyIncludeVat({
+        IOCT: (ioctParsed?.legacyTotalsSnapshot.vat ?? 0) > 0,
+        ACTI: (actiParsed?.legacyTotalsSnapshot.vat ?? 0) > 0,
+      });
       setLegacyOpen(true);
     } catch (err: any) {
       setLegacyError(`Parse failed: ${err.message || err}`);
@@ -203,6 +478,17 @@ export default function ProjectDetail() {
           importedAt: new Date().toISOString(),
           originalCode: legacyParsed.originalCode,
         };
+        // Honor the per-kind "Include VAT" toggle: when off, zero out the VAT
+        // amount and recompute the grand total as (subtotal − discount). The
+        // snapshot is the source of truth for legacy quotations, so this is
+        // where the decision is baked in.
+        const includeVat = legacyIncludeVat[pq.kind];
+        const snap = pq.legacyTotalsSnapshot;
+        const snapshot = includeVat ? snap : {
+          ...snap,
+          vat: 0,
+          grandTotal: Math.max(0, snap.subtotal - snap.discount),
+        };
         const built: Quotation = {
           id: nanoid(8),
           projectId: project.id,
@@ -218,7 +504,7 @@ export default function ProjectDetail() {
           generalReqMarkupPct: pq.generalReqMarkupPct,
           globalContingencyPct: pq.globalContingencyPct,
           discountPct: pq.discountPct,
-          vatPct: pq.vatPct,
+          vatPct: includeVat ? pq.vatPct : 0,
           generalReqts: pq.generalReqts,
           components: pq.components,
           services: pq.services,
@@ -227,7 +513,7 @@ export default function ProjectDetail() {
           preparedBy: pq.preparedBy,
           authorizedBy: pq.authorizedBy,
           formulaVersion: 'legacy',
-          legacyTotalsSnapshot: pq.legacyTotalsSnapshot,
+          legacyTotalsSnapshot: snapshot,
           importedFrom,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -510,6 +796,113 @@ export default function ProjectDetail() {
         </Stack>
       </Paper>
 
+      {isCorporateOneDriveConfigured() && (
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ rowGap: 1 }}>
+          {!oneDriveSignedIn ? (
+            <Button
+              variant="outlined"
+              size="small"
+              color="info"
+              startIcon={<CloudOffIcon />}
+              onClick={() => { void oneDriveLogin(); }}
+            >
+              Sign in to OneDrive
+            </Button>
+          ) : (
+            <>
+              {/*
+                After promotion to 'won', the proposal folder URL is updated to the
+                moved folder's new URL — same as executionFolderUrl. We hide the
+                "Proposal folder" button in that state since both would point to the
+                same place; the "Execution folder" button is sufficient.
+              */}
+              {project.status !== 'won' && (
+                project.proposalFolderUrl ? (
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<FolderIcon />}
+                    endIcon={<OpenInNewIcon />}
+                    onClick={() => { void openFolderOrSelfHeal('proposal'); }}
+                  >
+                    Proposal folder
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      color="info"
+                      startIcon={<CloudIcon />}
+                      disabled={oneDriveBusy === 'proposal'}
+                      onClick={createProposalFolderManually}
+                    >
+                      {oneDriveBusy === 'proposal' ? 'Creating…' : 'Create proposal folder'}
+                    </Button>
+                    <Button
+                      variant="text"
+                      size="small"
+                      startIcon={<LinkIcon />}
+                      onClick={() => openLinkDialog('proposal')}
+                    >
+                      Link existing
+                    </Button>
+                  </>
+                )
+              )}
+              {project.status === 'won' && (
+                project.executionFolderUrl ? (
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    color="success"
+                    startIcon={<FolderIcon />}
+                    endIcon={<OpenInNewIcon />}
+                    onClick={() => { void openFolderOrSelfHeal('execution'); }}
+                  >
+                    Execution folder
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      color="success"
+                      startIcon={<CloudIcon />}
+                      disabled={oneDriveBusy === 'execution'}
+                      onClick={createExecutionFolderManually}
+                    >
+                      {oneDriveBusy === 'execution'
+                        ? (project.proposalFolderId ? 'Moving…' : 'Creating…')
+                        : (project.proposalFolderId ? 'Promote to execution' : 'Create execution folder')}
+                    </Button>
+                    <Button
+                      variant="text"
+                      size="small"
+                      color="success"
+                      startIcon={<LinkIcon />}
+                      onClick={() => openLinkDialog('execution')}
+                    >
+                      Link existing
+                    </Button>
+                  </>
+                )
+              )}
+            </>
+          )}
+          {oneDriveErr && (
+            <Typography variant="caption" color="error.main" sx={{ ml: 1 }}>
+              {oneDriveErr}
+            </Typography>
+          )}
+          {oneDriveInfo && !oneDriveErr && (
+            <Typography variant="caption" color="success.main" sx={{ ml: 1 }}>
+              {oneDriveInfo}
+            </Typography>
+          )}
+        </Stack>
+      )}
+
       <Stack direction="row" alignItems="center" justifyContent="space-between">
         <Typography variant="h5" sx={{ fontWeight: 600 }}>Quotations</Typography>
         <Stack direction="row" spacing={1}>
@@ -754,6 +1147,12 @@ export default function ProjectDetail() {
                     const dupExists = quotations.some(
                       (q) => q.kind === k && q.revision === legacyRevisions[k],
                     );
+                    const includeVat = legacyIncludeVat[k];
+                    const snap = pq.legacyTotalsSnapshot;
+                    const grandIncl = snap.grandTotal;
+                    const grandExcl = Math.max(0, snap.subtotal - snap.discount);
+                    const hasVatInWorkbook = (snap.vat || 0) > 0;
+                    const liveTotal = includeVat ? grandIncl : grandExcl;
                     return (
                       <Paper key={k} variant="outlined" sx={{ p: 1.25 }}>
                         <Stack spacing={1}>
@@ -772,11 +1171,16 @@ export default function ProjectDetail() {
                             <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
                               {pq.components.length} component(s) · {pq.services.length} service(s) · {pq.generalReqts.length} gen-reqt(s)
                             </Typography>
-                            <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
-                              {PHP(pq.legacyTotalsSnapshot.grandTotal)}
-                            </Typography>
+                            <Stack alignItems="flex-end" spacing={0}>
+                              <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                                {PHP(liveTotal)}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                                {includeVat ? 'VAT-IN' : 'VAT-EX'}
+                              </Typography>
+                            </Stack>
                           </Stack>
-                          <Stack direction="row" spacing={1.5}>
+                          <Stack direction="row" spacing={1.5} alignItems="center">
                             <TextField
                               label="Revision"
                               size="small"
@@ -802,6 +1206,28 @@ export default function ProjectDetail() {
                                 <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>
                               ))}
                             </TextField>
+                          </Stack>
+                          <Stack direction="row" spacing={1} alignItems="center" sx={{ pl: 0.5 }}>
+                            <FormControlLabel
+                              control={
+                                <Switch
+                                  size="small"
+                                  checked={includeVat}
+                                  onChange={(e) => setLegacyIncludeVat((v) => ({ ...v, [k]: e.target.checked }))}
+                                  disabled={!legacySelect[k] || !hasVatInWorkbook}
+                                />
+                              }
+                              label={
+                                <Typography variant="caption">
+                                  Include VAT
+                                </Typography>
+                              }
+                            />
+                            <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>
+                              {hasVatInWorkbook
+                                ? `VAT-EX ${PHP(grandExcl)} · VAT ${PHP(snap.vat)} · VAT-IN ${PHP(grandIncl)}`
+                                : 'workbook has no VAT line — already VAT-EX'}
+                            </Typography>
                           </Stack>
                         </Stack>
                       </Paper>
@@ -1066,6 +1492,90 @@ export default function ProjectDetail() {
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancel</Button>
           <Button variant="contained" onClick={create}>Create</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Link existing OneDrive folder dialog */}
+      <Dialog open={!!linkDialogOpen} onClose={() => !linkBusy && setLinkDialogOpen(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Link existing {linkDialogOpen} folder
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {/* Suggested folders — auto-scanned by PCS code prefix */}
+            <Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                {project ? (
+                  <>Suggested folders in <code>{linkDialogOpen === 'proposal' ? onedriveConfig.proposalRoot : onedriveConfig.executionRoot}</code> starting with <code>{projectCodePrefix(project)}</code>:</>
+                ) : 'Suggested folders:'}
+              </Typography>
+              {linkSuggestionsLoading ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
+                  <LinearProgress sx={{ flex: 1 }} />
+                  <Typography variant="caption" color="text.secondary">Scanning…</Typography>
+                </Box>
+              ) : linkSuggestions.length === 0 ? (
+                <Alert severity="info" variant="outlined" sx={{ py: 0.5 }}>
+                  No folders found with this project&apos;s PCS code prefix. Paste a URL below to link manually.
+                </Alert>
+              ) : (
+                <Stack spacing={0.5}>
+                  {linkSuggestions.map((s) => (
+                    <Paper
+                      key={s.id}
+                      variant="outlined"
+                      sx={{
+                        p: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1,
+                        cursor: linkBusy ? 'wait' : 'pointer',
+                        '&:hover': { bgcolor: linkBusy ? undefined : 'action.hover' },
+                      }}
+                      onClick={() => !linkBusy && linkToSuggestion(s)}
+                    >
+                      <FolderIcon fontSize="small" color="action" />
+                      <Typography variant="body2" sx={{ flex: 1, wordBreak: 'break-word' }}>
+                        {s.name}
+                      </Typography>
+                      <Button size="small" variant="contained" disabled={linkBusy}>
+                        Link this
+                      </Button>
+                    </Paper>
+                  ))}
+                </Stack>
+              )}
+            </Box>
+
+            <Divider>or paste a URL</Divider>
+
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                For folders that don&apos;t match the PCS code prefix, paste the OneDrive URL (long Documents path or short share link).
+              </Typography>
+              <TextField
+                fullWidth
+                size="small"
+                label="OneDrive folder URL"
+                placeholder="https://iocontroltech-my.sharepoint.com/..."
+                value={linkUrl}
+                onChange={(e) => setLinkUrl(e.target.value)}
+                disabled={linkBusy}
+                error={!!linkErr}
+                helperText={linkErr || ' '}
+              />
+            </Box>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLinkDialogOpen(null)} disabled={linkBusy}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={submitLinkDialog}
+            disabled={linkBusy || !linkUrl.trim()}
+          >
+            {linkBusy ? 'Linking…' : 'Link from URL'}
+          </Button>
         </DialogActions>
       </Dialog>
     </Stack>

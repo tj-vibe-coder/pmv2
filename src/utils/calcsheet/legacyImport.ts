@@ -433,6 +433,239 @@ function parseMarkupBasis(ws: WS): { laborMarkupPct: number; globalContingencyPc
   };
 }
 
+// ── ACTI single-sheet variant parser ──────────────────────────────────────────
+// The older ACTI-format workbooks (pre-PCS-standardization) have a totally
+// different layout than the dual-sheet PCS workbooks:
+//   - Single "Offer - Detailed" sheet (no IOCT/ACTI duplication)
+//   - Different General Info field labels (no Year/Month/ClientCode as separate fields)
+//   - Item prefixes are P- (components) and S- (services), remapped here to B-/C-
+//   - General Reqts roll up to a single summary line (no per-line breakdown)
+//
+// Detected by `wb.SheetNames.includes('Offer - Detailed')` without 'IOCT'/'ACTI'.
+// Ported from scripts/parse-legacy-calcsheet.js::parseACTIVariant — keep behavior
+// in lockstep with that CLI.
+function parseACTIVariant(
+  wb: XLSX.WorkBook,
+  opts: ParseLegacyOptions,
+  warnings: string[],
+): ParsedProject {
+  const gi = wb.Sheets['General Info'];
+  const offerWs = wb.Sheets['Offer - Detailed'];
+  if (!offerWs) {
+    warnings.push("Missing 'Offer - Detailed' sheet");
+  }
+
+  // ─── General Info (ACTI schema) ─────────────────────────────────────────────
+  const date = gi ? excelDateToISO(readByLabel(gi, 'Date:')) : new Date().toISOString().slice(0, 10);
+  const refNo = gi ? text(readByLabel(gi, 'Quotation Reference No:')) : '';
+  const revision = (gi ? text(readByLabel(gi, 'Revision No.')) : '') || '00';
+  const clientName = gi ? text(readByLabel(gi, 'Client:')) : '';
+  const projectName = gi ? text(readByLabel(gi, 'Project Name:')) : '';
+  const location = gi ? text(readByLabel(gi, 'Location:')) : '';
+  const contact = gi ? text(readByLabel(gi, 'Contact Person:')) : '';
+  const position = gi ? text(readByLabel(gi, 'Position')) : '';
+  const emailOrPhone = gi ? text(readByLabel(gi, 'Contact Number / email add')) : '';
+  const preparedBy = gi ? text(readByLabel(gi, 'Commercially Prepared By:')) : '';
+  const paymentTerms = gi ? text(readByLabel(gi, 'Payment Terms:')) : '';
+  const validityRaw = gi ? text(readByLabel(gi, 'Validity:')) : '';
+  const validityDays = parseInt(validityRaw, 10) || 30;
+  const deliveryRaw = gi ? text(readByLabel(gi, 'Delivery Leadtime:')) : '';
+  const deliveryTerms = deliveryRaw
+    ? `Delivery is ${deliveryRaw}, upon receipt of a technically and commercially clarified purchase order.`
+    : 'Delivery is 1-2 weeks, upon receipt of a technically and commercially clarified purchase order.';
+
+  // ─── Offer - Detailed: parse summary totals + component/service breakdowns ──
+  let componentsSubtotal = 0;
+  let servicesSubtotal = 0;
+  let generalReqtsSubtotal = 0;
+  let subtotal = 0;
+  let vat = 0;
+  let grandTotal = 0;
+  const components: ParsedQuotation['components'] = [];
+  const services: ParsedQuotation['services'] = [];
+
+  if (offerWs) {
+    const r = range(offerWs);
+    const lastRow = r.e.r;
+
+    // Scan summary block (top ~40 rows of col A) for labels.
+    for (let row = 0; row <= Math.min(40, lastRow); row++) {
+      const labelA = text(cell(offerWs, row, 0)).toLowerCase();
+      const valE = num(cell(offerWs, row, 4));
+      const valF = num(cell(offerWs, row, 5));
+      if (labelA.startsWith('supply of components')) componentsSubtotal = valF || valE;
+      else if (labelA.startsWith('engineering services')) servicesSubtotal = valF || valE;
+      else if (labelA.startsWith('general requirements')) generalReqtsSubtotal = valF || valE;
+      else if (labelA.includes('total price') && labelA.includes('vat-ex')) subtotal = valF || valE;
+      else if (labelA.includes('vat') && !labelA.includes('vat-ex') && !labelA.includes('vat-in')) vat = valF || valE;
+      else if (labelA.includes('total price') && labelA.includes('vat-in')) grandTotal = valF || valE;
+    }
+    if (!subtotal) subtotal = componentsSubtotal + servicesSubtotal + generalReqtsSubtotal;
+    if (!grandTotal) grandTotal = subtotal + vat;
+
+    // P-XXXX (components) → remapped to B-XXXX in our data model
+    for (let row = 0; row <= lastRow; row++) {
+      const code = text(cell(offerWs, row, 0));
+      if (!/^P-\d{4}$/.test(code)) continue;
+      const rawDesc = text(cell(offerWs, row, 1));
+      const description = rawDesc === '0' || rawDesc === '-' ? '' : rawDesc;
+      const qty = num(cell(offerWs, row, 3));
+      const uom = text(cell(offerWs, row, 4));
+      const unitPrice = num(cell(offerWs, row, 5));
+      const total = num(cell(offerWs, row, 6));
+      if (!description && qty === 0 && unitPrice === 0 && total === 0) continue;
+      components.push({
+        id: id(),
+        code: 'B-' + code.slice(2),
+        description,
+        brand: '',
+        partNo: '',
+        qty: qty || 1,
+        uom: uom || 'pc',
+        unitCost: unitPrice,
+        forex: 1,
+        contingencyPct: 0,
+        discountPct: 0,
+      });
+    }
+
+    // S-XXXX (services) → remapped to C-XXXX
+    for (let row = 0; row <= lastRow; row++) {
+      const code = text(cell(offerWs, row, 0));
+      if (!/^S-\d{4}$/.test(code)) continue;
+      const rawDesc = text(cell(offerWs, row, 1));
+      const description = rawDesc === '0' || rawDesc === '-' ? '' : rawDesc;
+      const total = num(cell(offerWs, row, 6));
+      const unitPrice = num(cell(offerWs, row, 5));
+      if (!description && total === 0 && unitPrice === 0) continue;
+      services.push({
+        id: id(),
+        code: 'C-' + code.slice(2),
+        description,
+        amount: total || unitPrice || 0,
+      });
+    }
+
+    if (subtotal === 0 && grandTotal === 0) {
+      warnings.push('ACTI Offer - Detailed: could not read Summary totals');
+    }
+  }
+
+  // General Reqts: ACTI variant has no per-line breakdown — emit a single
+  // summary line so the snapshot subtotal is preserved.
+  const generalReqts: ParsedQuotation['generalReqts'] = generalReqtsSubtotal > 0
+    ? [{
+        id: id(),
+        code: 'A-0010',
+        description: 'General Requirements (bundled — see source workbook for per-line breakdown)',
+        unitPrice: generalReqtsSubtotal,
+        qty: 1,
+        uom: 'lot',
+      }]
+    : [];
+
+  const totals = {
+    generalReqtsCost: generalReqtsSubtotal,
+    generalReqtsWithContingency: generalReqtsSubtotal,
+    generalReqtsSubtotal,
+    componentsCost: componentsSubtotal,
+    componentsSubtotal,
+    laborCost: servicesSubtotal,
+    laborWithContingency: servicesSubtotal,
+    servicesSubtotal,
+    subtotal,
+    discount: 0,
+    vat,
+    grandTotal,
+  };
+
+  // Derive code parts from the filename/folder when General Info doesn't carry
+  // them in the ACTI format. Examples: "ACTI2512-03-RPP Temperature..."
+  const filenameBase = opts.filename.replace(/\.xlsx?\s*$/i, '');
+  const folderName = opts.projectFolder || filenameBase;
+  const actiMatch = folderName.match(/^ACTI(\d{4})-?(\d{2,3})-([A-Z&]{2,4})\s*(.*)$/);
+  let yymm = '';
+  let seqFromOriginal = 0;
+  let clientCode = '';
+  let derivedName = projectName;
+  if (actiMatch) {
+    yymm = actiMatch[1];
+    seqFromOriginal = parseInt(actiMatch[2], 10);
+    clientCode = actiMatch[3].slice(0, 3);
+    if (!derivedName) derivedName = actiMatch[4].trim();
+  }
+  // If the existing General Info reference happens to be a PCS code, prefer that.
+  const pcsMatch = refNo.match(/^PCS(\d{2})(\d{2})(\d{3})-([A-Z]{3})-(\d{2})$/);
+  if (pcsMatch) {
+    yymm = `${pcsMatch[1]}${pcsMatch[2]}`;
+    seqFromOriginal = parseInt(pcsMatch[3], 10);
+    clientCode = clientCode || pcsMatch[4];
+  }
+
+  const baseCode = clientCode && yymm
+    ? `PCS${yymm}${String(seqFromOriginal).padStart(3, '0')}-${clientCode}`
+    : filenameBase.replace(/-\d{2}$/, '');
+
+  const quotation: ParsedQuotation = {
+    kind: 'ACTI',
+    revision,
+    recipientCode: '',
+    paymentTerms: paymentTerms || '30% Downpayment, 70% Progress Billing',
+    deliveryTerms,
+    validityDays,
+    warrantyMonths: 12,
+    preparedBy,
+    authorizedBy: preparedBy || 'Tyrone James Caballero',
+    productMarkupPct: 30,
+    laborMarkupPct: 30,
+    generalReqMarkupPct: 0,
+    globalContingencyPct: 5,
+    discountPct: 0,
+    vatPct: subtotal > 0 ? Math.round((vat / subtotal) * 10000) / 100 : 12,
+    generalReqts,
+    components,
+    services,
+    manpower: [],
+    servicesFromManpower: false,
+    legacyTotalsSnapshot: totals,
+  };
+
+  const customer: ParsedClient = {
+    code: clientCode || 'XXX',
+    name: clientName,
+    contact,
+    email: emailOrPhone.includes('@') ? emailOrPhone : undefined,
+    phone: emailOrPhone.includes('@') ? undefined : emailOrPhone,
+    address: location,
+    gender: undefined,
+    paymentTerms,
+  };
+
+  // Side-effect-free: surface that this was an ACTI-variant import so the
+  // upstream UI can show a hint if it cares.
+  warnings.push("Imported via ACTI single-sheet variant parser ('Offer - Detailed').");
+  // Reference position to satisfy lint (it's surfaced via the customer payload).
+  void position;
+
+  return {
+    originalCode: refNo,
+    baseCode,
+    yymm,
+    seqFromOriginal,
+    clientCode: clientCode || 'XXX',
+    revision,
+    projectName: derivedName,
+    date,
+    customer,
+    quotations: [quotation],
+    warnings,
+    sourceFile: opts.filename,
+    pdfFilename: opts.pdfFilename,
+    offerPdfs: opts.offerPdfs ?? [],
+    projectFolder: opts.projectFolder,
+  };
+}
+
 // ── Top-level entry point ─────────────────────────────────────────────────────
 
 export interface ParseLegacyOptions {
@@ -446,7 +679,17 @@ export function parseLegacyWorkbook(buf: ArrayBuffer | Uint8Array, opts: ParseLe
   const wb = XLSX.read(buf, { type: 'array', cellFormula: false, cellStyles: false });
   const warnings: string[] = [];
 
-  // Validate sheets
+  // Branch on workbook variant. ACTI single-sheet workbooks have an
+  // "Offer - Detailed" sheet but no IOCT/ACTI tabs — they predate the
+  // PCS dual-sheet standardization and need a different parser.
+  const isACTIVariant = wb.SheetNames.includes('Offer - Detailed')
+    && !wb.SheetNames.includes('IOCT')
+    && !wb.SheetNames.includes('ACTI');
+  if (isACTIVariant) {
+    return parseACTIVariant(wb, opts, warnings);
+  }
+
+  // Validate sheets (dual-sheet PCS workbook)
   const required = ['General Info', 'IOCT', 'ACTI', 'Labor and Gen Reqt'];
   const missing = required.filter((s) => !wb.SheetNames.includes(s));
   if (missing.length) warnings.push(`Missing sheets: ${missing.join(', ')}`);

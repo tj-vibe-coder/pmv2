@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Signing in…</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f7fa;
+      color: #2c5aa0;
+    }
+    .wrap {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 24px;
+      text-align: center;
+    }
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid #c7d6ea;
+      border-top-color: #2c5aa0;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .label { font-size: 14px; color: #4a5568; }
+    .err { color: #c53030; font-size: 12px; max-width: 480px; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="spinner" id="spinner"></div>
+    <div class="label" id="label">Completing OneDrive sign-in…</div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <!--
+    MSAL.js v5 popup flow requires the redirect URI page to actively run MSAL so it
+    can broadcast the auth response back to the parent window via BroadcastChannel.
+    A static HTML page won't work. We load MSAL from Microsoft's CDN, initialize
+    a PublicClientApplication with the same config as the parent app, and call
+    handleRedirectPromise() so MSAL detects the response in our URL and forwards
+    it to the opener.
+
+    Config values below are deliberately the same public IDs used in the React app
+    (they are NOT secrets — Azure SPA client IDs and tenant IDs are public).
+    If you rotate the Azure app, update both this file and src/config/onedriveConfig.ts.
+  -->
+  <!--
+    MSAL CDN. Pinned to the exact version in package.json so the popup uses the same
+    auth code as the parent app. If you upgrade @azure/msal-browser, update this URL.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@5.2.0/lib/msal-browser.min.js"
+          crossorigin="anonymous"></script>
+  <script>
+    (async () => {
+      const labelEl = document.getElementById('label');
+      const errEl = document.getElementById('err');
+      const spinner = document.getElementById('spinner');
+
+      const showError = (msg) => {
+        spinner.style.display = 'none';
+        labelEl.textContent = 'Sign-in failed';
+        errEl.textContent = msg;
+      };
+
+      try {
+        if (typeof msal === 'undefined' || !msal.PublicClientApplication) {
+          showError('MSAL library failed to load from Microsoft CDN. Check network/connectivity.');
+          return;
+        }
+
+        // Must match parent app config (src/config/onedriveConfig.ts + src/contexts/OneDriveAuthContext.tsx)
+        const config = {
+          auth: {
+            clientId: '0f9c22d5-01fa-47ee-9154-6d59ce544da0',
+            authority: 'https://login.microsoftonline.com/7e11dcd9-b615-422c-a383-cc810894cf90',
+            redirectUri: window.location.origin + '/auth-callback.html',
+          },
+          cache: {
+            cacheLocation: 'localStorage',
+            storeAuthStateInCookie: false,
+          },
+        };
+
+        const pca = new msal.PublicClientApplication(config);
+        // MSAL v5: simply initializing MSAL in the popup wires up the internal
+        // BroadcastChannel sender that forwards the response in the popup's URL
+        // back to the parent. Do NOT call handleRedirectPromise here — that API
+        // is for redirect flow and throws no_token_request_cache_error in the
+        // popup context (the popup has no cached request; only the parent does).
+        await pca.initialize();
+
+        labelEl.textContent = 'Sign-in complete. You can close this window.';
+        spinner.style.display = 'none';
+
+        // The parent should close this window automatically. Self-close as a fallback.
+        setTimeout(() => { try { window.close(); } catch (e) {} }, 2000);
+      } catch (e) {
+        showError(`${e && e.errorCode ? e.errorCode + ': ' : ''}${e && e.message ? e.message : String(e)}`);
+        // eslint-disable-next-line no-console
+        console.error('[auth-callback]', e);
+      }
+    })();
+  </script>
+</body>
+</html>

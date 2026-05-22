@@ -28,11 +28,43 @@ export const seedClients = (): Client[] => [
   { id: nanoid(8), code: 'SLC', name: 'Smartech LE Control Inc.', address: '', paymentTerms: '100% upon completion.', am: '', contacts: placeholderContact() },
 ];
 
+// Internal IOCT team identities used to populate "Prepared by" / "Authorized
+// by" dropdowns in the quotation editor and to render the signature block on
+// PDFs. `position` here is the **formal title** that appears under the
+// signatory's name on the quotation (e.g. "Solutions Manager"), not the
+// internal team role. Phone + email fall through to the PDF's signature
+// block when this name is selected as the authorizer.
+//
+// These are internal team identities, not customer PII — they're already
+// documented in CLAUDE.md. Add new IOCT staff here when they need signing
+// authority on quotations.
 export const seedSalesContacts = (): SalesContact[] => [
-  // Real names are loaded from Firestore at runtime; this is a placeholder set
-  // for offline / no-server mode.
-  { id: nanoid(8), name: '', position: 'Sales' },
-  { id: nanoid(8), name: '', position: 'Admin Ops' },
-  { id: nanoid(8), name: '', position: 'Engineering' },
-  { id: nanoid(8), name: '', position: 'Admin/Compliance' },
+  {
+    id: nanoid(8),
+    name: 'Tyrone James Caballero',
+    position: 'General Manager',
+    email: '',
+    phone: '',
+  },
+  {
+    id: nanoid(8),
+    name: 'Reuel Joshua Rivera',
+    position: 'Solutions Manager',
+    email: 'reuel.rivera@iocontroltech.com',
+    phone: '+63 919 082 5434',
+  },
+  {
+    id: nanoid(8),
+    name: 'Renzel Punongbayan',
+    position: 'Engineering Supervisor',
+    email: 'renzel.punongbayan@iocontroltech.com',
+    phone: '+63 999 557 0678',
+  },
+  {
+    id: nanoid(8),
+    name: 'Nylle Harold Managa',
+    position: 'Admin & Compliance',
+    email: '',
+    phone: '',
+  },
 ];

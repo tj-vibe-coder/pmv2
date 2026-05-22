@@ -31,6 +31,14 @@ export interface Project {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+
+  // OneDrive corporate-shared-library folder links. Populated best-effort when a
+  // project is created (proposal folder) or transitions to 'won' (execution folder).
+  // Absence is normal for older projects or when OneDrive is offline/unconfigured.
+  proposalFolderId?: string;
+  proposalFolderUrl?: string;
+  executionFolderId?: string;
+  executionFolderUrl?: string;
 }
 
 export type FormulaVersion = 'legacy' | 'current';

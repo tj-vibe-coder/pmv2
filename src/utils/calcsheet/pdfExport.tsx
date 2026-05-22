@@ -1,7 +1,7 @@
 import { Document, Page, Text, View, Image, StyleSheet, pdf } from '@react-pdf/renderer';
 import { saveAs } from 'file-saver';
 import { format } from 'date-fns';
-import type { Client, Project, Quotation } from '../../types/Quotation';
+import type { Client, Project, Quotation, SalesContact } from '../../types/Quotation';
 import { resolveContact } from '../../types/Client';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP,
@@ -24,7 +24,8 @@ const ISSUER_INFO = {
       'Region IV-A (Calabarzon), 4024',
     ],
     tin: 'TIN: 697-029-976-00000',
-    logo: '/logo-ioct.png',
+    // Icon-only mark (no "IO Control Technologie" wordmark). Wordmark version is at /logo-ioct.png.
+    logo: '/logo-ioct-only.png',
     footer: 'IO Control Technologie, OPC',
   },
   ACTI: {
@@ -36,19 +37,25 @@ const ISSUER_INFO = {
   },
 };
 
-// Known IOCT staff — provides title/phone/email when authorizedBy matches.
-const IOCT_STAFF: Record<string, { title: string; phone: string; email: string }> = {
-  'Reuel Joshua T. Rivera': {
-    title: 'Solutions Manager',
-    phone: '+63 919 082 5434',
-    email: 'reuel.rivera@iocontroltech.com',
-  },
-  'Renzel Punongbayan': {
-    title: 'Engineering Supervisor',
-    phone: '+63 999 557 0678',
-    email: 'renzel.punongbayan@iocontroltech.com',
-  },
-};
+// Resolve PDF signature-block details for the named signatory from the
+// salesContacts list (single source of truth — `src/data/quotationClients.ts`).
+// Returns the formal title, phone, and email when the name matches. Custom
+// (free-text) names that aren't in salesContacts return null and the PDF just
+// renders the name on its own.
+function lookupStaff(
+  name: string | undefined,
+  salesContacts: SalesContact[],
+): { title: string; phone: string; email: string } | null {
+  if (!name) return null;
+  const trimmed = name.trim().toLowerCase();
+  const match = salesContacts.find((c) => c.name.trim().toLowerCase() === trimmed);
+  if (!match) return null;
+  return {
+    title: match.position || '',
+    phone: match.phone || '',
+    email: match.email || '',
+  };
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const ONES = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
@@ -80,7 +87,9 @@ const styles = StyleSheet.create({
   // Header
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
   headerLeft: { width: '55%' },
-  logo: { width: 90, height: 28, objectFit: 'contain', marginBottom: 6 },
+  // Square icon mark — slightly larger than the previous 90x28 wordmark so the
+  // header has the same visual presence without the text portion.
+  logo: { width: 64, height: 64, objectFit: 'contain', marginBottom: 6 },
   brandName: { color: PRIMARY, fontSize: 11, fontWeight: 700, marginBottom: 1 },
   brandLine: { fontSize: 8.5, color: TEXT, lineHeight: 1.3 },
   headerRight: { width: '45%', alignItems: 'flex-end' },
@@ -180,9 +189,10 @@ interface Props {
   project: Project;
   recipient: Client | null;
   customer: Client | null;
+  salesContacts: SalesContact[];
 }
 
-function QuotationDoc({ quotation, project, recipient, customer }: Props) {
+function QuotationDoc({ quotation, project, recipient, customer, salesContacts }: Props) {
   const totals = computeTotals(quotation);
   const issuer = ISSUER_INFO[quotation.kind];
   const refNo = `${project.code.replace(/-[A-Z]{3}-\d{2}$/, '')}-${(recipient?.code ?? 'XXX').slice(0, 3)}-${quotation.revision}`;
@@ -193,9 +203,12 @@ function QuotationDoc({ quotation, project, recipient, customer }: Props) {
   const hasB = quotation.components.length > 0;
   const hasC = quotation.services.length > 0 || totals.servicesSubtotal > 0;
 
-  // Authorized by (with optional staff contact info)
-  const authName = quotation.authorizedBy || '';
-  const staff = IOCT_STAFF[authName];
+  // Authorized by (with optional staff contact info from the salesContacts seed)
+  // Signatory shown on the PDF is the "Prepared by" name from the quotation editor.
+  // (The legacy "Authorized by" slot was repurposed as "Prepared by" — only one
+  // signatory is shown on the issuer side.)
+  const prepName = quotation.preparedBy || '';
+  const staff = lookupStaff(prepName, salesContacts);
 
   // Resolve which contact the quotation addresses (explicit contactId or primary)
   const recipContact = resolveContact(recipient, quotation.contactId);
@@ -486,17 +499,13 @@ function QuotationDoc({ quotation, project, recipient, customer }: Props) {
         {/* ─── SIGNATURES ─── */}
         <View style={styles.signatures}>
           <View style={styles.sigBlock}>
-            <Text style={styles.sigHeader}>Authorized by:</Text>
-            {authName ? (
+            <Text style={styles.sigHeader}>Prepared by:</Text>
+            {prepName ? (
               <>
-                <Text style={styles.sigName}>{authName}</Text>
-                {staff && (
-                  <>
-                    <Text style={styles.sigSub}>{staff.title}</Text>
-                    <Text style={styles.sigSub}>Mobile No.: {staff.phone}</Text>
-                    <Text style={styles.sigEmail}>{staff.email}</Text>
-                  </>
-                )}
+                <Text style={styles.sigName}>{prepName}</Text>
+                {staff?.title && <Text style={styles.sigSub}>{staff.title}</Text>}
+                {staff?.phone && <Text style={styles.sigSub}>Mobile No.: {staff.phone}</Text>}
+                {staff?.email && <Text style={styles.sigEmail}>{staff.email}</Text>}
               </>
             ) : (
               <Text style={styles.sigSub}>{issuer.name}</Text>
@@ -518,12 +527,37 @@ function QuotationDoc({ quotation, project, recipient, customer }: Props) {
   );
 }
 
+/**
+ * Render a quotation to a PDF blob. By default also triggers a local download
+ * via file-saver, preserving the previous behavior of this function.
+ *
+ * Pass `{ save: false }` to skip the local download (useful when the caller
+ * wants to handle saving themselves — e.g. uploading the blob to OneDrive and
+ * showing a custom toast).
+ *
+ * Returns `{ blob, filename }` so callers can re-use the rendered PDF for both
+ * local download and remote upload without rendering twice.
+ */
 export async function exportQuotationPdf(
-  quotation: Quotation, project: Project, recipient: Client | null, customer: Client | null,
-) {
+  quotation: Quotation,
+  project: Project,
+  recipient: Client | null,
+  customer: Client | null,
+  salesContacts: SalesContact[],
+  options: { save?: boolean } = {},
+): Promise<{ blob: Blob; filename: string }> {
   const blob = await pdf(
-    <QuotationDoc quotation={quotation} project={project} recipient={recipient} customer={customer} />
+    <QuotationDoc
+      quotation={quotation}
+      project={project}
+      recipient={recipient}
+      customer={customer}
+      salesContacts={salesContacts}
+    />,
   ).toBlob();
   const filename = `${project.code.replace(/-[A-Z]{3}-\d{2}$/, '')}-${(recipient?.code ?? 'XXX').slice(0, 3)}-${quotation.revision}.pdf`;
-  saveAs(blob, filename);
+  if (options.save !== false) {
+    saveAs(blob, filename);
+  }
+  return { blob, filename };
 }
