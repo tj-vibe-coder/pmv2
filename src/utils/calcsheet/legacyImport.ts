@@ -433,6 +433,65 @@ function parseMarkupBasis(ws: WS): { laborMarkupPct: number; globalContingencyPc
   };
 }
 
+// ── Cost extractors (kept in lockstep with scripts/backfill-legacy-costs.js) ──
+// The IOCT/ACTI Summary block only carries selling-side subtotals — to surface
+// real margin we re-read the cost basis from the source sheets.
+//
+// Labor cost = Σ(qty × mandays × (dailyRate + allowance)) across role rows in
+// the right-hand manpower block of `Labor and Gen Reqt` (cols G/I/J/L/M).
+// We ignore the workbook's own per-row contingency math (it's inconsistent
+// across templates) and apply globalContingencyPct uniformly downstream.
+function extractLaborCostRaw(ws: WS): number {
+  const r = range(ws);
+  let total = 0;
+  for (let row = 0; row <= r.e.r; row++) {
+    const label = text(cell(ws, row, 6));
+    if (!label) continue;
+    const lower = label.toLowerCase();
+    if (
+      lower.startsWith('manpower') || lower.startsWith('mandays') ||
+      lower === 'sub-total' || lower === 'subtotal' || lower === 'total' ||
+      lower === 'engineering' || lower === 'laborers' || lower === 'automation'
+    ) continue;
+    const qty = num(cell(ws, row, 8));
+    const mandays = num(cell(ws, row, 9));
+    const daily = num(cell(ws, row, 11));
+    const allow = num(cell(ws, row, 12));
+    if (qty > 0 && qty < 50 && mandays > 0 && mandays < 1000 && daily > 100) {
+      total += qty * mandays * (daily + allow);
+    }
+  }
+  return total;
+}
+
+// General Reqts cost = Σ col E "Unit Cost" for A-XXXX rows on `Labor and Gen Reqt`.
+// The PCS template doesn't expose qty for A-XXXX here; per-row is treated as 1 lot.
+function extractGeneralReqtsCostRaw(ws: WS): number {
+  const r = range(ws);
+  let total = 0;
+  for (let row = 0; row <= r.e.r; row++) {
+    const code = text(cell(ws, row, 0));
+    if (!/^A-\d{3,4}$/i.test(code)) continue;
+    total += num(cell(ws, row, 4));
+  }
+  return total;
+}
+
+// Components cost = Σ(qty × unitPrice) for product rows in `Products`.
+// Cols H (qty) and J (unit price). Many template ghost rows have zero qty/price
+// — they're skipped naturally.
+function extractComponentsCostRaw(ws: WS | undefined): number {
+  if (!ws) return 0;
+  const r = range(ws);
+  let total = 0;
+  for (let row = 11; row <= r.e.r; row++) {
+    const qty = num(cell(ws, row, 7));
+    const unitPrice = num(cell(ws, row, 9));
+    if (qty > 0 && unitPrice > 0) total += qty * unitPrice;
+  }
+  return total;
+}
+
 // ── ACTI single-sheet variant parser ──────────────────────────────────────────
 // The older ACTI-format workbooks (pre-PCS-standardization) have a totally
 // different layout than the dual-sheet PCS workbooks:
@@ -712,6 +771,14 @@ export function parseLegacyWorkbook(buf: ArrayBuffer | Uint8Array, opts: ParseLe
 
   const manpower = laborWs ? parseManpower(laborWs) : [];
 
+  // Cost basis from Labor and Gen Reqt + Products sheets. Read once and reused
+  // per-kind below (IOCT typically has no components billed, ACTI does).
+  const cont = globalContingencyPct / 100;
+  const productsWs = wb.Sheets['Products'];
+  const rawLaborCost = laborWs ? extractLaborCostRaw(laborWs) : 0;
+  const rawGRCost = laborWs ? extractGeneralReqtsCostRaw(laborWs) : 0;
+  const rawComponentsCost = productsWs ? extractComponentsCostRaw(productsWs) : 0;
+
   // Derive code parts from filename if General Info refNo is blank.
   const filenameBase = opts.filename.replace(/\.xlsx?\s*$/i, '');
   const refNo = (info.refNo && !/^PCS\d{4}-?0-/.test(info.refNo)) ? info.refNo : filenameBase;
@@ -775,6 +842,20 @@ export function parseLegacyWorkbook(buf: ArrayBuffer | Uint8Array, opts: ParseLe
     const vatPct = afterDisc > 0
       ? Math.round((parsed.totals.vat / afterDisc) * 10000) / 100
       : 0;
+
+    // Override the cost fields in the snapshot with real raw costs from the
+    // Labor and Gen Reqt + Products sheets. parseQuotationSheet (which reads
+    // only the IOCT/ACTI Summary block) returns cost=subtotal as a placeholder,
+    // which makes margin display read as zero. Components are billed only on
+    // the ACTI side typically; IOCT's componentsSubtotal is 0 so cost=0 there.
+    const enrichedTotals: QuotationTotals = {
+      ...parsed.totals,
+      generalReqtsCost: rawGRCost,
+      generalReqtsWithContingency: rawGRCost * (1 + cont),
+      componentsCost: kind === 'ACTI' ? rawComponentsCost : 0,
+      laborCost: rawLaborCost,
+      laborWithContingency: rawLaborCost * (1 + cont),
+    };
     return {
       kind,
       revision,
@@ -796,7 +877,7 @@ export function parseLegacyWorkbook(buf: ArrayBuffer | Uint8Array, opts: ParseLe
       services: parsed.services,
       manpower,
       servicesFromManpower: parsed.services.length <= 1 && manpower.length > 0,
-      legacyTotalsSnapshot: parsed.totals,
+      legacyTotalsSnapshot: enrichedTotals,
     };
   };
 
