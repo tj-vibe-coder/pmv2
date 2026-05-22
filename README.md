@@ -1,217 +1,200 @@
-# Project Monitoring System
+# IOCT Project Monitoring System v2 (pmv2)
 
-A comprehensive React-based web application for project directors to monitor and manage multiple projects, track financial health, and make informed decisions. Built specifically for IOCT to provide real-time insights into project performance, budget tracking, and operational health.
+A full-featured internal operations platform for IOCT — covering project monitoring, financial tracking, supply chain, quotations/calcsheets, payroll, expense management, reporting, and utilities.
 
-## 🚀 Features
-
-### Dashboard Overview
-- **High-Level KPIs**: Total projects, contract amounts, billed amounts, and outstanding balances
-- **Interactive Visualizations**: 
-  - Bar charts showing contract vs billed amounts by year
-  - Pie charts displaying project status distribution
-- **Real-time Project Health Indicators**: Color-coded status indicators for quick assessment
-
-### Project Management
-- **Comprehensive Project Table**: Sortable and filterable view of all projects
-- **Advanced Filtering**: Filter by year, status, client, project director, and search terms
-- **Project Details View**: In-depth project information including financial summaries and progress tracking
-
-### Financial Tracking
-- **Budget vs Actual**: Track contract amounts against billed amounts
-- **Outstanding Balances**: Monitor remaining project balances and retention
-- **Billing Progress**: Visual progress bars showing percentage of project completion
-- **Project Health Scoring**: Automated health indicators based on billing performance
-
-### User Experience
-- **Responsive Design**: Works seamlessly on desktop and mobile devices
-- **Intuitive Navigation**: Easy switching between dashboard and detailed views
-- **Material UI Components**: Modern, professional interface design
-
-## 🛠️ Technology Stack
-
-- **Frontend**: React 18 with TypeScript
-- **UI Framework**: Material-UI (MUI) v5
-- **Charts**: Recharts for data visualization
-- **Styling**: Emotion (CSS-in-JS) with Material-UI theming
-- **Date Handling**: date-fns for date formatting and manipulation
-- **Build Tool**: Create React App with TypeScript template
-
-## 📦 Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd project-monitoring-system
-   ```
-
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
-
-3. **Start the development server**
-   ```bash
-   npm start
-   ```
-
-4. **Access the application**
-   Open [http://localhost:3000](http://localhost:3000) in your browser
-
-### OneDrive Attachments (optional)
-
-To enable project file attachments stored in OneDrive:
-
-1. Create an app in [Azure Portal](https://portal.azure.com) → App registrations → New registration
-2. Add API permissions: Microsoft Graph → Delegated → `Files.ReadWrite`, `User.Read`
-3. Add a redirect URI: `http://localhost:3000` (for dev)
-4. Copy `.env.example` to `.env` and set `REACT_APP_ONEDRIVE_CLIENT_ID` to your app's Client ID
-5. Restart the dev server
-
-Files are stored in the user's OneDrive under `Projects/{projectId}/`.
-
-## 🗂️ Project Structure
-
-```
-src/
-├── components/           # React components
-│   ├── Dashboard.tsx     # Main dashboard with KPIs and project table
-│   ├── ProjectDetails.tsx # Detailed project view
-│   └── ProjectMonitoringApp.tsx # Main application wrapper
-├── data/
-│   └── mockData.ts       # Sample project data
-├── types/
-│   └── Project.ts        # TypeScript type definitions
-├── utils/
-│   └── projectUtils.ts   # Utility functions for calculations
-└── App.tsx              # Root application component
-```
-
-## 📊 Data Model
-
-The application is built around the following core data structure:
-
-### Project Interface
-```typescript
-interface Project {
-  id: string;
-  projectName: string;
-  client: string;
-  projectDirector: string;
-  ovpNumber: string;
-  poNumber: string;
-  scopeOfWork: string;
-  location: string;
-  contractAmount: number;
-  billedAmount: number;
-  remainingBalance: number;
-  retention: number;
-  status: ProjectStatus;
-  completionDate: Date | null;
-  createdDate: Date;
-  lastUpdated: Date;
-  remarks?: string;
-}
-```
-
-### Project Status Types
-- **OPEN**: Active projects in progress
-- **CLOSED**: Successfully completed projects
-- **FOR_CLOSEOUT**: Projects awaiting final documentation
-- **PENDING**: Projects on hold or waiting to start
-
-## 🎯 Key Features Breakdown
-
-### 1. Interactive Dashboard
-- **KPI Cards**: Real-time metrics for total projects, contract amounts, and balances
-- **Visual Charts**: Bar charts for yearly comparisons and pie charts for status distribution
-- **Project Health**: Color-coded indicators showing project financial health
-
-### 2. Advanced Filtering System
-- **Multi-dimensional Filtering**: By year, status, client, project director
-- **Real-time Search**: Instant filtering based on project name, client, or reference numbers
-- **Dynamic Updates**: All visualizations update automatically based on applied filters
-
-### 3. Detailed Project Views
-- **Comprehensive Information**: All project details in an organized layout
-- **Financial Summary**: Contract amounts, billed amounts, retention, and balances
-- **Progress Tracking**: Visual progress bars showing billing completion percentage
-- **Project Timeline**: Creation dates, completion dates, and last update information
-
-### 4. Responsive Design
-- **Mobile-Friendly**: Fully responsive layout that works on all device sizes
-- **Modern UI**: Clean, professional interface following Material Design principles
-- **Accessibility**: Built with accessibility best practices
-
-## 📈 Usage Examples
-
-### Viewing Project Health
-The dashboard provides immediate visual feedback on project health through:
-- **Green indicators**: Projects with >90% billing completion or closed status
-- **Orange indicators**: Projects with 70-90% billing completion
-- **Red indicators**: Projects with <70% billing completion
-
-### Filtering Projects
-Use the filter controls to:
-- View projects for a specific year
-- Filter by project status (Open, Closed, etc.)
-- Show projects for a particular client or director
-- Search by project name or reference numbers
-
-### Project Analysis
-Navigate to detailed views to:
-- Review comprehensive project information
-- Analyze financial performance and billing progress
-- Track project timeline and milestones
-- View project-specific remarks and notes
-
-## 🔧 Available Scripts
-
-- `npm start` - Start development server
-- `npm run build` - Create production build
-- `npm test` - Run test suite
-- `npm run eject` - Eject from Create React App (not recommended)
-
-## 🚀 Future Enhancements
-
-The current implementation provides a solid foundation. Potential future enhancements include:
-
-### Authentication & Authorization
-- User login system with role-based access
-- Project director-specific dashboards
-- Admin controls for data management
-
-### Data Integration
-- API integration for real-time data updates
-- CSV/Excel import functionality
-- Database connectivity for persistent storage
-
-### Advanced Analytics
-- Trend analysis and forecasting
-- Performance benchmarking
-- Custom reporting and exports
-
-### Enhanced Features
-- Project timeline visualization
-- Notification system for project milestones
-- Collaboration tools and project notes
-- Mobile application for field access
-
-## 📝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/new-feature`)
-3. Commit your changes (`git commit -am 'Add new feature'`)
-4. Push to the branch (`git push origin feature/new-feature`)
-5. Create a Pull Request
-
-## 📄 License
-
-This project is built for IOCT internal use. All rights reserved.
-
-## 🤝 Support
-
-For questions, issues, or feature requests, please contact the development team or create an issue in the project repository.
+Built with React + TypeScript, backed by a Node/Express + Firebase/Firestore server.
 
 ---
 
-**Built with ❤️ for IOCT**
+## 🗺️ Navigation & Modules
+
+The app uses a Gmail-style collapsible sidebar (collapsed to icons by default, expands on hover). The following modules are accessible:
+
+### Project List
+- Sortable/filterable table of all IOCT projects
+- Add, edit, and track projects with status, billing, and financial health indicators
+- Project detail view with contract amounts, billed, outstanding balance, retention
+- Color-coded health indicators (green / orange / red)
+
+### Dashboard
+- Location-based analytics and project insights
+- Per-region project breakdown and performance overview
+
+### Expense Monitoring *(collapsible group)*
+- **Expense Monitoring** — project-level expense tracking
+- **CA Form** — cash advance request forms
+- **Liquidation Form** — liquidation of cash advances
+- **Direct Labor** — direct labor cost recording
+- **Payroll** *(authorized users only — TJC & RJR)* — full payroll module (see below)
+
+### Clients
+- Client database with contact management
+- Payment terms, account managers, and multi-contact support
+
+### Investment Tracker
+- Founder contributions and company-level expense tracking
+
+### Calcsheet *(Quotation Management)*
+Full quotation/proposal system for IOCT and ACTI:
+- **Projects list** — filter/sort by status, customer, year, formula type; scroll-position memory when navigating back
+- **Project detail** — per-project quotation management with drag-and-drop legacy import
+- **Quotation editor** — itemized line-item editor with labor roles, materials, and overhead
+- **Compare view** — side-by-side IOCT vs ACTI quotation comparison
+- **Legacy import** — bulk import of historical `.xlsx` and `.pdf` calcsheets
+- **Clients** — calcsheet-specific client and contact management
+- **Presets** — labor role preset library
+
+Project codes follow the format `PCS{YYMM}{SEQ}-{CLI}-{REV}` (e.g. `PCS2605034-LBI-00`). Auto-generated on project creation but editable.
+
+### Supply Chain *(collapsible group)*
+- **Requests & Orders** — material request forms
+- **Delivery Receipt** — delivery tracking
+- **Suppliers** — supplier database
+- **Purchase Order** — PO management
+- **Estimates** — cost estimates
+
+### Reports *(collapsible group)*
+- **Progress Report** — PDF progress reports per project
+- **Service Report** — service completion reports
+- **Certificate of Completion** — formal completion certificates
+- **Attachments** — OneDrive-backed file attachments per project
+
+### Utilities *(collapsible group)*
+- **Safety Certificate** — EHS safety certificate PDF generation
+- **Safety Manual** — EHS safety manual
+- **OSH Program** — Occupational Safety and Health program document
+- **ID Generator** — employee ID card generator
+- **Acknowledgement Receipt** — acknowledgement receipt document
+
+### Admin *(superadmin only)*
+- **User Approvals** — approve/reject new user registrations
+- **Users DB** — full user management
+
+---
+
+## 💸 Payroll Module *(restricted)*
+
+Access controlled via `isPayrollAuthorized()` — visible only to TJC and RJR. Accessible under **Expense Monitoring → Payroll**.
+
+- Employee database with government contribution tables
+- Payroll run management with holiday adjustments
+- Payroll register and payslip generation
+- Government contributions: SSS, PhilHealth, Pag-IBIG
+- Payroll settings (cut-off periods, etc.)
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 18, TypeScript |
+| UI | Material UI (MUI) v5 |
+| State | Zustand (`quotationStore`, `AuthContext`) |
+| Charts | Recharts |
+| PDF | `@react-pdf/renderer` |
+| Dates | `date-fns` |
+| Backend | Node.js + Express |
+| Database | Firebase Firestore |
+| Auth | Custom JWT / Firebase Auth |
+| Cloud storage | OneDrive (Microsoft Graph API) |
+| Hosting | Firebase Hosting + Render (server) |
+
+---
+
+## 📁 Project Structure
+
+```
+src/
+├── components/
+│   ├── calcsheet/          # Quotation/calcsheet module
+│   ├── payroll/            # Payroll module (restricted)
+│   ├── reports/            # Report tabs (Progress, Service, Completion, Attachments)
+│   ├── Sidebar.tsx         # Gmail-style collapsible nav
+│   ├── Header.tsx
+│   ├── Dashboard.tsx
+│   ├── ProjectMonitoringApp.tsx
+│   ├── ExpenseMonitoring.tsx
+│   ├── CAFormPage.tsx
+│   ├── LiquidationFormPage.tsx
+│   ├── DirectLaborPage.tsx
+│   ├── ClientsPage.tsx
+│   ├── InvestmentTrackerPage.tsx
+│   ├── SuppliersPage.tsx
+│   ├── PurchaseOrderPage.tsx
+│   ├── DeliveryPage.tsx
+│   ├── EstimatesPage.tsx
+│   ├── EHSPage.tsx
+│   ├── IDGeneratorPage.tsx
+│   ├── AcknowledgementReceiptPage.tsx
+│   └── ...
+├── contexts/
+│   ├── AuthContext.tsx
+│   └── OneDriveAuthContext.tsx
+├── store/
+│   └── quotationStore.ts   # Zustand store for calcsheet data
+├── types/
+│   ├── Project.ts
+│   ├── Quotation.ts
+│   ├── Client.ts
+│   ├── User.ts
+│   └── Payroll.ts
+├── utils/
+│   └── calcsheet/          # Code generation, PDF export, calc logic
+├── config/
+│   └── payrollAccess.ts    # Payroll authorization whitelist
+└── App.tsx                 # Routes + AppLayout
+```
+
+---
+
+## 🔐 Auth & Roles
+
+| Role | Access |
+|---|---|
+| `viewer` | Read-only project and dashboard views |
+| `user` | Standard access to all non-admin modules |
+| `admin` | Extended permissions |
+| `superadmin` | Full access including User Approvals and Users DB |
+| Payroll whitelist | Payroll module (TJC, RJR by username) |
+
+---
+
+## 🚀 Running Locally
+
+```bash
+# Install dependencies
+npm install
+
+# Start frontend dev server (port 3000)
+npm start
+
+# Start backend server (separate terminal)
+node server.js
+```
+
+### Environment Variables
+
+```env
+REACT_APP_ONEDRIVE_CLIENT_ID=<Azure app client ID>
+```
+
+OneDrive files are stored under `Projects/{projectId}/` in the authenticated user's OneDrive.
+
+---
+
+## 📦 Build & Deploy
+
+```bash
+# Production build
+npm run build
+
+# Firebase deploy (hosting)
+firebase deploy
+```
+
+Backend is deployed separately on Render.
+
+---
+
+**Built for IOCT internal use. All rights reserved.**

@@ -25,8 +25,23 @@ const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'e
   draft: 'default', sent: 'primary', won: 'success', lost: 'error',
 };
 
-type SortKey = 'code' | 'name' | 'customer' | 'date' | 'status' | 'grandTotal';
+type SortKey = 'code' | 'name' | 'customer' | 'date' | 'status' | 'grandTotal' | 'margin';
 type SortDir = 'asc' | 'desc';
+
+// IOCT gross margin from the quotation's snapshot.
+// For non-legacy: cost fields are real, always returns a value.
+// For legacy: returns null when costs weren't backfilled — those snapshots
+// store cost=subtotal (placeholder), so margin would falsely read as zero.
+function ioctMargin(t: ReturnType<typeof computeTotals>): { value: number; pct: number } | null {
+  const net = t.subtotal - t.discount;
+  if (net <= 0) return null;
+  const totalCost = t.generalReqtsCost + t.componentsCost + t.laborCost;
+  const totalSubtotals = t.generalReqtsSubtotal + t.componentsSubtotal + t.servicesSubtotal;
+  // Cost placeholder: totalCost equals sum of subtotals → no real cost data
+  if (Math.abs(totalCost - totalSubtotals) < 0.01) return null;
+  const value = net - totalCost;
+  return { value, pct: (value / net) * 100 };
+}
 
 const empty = {
   name: '', location: '', date: format(new Date(), 'yyyy-MM-dd'),
@@ -187,7 +202,13 @@ export default function Projects() {
     const grandTotal = totals.reduce((sum, t) => Math.max(sum, t.total), 0);  // use max kind as the "headline"
     const hasLegacy = qs.some((q) => q.formulaVersion === 'legacy');
     const year = p.date ? new Date(p.date).getFullYear() : 0;
-    return { p, customer, partner, totals, grandTotal, hasLegacy, year };
+    // IOCT margin: pick the latest IOCT quotation (highest revision).
+    const ioctQuotes = qs.filter((q) => q.kind === 'IOCT');
+    const latestIoct = ioctQuotes.sort((a, b) =>
+      (b.revision || '00').localeCompare(a.revision || '00'),
+    )[0];
+    const margin = latestIoct ? ioctMargin(computeTotals(latestIoct)) : null;
+    return { p, customer, partner, totals, grandTotal, hasLegacy, year, margin };
   }), [projects, clients, quotations]);
 
   // Derive year options from data
@@ -228,6 +249,11 @@ export default function Projects() {
         case 'date': av = a.p.date || ''; bv = b.p.date || ''; break;
         case 'status': av = a.p.status; bv = b.p.status; break;
         case 'grandTotal': av = a.grandTotal; bv = b.grandTotal; break;
+        case 'margin':
+          // Sort by pct; nulls (no data) go to the bottom regardless of direction
+          av = a.margin ? a.margin.pct : -Infinity;
+          bv = b.margin ? b.margin.pct : -Infinity;
+          break;
       }
       if (av < bv) return -1 * mul;
       if (av > bv) return 1 * mul;
@@ -476,11 +502,12 @@ export default function Projects() {
               <SortHeader k="date" label="Date" />
               <SortHeader k="status" label="Status" />
               <SortHeader k="grandTotal" label="Quotations" align="right" />
+              <SortHeader k="margin" label="IOCT Margin" align="right" />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {sorted.map(({ p, customer, partner, totals, hasLegacy }) => {
+            {sorted.map(({ p, customer, partner, totals, hasLegacy, margin }) => {
               const isLast = p.id === lastClickedId;
               const onRowClick = () => { setLastClickedId(p.id); saveScroll(p.id); };
               return (
@@ -539,6 +566,29 @@ export default function Projects() {
                   </Stack>
                 </TableCell>
                 <TableCell align="right">
+                  {margin ? (
+                    <Stack spacing={0.25}>
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          fontFamily: 'monospace',
+                          fontWeight: 600,
+                          color: margin.value >= 0 ? 'success.main' : 'error.main',
+                        }}
+                      >
+                        {PHP(margin.value)}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                        {margin.pct.toFixed(1)}%
+                      </Typography>
+                    </Stack>
+                  ) : (
+                    <Tooltip title="No cost data — legacy snapshot was imported from PDF or an ACTI-variant workbook">
+                      <Typography variant="caption" color="text.secondary">—</Typography>
+                    </Tooltip>
+                  )}
+                </TableCell>
+                <TableCell align="right">
                   <IconButton size="small" onClick={() => deleteProject(p.id)}><DeleteIcon fontSize="small" /></IconButton>
                 </TableCell>
               </TableRow>
@@ -546,7 +596,7 @@ export default function Projects() {
             })}
             {sorted.length === 0 && (
               <TableRow>
-                <TableCell colSpan={8} align="center" sx={{ color: 'text.secondary', py: 4 }}>
+                <TableCell colSpan={9} align="center" sx={{ color: 'text.secondary', py: 4 }}>
                   {projects.length === 0
                     ? 'No projects yet — click "New project" to start'
                     : 'No projects match the current filters'}

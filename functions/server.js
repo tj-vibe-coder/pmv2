@@ -12,6 +12,7 @@ const ALLOWED_ORIGINS = [
   'https://pmv2-851ae.firebaseapp.com',
   'http://localhost:3000',
   'http://localhost:3001',
+  'http://localhost:5173', // Calcsheet Vite dev server
 ];
 app.use(cors({
   origin: (origin, callback) => {
@@ -45,33 +46,21 @@ if (require.main === module) {
 // Create default users on startup
 async function createDefaultUsers() {
   const defaults = [
-    // Default user seeds: passwords AND emails are sourced from environment
-    // variables so no real credentials or PII land in git. Set
-    // DEFAULT_USER_EMAIL_<USERNAME> and DEFAULT_USER_PASSWORD_<USERNAME>
-    // (e.g. DEFAULT_USER_PASSWORD_TJC, DEFAULT_USER_EMAIL_TJC) in the Cloud
-    // Functions config. The seed is skipped for any user whose password env
-    // var is unset, so production deployments can safely omit them and create
-    // accounts via the admin UI instead.
-    { username: 'TJC',      email: process.env.DEFAULT_USER_EMAIL_TJC      || '', password: process.env.DEFAULT_USER_PASSWORD_TJC      || '', role: 'superadmin', full_name: process.env.DEFAULT_USER_FULLNAME_TJC || null, approved: 1 },
-    { username: 'admin',    email: process.env.DEFAULT_USER_EMAIL_ADMIN    || '', password: process.env.DEFAULT_USER_PASSWORD_ADMIN    || '', role: 'admin',      full_name: null, approved: 1 },
-    { username: 'user',     email: process.env.DEFAULT_USER_EMAIL_USER     || '', password: process.env.DEFAULT_USER_PASSWORD_USER     || '', role: 'user',       full_name: null, approved: 1 },
-    { username: 'projects', email: process.env.DEFAULT_USER_EMAIL_PROJECTS || '', password: process.env.DEFAULT_USER_PASSWORD_PROJECTS || '', role: 'admin',      full_name: null, approved: 1 },
+    { username: 'TJC', email: 'tyronejames.caballero@gmail.com', password: 'IOCT0201!', role: 'superadmin', full_name: 'Tyrone James Caballero', approved: 1 },
+    { username: 'admin', email: 'admin@netpacific.com', password: 'admin123', role: 'admin', full_name: null, approved: 1 },
+    { username: 'user', email: 'user@netpacific.com', password: 'user123', role: 'user', full_name: null, approved: 1 },
+    { username: 'projects', email: 'projects@iocontroltech.com', password: 'IOCT0201!', role: 'admin', full_name: null, approved: 1 },
   ];
   for (const u of defaults) {
     try {
-      // Skip seeding when no password is configured for this user — prevents
-      // accidentally creating accounts with empty/blank passwords.
-      if (!u.password) {
-        continue;
-      }
       const snap = await db.collection('users').where('username', '==', u.username).limit(1).get();
       if (snap.empty) {
         const passwordHash = Buffer.from(u.password).toString('base64');
         const now = Math.floor(Date.now() / 1000);
         await db.collection('users').add({ username: u.username, email: u.email, password_hash: passwordHash, role: u.role, approved: u.approved, full_name: u.full_name, designation: null, created_at: now, updated_at: now });
         console.log(`Default user created: ${u.username}`);
-      } else if (u.username === 'TJC' && u.full_name) {
-        await snap.docs[0].ref.update({ full_name: u.full_name });
+      } else if (u.username === 'TJC') {
+        await snap.docs[0].ref.update({ full_name: 'Tyrone James Caballero' });
       }
     } catch (e) {
       console.error(`Error creating default user ${u.username}:`, e.message);
@@ -490,10 +479,22 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-// ========== CLIENTS ROUTES ==========
+// ========== CLIENTS ROUTES (unified schema: camelCase + contacts[]) ==========
+
+function primaryContactOf(contacts) {
+  if (!Array.isArray(contacts) || contacts.length === 0) return null;
+  return contacts.find((c) => c && c.isPrimary) || contacts[0];
+}
+
+function clientApproverString(contacts) {
+  const p = primaryContactOf(contacts);
+  if (!p) return '';
+  return [p.name, p.position].filter(Boolean).join(' – ').trim();
+}
+
 app.get('/api/clients', async (req, res) => {
   try {
-    const snap = await db.collection('clients').orderBy('client_name').get();
+    const snap = await db.collection('clients').orderBy('name').get();
     res.json(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
   } catch (err) {
     console.error('Error fetching clients:', err);
@@ -513,12 +514,36 @@ app.get('/api/clients/:id', async (req, res) => {
 });
 
 app.post('/api/clients', async (req, res) => {
-  const { client_name, address, payment_terms, contact_person, designation, email_address } = req.body;
-  if (!client_name || !client_name.trim()) return res.status(400).json({ error: 'Client name is required' });
+  const { code, name, address, paymentTerms, am, contacts } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Client name is required' });
+  if (!Array.isArray(contacts) || contacts.length === 0) {
+    return res.status(400).json({ error: 'At least one contact is required' });
+  }
   try {
     const now = new Date().toISOString();
-    const ref = await db.collection('clients').add({ client_name: client_name.trim(), address: address || '', payment_terms: payment_terms || '', contact_person: contact_person || '', designation: designation || '', email_address: email_address || '', created_at: now, updated_at: now });
-    res.status(201).json({ id: ref.id, message: 'Client created successfully' });
+    const body = {
+      code: (code || '').trim().toUpperCase().slice(0, 4),
+      name: name.trim(),
+      address: address || '',
+      paymentTerms: paymentTerms || '',
+      am: am || '',
+      contacts: contacts.map((c) => ({
+        id: c.id || Math.random().toString(36).slice(2, 10),
+        name: (c.name || '').trim(),
+        position: c.position || '',
+        email: c.email || '',
+        phone: c.phone || '',
+        gender: c.gender || '',
+        isPrimary: !!c.isPrimary,
+        notes: c.notes || '',
+      })),
+      createdAt: now,
+      updatedAt: now,
+    };
+    // Ensure at least one is primary
+    if (!body.contacts.some((c) => c.isPrimary)) body.contacts[0].isPrimary = true;
+    const ref = await db.collection('clients').add(body);
+    res.status(201).json({ id: ref.id, ...body });
   } catch (err) {
     console.error('Error creating client:', err);
     res.status(500).json({ error: 'Failed to create client' });
@@ -527,20 +552,47 @@ app.post('/api/clients', async (req, res) => {
 
 app.put('/api/clients/:id', async (req, res) => {
   const { id } = req.params;
-  const { client_name, address, payment_terms, contact_person, designation, email_address } = req.body;
-  if (!client_name || !client_name.trim()) return res.status(400).json({ error: 'Client name is required' });
-  const trimmedName = client_name.trim();
+  const { code, name, address, paymentTerms, am, contacts } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Client name is required' });
+  if (!Array.isArray(contacts) || contacts.length === 0) {
+    return res.status(400).json({ error: 'At least one contact is required' });
+  }
   try {
     const ref = db.collection('clients').doc(id);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Client not found' });
     const now = new Date().toISOString();
-    await ref.update({ client_name: trimmedName, address: address || '', payment_terms: payment_terms || '', contact_person: contact_person || '', designation: designation || '', email_address: email_address || '', updated_at: now });
-    const approver = [contact_person, designation].filter(Boolean).join(' – ').trim();
+    const cleanedContacts = contacts.map((c) => ({
+      id: c.id || Math.random().toString(36).slice(2, 10),
+      name: (c.name || '').trim(),
+      position: c.position || '',
+      email: c.email || '',
+      phone: c.phone || '',
+      gender: c.gender || '',
+      isPrimary: !!c.isPrimary,
+      notes: c.notes || '',
+    }));
+    if (!cleanedContacts.some((c) => c.isPrimary)) cleanedContacts[0].isPrimary = true;
+    const trimmedName = name.trim();
+    await ref.update({
+      code: (code || '').trim().toUpperCase().slice(0, 4),
+      name: trimmedName,
+      address: address || '',
+      paymentTerms: paymentTerms || '',
+      am: am || '',
+      contacts: cleanedContacts,
+      updatedAt: now,
+    });
+    // Cascade to projects.account_name and projects.client_approver (derived from primary contact)
+    const approver = clientApproverString(cleanedContacts);
     const projectsSnap = await db.collection('projects').where('client_id', '==', id).get();
     if (!projectsSnap.empty) {
       const batch = db.batch();
-      projectsSnap.docs.forEach(pDoc => batch.update(pDoc.ref, { account_name: trimmedName, client_approver: approver, updated_at: now }));
+      projectsSnap.docs.forEach((pDoc) => batch.update(pDoc.ref, {
+        account_name: trimmedName,
+        client_approver: approver,
+        updated_at: now,
+      }));
       await batch.commit();
     }
     res.json({ message: 'Client updated successfully' });
@@ -1291,6 +1343,306 @@ app.post('/api/payroll/holidays/bulk', async (req, res) => {
     await batch.commit();
     res.json({ success: true, count: holidays.length });
   } catch (err) { res.status(500).json({ error: 'Failed to bulk save holidays' }); }
+});
+
+// ========== CALCSHEET ==========
+// Collections: calcsheet_projects, calcsheet_quotations, calcsheet_clients, calcsheet_presets
+
+// ── Projects ─────────────────────────────────────────────────────────────────
+
+app.get('/api/calcsheet/projects', async (req, res) => {
+  try {
+    const snap = await db.collection('calcsheet_projects').orderBy('createdAt', 'desc').get();
+    const projects = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    res.json({ success: true, projects });
+  } catch (err) { res.status(500).json({ error: 'Failed to get projects' }); }
+});
+
+app.post('/api/calcsheet/projects', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const data = { ...req.body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const ref = await db.collection('calcsheet_projects').add(data);
+    res.json({ success: true, project: { id: ref.id, ...data } });
+  } catch (err) { res.status(500).json({ error: 'Failed to create project' }); }
+});
+
+app.put('/api/calcsheet/projects/:id', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const update = { ...req.body, updatedAt: new Date().toISOString() };
+    await db.collection('calcsheet_projects').doc(req.params.id).update(update);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update project' }); }
+});
+
+app.delete('/api/calcsheet/projects/:id', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    await db.collection('calcsheet_projects').doc(req.params.id).delete();
+    // Also delete all quotations for this project
+    const qsnap = await db.collection('calcsheet_quotations').where('projectId', '==', req.params.id).get();
+    await Promise.all(qsnap.docs.map((d) => d.ref.delete()));
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete project' }); }
+});
+
+// ── Quotations ────────────────────────────────────────────────────────────────
+
+app.get('/api/calcsheet/quotations', async (req, res) => {
+  try {
+    const { projectId } = req.query;
+    let query = db.collection('calcsheet_quotations');
+    if (projectId) query = query.where('projectId', '==', projectId);
+    const snap = await query.orderBy('createdAt', 'desc').get();
+    const quotations = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    res.json({ success: true, quotations });
+  } catch (err) { res.status(500).json({ error: 'Failed to get quotations' }); }
+});
+
+app.post('/api/calcsheet/quotations', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const data = { ...req.body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const ref = await db.collection('calcsheet_quotations').add(data);
+    res.json({ success: true, quotation: { id: ref.id, ...data } });
+  } catch (err) { res.status(500).json({ error: 'Failed to create quotation' }); }
+});
+
+app.put('/api/calcsheet/quotations/:id', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const update = { ...req.body, updatedAt: new Date().toISOString() };
+    await db.collection('calcsheet_quotations').doc(req.params.id).update(update);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update quotation' }); }
+});
+
+app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    await db.collection('calcsheet_quotations').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete quotation' }); }
+});
+
+// ── Clients (calcsheet alias — now reads/writes the unified `clients` collection) ─
+
+app.get('/api/calcsheet/clients', async (req, res) => {
+  try {
+    const snap = await db.collection('clients').orderBy('name').get();
+    const clients = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    res.json({ success: true, clients });
+  } catch (err) { res.status(500).json({ error: 'Failed to get clients' }); }
+});
+
+// POST/PUT/DELETE under /api/calcsheet/clients are deprecated. The calcsheet UI now
+// uses /api/clients directly (see `ClientsPage.tsx` and `CalcsheetClients.tsx` redirect).
+// Kept as 410 Gone responses to surface any lingering callers in the logs.
+app.post('/api/calcsheet/clients', (req, res) => res.status(410).json({ error: 'Use POST /api/clients' }));
+app.put('/api/calcsheet/clients/:id', (req, res) => res.status(410).json({ error: 'Use PUT /api/clients/:id' }));
+app.delete('/api/calcsheet/clients/:id', (req, res) => res.status(410).json({ error: 'Use DELETE /api/clients/:id' }));
+
+// ── Labor Presets ─────────────────────────────────────────────────────────────
+
+app.get('/api/calcsheet/presets', async (req, res) => {
+  try {
+    const snap = await db.collection('calcsheet_presets').orderBy('group').get();
+    const presets = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    res.json({ success: true, presets });
+  } catch (err) { res.status(500).json({ error: 'Failed to get presets' }); }
+});
+
+app.post('/api/calcsheet/presets', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const ref = await db.collection('calcsheet_presets').add(req.body);
+    res.json({ success: true, preset: { id: ref.id, ...req.body } });
+  } catch (err) { res.status(500).json({ error: 'Failed to create preset' }); }
+});
+
+app.put('/api/calcsheet/presets/:id', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    await db.collection('calcsheet_presets').doc(req.params.id).update(req.body);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update preset' }); }
+});
+
+app.delete('/api/calcsheet/presets/:id', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    await db.collection('calcsheet_presets').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete preset' }); }
+});
+
+// ── Sequence counter (for quotation code generation) ─────────────────────────
+
+app.get('/api/calcsheet/seq', async (req, res) => {
+  try {
+    const doc = await db.collection('calcsheet_meta').doc('seq').get();
+    res.json({ success: true, seq: doc.exists ? doc.data().value : 1 });
+  } catch (err) { res.status(500).json({ error: 'Failed to get seq' }); }
+});
+
+app.post('/api/calcsheet/seq/increment', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const ref = db.collection('calcsheet_meta').doc('seq');
+    const doc = await ref.get();
+    const current = doc.exists ? doc.data().value : 1;
+    await ref.set({ value: current + 1 });
+    res.json({ success: true, seq: current });
+  } catch (err) { res.status(500).json({ error: 'Failed to increment seq' }); }
+});
+
+// ── Legacy import (bulk-import historical calcsheets as formulaVersion='legacy') ─
+
+app.post('/api/calcsheet/import/legacy', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const mode = (req.query.mode || 'skip').toString(); // 'skip' | 'overwrite'
+    const { project, quotations, client } = req.body || {};
+    if (!project || !project.code) {
+      return res.status(400).json({ error: 'project.code is required' });
+    }
+    if (!Array.isArray(quotations)) {
+      return res.status(400).json({ error: 'quotations[] is required' });
+    }
+
+    const now = new Date().toISOString();
+    const warnings = [];
+
+    // Optional: upsert a client matched by code into the unified `clients` collection.
+    // The UI payload now sends the new schema: { code, name, address, paymentTerms, contacts: [...] }.
+    let resolvedCustomerId = project.customerId || null;
+    if (client && client.code) {
+      const existing = await db.collection('clients').where('code', '==', client.code).limit(1).get();
+      if (existing.empty) {
+        // Normalize the contacts array (ensure ids, ensure one primary)
+        const contacts = Array.isArray(client.contacts) ? client.contacts.map((c) => ({
+          id: c.id || Math.random().toString(36).slice(2, 10),
+          name: (c.name || '').trim(),
+          position: c.position || '',
+          email: c.email || '',
+          phone: c.phone || '',
+          gender: c.gender || '',
+          isPrimary: !!c.isPrimary,
+          notes: c.notes || '',
+        })) : [];
+        if (contacts.length > 0 && !contacts.some((c) => c.isPrimary)) contacts[0].isPrimary = true;
+        const newClient = {
+          code: (client.code || '').toUpperCase().slice(0, 4),
+          name: (client.name || '').trim(),
+          address: client.address || '',
+          paymentTerms: client.paymentTerms || '',
+          am: client.am || '',
+          contacts,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const ref = await db.collection('clients').add(newClient);
+        resolvedCustomerId = ref.id;
+        warnings.push(`Created new client ${client.code} (${client.name})`);
+      } else {
+        resolvedCustomerId = existing.docs[0].id;
+      }
+    }
+
+    // Idempotency: look up existing project by code
+    const projSnap = await db.collection('calcsheet_projects').where('code', '==', project.code).limit(1).get();
+    let projectId = null;
+    let action = '';
+
+    if (!projSnap.empty) {
+      if (mode === 'skip') {
+        return res.status(409).json({
+          error: `Project ${project.code} already exists. Re-run with mode=overwrite to replace.`,
+          existingProjectId: projSnap.docs[0].id,
+        });
+      }
+      // overwrite: delete existing project + its quotations, then recreate
+      const oldId = projSnap.docs[0].id;
+      const oldQs = await db.collection('calcsheet_quotations').where('projectId', '==', oldId).get();
+      const delBatch = db.batch();
+      oldQs.docs.forEach((d) => delBatch.delete(d.ref));
+      delBatch.delete(projSnap.docs[0].ref);
+      await delBatch.commit();
+      action = 'overwritten';
+    } else {
+      action = 'created';
+    }
+
+    // Create project
+    const projectData = {
+      ...project,
+      customerId: resolvedCustomerId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const projRef = await db.collection('calcsheet_projects').add(projectData);
+    projectId = projRef.id;
+
+    // Create quotations
+    const createdQuotations = [];
+    for (const q of quotations) {
+      const data = {
+        ...q,
+        projectId,
+        formulaVersion: 'legacy',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const ref = await db.collection('calcsheet_quotations').add(data);
+      createdQuotations.push({ id: ref.id, kind: q.kind, revision: q.revision });
+    }
+
+    // Audit log
+    await db.collection('calcsheet_import_audit').add({
+      action,
+      mode,
+      projectCode: project.code,
+      projectId,
+      sourceFile: (quotations[0] && quotations[0].importedFrom && quotations[0].importedFrom.sourceFile) || null,
+      originalCode: (quotations[0] && quotations[0].importedFrom && quotations[0].importedFrom.originalCode) || null,
+      quotationCount: createdQuotations.length,
+      warnings,
+      importedAt: now,
+      importedBy: user.email || user.uid || null,
+    });
+
+    res.json({
+      success: true,
+      action,
+      projectId,
+      project: { id: projectId, ...projectData },
+      quotations: createdQuotations,
+      warnings,
+    });
+  } catch (err) {
+    console.error('Legacy import error:', err);
+    res.status(500).json({ error: 'Failed to import legacy calcsheet: ' + err.message });
+  }
+});
+
+app.get('/api/calcsheet/import/audit', async (req, res) => {
+  try {
+    const snap = await db.collection('calcsheet_import_audit').orderBy('importedAt', 'desc').limit(100).get();
+    const audit = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    res.json({ success: true, audit });
+  } catch (err) { res.status(500).json({ error: 'Failed to get audit log' }); }
 });
 
 // ========== HEALTH CHECK ==========

@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   Divider, FormControlLabel, IconButton, LinearProgress, MenuItem, Paper, Stack, Switch, Table,
-  TableBody, TableCell, TableHead, TableRow, TextField, Typography,
+  TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import { nanoid } from 'nanoid';
 import AddIcon from '@mui/icons-material/Add';
@@ -997,6 +997,27 @@ export default function ProjectDetail() {
                           sx={{ height: 20 }}
                         />
                       )}
+                      {q.formulaVersion === 'legacy' && (() => {
+                        const src = q.importedFrom?.sourceFile || '';
+                        const isPdf = /\.pdf$/i.test(src);
+                        const isXlsx = /\.xlsx?$/i.test(src);
+                        if (!isPdf && !isXlsx) return null;
+                        return (
+                          <Tooltip title={src || (isPdf ? 'Imported from PDF' : 'Imported from xlsx')}>
+                            <Chip
+                              size="small"
+                              label={isPdf ? 'PDF' : 'XLSX'}
+                              variant="outlined"
+                              sx={{
+                                height: 20,
+                                borderColor: isPdf ? 'error.light' : 'success.light',
+                                color: isPdf ? 'error.main' : 'success.main',
+                                '& .MuiChip-label': { fontSize: '0.65rem', fontWeight: 600 },
+                              }}
+                            />
+                          </Tooltip>
+                        );
+                      })()}
                     </Stack>
                   </TableCell>
                   <TableCell>{recipient?.name ?? '—'}</TableCell>
