@@ -20,7 +20,7 @@ pmv2 is a **monolithic web application** deployed as a single Render Web Service
 | **Reports** | Progress Reports, Service Reports, Certificates of Completion, Attachments | `/reports/*` |
 | **Utilities** | EHS docs (Safety Certificate, Manual, OSH Program), ID Generator, Acknowledgement Receipt | `/utilities/*` |
 | **Payroll** | Employee management, payroll runs, payslip generation, government contributions | `/payroll` |
-| **Admin** | User approvals, user database | `/user-approvals`, `/users` |
+| **Admin / Settings** | User approvals, user database, account/role/password management | `/user-approvals`, `/settings/users` |
 | **Investment Tracker** | Founder contributions & expenses | `/investment-tracker` |
 
 ---
@@ -297,6 +297,8 @@ ReportsPage.tsx                    → Tab shell, route param: /reports/:tab
   └── AttachmentsTab.tsx          → OneDrive file attachments per project
 ```
 
+Saved progress/service reports are stored per project in localStorage. Loading a saved service report switches the save action into update mode; saved service reports and progress snapshots expose visible load/delete actions. Report prepared-by designation refreshes from the logged-in user's `designation` when the saved prepared-by identity matches the current user.
+
 **Key files:** `src/components/ReportsPage.tsx`, `src/components/reports/*.tsx`, `src/services/attachmentsService.ts`, `src/services/onedriveService.ts`, `src/contexts/OneDriveAuthContext.tsx`
 
 ### 4.7 Utilities Module
@@ -372,7 +374,9 @@ All routes defined in `src/App.tsx`. Routes are guarded by `ProtectedRoute` (che
 | `/utilities/id-generator` | `IDGeneratorPage` | Auth | |
 | `/utilities/acknowledgement-receipt` | `AcknowledgementReceiptPage` | Auth | |
 | `/user-approvals` | `UserApprovalsPage` | Auth + Superadmin | |
-| `/users` | `UsersPage` | Auth + Superadmin | |
+| `/settings` | Redirect → `/settings/users` | Auth + Superadmin | |
+| `/settings/users` | `UsersPage` | Auth + Superadmin | Settings user management |
+| `/users` | Redirect → `/settings/users` | Auth + Superadmin | Legacy redirect |
 | `/investment-tracker` | `InvestmentTrackerPage` | Auth | |
 | `/payroll` | `PayrollDashboard` | Auth + PayrollGuard | Guard checks username-based access |
 | `/` | Redirect → `/dashboard` | Auth | |
@@ -738,6 +742,11 @@ The app uses a **custom username/password auth** against the Express backend, no
 
 ### Payroll Access is Username-Based
 `isPayrollAuthorized()` checks `user.username` values `['TJC', 'RJR']`, not Firebase UIDs or roles. This is separate from the role system (`superadmin`/`admin`/`user`/`viewer`).
+
+Current production `TJC` and `RJR` user records are approved superadmins. There are two `TJC` Firestore records; both are approved superadmins and should be deduplicated only after confirming the actively used account.
+
+### Account Designations Feed Signatures
+Report prepared-by signatures use the logged-in user's account designation when the saved prepared-by identity matches the current user. Calcsheet quotation signing merges the logged-in user account into the signatory list and prefers the account designation for exact or first/last-name matches before falling back to `src/data/quotationClients.ts`.
 
 ### Supplier Management is Bulk-Replace Only
 You cannot incrementally add/edit/delete a single supplier or product. The entire supplier list is sent as a JSON array, and the server deletes everything then re-inserts it all. This means supplier changes require the complete dataset.

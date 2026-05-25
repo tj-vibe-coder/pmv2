@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useCallback, useState, useEffect, useMemo } from 'react';
 import {
   Box,
   Paper,
@@ -35,30 +35,12 @@ import {
   getProgressSnapshots,
   saveProgressSnapshot,
   updateProgressSnapshotAt,
+  deleteProgressSnapshotAt,
 } from '../ProjectDetails';
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
-
-const loadImageAsDataUrl = (url: string): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const img = new window.Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('No canvas context'));
-        return;
-      }
-      ctx.drawImage(img, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = () => reject(new Error('Failed to load image'));
-    img.src = url;
-  });
 
 const wbsInputSx = {
   '& .MuiOutlinedInput-root': { fontSize: '0.9375rem', backgroundColor: '#fff', '& fieldset': { borderColor: '#e2e8f0' }, '&:hover fieldset': { borderColor: '#cbd5e1' }, '&.Mui-focused fieldset': { borderWidth: '1px', borderColor: NET_PACIFIC_COLORS.primary } },
@@ -122,27 +104,27 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   const progressSnapshots = useMemo(() => getProgressSnapshots(project.id), [project.id, snapshotVersion]);
 
   // Helper function to check if a code is a parent (has children)
-  const isParentItem = (code: string, allItems: WBSItem[]): boolean => {
+  const isParentItem = useCallback((code: string, allItems: WBSItem[]): boolean => {
     if (!code || code.trim() === '') return false;
     const parentCode = code.trim();
     return allItems.some((item) => {
       const itemCode = (item.code || '').trim();
       return itemCode.startsWith(parentCode + '.') && itemCode !== parentCode;
     });
-  };
+  }, []);
 
   // Helper function to get child items of a parent
-  const getChildItems = (parentCode: string, allItems: WBSItem[]): WBSItem[] => {
+  const getChildItems = useCallback((parentCode: string, allItems: WBSItem[]): WBSItem[] => {
     const code = (parentCode || '').trim();
     if (!code) return [];
     return allItems.filter((item) => {
       const itemCode = (item.code || '').trim();
       return itemCode.startsWith(code + '.') && itemCode !== code;
     });
-  };
+  }, []);
 
   // Helper function to calculate totals for a parent item
-  const calculateParentTotals = (parentCode: string, allItems: WBSItem[]): { weight: number; progress: number } => {
+  const calculateParentTotals = useCallback((parentCode: string, allItems: WBSItem[]): { weight: number; progress: number } => {
     const children = getChildItems(parentCode, allItems);
     if (children.length === 0) return { weight: 0, progress: 0 };
     
@@ -155,7 +137,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     
     const progress = totalWeight > 0 ? (weightedSum / totalWeight) * 100 : 0;
     return { weight: totalWeight, progress };
-  };
+  }, [getChildItems]);
 
   // Helper function to get indentation level (0 = parent, 1 = child, 2 = grandchild, etc.)
   const getIndentLevel = (code: string): number => {
@@ -218,7 +200,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       }
       return s + parseWBSNum(i.progress);
     }, 0) / topLevelItems.length;
-  }, [wbsItems]);
+  }, [calculateParentTotals, isParentItem, wbsItems]);
 
   const syncProjectStatusFromWBS = (items: WBSItem[]) => {
     if (items.length === 0) return;
@@ -276,6 +258,24 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     setEditingSnapshotIndex(index);
   };
 
+  const handleDeleteLoadedSnapshot = () => {
+    if (editingSnapshotIndex === null || progressSnapshots[editingSnapshotIndex] == null) return;
+    handleDeleteSnapshot(editingSnapshotIndex);
+  };
+
+  const handleDeleteSnapshot = (index: number) => {
+    const snapshot = progressSnapshots[index];
+    if (!snapshot) return;
+    if (!window.confirm(`Delete saved progress report "PB${snapshot.pbNumber}"? This cannot be undone.`)) return;
+    deleteProgressSnapshotAt(project.id, index);
+    if (editingSnapshotIndex === index) {
+      setEditingSnapshotIndex(null);
+    } else if (editingSnapshotIndex !== null && index < editingSnapshotIndex) {
+      setEditingSnapshotIndex(editingSnapshotIndex - 1);
+    }
+    setSnapshotVersion((v) => v + 1);
+  };
+
   const buildPdf = async (preview: boolean): Promise<Blob | void> => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const margin = 16;
@@ -283,7 +283,6 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     const pageHeight = 297;
     const signatureStartY = 220; // Position for Prepared by / Approved by (moved up to avoid footer overlap)
     const footerY = pageHeight - 10; // Doc. No. and Page X of Y at very bottom
-    let y = 18;
     const lineHeight = 5.2;
     const sectionGap = 6;
     const afterHeading = 4;
@@ -296,10 +295,8 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     }
     const fontTitle = () => doc.setFont('helvetica', 'bold');
     const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
-    const fontBoldArialNarrow = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'bold');
 
     const companyName = REPORT_COMPANIES[reportCompany];
-    const companyNameUpper = companyName.toUpperCase();
     const completionPct = Math.round(wbsOverallProgress * 100) / 100;
     const poNum = project.po_number || '—';
 
@@ -344,12 +341,12 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
         } catch (_) {}
       } else if (reportCompany === 'IOCT') {
         try {
-          const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
-          const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
+          const { loadLogoTransparentBackground, IOCT_ICON_LOGO_PDF_SIZE } = await import('../../utils/logoUtils');
+          const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
           const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-          doc.addImage(logoDataUrl, 'PNG', margin, logoY, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT);
-          logoHeight = IOCT_LOGO_PDF_HEIGHT;
-          currentY = Math.max(currentY, logoY + IOCT_LOGO_PDF_HEIGHT + 4);
+          doc.addImage(logoDataUrl, 'PNG', margin, logoY, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
+          logoHeight = IOCT_ICON_LOGO_PDF_SIZE;
+          currentY = Math.max(currentY, logoY + IOCT_ICON_LOGO_PDF_SIZE + 4);
         } catch (_) {}
       }
       
@@ -671,12 +668,12 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           textColor: [255, 255, 255], 
           fontStyle: 'bold', 
           fontSize: 8,
-          font: hasArialNarrow ? 'ArialNarrow' : 'helvetica'
+          font: 'helvetica'
         },
         didParseCell: (data) => {
           if (data.section === 'head') {
             // Make headers bold Arial Narrow
-            data.cell.styles.font = hasArialNarrow ? 'ArialNarrow' : 'helvetica';
+            data.cell.styles.font = 'helvetica';
             data.cell.styles.fontStyle = 'bold';
           } else if (data.section === 'body') {
             const rowIndex = data.row.index;
@@ -725,13 +722,13 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
             textColor: [255, 255, 255],
             fontStyle: 'bold',
             fontSize: 8,
-            font: hasArialNarrow ? 'ArialNarrow' : 'helvetica',
+            font: 'helvetica',
           },
           didParseCell: (data) => {
             // All body cells are bold (no yellow background)
             if (data.section === 'body') {
               data.cell.styles.fontStyle = 'bold';
-              data.cell.styles.font = hasArialNarrow ? 'ArialNarrow' : 'helvetica';
+              data.cell.styles.font = 'helvetica';
             }
           },
         });
@@ -909,12 +906,42 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           </FormControl>
         )}
       </Box>
+      {progressSnapshots.length > 0 && (
+        <TableContainer sx={{ mb: 1.5, border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 180, flexShrink: 0 }}>
+          <Table size="small" stickyHeader>
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Saved progress reports</TableCell>
+                <TableCell sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Date</TableCell>
+                <TableCell align="right" sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Overall</TableCell>
+                <TableCell align="right" sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {progressSnapshots.map((s, idx) => (
+                <TableRow key={`${s.date}-${s.pbNumber}-${idx}`} hover selected={editingSnapshotIndex === idx}>
+                  <TableCell>PB{s.pbNumber}</TableCell>
+                  <TableCell>{new Date(s.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
+                  <TableCell align="right">{Math.round(s.overallProgress * 100) / 100}%</TableCell>
+                  <TableCell align="right">
+                    <Button size="small" onClick={() => handleLoadSnapshot(s, idx)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
+                    <IconButton size="small" color="error" onClick={() => handleDeleteSnapshot(idx)} title="Delete snapshot" aria-label="Delete snapshot">
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
       {editingSnapshotIndex !== null && progressSnapshots[editingSnapshotIndex] != null && (
         <Box sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', flexShrink: 0 }}>
           <Typography variant="body2" sx={{ color: 'info.main', fontSize: '0.8125rem' }}>
             Editing: {new Date(progressSnapshots[editingSnapshotIndex].date).toLocaleDateString('en-US', { dateStyle: 'medium' })} · PB{progressSnapshots[editingSnapshotIndex].pbNumber}. Click &quot;Update snapshot&quot; to save.
           </Typography>
           <Button size="small" variant="outlined" onClick={() => setEditingSnapshotIndex(null)}>Cancel edit</Button>
+          <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={handleDeleteLoadedSnapshot}>Delete snapshot</Button>
         </Box>
       )}
       <TableContainer sx={{ flex: 1, minHeight: 0, border: '1px solid #e2e8f0', borderRadius: 1, overflow: 'auto' }}>

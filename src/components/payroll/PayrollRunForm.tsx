@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Box, Button, Step, StepLabel, Stepper, Typography, TextField,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Paper, MenuItem, Alert, CircularProgress, Divider,
 } from '@mui/material';
 import { Employee, DTRInput, Payslip, PayrollRun, DayType } from '../../types/Payroll';
-import { getEmployees, createPayrollRun, saveDTREntries, savePayslips, approvePayrollRun } from '../../utils/firebasePayroll';
+import { getEmployees, createPayrollRun, savePayslips, approvePayrollRun } from '../../utils/firebasePayroll';
 import { computePayslip } from '../../utils/payrollEngine';
 import { useAuth } from '../../contexts/AuthContext';
 

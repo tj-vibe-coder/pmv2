@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Button, IconButton, Chip, Alert, CircularProgress,
@@ -70,7 +70,7 @@ const HolidayManager: React.FC = () => {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -80,9 +80,9 @@ const HolidayManager: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [year]);
 
-  useEffect(() => { load(); }, [year]);
+  useEffect(() => { load(); }, [load]);
 
   // ── Sync from Nager.Date ────────────────────────────────────────────────
   const handleSync = async () => {

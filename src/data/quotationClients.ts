@@ -44,7 +44,7 @@ export const seedSalesContacts = (): SalesContact[] => [
     name: 'Tyrone James Caballero',
     position: 'General Manager',
     email: '',
-    phone: '',
+    phone: '+63 969 162 2660',
   },
   {
     id: nanoid(8),

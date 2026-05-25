@@ -19,10 +19,10 @@ import { PHP, computeTotals } from '../../utils/calcsheet/calc';
 import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
-import { ensureProposalFolder, ensureExecutionFolder } from '../../services/onedriveFolderService';
+import { ensureProposalFolder, ensureExecutionFolder, moveProposalToExecution } from '../../services/onedriveFolderService';
 
-const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error'> = {
-  draft: 'default', sent: 'primary', won: 'success', lost: 'error',
+const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error' | 'warning'> = {
+  draft: 'default', sent: 'primary', won: 'success', lost: 'error', inactive: 'warning',
 };
 
 type SortKey = 'code' | 'name' | 'customer' | 'date' | 'status' | 'grandTotal' | 'margin';
@@ -58,7 +58,12 @@ export default function Projects() {
   const updateProject = useQuotationStore((s) => s.updateProject);
 
   // OneDrive bulk auto-link
-  const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const {
+    isAuthenticated: oneDriveSignedIn,
+    isLoading: oneDriveLoading,
+    login: oneDriveLogin,
+    getAccessToken: getOneDriveToken,
+  } = useOneDriveAuth();
   const [bulkLinkDialogOpen, setBulkLinkDialogOpen] = useState(false);
   const [bulkLinkProgress, setBulkLinkProgress] = useState<{
     running: boolean;
@@ -71,6 +76,7 @@ export default function Projects() {
     failures: string[];
   } | null>(null);
   const [bulkLinkSummary, setBulkLinkSummary] = useState<string>('');
+  const oneDriveRequired = isCorporateOneDriveConfigured();
 
   // Projects that don't yet have a proposal folder linked. (We don't try to
   // auto-link execution folders here — those are derived from proposal folders
@@ -121,10 +127,18 @@ export default function Projects() {
         // Bonus: if the project is already won, also resolve the execution folder.
         if (p.status === 'won' && !p.executionFolderId) {
           try {
-            const exRef = await ensureExecutionFolder(token, p);
+            const exRef = p.mainProjectNo
+              ? (await moveProposalToExecution(token, {
+                  code: p.code,
+                  name: p.name,
+                  proposalFolderId: ref.id,
+                  executionFolderName: p.mainProjectNo,
+                })).moved
+              : await ensureExecutionFolder(token, p);
             await updateProject(p.id, {
               executionFolderId: exRef.id,
               executionFolderUrl: exRef.webUrl,
+              ...(p.mainProjectNo ? { proposalFolderUrl: exRef.webUrl } : {}),
             });
           } catch (exErr) {
             // Non-fatal — proposal folder still landed.
@@ -177,20 +191,38 @@ export default function Projects() {
   const [sortKey, setSortKey] = useState<SortKey>('code');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
 
-  const startNew = () => { setForm(empty); setLocationAutoFilled(false); setCodeManuallyEdited(false); setOpen(true); };
+  const requireOneDriveForProjectCreate = async (): Promise<boolean> => {
+    if (!oneDriveRequired || oneDriveSignedIn) return true;
+    setBulkLinkSummary('Sign in to OneDrive before creating a Calcsheet project so the proposal folder can be created.');
+    await oneDriveLogin();
+    return false;
+  };
+
+  const startNew = async () => {
+    if (!(await requireOneDriveForProjectCreate())) return;
+    setForm(empty);
+    setLocationAutoFilled(false);
+    setCodeManuallyEdited(false);
+    setOpen(true);
+  };
   const save = async () => {
     if (!form.name || !form.customerId) return;
-    await addProject({
-      name: form.name,
-      location: form.location,
-      date: form.date,
-      customerId: form.customerId || null,
-      partnerId: form.partnerId || null,
-      salesContactId: form.salesContactId || null,
-      status: form.status,
-      code: form.code || undefined,
-    });
-    setOpen(false);
+    if (!(await requireOneDriveForProjectCreate())) return;
+    try {
+      await addProject({
+        name: form.name,
+        location: form.location,
+        date: form.date,
+        customerId: form.customerId || null,
+        partnerId: form.partnerId || null,
+        salesContactId: form.salesContactId || null,
+        status: form.status,
+        code: form.code || undefined,
+      });
+      setOpen(false);
+    } catch (err) {
+      setBulkLinkSummary(err instanceof Error ? err.message : 'Failed to create project.');
+    }
   };
 
   // Memoize per-project data so sort/filter doesn't re-scan quotations N times per render
@@ -333,6 +365,17 @@ export default function Projects() {
               </Button>
             </Tooltip>
           )}
+          {oneDriveRequired && !oneDriveSignedIn && (
+            <Button
+              variant="outlined"
+              color="info"
+              startIcon={<CloudSyncIcon />}
+              onClick={() => { void oneDriveLogin(); }}
+              disabled={oneDriveLoading}
+            >
+              Sign in OneDrive
+            </Button>
+          )}
           <Button
             component={Link}
             to="/calcsheet/import-legacy"
@@ -342,7 +385,12 @@ export default function Projects() {
           >
             Import legacy
           </Button>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={startNew}>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => { void startNew(); }}
+            disabled={oneDriveRequired && !oneDriveSignedIn && oneDriveLoading}
+          >
             New project
           </Button>
         </Stack>
@@ -446,6 +494,7 @@ export default function Projects() {
             <MenuItem value="sent">Sent</MenuItem>
             <MenuItem value="won">Won</MenuItem>
             <MenuItem value="lost">Lost</MenuItem>
+            <MenuItem value="inactive">Inactive</MenuItem>
           </TextField>
           <TextField
             select size="small" label="Customer" value={customerFilter}
@@ -479,7 +528,7 @@ export default function Projects() {
           </TextField>
           <FormControlLabel
             control={<Switch size="small" checked={ongoingOnly} onChange={(e) => setOngoingOnly(e.target.checked)} />}
-            label={<Typography variant="caption">Ongoing only</Typography>}
+            label={<Typography variant="caption">Active proposals only</Typography>}
           />
           <Box sx={{ flex: 1 }} />
           <Typography variant="caption" color="text.secondary">
@@ -552,7 +601,7 @@ export default function Projects() {
                 <TableCell>
                   <Stack direction="row" spacing={0.5} alignItems="center">
                     <Chip size="small" label={p.status} color={statusColors[p.status]} />
-                    {p.ongoing && <Chip size="small" label="ongoing" variant="outlined" sx={{ height: 18 }} />}
+                    {p.ongoing && <Chip size="small" label="active" variant="outlined" sx={{ height: 18 }} />}
                   </Stack>
                 </TableCell>
                 <TableCell align="right">
@@ -659,6 +708,7 @@ export default function Projects() {
               <MenuItem value="sent">Sent</MenuItem>
               <MenuItem value="won">Won</MenuItem>
               <MenuItem value="lost">Lost</MenuItem>
+              <MenuItem value="inactive">Inactive</MenuItem>
             </TextField>
             <TextField
               select

@@ -11,14 +11,31 @@ import {
   Button,
   IconButton,
   TextField,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Stack,
+  Alert,
 } from '@mui/material';
-import { ArrowBack as ArrowBackIcon, Edit as EditIcon } from '@mui/icons-material';
+import {
+  ArrowBack as ArrowBackIcon,
+  Edit as EditIcon,
+  Folder as FolderIcon,
+  Link as LinkIcon,
+  OpenInNew as OpenInNewIcon,
+  Cloud as CloudIcon,
+  CloudOff as CloudOffIcon,
+} from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import EditProjectDialog from './EditProjectDialog';
 import { getBudget, setBudget } from '../utils/projectBudgetStorage';
 import { ResponsiveContainer, BarChart, CartesianGrid, XAxis, YAxis, Bar, Cell, Tooltip } from 'recharts';
 import { ORDER_TRACKER_STORAGE_KEY } from './OrderTrackerPage';
+import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
+import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
+import { ensureExecutionFolder, resolveSharingUrl } from '../services/onedriveFolderService';
 
 const PROJECT_EXPENSES_KEY = 'projectExpenses';
 const MATERIAL_REQUESTS_KEY = 'materialRequests';
@@ -132,6 +149,20 @@ export function updateProgressSnapshotAt(projectId: number, index: number, snaps
   } catch (_) {}
 }
 
+export function deleteProgressSnapshotAt(projectId: number, index: number): void {
+  try {
+    const raw = localStorage.getItem(PROJECT_PROGRESS_SNAPSHOTS_KEY);
+    const o: Record<string, ProgressSnapshot[]> = raw ? JSON.parse(raw) : {};
+    const list = o[String(projectId)] || [];
+    if (index >= 0 && index < list.length) {
+      list.splice(index, 1);
+      if (list.length > 0) o[String(projectId)] = list;
+      else delete o[String(projectId)];
+      localStorage.setItem(PROJECT_PROGRESS_SNAPSHOTS_KEY, JSON.stringify(o));
+    }
+  } catch (_) {}
+}
+
 export interface ServiceReportActivityRow {
   activity: string;
   findingOutcome: string;
@@ -178,6 +209,37 @@ export function saveServiceReport(projectId: number, report: Omit<ServiceReport,
     list.unshift(newReport);
     o[String(projectId)] = list.slice(0, 100);
     localStorage.setItem(PROJECT_SERVICE_REPORTS_KEY, JSON.stringify(o));
+  } catch (_) {}
+}
+
+export function updateServiceReportAt(projectId: number, index: number, report: Omit<ServiceReport, 'id' | 'createdAt'>): void {
+  try {
+    const raw = localStorage.getItem(PROJECT_SERVICE_REPORTS_KEY);
+    const o: Record<string, ServiceReport[]> = raw ? JSON.parse(raw) : {};
+    const list = o[String(projectId)] || [];
+    if (index >= 0 && index < list.length) {
+      list[index] = {
+        ...report,
+        id: list[index].id,
+        createdAt: list[index].createdAt,
+      };
+      o[String(projectId)] = list;
+      localStorage.setItem(PROJECT_SERVICE_REPORTS_KEY, JSON.stringify(o));
+    }
+  } catch (_) {}
+}
+
+export function deleteServiceReportAt(projectId: number, index: number): void {
+  try {
+    const raw = localStorage.getItem(PROJECT_SERVICE_REPORTS_KEY);
+    const o: Record<string, ServiceReport[]> = raw ? JSON.parse(raw) : {};
+    const list = o[String(projectId)] || [];
+    if (index >= 0 && index < list.length) {
+      list.splice(index, 1);
+      if (list.length > 0) o[String(projectId)] = list;
+      else delete o[String(projectId)];
+      localStorage.setItem(PROJECT_SERVICE_REPORTS_KEY, JSON.stringify(o));
+    }
   } catch (_) {}
 }
 
@@ -242,6 +304,70 @@ interface ProjectDetailsProps {
 const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProjectUpdated }) => {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [budgetAmount, setBudgetAmount] = useState(0);
+  const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const [oneDriveBusy, setOneDriveBusy] = useState(false);
+  const [oneDriveErr, setOneDriveErr] = useState('');
+  const [oneDriveInfo, setOneDriveInfo] = useState('');
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState('');
+
+  const executionFolderProject = useMemo(() => ({
+    code: project.project_no || project.calcsheet_code || project.qtn_no || project.ovp_number || String(project.id),
+    name: project.project_no ? '' : (project.project_name || String(project.id)),
+  }), [project.calcsheet_code, project.id, project.ovp_number, project.project_name, project.project_no, project.qtn_no]);
+
+  const saveExecutionFolderLink = async (ref: { id: string; webUrl: string }) => {
+    const patch = { executionFolderId: ref.id, executionFolderUrl: ref.webUrl };
+    const result = await dataService.updateProject(project.id, patch);
+    if (!result.success) throw new Error(result.error || 'Failed to save OneDrive link');
+    onProjectUpdated?.({ ...project, ...patch });
+  };
+
+  const createOrLinkExecutionFolder = async () => {
+    setOneDriveBusy(true);
+    setOneDriveErr('');
+    setOneDriveInfo('');
+    try {
+      const token = await getOneDriveToken();
+      if (!token) {
+        setOneDriveErr('Sign in to OneDrive first.');
+        return;
+      }
+      const ref = await ensureExecutionFolder(token, executionFolderProject);
+      await saveExecutionFolderLink(ref);
+      setOneDriveInfo(ref.matchedExisting ? `Linked existing folder: "${ref.folderName}"` : 'Execution folder linked.');
+    } catch (e) {
+      setOneDriveErr(e instanceof Error ? e.message : 'Failed to link execution folder');
+    } finally {
+      setOneDriveBusy(false);
+    }
+  };
+
+  const submitExecutionFolderUrl = async () => {
+    setOneDriveBusy(true);
+    setOneDriveErr('');
+    setOneDriveInfo('');
+    try {
+      const token = await getOneDriveToken();
+      if (!token) {
+        setOneDriveErr('Sign in to OneDrive first.');
+        return;
+      }
+      const ref = await resolveSharingUrl(token, linkUrl);
+      if (!ref.isFolder) {
+        setOneDriveErr('That URL points to a file, not a folder.');
+        return;
+      }
+      await saveExecutionFolderLink(ref);
+      setLinkDialogOpen(false);
+      setLinkUrl('');
+      setOneDriveInfo('Execution folder linked.');
+    } catch (e) {
+      setOneDriveErr(e instanceof Error ? e.message : 'Failed to link execution folder');
+    } finally {
+      setOneDriveBusy(false);
+    }
+  };
 
   useEffect(() => {
     setBudgetAmount(getBudget(project.id));
@@ -320,6 +446,53 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
         <Typography variant="h4" component="h1" sx={{ flexGrow: 1, color: '#2c5aa0' }}>
           {project.project_name}
         </Typography>
+        {isCorporateOneDriveConfigured() && (
+          <Stack direction="row" spacing={1} alignItems="center">
+            {!oneDriveSignedIn ? (
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<CloudOffIcon />}
+                onClick={() => { void oneDriveLogin(); }}
+              >
+                Sign in
+              </Button>
+            ) : project.executionFolderUrl ? (
+              <Button
+                variant="outlined"
+                size="small"
+                color="success"
+                startIcon={<FolderIcon />}
+                endIcon={<OpenInNewIcon />}
+                onClick={() => window.open(project.executionFolderUrl, '_blank', 'noopener')}
+              >
+                Execution Folder
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  color="success"
+                  startIcon={<CloudIcon />}
+                  disabled={oneDriveBusy}
+                  onClick={() => { void createOrLinkExecutionFolder(); }}
+                >
+                  {oneDriveBusy ? 'Linking...' : 'Link OneDrive'}
+                </Button>
+                <Button
+                  variant="text"
+                  size="small"
+                  startIcon={<LinkIcon />}
+                  disabled={oneDriveBusy}
+                  onClick={() => setLinkDialogOpen(true)}
+                >
+                  Link existing
+                </Button>
+              </>
+            )}
+          </Stack>
+        )}
         <Button
           variant="outlined"
           startIcon={<EditIcon />}
@@ -329,6 +502,39 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
           Edit Project
         </Button>
       </Box>
+
+      {(oneDriveErr || oneDriveInfo) && (
+        <Alert severity={oneDriveErr ? 'error' : 'success'} sx={{ mb: 2 }} onClose={() => { setOneDriveErr(''); setOneDriveInfo(''); }}>
+          {oneDriveErr || oneDriveInfo}
+        </Alert>
+      )}
+
+      <Dialog open={linkDialogOpen} onClose={() => !oneDriveBusy && setLinkDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Link execution folder</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Paste the OneDrive execution folder URL for this project.
+            </Typography>
+            <TextField
+              fullWidth
+              size="small"
+              label="OneDrive folder URL"
+              value={linkUrl}
+              onChange={(e) => setLinkUrl(e.target.value)}
+              disabled={oneDriveBusy}
+              error={!!oneDriveErr}
+              helperText={oneDriveErr || ' '}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLinkDialogOpen(false)} disabled={oneDriveBusy}>Cancel</Button>
+          <Button variant="contained" onClick={() => { void submitExecutionFolderUrl(); }} disabled={oneDriveBusy || !linkUrl.trim()}>
+            {oneDriveBusy ? 'Linking...' : 'Link Folder'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <EditProjectDialog
         open={editDialogOpen}

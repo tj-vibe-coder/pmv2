@@ -46,10 +46,10 @@ if (require.main === module) {
 // Create default users on startup
 async function createDefaultUsers() {
   const defaults = [
-    { username: 'TJC', email: 'tyronejames.caballero@gmail.com', password: 'IOCT0201!', role: 'superadmin', full_name: 'Tyrone James Caballero', approved: 1 },
-    { username: 'admin', email: 'admin@netpacific.com', password: 'admin123', role: 'admin', full_name: null, approved: 1 },
-    { username: 'user', email: 'user@netpacific.com', password: 'user123', role: 'user', full_name: null, approved: 1 },
-    { username: 'projects', email: 'projects@iocontroltech.com', password: 'IOCT0201!', role: 'admin', full_name: null, approved: 1 },
+    { username: 'TJC', email: 'tyronejames.caballero@gmail.com', password: 'IOCT0201!', role: 'superadmin', full_name: 'Tyrone James Caballero', contact_number: '+63 969 162 2660', approved: 1 },
+    { username: 'admin', email: 'admin@netpacific.com', password: 'admin123', role: 'admin', full_name: null, contact_number: null, approved: 1 },
+    { username: 'user', email: 'user@netpacific.com', password: 'user123', role: 'user', full_name: null, contact_number: null, approved: 1 },
+    { username: 'projects', email: 'projects@iocontroltech.com', password: 'IOCT0201!', role: 'admin', full_name: null, contact_number: null, approved: 1 },
   ];
   for (const u of defaults) {
     try {
@@ -57,15 +57,52 @@ async function createDefaultUsers() {
       if (snap.empty) {
         const passwordHash = Buffer.from(u.password).toString('base64');
         const now = Math.floor(Date.now() / 1000);
-        await db.collection('users').add({ username: u.username, email: u.email, password_hash: passwordHash, role: u.role, approved: u.approved, full_name: u.full_name, designation: null, created_at: now, updated_at: now });
+        await db.collection('users').add({ username: u.username, email: u.email, password_hash: passwordHash, role: u.role, approved: u.approved, full_name: u.full_name, designation: null, contact_number: u.contact_number, created_at: now, updated_at: now });
         console.log(`Default user created: ${u.username}`);
       } else if (u.username === 'TJC') {
-        await snap.docs[0].ref.update({ full_name: 'Tyrone James Caballero' });
+        const existing = snap.docs[0].data();
+        const patch = {};
+        if (!existing.full_name) patch.full_name = 'Tyrone James Caballero';
+        if (!existing.contact_number) patch.contact_number = '+63 969 162 2660';
+        if (Object.keys(patch).length > 0) await snap.docs[0].ref.update(patch);
       }
     } catch (e) {
       console.error(`Error creating default user ${u.username}:`, e.message);
     }
   }
+}
+
+async function syncOperationsStatusToCalcsheet(mainProjectId, projectData) {
+  const calcsheetProjectId = projectData?.calcsheet_project_id;
+  if (!calcsheetProjectId) return;
+  try {
+    const now = new Date().toISOString();
+    const ref = db.collection('calcsheet_projects').doc(String(calcsheetProjectId));
+    const doc = await ref.get();
+    if (!doc.exists) return;
+    await ref.update({
+      mainProjectId: String(mainProjectId),
+      mainProjectStatus: projectData.project_status || '',
+      mainProjectProgressPercent: Number(projectData.actual_site_progress_percent || 0),
+      mainProjectCompletionDate: projectData.completion_date || null,
+      mainProjectStatusSyncedAt: now,
+    });
+  } catch (err) {
+    console.error('[projects] failed to sync operations status to calcsheet:', {
+      mainProjectId,
+      calcsheetProjectId: projectData?.calcsheet_project_id,
+      err: err && err.message,
+    });
+  }
+}
+
+function stripUndefinedFields(obj) {
+  return Object.fromEntries(Object.entries(obj || {}).filter(([, value]) => value !== undefined));
+}
+
+function primaryClientContact(client) {
+  const contacts = Array.isArray(client?.contacts) ? client.contacts : [];
+  return contacts.find((c) => c.isPrimary) || contacts[0] || null;
 }
 
 // Helper: get current user from Bearer token
@@ -85,22 +122,62 @@ async function getCurrentUser(req) {
   }
 }
 
+function isActiveUser(user) {
+  if (!user) return false;
+  return user.role === 'superadmin' || user.approved === 1 || user.approved === true;
+}
+
+async function requireActiveUser(req, res) {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return null;
+  }
+  return user;
+}
+
 // ========== AUTH ROUTES ==========
+
+function userResponse(id, user) {
+  return {
+    id,
+    username: user.username,
+    email: user.email,
+    role: user.role,
+    approved: user.approved ? 1 : 0,
+    full_name: user.full_name || null,
+    designation: user.designation || null,
+    contact_number: user.contact_number || null,
+    created_at: user.created_at,
+    updated_at: user.updated_at,
+  };
+}
 
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.json({ success: false, error: 'Username and password are required' });
   try {
-    const snap = await db.collection('users').where('username', '==', username).limit(1).get();
+    const snap = await db.collection('users').where('username', '==', username).get();
     if (snap.empty) return res.json({ success: false, error: 'Invalid credentials' });
-    const userDoc = snap.docs[0];
-    const user = userDoc.data();
     const providedPasswordHash = Buffer.from(password).toString('base64');
-    if (user.password_hash !== providedPasswordHash) return res.json({ success: false, error: 'Invalid credentials' });
+    const candidates = snap.docs
+      .map((doc) => ({ doc, data: doc.data() }))
+      .filter((entry) => entry.data.password_hash === providedPasswordHash)
+      .sort((a, b) => {
+        const aActive = isActiveUser(a.data) ? 1 : 0;
+        const bActive = isActiveUser(b.data) ? 1 : 0;
+        if (aActive !== bActive) return bActive - aActive;
+        const aUpdated = Number(a.data.updated_at || a.data.created_at || 0);
+        const bUpdated = Number(b.data.updated_at || b.data.created_at || 0);
+        return bUpdated - aUpdated;
+      });
+    if (candidates.length === 0) return res.json({ success: false, error: 'Invalid credentials' });
+    const userDoc = candidates[0].doc;
+    const user = userDoc.data();
     const approved = user.approved === 1 || user.approved === true;
     if (!approved && user.role !== 'superadmin') return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
     const token = Buffer.from(`${userDoc.id}:${user.username}:${Date.now()}`).toString('base64');
-    res.json({ success: true, user: { id: userDoc.id, username: user.username, email: user.email, role: user.role, approved: user.approved ? 1 : 0, full_name: user.full_name || null, designation: user.designation || null, created_at: user.created_at, updated_at: user.updated_at }, token });
+    res.json({ success: true, user: userResponse(userDoc.id, user), token });
   } catch (err) {
     console.error('Database error during login:', err);
     res.json({ success: false, error: 'Database error' });
@@ -122,7 +199,7 @@ app.post('/api/auth/register', async (req, res) => {
     if (!uSnap.empty || !eSnap.empty) return res.json({ success: false, error: 'Username or email already exists' });
     const passwordHash = Buffer.from(password).toString('base64');
     const createdAt = Math.floor(Date.now() / 1000);
-    const ref = await db.collection('users').add({ username, email, password_hash: passwordHash, role, approved: 0, full_name: null, designation: null, created_at: createdAt, updated_at: createdAt });
+    const ref = await db.collection('users').add({ username, email, password_hash: passwordHash, role, approved: 0, full_name: null, designation: null, contact_number: null, created_at: createdAt, updated_at: createdAt });
     console.log(`New user registered: ${username} (${email}) with role: ${role} (pending approval)`);
     res.json({ success: true, message: 'Account created. You will be able to log in after an administrator approves your account.', user: { id: ref.id, username, email, role, approved: 0, created_at: createdAt } });
   } catch (err) {
@@ -133,8 +210,8 @@ app.post('/api/auth/register', async (req, res) => {
 
 app.get('/api/auth/me', async (req, res) => {
   const user = await getCurrentUser(req);
-  if (!user) return res.json({ success: false, error: 'Invalid token' });
-  res.json({ success: true, user: { id: user.id, username: user.username, email: user.email, role: user.role, approved: user.approved ? 1 : 0, full_name: user.full_name || null, designation: user.designation || null, created_at: user.created_at, updated_at: user.updated_at } });
+  if (!user || !isActiveUser(user)) return res.status(401).json({ success: false, error: 'Invalid token' });
+  res.json({ success: true, user: userResponse(user.id, user) });
 });
 
 // ========== USERS ROUTES ==========
@@ -146,7 +223,7 @@ async function listAllUsers(req, res) {
   if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
   try {
     const snap = await db.collection('users').get();
-    const users = snap.docs.map(doc => { const d = doc.data(); return { id: doc.id, username: d.username, email: d.email, full_name: d.full_name, designation: d.designation, role: d.role, approved: d.approved, created_at: d.created_at, updated_at: d.updated_at }; }).sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+    const users = snap.docs.map(doc => userResponse(doc.id, doc.data())).sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
     res.json({ success: true, users });
   } catch (err) {
     console.error('Error fetching users:', err);
@@ -155,6 +232,31 @@ async function listAllUsers(req, res) {
 }
 app.get('/api/users', listAllUsers);
 usersRouter.get('/', listAllUsers);
+
+usersRouter.get('/staff-contacts', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const snap = await db.collection('users').where('approved', '==', 1).get();
+    const contacts = snap.docs
+      .map((doc) => {
+        const d = doc.data();
+        return {
+          id: doc.id,
+          username: d.username || '',
+          full_name: d.full_name || '',
+          designation: d.designation || '',
+          email: d.email || '',
+          contact_number: d.contact_number || '',
+        };
+      })
+      .filter((u) => u.full_name);
+    res.json({ success: true, contacts });
+  } catch (err) {
+    console.error('Error fetching staff contacts:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
 
 usersRouter.get('/pending', async (req, res) => {
   const user = await getCurrentUser(req);
@@ -175,10 +277,28 @@ usersRouter.patch('/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
-  const { full_name, designation, role, approved } = req.body;
+  const { username, email, password, full_name, designation, contact_number, role, approved } = req.body;
   const updates = {};
+  if (username !== undefined) {
+    const nextUsername = String(username).trim();
+    if (!nextUsername) return res.status(400).json({ success: false, error: 'Username is required' });
+    updates.username = nextUsername;
+  }
+  if (email !== undefined) {
+    const nextEmail = String(email).trim();
+    if (!nextEmail) return res.status(400).json({ success: false, error: 'Email is required' });
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(nextEmail)) return res.status(400).json({ success: false, error: 'Please enter a valid email address' });
+    updates.email = nextEmail;
+  }
+  if (password !== undefined && String(password).length > 0) {
+    const nextPassword = String(password);
+    if (nextPassword.length < 6) return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long' });
+    updates.password_hash = Buffer.from(nextPassword).toString('base64');
+  }
   if (full_name !== undefined) updates.full_name = full_name == null ? null : String(full_name).trim();
   if (designation !== undefined) updates.designation = designation == null ? null : String(designation).trim();
+  if (contact_number !== undefined) updates.contact_number = contact_number == null ? null : String(contact_number).trim();
   if (role !== undefined && ['superadmin', 'admin', 'user', 'viewer'].includes(role)) updates.role = role;
   if (approved !== undefined) updates.approved = approved ? 1 : 0;
   if (Object.keys(updates).length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update' });
@@ -187,8 +307,30 @@ usersRouter.patch('/:id', async (req, res) => {
     const ref = db.collection('users').doc(targetId);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ success: false, error: 'User not found' });
+    const currentData = doc.data();
+    if (
+      currentData.role === 'superadmin' &&
+      ((updates.role && updates.role !== 'superadmin') || updates.approved === 0)
+    ) {
+      const saSnap = await db.collection('users').where('role', '==', 'superadmin').get();
+      if (saSnap.size <= 1) return res.status(400).json({ success: false, error: 'Cannot remove access from the last superadmin' });
+    }
+    if (updates.username) {
+      const snap = await db.collection('users').where('username', '==', updates.username).limit(1).get();
+      if (!snap.empty && snap.docs[0].id !== targetId) return res.status(409).json({ success: false, error: 'Username already exists' });
+    }
+    if (updates.email) {
+      const snap = await db.collection('users').where('email', '==', updates.email).limit(1).get();
+      if (!snap.empty && snap.docs[0].id !== targetId) return res.status(409).json({ success: false, error: 'Email already exists' });
+    }
     await ref.update(updates);
-    res.json({ success: true, message: 'User updated' });
+    const updatedDoc = await ref.get();
+    const d = updatedDoc.data();
+    res.json({
+      success: true,
+      message: 'User updated',
+      user: userResponse(updatedDoc.id, d),
+    });
   } catch (err) {
     console.error('Error updating user:', err);
     res.status(500).json({ success: false, error: 'Database error' });
@@ -343,16 +485,23 @@ app.post('/api/projects', async (req, res) => {
       const clientDoc = await db.collection('clients').doc(String(projectData.client_id)).get();
       if (clientDoc.exists) {
         const c = clientDoc.data();
-        projectData.account_name = c.client_name;
-        projectData.client_approver = [c.contact_person, c.designation].filter(Boolean).join(' – ').trim() || projectData.client_approver || '';
+        const primary = primaryClientContact(c);
+        projectData.account_name = c.name || c.client_name || projectData.account_name || '';
+        projectData.client_approver = [
+          primary?.name || c.contact_person,
+          primary?.position || c.designation,
+        ].filter(Boolean).join(' – ').trim() || projectData.client_approver || '';
       }
     }
     const now = new Date().toISOString();
-    const ref = await db.collection('projects').add({ ...projectData, created_at: now, updated_at: now });
+    const ref = await db.collection('projects').add(stripUndefinedFields({ ...projectData, created_at: now, updated_at: now }));
     res.status(201).json({ id: ref.id, message: 'Project created successfully' });
   } catch (err) {
     console.error('Error creating project:', err);
-    res.status(500).json({ error: 'Failed to create project' });
+    res.status(500).json({
+      error: 'Failed to create project',
+      details: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
   }
 });
 
@@ -417,19 +566,28 @@ app.put('/api/projects/:id', async (req, res) => {
       const clientDoc = await db.collection('clients').doc(String(projectData.client_id)).get();
       if (clientDoc.exists) {
         const c = clientDoc.data();
-        projectData.account_name = c.client_name;
-        projectData.client_approver = [c.contact_person, c.designation].filter(Boolean).join(' – ').trim() || projectData.client_approver || '';
+        const primary = primaryClientContact(c);
+        projectData.account_name = c.name || c.client_name || projectData.account_name || '';
+        projectData.client_approver = [
+          primary?.name || c.contact_person,
+          primary?.position || c.designation,
+        ].filter(Boolean).join(' – ').trim() || projectData.client_approver || '';
       }
     }
     projectData.updated_at = new Date().toISOString();
+    const cleanProjectData = stripUndefinedFields(projectData);
     const ref = db.collection('projects').doc(id);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Project not found' });
-    await ref.update(projectData);
+    await ref.update(cleanProjectData);
+    await syncOperationsStatusToCalcsheet(id, { ...doc.data(), ...cleanProjectData });
     res.json({ message: 'Project updated successfully' });
   } catch (err) {
     console.error('Error updating project:', err);
-    res.status(500).json({ error: 'Failed to update project' });
+    res.status(500).json({
+      error: 'Failed to update project',
+      details: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
   }
 });
 
@@ -1348,40 +1506,352 @@ app.post('/api/payroll/holidays/bulk', async (req, res) => {
 // ========== CALCSHEET ==========
 // Collections: calcsheet_projects, calcsheet_quotations, calcsheet_clients, calcsheet_presets
 
+function parseProjectDateToUnix(date) {
+  if (!date) return null;
+  const parsed = new Date(`${String(date).slice(0, 10)}T12:00:00`);
+  const time = parsed.getTime();
+  return Number.isFinite(time) ? Math.floor(time / 1000) : null;
+}
+
+function phYearMonth(dateLike) {
+  const base = dateLike ? new Date(dateLike) : new Date();
+  const time = Number.isFinite(base.getTime()) ? base.getTime() : Date.now();
+  // Project numbers follow Philippine business dates. Add UTC+8 then read UTC
+  // fields to avoid host-machine timezone drift.
+  const ph = new Date(time + 8 * 60 * 60 * 1000);
+  const yy = String(ph.getUTCFullYear()).slice(-2);
+  const mm = String(ph.getUTCMonth() + 1).padStart(2, '0');
+  return `${yy}${mm}`;
+}
+
+async function nextIoctProjectNo(dateLike) {
+  const yymm = phYearMonth(dateLike);
+  const prefix = `IOCT${yymm}`;
+  const snap = await db.collection('projects').select('project_no').get();
+  let max = 0;
+  for (const doc of snap.docs) {
+    const raw = String(doc.data().project_no || '').trim().toUpperCase();
+    const m = raw.match(new RegExp(`^${prefix}(\\d{3})(?:[A-Z])?$`));
+    if (!m) continue;
+    const n = parseInt(m[1], 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return `${prefix}${String(max + 1).padStart(3, '0')}`;
+}
+
+function numericRevision(q) {
+  const n = parseInt(q.revision || '0', 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function newestQuotation(a, b) {
+  const rev = numericRevision(b) - numericRevision(a);
+  if (rev !== 0) return rev;
+  return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+}
+
+function quotationGrandTotal(q) {
+  if (!q) return 0;
+  if (q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.grandTotal))) {
+    return Number(q.legacyTotalsSnapshot.grandTotal);
+  }
+  const cont = Number(q.globalContingencyPct || 0) / 100;
+  const generalReqtsCost = (q.generalReqts || []).reduce((sum, line) => {
+    return sum + Number(line.unitPrice || 0) * Number(line.qty || 0);
+  }, 0);
+  const generalReqtsSubtotal = generalReqtsCost * (1 + cont) * (1 + Number(q.generalReqMarkupPct || 0) / 100);
+  const componentsSubtotal = (q.components || []).reduce((sum, line) => {
+    const base = Number(line.unitCost || 0) * Number(line.forex || 1);
+    const adjusted = base * (1 + Number(line.contingencyPct || 0) / 100) * (1 - Number(line.discountPct || 0) / 100);
+    return sum + adjusted * (1 + Number(q.productMarkupPct || 0) / 100) * Number(line.qty || 0);
+  }, 0);
+  const manpowerCost = (q.manpower || []).reduce((sum, row) => {
+    return sum + Number(row.headcount || 0) * Number(row.mandays || 0) * (Number(row.dailyRate || 0) + Number(row.allowance || 0));
+  }, 0);
+  const servicesSubtotal = q.servicesFromManpower !== false
+    ? manpowerCost * (1 + cont) * (1 + Number(q.laborMarkupPct || 0) / 100)
+    : (q.services || []).reduce((sum, line) => sum + Number(line.amount || 0), 0);
+  const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSubtotal;
+  const afterDiscount = subtotal * (1 - Number(q.discountPct || 0) / 100);
+  return afterDiscount * (1 + Number(q.vatPct || 0) / 100);
+}
+
+function clientApproverFromClient(client) {
+  const contacts = Array.isArray(client?.contacts) ? client.contacts : [];
+  const primary = contacts.find((c) => c.isPrimary) || contacts[0];
+  return primary ? [primary.name, primary.position].filter(Boolean).join(' – ') : '';
+}
+
+function mapCalcsheetToMainProject(project, client, quotation, now, projectNo) {
+  const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
+  const amount = quotationGrandTotal(quotation);
+  const year = Number.isFinite(new Date(project.date || now).getFullYear())
+    ? new Date(project.date || now).getFullYear()
+    : new Date().getFullYear();
+  const paymentTerms = quotation?.paymentTerms || client?.paymentTerms || '';
+  return {
+    project_no: projectNo || '',
+    item_no: 0,
+    year,
+    am: client?.am || '',
+    ovp_number: '',
+    po_number: '',
+    po_date: null,
+    client_status: 'Won from Calcsheet',
+    client_id: project.customerId || null,
+    client_contact_id: quotation?.contactId || null,
+    account_name: client?.name || '',
+    project_name: project.name || '',
+    project_category: 'Services',
+    project_location: project.location || client?.address || '',
+    scope_of_work: project.notes || '',
+    qtn_no: project.code || '',
+    ovp_category: '',
+    contract_amount: amount,
+    updated_contract_amount: amount,
+    down_payment_percent: 0,
+    retention_percent: 0,
+    start_date: projectDate,
+    duration_days: 90,
+    completion_date: projectDate + (90 * 24 * 60 * 60),
+    payment_schedule: '',
+    payment_terms: paymentTerms,
+    bonds_requirement: 'NO',
+    project_director: '',
+    client_approver: clientApproverFromClient(client),
+    progress_billing_schedule: '',
+    mobilization_date: null,
+    updated_completion_date: null,
+    project_status: 'Not Started',
+    actual_site_progress_percent: 0,
+    actual_progress: 0,
+    evaluated_progress_percent: 0,
+    evaluated_progress: 0,
+    for_rfb_percent: 0,
+    for_rfb_amount: 0,
+    rfb_date: null,
+    type_of_rfb: '',
+    work_in_progress_ap: amount,
+    work_in_progress_ep: amount,
+    updated_contract_balance_percent: 1,
+    total_contract_balance: amount,
+    updated_contract_balance_net_percent: 1,
+    updated_contract_balance_net: amount,
+    remarks: `Created from Calcsheet ${project.code || ''}`.trim(),
+    contract_billed_gross_percent: 0,
+    contract_billed: 0,
+    contract_billed_net_percent: 0,
+    amount_contract_billed_net: 0,
+    for_retention_billing_percent: 0,
+    amount_for_retention_billing: 0,
+    retention_status: '',
+    unevaluated_progress: 0,
+    calcsheet_project_id: project.id,
+    calcsheet_code: project.code || '',
+    calcsheet_quotation_id: quotation?.id || null,
+    source_module: 'calcsheet',
+    executionFolderId: project.executionFolderId || '',
+    executionFolderUrl: project.executionFolderUrl || '',
+  };
+}
+
+async function findLinkedMainProject(project) {
+  if (project.mainProjectId) {
+    const linked = await db.collection('projects').doc(String(project.mainProjectId)).get();
+    if (linked.exists) return linked;
+  }
+  const byCalcsheetId = await db.collection('projects')
+    .where('calcsheet_project_id', '==', project.id)
+    .limit(1)
+    .get();
+  if (!byCalcsheetId.empty) return byCalcsheetId.docs[0];
+  if (project.code) {
+    const byCode = await db.collection('projects')
+      .where('calcsheet_code', '==', project.code)
+      .limit(1)
+      .get();
+    if (!byCode.empty) return byCode.docs[0];
+  }
+  return null;
+}
+
+async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
+  const now = new Date().toISOString();
+  const projectRef = db.collection('calcsheet_projects').doc(projectId);
+  const projectDoc = await projectRef.get();
+  if (!projectDoc.exists) {
+    const err = new Error('Calcsheet project not found');
+    err.status = 404;
+    throw err;
+  }
+  const project = { id: projectDoc.id, ...projectDoc.data() };
+  const [clientDoc, qSnap] = await Promise.all([
+    project.customerId ? db.collection('clients').doc(String(project.customerId)).get() : Promise.resolve(null),
+    db.collection('calcsheet_quotations').where('projectId', '==', projectId).get(),
+  ]);
+  const client = clientDoc && clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
+  const quotations = qSnap.docs.map((d) => {
+    const { id: _stored, ...data } = d.data();
+    return { ...data, id: d.id };
+  });
+  const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
+  const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
+  const selectedQuotation = ioct || acti;
+  if (!selectedQuotation) {
+    const err = new Error('No IOCT or ACTI quotation found to seed contract amount');
+    err.status = 400;
+    throw err;
+  }
+
+  const linkedDoc = await findLinkedMainProject(project);
+  if (linkedDoc && !options.force) {
+    const linkedData = linkedDoc.data() || {};
+    await projectRef.update({
+      mainProjectId: linkedDoc.id,
+      mainProjectNo: linkedData.project_no || '',
+      mainProjectLastSyncedAt: now,
+      mainProjectSyncStatus: 'linked',
+      mainProjectSyncError: '',
+      mainProjectStatus: linkedData.project_status || '',
+      mainProjectProgressPercent: Number(linkedData.actual_site_progress_percent || 0),
+      mainProjectCompletionDate: linkedData.completion_date || null,
+      mainProjectStatusSyncedAt: now,
+    });
+    return {
+      action: 'linked-existing',
+      mainProjectId: linkedDoc.id,
+      projectNo: linkedData.project_no || '',
+      quotationId: selectedQuotation.id,
+      quotationKind: selectedQuotation.kind,
+      amount: quotationGrandTotal(selectedQuotation),
+    };
+  }
+
+  let mapped;
+  let mainProjectId;
+  let action;
+  if (linkedDoc && options.force) {
+    const linkedData = linkedDoc.data() || {};
+    const projectNo = linkedData.project_no || await nextIoctProjectNo(now);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo);
+    mainProjectId = linkedDoc.id;
+    action = 'updated';
+    await linkedDoc.ref.update({ ...mapped, updated_at: now });
+  } else {
+    const projectNo = await nextIoctProjectNo(now);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo);
+    action = project.mainProjectId ? 'recreated' : 'created';
+    const ref = await db.collection('projects').add({ ...mapped, created_at: now, updated_at: now });
+    mainProjectId = ref.id;
+  }
+
+  await projectRef.update({
+    mainProjectId,
+    mainProjectNo: mapped.project_no || '',
+    mainProjectLinkedAt: project.mainProjectLinkedAt || now,
+    mainProjectLastSyncedAt: now,
+    mainProjectSyncStatus: 'linked',
+    mainProjectSyncError: '',
+    mainProjectStatus: mapped.project_status || '',
+    mainProjectProgressPercent: Number(mapped.actual_site_progress_percent || 0),
+    mainProjectCompletionDate: mapped.completion_date || null,
+    mainProjectStatusSyncedAt: now,
+  });
+
+  return {
+    action,
+    mainProjectId,
+    projectNo: mapped.project_no || '',
+    quotationId: selectedQuotation.id,
+    quotationKind: selectedQuotation.kind,
+    amount: quotationGrandTotal(selectedQuotation),
+  };
+}
+
 // ── Projects ─────────────────────────────────────────────────────────────────
 
 app.get('/api/calcsheet/projects', async (req, res) => {
   try {
     const snap = await db.collection('calcsheet_projects').orderBy('createdAt', 'desc').get();
-    const projects = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Drop any stale stored `id` field; the Firestore doc.id is authoritative.
+    // Without the explicit strip, `{ id: d.id, ...d.data() }` would let the spread
+    // overwrite d.id with whatever stored.id holds — and broken docs from before
+    // the POST fix have a wrong stored id, which would make the client target the
+    // wrong document on subsequent updates/deletes.
+    const projects = snap.docs.map((d) => {
+      const { id: _stored, ...data } = d.data();
+      return { ...data, id: d.id };
+    });
     res.json({ success: true, projects });
-  } catch (err) { res.status(500).json({ error: 'Failed to get projects' }); }
+  } catch (err) {
+    console.error('[calcsheet] get projects failed:', err);
+    res.status(500).json({ error: 'Failed to get projects' });
+  }
 });
 
 app.post('/api/calcsheet/projects', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const data = { ...req.body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    // Strip any client-supplied `id` from the body — Firestore's auto-generated
+    // ref.id is the canonical project ID. Without this strip, the `...data` spread
+    // below would overwrite ref.id with the client's nanoid in the response,
+    // leaving the client with an ID that doesn't address the stored document
+    // (subsequent PUTs would 500 with "Failed to update project").
+    const { id: _ignored, ...body } = req.body || {};
+    const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     const ref = await db.collection('calcsheet_projects').add(data);
-    res.json({ success: true, project: { id: ref.id, ...data } });
-  } catch (err) { res.status(500).json({ error: 'Failed to create project' }); }
+    res.json({ success: true, project: { ...data, id: ref.id } });
+  } catch (err) {
+    console.error('[calcsheet] create project failed:', err);
+    res.status(500).json({ error: 'Failed to create project' });
+  }
 });
 
 app.put('/api/calcsheet/projects/:id', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const update = { ...req.body, updatedAt: new Date().toISOString() };
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    // Defensively drop `id` from the update body — it's the doc identifier (from
+    // the URL param) and storing it inside the document is just dead data that
+    // can mask the real ID during debugging.
+    const { id: _ignored, ...body } = req.body || {};
+    const update = { ...body, updatedAt: new Date().toISOString() };
     await db.collection('calcsheet_projects').doc(req.params.id).update(update);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to update project' }); }
+  } catch (err) {
+    console.error('[calcsheet] update project failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to update project' });
+  }
+});
+
+app.post('/api/calcsheet/projects/:id/sync-main', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const result = await syncCalcsheetProjectToMainProject(req.params.id, { force: !!req.body?.force });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = err.status || 500;
+    const message = err.message || 'Failed to sync Project List record';
+    try {
+      await db.collection('calcsheet_projects').doc(req.params.id).update({
+        mainProjectSyncStatus: status === 404 ? 'missing' : 'error',
+        mainProjectSyncError: message,
+        mainProjectLastSyncedAt: new Date().toISOString(),
+      });
+    } catch (_) {
+      // ignore secondary sync-status failure
+    }
+    console.error('[calcsheet] sync main project failed:', { id: req.params.id, err: message });
+    res.status(status).json({ error: message });
+  }
 });
 
 app.delete('/api/calcsheet/projects/:id', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
     await db.collection('calcsheet_projects').doc(req.params.id).delete();
     // Also delete all quotations for this project
     const qsnap = await db.collection('calcsheet_quotations').where('projectId', '==', req.params.id).get();
@@ -1398,35 +1868,51 @@ app.get('/api/calcsheet/quotations', async (req, res) => {
     let query = db.collection('calcsheet_quotations');
     if (projectId) query = query.where('projectId', '==', projectId);
     const snap = await query.orderBy('createdAt', 'desc').get();
-    const quotations = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Strip any stale stored `id` so the spread can't overwrite d.id. See the
+    // identical fix applied to calcsheet_projects above for the full explanation.
+    const quotations = snap.docs.map((d) => {
+      const { id: _stored, ...data } = d.data();
+      return { ...data, id: d.id };
+    });
     res.json({ success: true, quotations });
-  } catch (err) { res.status(500).json({ error: 'Failed to get quotations' }); }
+  } catch (err) {
+    console.error('[calcsheet] get quotations failed:', err);
+    res.status(500).json({ error: 'Failed to get quotations' });
+  }
 });
 
 app.post('/api/calcsheet/quotations', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const data = { ...req.body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { id: _ignored, ...body } = req.body || {};
+    const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     const ref = await db.collection('calcsheet_quotations').add(data);
-    res.json({ success: true, quotation: { id: ref.id, ...data } });
-  } catch (err) { res.status(500).json({ error: 'Failed to create quotation' }); }
+    res.json({ success: true, quotation: { ...data, id: ref.id } });
+  } catch (err) {
+    console.error('[calcsheet] create quotation failed:', err);
+    res.status(500).json({ error: 'Failed to create quotation' });
+  }
 });
 
 app.put('/api/calcsheet/quotations/:id', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const update = { ...req.body, updatedAt: new Date().toISOString() };
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { id: _ignored, ...body } = req.body || {};
+    const update = { ...body, updatedAt: new Date().toISOString() };
     await db.collection('calcsheet_quotations').doc(req.params.id).update(update);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to update quotation' }); }
+  } catch (err) {
+    console.error('[calcsheet] update quotation failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to update quotation' });
+  }
 });
 
 app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
     await db.collection('calcsheet_quotations').doc(req.params.id).delete();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete quotation' }); }
@@ -1461,8 +1947,8 @@ app.get('/api/calcsheet/presets', async (req, res) => {
 
 app.post('/api/calcsheet/presets', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
     const ref = await db.collection('calcsheet_presets').add(req.body);
     res.json({ success: true, preset: { id: ref.id, ...req.body } });
   } catch (err) { res.status(500).json({ error: 'Failed to create preset' }); }
@@ -1470,8 +1956,8 @@ app.post('/api/calcsheet/presets', async (req, res) => {
 
 app.put('/api/calcsheet/presets/:id', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
     await db.collection('calcsheet_presets').doc(req.params.id).update(req.body);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to update preset' }); }
@@ -1479,40 +1965,69 @@ app.put('/api/calcsheet/presets/:id', async (req, res) => {
 
 app.delete('/api/calcsheet/presets/:id', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
     await db.collection('calcsheet_presets').doc(req.params.id).delete();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete preset' }); }
 });
 
 // ── Sequence counter (for quotation code generation) ─────────────────────────
+// The next sequence is always derived from the actual project codes — never
+// trust the `calcsheet_meta/seq` doc as the source of truth. Historical reason:
+// legacy bulk imports (and manual code re-assignments) wrote codes directly to
+// `calcsheet_projects` without updating the meta counter, so the counter drifted
+// far behind the real data (e.g. counter at 7, actual max at 036). Computing
+// from data on every request keeps the next number correct regardless of how
+// codes get into the system.
+
+// Helper: parse the 3-digit SEQ portion of PCS{YYMM}{SEQ}-{CLI}-{REV} codes
+// across all calcsheet projects and return the next global sequence number.
+async function computeNextProjectSeq() {
+  const snap = await db.collection('calcsheet_projects').get();
+  let max = 0;
+  for (const d of snap.docs) {
+    const code = (d.data() || {}).code || '';
+    const m = String(code).match(/^PCS\d{4}(\d{3})-/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  return max + 1;
+}
 
 app.get('/api/calcsheet/seq', async (req, res) => {
   try {
-    const doc = await db.collection('calcsheet_meta').doc('seq').get();
-    res.json({ success: true, seq: doc.exists ? doc.data().value : 1 });
-  } catch (err) { res.status(500).json({ error: 'Failed to get seq' }); }
+    const next = await computeNextProjectSeq();
+    res.json({ success: true, seq: next });
+  } catch (err) {
+    console.error('[calcsheet] get seq failed:', err);
+    res.status(500).json({ error: 'Failed to get seq' });
+  }
 });
 
 app.post('/api/calcsheet/seq/increment', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    const ref = db.collection('calcsheet_meta').doc('seq');
-    const doc = await ref.get();
-    const current = doc.exists ? doc.data().value : 1;
-    await ref.set({ value: current + 1 });
-    res.json({ success: true, seq: current });
-  } catch (err) { res.status(500).json({ error: 'Failed to increment seq' }); }
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    // Compute next from data, then update the meta doc as a debug breadcrumb
+    // (not the source of truth). The data-derived value is what we return.
+    const next = await computeNextProjectSeq();
+    db.collection('calcsheet_meta').doc('seq').set({ value: next, updatedAt: new Date().toISOString() }).catch(() => null);
+    res.json({ success: true, seq: next });
+  } catch (err) {
+    console.error('[calcsheet] increment seq failed:', err);
+    res.status(500).json({ error: 'Failed to increment seq' });
+  }
 });
 
 // ── Legacy import (bulk-import historical calcsheets as formulaVersion='legacy') ─
 
 app.post('/api/calcsheet/import/legacy', async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
     const mode = (req.query.mode || 'skip').toString(); // 'skip' | 'overwrite'
     const { project, quotations, client } = req.body || {};
     if (!project || !project.code) {

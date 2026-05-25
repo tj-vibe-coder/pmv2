@@ -8,25 +8,6 @@ import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 
-const loadImageAsDataUrl = (url: string): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const img = new window.Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('No canvas context'));
-        return;
-      }
-      ctx.drawImage(img, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = () => reject(new Error('Failed to load image'));
-    img.src = url;
-  });
-
 export interface CompletionCertificateTabProps {
   project: Project;
   currentUser: { full_name?: string | null; username?: string; email?: string } | null;
@@ -47,8 +28,8 @@ const formatCompletionDateForPdf = (value: string | number | Date | null | undef
   return new Date(value).toLocaleDateString('en-US', { dateStyle: 'long' });
 };
 
-const projectCompletionDateToInputValue = (project: Project): string => {
-  const d = project.completion_date;
+const completionDateToInputValue = (completionDate: Project['completion_date']): string => {
+  const d = completionDate;
   if (!d) return '';
   const date = typeof d === 'number' ? new Date(d * 1000) : new Date(d);
   if (isNaN(date.getTime())) return '';
@@ -62,9 +43,9 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
   preparedBy,
   onPreview,
 }) => {
-  const [completionDateOverride, setCompletionDateOverride] = useState<string>(() => projectCompletionDateToInputValue(project));
+  const [completionDateOverride, setCompletionDateOverride] = useState<string>(() => completionDateToInputValue(project.completion_date));
   useEffect(() => {
-    setCompletionDateOverride(projectCompletionDateToInputValue(project));
+    setCompletionDateOverride(completionDateToInputValue(project.completion_date));
   }, [project.id, project.completion_date]);
   const completionDateDisplay = useMemo(
     () => formatCompletionDateForPdf(completionDateOverride.trim() || undefined),
@@ -108,11 +89,11 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
       } catch (_) {}
     } else if (reportCompany === 'IOCT') {
       try {
-        const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
+        const { loadLogoTransparentBackground, IOCT_ICON_LOGO_PDF_SIZE } = await import('../../utils/logoUtils');
+        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
         const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-        doc.addImage(logoDataUrl, 'PNG', margin, y, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT);
-        y += IOCT_LOGO_PDF_HEIGHT + 4;
+        doc.addImage(logoDataUrl, 'PNG', margin, y, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
+        y += IOCT_ICON_LOGO_PDF_SIZE + 4;
       } catch (_) {}
     }
 

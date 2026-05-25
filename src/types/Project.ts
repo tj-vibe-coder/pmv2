@@ -58,6 +58,15 @@ export interface Project {
   unevaluated_progress: number;
   created_at: string;
   updated_at: string;
+
+  // Optional provenance when a Project List record is created from a won
+  // Calcsheet proposal.
+  calcsheet_project_id?: string;
+  calcsheet_code?: string;
+  calcsheet_quotation_id?: string;
+  source_module?: 'calcsheet' | string;
+  executionFolderId?: string;
+  executionFolderUrl?: string;
 }
 
 export type ProjectStatus = 'OPEN' | 'CLOSED' | 'FOR_CLOSEOUT' | 'PENDING' | 'CANCELLED';

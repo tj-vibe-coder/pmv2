@@ -157,7 +157,7 @@ export default function LiquidationFormPage() {
     const fallback = user?.username;
     if (fullName) setEmployeeName(fullName);
     else if (fallback && !employeeName) setEmployeeName(fallback);
-  }, [user?.full_name, user?.username]);
+  }, [employeeName, user?.full_name, user?.username]);
 
   useEffect(() => {
     dataService.getProjects().then(setProjects);

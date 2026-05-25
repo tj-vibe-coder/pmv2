@@ -18,7 +18,7 @@ import {
   Divider,
   MenuItem,
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon, Search as SearchIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import type { Supplier, SupplierProduct } from './SuppliersPage';
 
 const ESTIMATES_STORAGE_KEY = 'estimatesList';

@@ -11,6 +11,7 @@ import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import { useNavigate } from 'react-router-dom';
 import { nanoid } from 'nanoid';
+import { format } from 'date-fns';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import { useQuotationStore } from '../../store/quotationStore';
@@ -19,13 +20,14 @@ import {
   componentSellingUnit, lineGeneralTotal, manpowerCost, manpowerTotalCost,
 } from '../../utils/calcsheet/calc';
 import type {
-  ComponentLine, GeneralReqLine, ManpowerEntry, Quotation, ServiceLine,
+  ComponentLine, GeneralReqLine, ManpowerEntry, Quotation, SalesContact, ServiceLine,
 } from '../../types/Quotation';
 import { EditableTable } from './EditableTable';
 import type { Column } from './EditableTable';
 import { exportQuotationPdf } from '../../utils/calcsheet/pdfExport';
 import { exportQuotationXlsx } from '../../utils/calcsheet/xlsxExport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
 
@@ -45,6 +47,14 @@ const PAYMENT_TERM_OPTIONS = [
   'Back-to-back with end-user payment terms',
 ];
 const CUSTOM_PAYMENT = '__custom__';
+const todayDateOnly = () => format(new Date(), 'yyyy-MM-dd');
+
+const normalizeName = (value: string | undefined | null) => (value || '').trim().toLowerCase();
+const firstLastKey = (value: string | undefined | null) => {
+  const parts = normalizeName(value).split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  return `${parts[0]} ${parts[parts.length - 1]}`;
+};
 
 // Number input that doesn't force a leading 0 — empty when value is 0, select-all on focus.
 function NumField({
@@ -183,7 +193,44 @@ export default function QuotationEditor() {
   // OneDrive auto-upload on export. Hooks must be declared unconditionally —
   // keep these above the early-return guard below.
   const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const { user: currentUser } = useAuth();
   const [toast, setToast] = useState<{ msg: string; sev: 'success' | 'warning' | 'info' } | null>(null);
+  const effectiveSalesContacts = useMemo<SalesContact[]>(() => {
+    const userName = (currentUser?.full_name?.trim() || currentUser?.username || currentUser?.email || '').trim();
+    const userPosition = (currentUser?.designation || '').trim();
+    if (!userName && !userPosition) return salesContacts;
+    const userEmail = (currentUser?.email || '').trim();
+    const userNameKey = normalizeName(userName);
+    const userFirstLast = firstLastKey(userName);
+    const currentUserContact: SalesContact = {
+      id: String(currentUser?.id || 'current-user'),
+      name: userName,
+      position: userPosition,
+      email: userEmail,
+      phone: (currentUser?.contact_number || '').trim(),
+    };
+    const merged = salesContacts.map((contact) => {
+      const contactNameKey = normalizeName(contact.name);
+      const contactFirstLast = firstLastKey(contact.name);
+      const isCurrentUser =
+        (!!userNameKey && contactNameKey === userNameKey) ||
+        (!!userFirstLast && contactFirstLast === userFirstLast) ||
+        (!!userEmail && normalizeName(contact.email) === normalizeName(userEmail));
+      return isCurrentUser
+        ? { ...contact, position: userPosition || contact.position, email: userEmail || contact.email }
+        : contact;
+    });
+    const alreadyListed = merged.some((contact) => {
+      const contactNameKey = normalizeName(contact.name);
+      const contactFirstLast = firstLastKey(contact.name);
+      return (
+        (!!userNameKey && contactNameKey === userNameKey) ||
+        (!!userFirstLast && contactFirstLast === userFirstLast) ||
+        (!!userEmail && normalizeName(contact.email) === normalizeName(userEmail))
+      );
+    });
+    return alreadyListed || !userName ? merged : [currentUserContact, ...merged];
+  }, [currentUser?.contact_number, currentUser?.designation, currentUser?.email, currentUser?.full_name, currentUser?.id, currentUser?.username, salesContacts]);
 
   if (!saved || !draft || !project || !totals) {
     return <Typography>Quotation not found. <Link to="/calcsheet/projects">Back</Link></Typography>;
@@ -208,7 +255,8 @@ export default function QuotationEditor() {
     try {
       // Send the full draft as the patch — the store's updateQuotation handles
       // PUT to the server and updates local state on success.
-      await update(quotation.id, draft);
+      const savedQuotation = await update(quotation.id, draft);
+      setDraft(savedQuotation);
       setToast({ msg: 'Saved', sev: 'success' });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -406,7 +454,7 @@ export default function QuotationEditor() {
   const exportPdf = async () => {
     try {
       const { blob, filename } = await exportQuotationPdf(
-        quotation, project, recipient ?? null, customer ?? null, salesContacts,
+        quotation, project, recipient ?? null, customer ?? null, effectiveSalesContacts,
       );
 
       // Use whichever folder is current. After promotion to 'won', the move
@@ -597,6 +645,15 @@ export default function QuotationEditor() {
             ))}
           </TextField>
           <TextField label="Revision" value={quotation.revision} onChange={(e) => setField('revision', e.target.value)} disabled={isLegacy} />
+          <TextField
+            label="Date Sent"
+            type="date"
+            value={quotation.dateSent || todayDateOnly()}
+            onChange={(e) => setField('dateSent', e.target.value || undefined)}
+            disabled={isLegacy}
+            InputLabelProps={{ shrink: true }}
+            helperText={quotation.dateSent ? 'User-defined export date' : 'Defaults to export date'}
+          />
           <NumField label="Validity (days)" value={quotation.validityDays} onChange={(v) => setField('validityDays', v)} integer disabled={isLegacy} />
           <NumField label="Warranty (months)" value={quotation.warrantyMonths} onChange={(v) => setField('warrantyMonths', v)} integer disabled={isLegacy} />
           <Box sx={{ gridColumn: 'span 2' }}>
@@ -638,7 +695,7 @@ export default function QuotationEditor() {
           />
           {(() => {
             const staffOption = (props: any, option: string) => {
-              const c = salesContacts.find((x) => x.name === option);
+              const c = effectiveSalesContacts.find((x) => x.name === option);
               const sub = [c?.position, c?.phone, c?.email].filter(Boolean).join(' · ');
               return (
                 <li {...props} key={option}>
@@ -652,14 +709,14 @@ export default function QuotationEditor() {
               );
             };
             const helperFor = (name: string | undefined) => {
-              const c = name ? salesContacts.find((x) => x.name === name) : undefined;
+              const c = name ? effectiveSalesContacts.find((x) => x.name === name) : undefined;
               return c ? [c.position, c.phone, c.email].filter(Boolean).join(' · ') : ' ';
             };
             return (
               <>
                 <Autocomplete
                   freeSolo
-                  options={salesContacts.map((c) => c.name).filter(Boolean)}
+                  options={effectiveSalesContacts.map((c) => c.name).filter(Boolean)}
                   value={quotation.preparedBy ?? ''}
                   onChange={(_, v) => setField('preparedBy', v ?? '')}
                   onInputChange={(_, v, reason) => { if (reason === 'input') setField('preparedBy', v); }}
@@ -676,7 +733,7 @@ export default function QuotationEditor() {
                 />
                 <Autocomplete
                   freeSolo
-                  options={salesContacts.map((c) => c.name).filter(Boolean)}
+                  options={effectiveSalesContacts.map((c) => c.name).filter(Boolean)}
                   value={quotation.authorizedBy ?? ''}
                   onChange={(_, v) => setField('authorizedBy', v ?? '')}
                   onInputChange={(_, v, reason) => { if (reason === 'input') setField('authorizedBy', v); }}
@@ -736,7 +793,20 @@ export default function QuotationEditor() {
       {/* Section A */}
       <Paper sx={{ p: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>A. General Requirements</Typography>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>A. General Requirements</Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={!!quotation.exportGeneralReqtsAsLot}
+                  onChange={(e) => setField('exportGeneralReqtsAsLot', e.target.checked)}
+                  disabled={isLegacy}
+                />
+              }
+              label={<Typography variant="caption">Export as 1 LOT in PDF</Typography>}
+            />
+          </Stack>
           {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addGeneral}>Add row</Button>}
         </Stack>
         <EditableTable

@@ -17,6 +17,7 @@ import {
   Select,
   MenuItem,
   IconButton,
+  Alert,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
@@ -28,31 +29,17 @@ import {
   ServiceReport,
   getServiceReports,
   saveServiceReport,
+  updateServiceReportAt,
+  deleteServiceReportAt,
   clearServiceReports,
 } from '../ProjectDetails';
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
+import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
+import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
+import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
-
-const loadImageAsDataUrl = (url: string): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const img = new window.Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('No canvas context'));
-        return;
-      }
-      ctx.drawImage(img, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = () => reject(new Error('Failed to load image'));
-    img.src = url;
-  });
 
 export interface ServiceReportTabProps {
   project: Project;
@@ -81,9 +68,13 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   const [serviceReportActivitiesTable, setServiceReportActivitiesTable] = useState<{ activity: string; findingOutcome: string }[]>([{ activity: '', findingOutcome: '' }]);
   const [serviceReportCustomerComments, setServiceReportCustomerComments] = useState('');
   const [serviceReportVersion, setServiceReportVersion] = useState(0);
+  const [editingServiceReportIndex, setEditingServiceReportIndex] = useState<number | null>(null);
   const [serviceReportSaveFeedback, setServiceReportSaveFeedback] = useState(false);
+  const [exportFeedback, setExportFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken } = useOneDriveAuth();
 
-  useEffect(() => {
+  const resetServiceReportForm = () => {
     setServiceReportDate(new Date().toISOString().slice(0, 10));
     setServiceReportStartTime('');
     setServiceReportEndTime('');
@@ -91,6 +82,12 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     setServiceReportTitle('');
     setServiceReportActivitiesTable([{ activity: '', findingOutcome: '' }]);
     setServiceReportCustomerComments('');
+    setEditingServiceReportIndex(null);
+    setExportFeedback(null);
+  };
+
+  useEffect(() => {
+    resetServiceReportForm();
   }, [project.id]);
 
   // serviceReportVersion triggers refetch when user saves a report
@@ -99,11 +96,12 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
 
   const handleSaveServiceReport = () => {
     const projectNo = (project.project_no || String(project.item_no ?? project.id) || '').trim() || '—';
-    const nextSeq = serviceReports.length + 1;
-    const reportNo = `${projectNo} - SR${nextSeq}`;
+    const reportNo = editingServiceReportIndex !== null && serviceReports[editingServiceReportIndex]?.reportNo
+      ? serviceReports[editingServiceReportIndex].reportNo
+      : `${projectNo} - SR${serviceReports.length + 1}`;
     const table = serviceReportActivitiesTable.filter((r) => (r.activity || '').trim() || (r.findingOutcome || '').trim());
     const recs = (serviceReportCustomerComments || '').trim() ? [serviceReportCustomerComments.trim()] : [];
-    saveServiceReport(project.id, {
+    const report = {
       date: serviceReportDate,
       reportNo,
       title: serviceReportTitle.trim() || 'Service Report',
@@ -111,14 +109,19 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       endTime: serviceReportEndTime.trim() || undefined,
       activitiesTable: table.length > 0 ? table : [{ activity: '', findingOutcome: '' }],
       recommendationsTable: recs,
-    });
+    };
+    if (editingServiceReportIndex !== null && serviceReports[editingServiceReportIndex] != null) {
+      updateServiceReportAt(project.id, editingServiceReportIndex, report);
+    } else {
+      saveServiceReport(project.id, report);
+    }
     setServiceReportNo(reportNo);
     setServiceReportVersion((v) => v + 1);
     setServiceReportSaveFeedback(true);
     setTimeout(() => setServiceReportSaveFeedback(false), 2000);
   };
 
-  const handleLoadServiceReport = (report: ServiceReport) => {
+  const handleLoadServiceReport = (report: ServiceReport, index: number) => {
     setServiceReportDate(report.date);
     setServiceReportStartTime(report.startTime || '');
     setServiceReportEndTime(report.endTime || '');
@@ -137,17 +140,37 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       const leg = (report as { recommendations?: string }).recommendations || '';
       setServiceReportCustomerComments(leg.trim());
     }
+    setEditingServiceReportIndex(index);
+    setExportFeedback(null);
+  };
+
+  const handleDeleteLoadedServiceReport = () => {
+    if (editingServiceReportIndex === null || serviceReports[editingServiceReportIndex] == null) return;
+    handleDeleteServiceReport(editingServiceReportIndex);
+  };
+
+  const handleDeleteServiceReport = (index: number) => {
+    const report = serviceReports[index];
+    if (!report) return;
+    if (!window.confirm(`Delete saved service report "${report.reportNo}"? This cannot be undone.`)) return;
+    deleteServiceReportAt(project.id, index);
+    setServiceReportVersion((v) => v + 1);
+    if (editingServiceReportIndex === index) {
+      resetServiceReportForm();
+    } else if (editingServiceReportIndex !== null && index < editingServiceReportIndex) {
+      setEditingServiceReportIndex(editingServiceReportIndex - 1);
+    }
   };
 
   const handleClearServiceReports = () => {
     if (window.confirm('Remove all saved service reports for this project? This cannot be undone.')) {
       clearServiceReports(project.id);
       setServiceReportVersion((v) => v + 1);
-      setServiceReportNo('');
+      resetServiceReportForm();
     }
   };
 
-  const buildPdf = async (preview: boolean): Promise<Blob | void> => {
+  const buildPdf = async (preview: boolean): Promise<{ blob: Blob; filename: string } | void> => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const margin = 16;
     const contentWidth = 210 - margin * 2;
@@ -179,11 +202,11 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       } catch (_) {}
     } else if (reportCompany === 'IOCT') {
       try {
-        const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
+        const { loadLogoTransparentBackground, IOCT_ICON_LOGO_PDF_SIZE } = await import('../../utils/logoUtils');
+        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
         const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-        doc.addImage(logoDataUrl, 'PNG', margin, y, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT);
-        y += IOCT_LOGO_PDF_HEIGHT + 4;
+        doc.addImage(logoDataUrl, 'PNG', margin, y, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
+        y += IOCT_ICON_LOGO_PDF_SIZE + 4;
       } catch (_) {}
     }
 
@@ -253,7 +276,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       theme: 'grid',
       columnStyles: { 0: { cellWidth: 10 }, 1: { cellWidth: contentWidth * 0.5 - 5 }, 2: { cellWidth: contentWidth * 0.5 - 5 } },
       styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', overflow: 'linebreak', cellPadding: 2 },
-      headStyles: { fillColor: DR_HEADER_BLUE, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+      headStyles: { fillColor: DR_HEADER_BLUE, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', fontSize: 8 },
     });
     const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
     y = (docWithTable.lastAutoTable?.finalY ?? y) + sectionGap;
@@ -327,13 +350,48 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       doc.text(`Page ${p} of ${totalPages}`, 210 - margin, footerY, { align: 'right' });
     }
 
-    if (preview) return doc.output('blob') as Blob;
-    doc.save(`${reportNo.replace(/\s/g, '_')}.pdf`);
+    const filename = `${reportNo.replace(/\s/g, '_')}.pdf`;
+    const blob = doc.output('blob') as Blob;
+    if (!preview) doc.save(filename);
+    return { blob, filename };
   };
 
   const handlePreview = async () => {
-    const blob = await buildPdf(true);
-    if (blob) onPreview(blob, 'Service Report');
+    const result = await buildPdf(true);
+    if (result) onPreview(result.blob, 'Service Report');
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    setExportFeedback(null);
+    try {
+      const result = await buildPdf(false);
+      if (!result) return;
+      if (!isCorporateOneDriveConfigured()) {
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. OneDrive is not configured.' });
+        return;
+      }
+      if (!project.executionFolderId) {
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Link an execution folder to upload to OneDrive.' });
+        return;
+      }
+      if (!oneDriveSignedIn) {
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Sign in to OneDrive to upload it.' });
+        return;
+      }
+      const token = await getOneDriveToken();
+      if (!token) {
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Could not get OneDrive access token.' });
+        return;
+      }
+      const driveId = await resolveCorporateDriveId(token);
+      await uploadFileToFolderById(token, driveId, project.executionFolderId, result.filename, result.blob);
+      setExportFeedback({ severity: 'success', message: `PDF exported and uploaded to OneDrive: ${result.filename}` });
+    } catch (e) {
+      setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'PDF exported locally, but OneDrive upload failed.' });
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -344,6 +402,17 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Create service reports. Save to store a snapshot; load a previous report; Preview or Export to PDF.
       </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={resetServiceReportForm}
+          sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary, textTransform: 'none' }}
+        >
+          New report
+        </Button>
+      </Box>
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, sm: 6 }}>
           <TextField size="small" fullWidth label="Report Date" type="date" value={serviceReportDate} onChange={(e) => setServiceReportDate(e.target.value)} InputLabelProps={{ shrink: true }} />
@@ -401,16 +470,17 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         </Grid>
       </Grid>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mt: 2 }}>
-        <Button variant="contained" size="small" onClick={handleSaveServiceReport} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{serviceReportSaveFeedback ? 'Saved' : 'Save report'}</Button>
+        <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={resetServiceReportForm} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>New report</Button>
+        <Button variant="contained" size="small" onClick={handleSaveServiceReport} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{serviceReportSaveFeedback ? 'Saved' : editingServiceReportIndex !== null ? 'Update report' : 'Save report'}</Button>
         <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
-        <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={() => buildPdf(false)} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Export to PDF</Button>
+        <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Exporting...' : 'Export to PDF'}</Button>
         {serviceReports.length > 0 && (
           <>
             <FormControl size="small" sx={{ minWidth: 240 }}>
               <InputLabel id="load-service-report-label">Load previous report</InputLabel>
               <Select labelId="load-service-report-label" value="" label="Load previous report" onChange={(e) => {
                 const idx = Number(e.target.value);
-                if (!Number.isNaN(idx) && serviceReports[idx] != null) handleLoadServiceReport(serviceReports[idx]);
+                if (!Number.isNaN(idx) && serviceReports[idx] != null) handleLoadServiceReport(serviceReports[idx], idx);
                 (e.target as HTMLSelectElement).value = '';
               }}>
                 <MenuItem value=""><em>— Select to load —</em></MenuItem>
@@ -423,6 +493,49 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           </>
         )}
       </Box>
+      {serviceReports.length > 0 && (
+        <TableContainer sx={{ mt: 2, border: '1px solid #e2e8f0', borderRadius: 1 }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow sx={{ bgcolor: '#f8fafc' }}>
+                <TableCell sx={{ fontWeight: 600 }}>Saved service reports</TableCell>
+                <TableCell sx={{ fontWeight: 600 }}>Date</TableCell>
+                <TableCell sx={{ fontWeight: 600 }}>Title</TableCell>
+                <TableCell align="right" sx={{ fontWeight: 600 }}>Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {serviceReports.map((r, idx) => (
+                <TableRow key={r.id} hover selected={editingServiceReportIndex === idx}>
+                  <TableCell>{r.reportNo}</TableCell>
+                  <TableCell>{new Date(r.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
+                  <TableCell>{r.title || 'Service Report'}</TableCell>
+                  <TableCell align="right">
+                    <Button size="small" onClick={() => handleLoadServiceReport(r, idx)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
+                    <IconButton size="small" color="error" onClick={() => handleDeleteServiceReport(idx)} title="Delete report" aria-label="Delete report">
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+      {editingServiceReportIndex !== null && serviceReports[editingServiceReportIndex] != null && (
+        <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <Typography variant="body2" sx={{ color: 'info.main', fontSize: '0.8125rem' }}>
+            Editing: {serviceReports[editingServiceReportIndex].reportNo}. Click &quot;Update report&quot; to save changes.
+          </Typography>
+          <Button size="small" variant="outlined" onClick={resetServiceReportForm}>Cancel edit</Button>
+          <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={handleDeleteLoadedServiceReport}>Delete report</Button>
+        </Box>
+      )}
+      {exportFeedback && (
+        <Alert severity={exportFeedback.severity} sx={{ mt: 2 }} onClose={() => setExportFeedback(null)}>
+          {exportFeedback.message}
+        </Alert>
+      )}
     </Paper>
   );
 };

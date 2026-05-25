@@ -2,7 +2,7 @@ export type ID = string;
 
 export type QuotationKind = 'IOCT' | 'ACTI';
 
-export type ProjectStatus = 'draft' | 'sent' | 'won' | 'lost';
+export type ProjectStatus = 'draft' | 'sent' | 'won' | 'lost' | 'inactive';
 
 // Re-export the unified Client + ClientContact types so calcsheet code that imports
 // from `types/Quotation` keeps working without a path change.
@@ -39,6 +39,23 @@ export interface Project {
   proposalFolderUrl?: string;
   executionFolderId?: string;
   executionFolderUrl?: string;
+
+  // Link to the original Project List module after a proposal is won. The
+  // main project remains the operations record; Calcsheet only stores the link
+  // and sync status so accidental status flips can be recovered without
+  // deleting operational data.
+  mainProjectId?: string;
+  mainProjectNo?: string;
+  mainProjectLinkedAt?: string;
+  mainProjectLastSyncedAt?: string;
+  mainProjectSyncStatus?: 'none' | 'linked' | 'missing' | 'unlinked' | 'error';
+  mainProjectSyncError?: string;
+  mainProjectUnlinkedAt?: string;
+  mainProjectUnlinkReason?: string;
+  mainProjectStatus?: string;
+  mainProjectProgressPercent?: number;
+  mainProjectCompletionDate?: number | string | null;
+  mainProjectStatusSyncedAt?: string;
 }
 
 export type FormulaVersion = 'legacy' | 'current';
@@ -106,6 +123,7 @@ export interface Quotation {
   revision: string;
   recipientId: ID | null;
   contactId?: ID;            // Which contact at the recipient client this quotation addresses
+  dateSent?: string;          // YYYY-MM-DD. If blank, exports use the generation date.
   validityDays: number;
   paymentTerms: string;
   deliveryTerms: string;
@@ -124,6 +142,7 @@ export interface Quotation {
   preparedBy?: string;
   authorizedBy?: string;
   notes?: string;
+  exportGeneralReqtsAsLot?: boolean;
   formulaVersion?: FormulaVersion;
   generalReqContingencyMode?: 'standard' | 'baked';
   importedFrom?: QuotationImportMeta;

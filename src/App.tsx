@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, Outlet, useParams } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { Box } from '@mui/material';
@@ -321,6 +321,14 @@ function App() {
             />
             <Route
               path="/users"
+              element={<Navigate to="/settings/users" replace />}
+            />
+            <Route
+              path="/settings"
+              element={<Navigate to="/settings/users" replace />}
+            />
+            <Route
+              path="/settings/users"
               element={
                 <ProtectedRoute>
                   <SuperadminRoute>

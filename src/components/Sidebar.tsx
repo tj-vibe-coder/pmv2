@@ -35,7 +35,6 @@ import {
   RequestQuote as EstimateIcon,
   Calculate as CalculateIcon,
   HowToReg as HowToRegIcon,
-  Group as GroupIcon,
   AccountBalance as AccountBalanceIcon,
   Badge as BadgeIcon,
   Build as BuildIcon,
@@ -751,34 +750,6 @@ const Sidebar: React.FC = () => {
               </Tooltip>
             </ListItem>
           )}
-          {user?.role === 'superadmin' && (
-            <ListItem disablePadding sx={{ mb: 0.5 }}>
-              <Tooltip title={isExpanded ? '' : 'Users DB'} placement="right" arrow>
-                <ListItemButton
-                  selected={location.pathname === '/users'}
-                  onClick={() => navigate('/users')}
-                  sx={{
-                    borderRadius: 2,
-                    minHeight: 48,
-                    justifyContent: isExpanded ? 'initial' : 'center',
-                    px: isExpanded ? 2 : 1.5,
-                    '&.Mui-selected': { backgroundColor: 'rgba(255,255,255,0.15)', color: 'white' },
-                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
-                  }}
-                >
-                  <ListItemIcon sx={{ color: 'inherit', minWidth: isExpanded ? 40 : 'auto', justifyContent: 'center' }}>
-                    <GroupIcon />
-                  </ListItemIcon>
-                  {isExpanded && (
-                    <ListItemText
-                      primary="Users DB"
-                      primaryTypographyProps={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.9)' }}
-                    />
-                  )}
-                </ListItemButton>
-              </Tooltip>
-            </ListItem>
-          )}
           <ListItem disablePadding>
             <Tooltip title={isExpanded ? '' : 'Notifications'} placement="right" arrow>
               <ListItemButton
@@ -802,29 +773,36 @@ const Sidebar: React.FC = () => {
               </ListItemButton>
             </Tooltip>
           </ListItem>
-          <ListItem disablePadding>
-            <Tooltip title={isExpanded ? '' : 'Settings'} placement="right" arrow>
-              <ListItemButton
-                sx={{
-                  borderRadius: 2,
-                  minHeight: 48,
-                  justifyContent: isExpanded ? 'initial' : 'center',
-                  px: isExpanded ? 2 : 1.5,
-                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
-                }}
-              >
-                <ListItemIcon sx={{ color: 'rgba(255,255,255,0.8)', minWidth: isExpanded ? 40 : 'auto', justifyContent: 'center' }}>
-                  <SettingsIcon />
-                </ListItemIcon>
-                {isExpanded && (
-                  <ListItemText
-                    primary="Settings"
-                    primaryTypographyProps={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.9)' }}
-                  />
-                )}
-              </ListItemButton>
-            </Tooltip>
-          </ListItem>
+          {user?.role === 'superadmin' && (
+            <ListItem disablePadding>
+              <Tooltip title={isExpanded ? '' : 'User Management'} placement="right" arrow>
+                <ListItemButton
+                  selected={location.pathname.startsWith('/settings')}
+                  onClick={() => navigate('/settings/users')}
+                  sx={{
+                    borderRadius: 2,
+                    minHeight: 48,
+                    justifyContent: isExpanded ? 'initial' : 'center',
+                    px: isExpanded ? 2 : 1.5,
+                    '&.Mui-selected': { backgroundColor: 'rgba(255,255,255,0.15)', color: 'white' },
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'inherit', minWidth: isExpanded ? 40 : 'auto', justifyContent: 'center' }}>
+                    <SettingsIcon />
+                  </ListItemIcon>
+                  {isExpanded && (
+                    <ListItemText
+                      primary="User Management"
+                      secondary="Settings"
+                      primaryTypographyProps={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.9)' }}
+                      secondaryTypographyProps={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.62)' }}
+                    />
+                  )}
+                </ListItemButton>
+              </Tooltip>
+            </ListItem>
+          )}
         </List>
       </Box>
     </Drawer>

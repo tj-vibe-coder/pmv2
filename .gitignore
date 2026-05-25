@@ -48,6 +48,9 @@ yarn-error.log*
 # Claude Code workspace settings
 /.claude/
 
+# Command Code workspace settings
+/.commandcode/
+
 # Firestore backups (large, local-only)
 /backups/
 

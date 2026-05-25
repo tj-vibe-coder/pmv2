@@ -16,6 +16,7 @@ import {
   Select,
   MenuItem,
   IconButton,
+  Stack,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import SaveIcon from '@mui/icons-material/Save';
@@ -25,11 +26,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
 
 interface UserRow {
-  id: number;
+  id: string;
   username: string;
   email: string;
   full_name: string | null;
   designation: string | null;
+  contact_number: string | null;
   role: string;
   approved: number;
   created_at: number;
@@ -39,17 +41,21 @@ interface UserRow {
 const ROLES = ['superadmin', 'admin', 'user', 'viewer'] as const;
 
 export default function UsersPage() {
-  const { user } = useAuth();
+  const { user, updateCachedUser } = useAuth();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editUsername, setEditUsername] = useState('');
+  const [editEmail, setEditEmail] = useState('');
   const [editFullName, setEditFullName] = useState('');
   const [editDesignation, setEditDesignation] = useState('');
+  const [editContactNumber, setEditContactNumber] = useState('');
   const [editRole, setEditRole] = useState<string>('');
   const [editApproved, setEditApproved] = useState<number>(1);
-  const [savingId, setSavingId] = useState<number | null>(null);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [editPassword, setEditPassword] = useState('');
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fetchUsers = useCallback(async () => {
     const token = localStorage.getItem('netpacific_token');
@@ -92,10 +98,14 @@ export default function UsersPage() {
 
   const startEdit = (u: UserRow) => {
     setEditingId(u.id);
+    setEditUsername(u.username);
+    setEditEmail(u.email);
     setEditFullName(u.full_name ?? '');
     setEditDesignation(u.designation ?? '');
+    setEditContactNumber(u.contact_number ?? '');
     setEditRole(u.role);
     setEditApproved(u.approved);
+    setEditPassword('');
   };
 
   const cancelEdit = () => {
@@ -106,6 +116,18 @@ export default function UsersPage() {
     if (editingId == null) return;
     const token = localStorage.getItem('netpacific_token');
     if (!token) return;
+    if (!editUsername.trim()) {
+      setError('Username is required');
+      return;
+    }
+    if (!editEmail.trim()) {
+      setError('Email is required');
+      return;
+    }
+    if (editPassword && editPassword.length < 6) {
+      setError('Password must be at least 6 characters long');
+      return;
+    }
     setSavingId(editingId);
     try {
       const res = await fetch(`${API_BASE}/api/users/${editingId}`, {
@@ -115,28 +137,30 @@ export default function UsersPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          username: editUsername.trim(),
+          email: editEmail.trim(),
           full_name: editFullName.trim() || null,
           designation: editDesignation.trim() || null,
+          contact_number: editContactNumber.trim() || null,
           role: editRole,
           approved: editApproved,
+          ...(editPassword ? { password: editPassword } : {}),
         }),
       });
       const data = await res.json();
-      if (data.success) {
+      if (data.success && data.user) {
         setUsers((prev) =>
           prev.map((u) =>
             u.id === editingId
-              ? {
-                  ...u,
-                  full_name: editFullName.trim() || null,
-                  designation: editDesignation.trim() || null,
-                  role: editRole,
-                  approved: editApproved,
-                }
+              ? data.user
               : u
           )
         );
+        if (String(user?.id) === editingId) {
+          updateCachedUser(data.user);
+        }
         setEditingId(null);
+        setEditPassword('');
       } else {
         setError(data.error || 'Failed to update user');
       }
@@ -148,7 +172,7 @@ export default function UsersPage() {
   };
 
   const deleteUser = async (u: UserRow) => {
-    if (user?.id === u.id) {
+    if (String(user?.id) === u.id) {
       setError('You cannot delete your own account.');
       return;
     }
@@ -188,10 +212,10 @@ export default function UsersPage() {
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h5" sx={{ fontWeight: 600, color: theme.primary, mb: 2 }}>
-        Users DB
+        User Management
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        View and edit user data. Set Full name and Designation so they appear on reports.
+        Manage account identity, contact details, company position, access role, approval status, and password resets.
       </Typography>
 
       {error && (
@@ -212,10 +236,12 @@ export default function UsersPage() {
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>ID</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Username</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Email</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Full name</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Designation</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Role</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Name</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Contact No.</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Company Position</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Access Role</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Approved</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Password</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Created</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }} align="right">
                   Actions
@@ -226,8 +252,35 @@ export default function UsersPage() {
               {users.map((u) => (
                 <TableRow key={u.id} hover>
                   <TableCell>{u.id}</TableCell>
-                  <TableCell>{u.username}</TableCell>
-                  <TableCell>{u.email}</TableCell>
+                  <TableCell>
+                    {editingId === u.id ? (
+                      <TextField
+                        size="small"
+                        value={editUsername}
+                        onChange={(e) => setEditUsername(e.target.value)}
+                        placeholder="Username"
+                        fullWidth
+                        sx={{ minWidth: 150 }}
+                      />
+                    ) : (
+                      u.username
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {editingId === u.id ? (
+                      <TextField
+                        size="small"
+                        type="email"
+                        value={editEmail}
+                        onChange={(e) => setEditEmail(e.target.value)}
+                        placeholder="Email"
+                        fullWidth
+                        sx={{ minWidth: 220 }}
+                      />
+                    ) : (
+                      u.email
+                    )}
+                  </TableCell>
                   <TableCell>
                     {editingId === u.id ? (
                       <TextField
@@ -246,9 +299,23 @@ export default function UsersPage() {
                     {editingId === u.id ? (
                       <TextField
                         size="small"
+                        value={editContactNumber}
+                        onChange={(e) => setEditContactNumber(e.target.value)}
+                        placeholder="+63 ..."
+                        fullWidth
+                        sx={{ minWidth: 170 }}
+                      />
+                    ) : (
+                      u.contact_number || '—'
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {editingId === u.id ? (
+                      <TextField
+                        size="small"
                         value={editDesignation}
                         onChange={(e) => setEditDesignation(e.target.value)}
-                        placeholder="Designation"
+                        placeholder="Company position"
                         fullWidth
                         sx={{ maxWidth: 180 }}
                       />
@@ -290,13 +357,28 @@ export default function UsersPage() {
                     )}
                   </TableCell>
                   <TableCell>
+                    {editingId === u.id ? (
+                      <TextField
+                        size="small"
+                        type="password"
+                        value={editPassword}
+                        onChange={(e) => setEditPassword(e.target.value)}
+                        placeholder="Leave blank"
+                        fullWidth
+                        sx={{ minWidth: 150 }}
+                      />
+                    ) : (
+                      '••••••'
+                    )}
+                  </TableCell>
+                  <TableCell>
                     {u.created_at
                       ? new Date(u.created_at * 1000).toLocaleDateString()
                       : '—'}
                   </TableCell>
                   <TableCell align="right">
                     {editingId === u.id ? (
-                      <>
+                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
                         <Button
                           size="small"
                           startIcon={<SaveIcon />}
@@ -309,9 +391,9 @@ export default function UsersPage() {
                         <IconButton size="small" onClick={cancelEdit} aria-label="Cancel">
                           <CloseIcon fontSize="small" />
                         </IconButton>
-                      </>
+                      </Stack>
                     ) : (
-                      <>
+                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
                         <Button
                           size="small"
                           startIcon={<EditIcon />}
@@ -323,14 +405,14 @@ export default function UsersPage() {
                         <IconButton
                           size="small"
                           color="error"
-                          disabled={deletingId === u.id || user?.id === u.id}
+                          disabled={deletingId === u.id || String(user?.id) === u.id}
                           onClick={() => deleteUser(u)}
                           aria-label="Delete user"
-                          title={user?.id === u.id ? 'Cannot delete your own account' : 'Delete user'}
+                          title={String(user?.id) === u.id ? 'Cannot delete your own account' : 'Delete user'}
                         >
                           <DeleteIcon fontSize="small" />
                         </IconButton>
-                      </>
+                      </Stack>
                     )}
                   </TableCell>
                 </TableRow>

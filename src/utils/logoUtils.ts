@@ -44,3 +44,6 @@ export const ACT_LOGO_PDF_HEIGHT = 15;
 /** Default IOCT logo size in PDF (mm). Image is 1024×648 — preserve aspect ratio (width 18mm → height ~11.4mm). */
 export const IOCT_LOGO_PDF_WIDTH = 18;
 export const IOCT_LOGO_PDF_HEIGHT = 11.4;
+
+/** Default IOCT icon-only mark size in PDF (mm). */
+export const IOCT_ICON_LOGO_PDF_SIZE = 16;

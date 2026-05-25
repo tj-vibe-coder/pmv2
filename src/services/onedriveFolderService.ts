@@ -529,12 +529,21 @@ export async function createUrlShortcut(
  */
 export async function moveProposalToExecution(
   token: string,
-  project: { code: string; name: string; proposalFolderId: string },
+  project: { code: string; name: string; proposalFolderId: string; executionFolderName?: string },
 ): Promise<{ moved: DriveItemRef; shortcut: DriveItemRef | null }> {
   const driveId = await resolveCorporateDriveId(token);
   const folderName = projectFolderName(project);
+  const executionFolderName = project.executionFolderName
+    ? sanitizeForOneDrive(project.executionFolderName)
+    : undefined;
 
-  const moved = await moveItem(token, driveId, project.proposalFolderId, onedriveConfig.executionRoot);
+  const moved = await moveItem(
+    token,
+    driveId,
+    project.proposalFolderId,
+    onedriveConfig.executionRoot,
+    executionFolderName,
+  );
 
   // Drop a shortcut in the original proposal location. If a shortcut by this name
   // already exists (re-won after lost), uploadFileToFolder will overwrite it — that's

@@ -1,11 +1,12 @@
 export interface User {
-  id: number;
+  id: string | number;
   username: string;
   email: string;
   role: 'superadmin' | 'admin' | 'user' | 'viewer';
   approved?: number;
   full_name?: string | null;
   designation?: string | null;
+  contact_number?: string | null;
   created_at: number;
   updated_at: number;
 }

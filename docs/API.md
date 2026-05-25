@@ -179,16 +179,19 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
+  "username": "RJR",
+  "email": "josh.actech.inc@gmail.com",
   "full_name": "Updated Name",
   "designation": "Manager",
   "role": "admin",
-  "approved": 1
+  "approved": 1,
+  "password": "optional-new-password"
 }
 ```
 
-**Allowed fields:** `full_name` (string|null), `designation` (string|null), `role` (superadmin|admin|user|viewer), `approved` (0|1)
+**Allowed fields:** `username` (string), `email` (valid email), `full_name` (string|null), `designation` (string|null), `role` (superadmin|admin|user|viewer), `approved` (0|1), `password` (optional string, min 6 chars). Omit/blank `password` to keep the current password.
 
-**Response:** `{ "success": true, "message": "User updated" }`
+**Response:** `{ "success": true, "message": "User updated", "user": { ...updatedUser } }`
 
 ### POST /api/users/:id/approve
 
@@ -868,3 +871,6 @@ Content-Type: application/json
 | **viewer** | Read | Read | — | — | — | — | — |
 
 **Note:** Payroll access is gated by **username** (`TJC` or `RJR`), not role. Any role with one of these usernames can access payroll.
+Current production `TJC` and `RJR` records are approved superadmins.
+
+Settings user management uses the existing `/api/users` endpoints. `PATCH /api/users/:id` accepts `username`, `email`, `full_name`, `designation`, `role`, `approved`, and optional `password`; blank/omitted password leaves the password unchanged. The server validates unique username/email, password length when provided, and protects against removing access from the last superadmin.

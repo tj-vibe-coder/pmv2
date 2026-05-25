@@ -2,6 +2,221 @@
 
 ---
 
+## 2026-05-25 — Firebase Deployment
+
+### Summary
+
+Deployed the latest Calcsheet/auth/OneDrive/status changes to Firebase production.
+
+### Files Changed
+
+- `docs/agent/TASK_LOG.md` — recorded deployment result
+
+### Checks Run
+
+- `npm run deploy:all`
+
+### Result
+
+Done
+
+### Notes
+
+- Firebase project: `pmv2-851ae`
+- Function URL: `https://api-2g62nnt3fa-uc.a.run.app`
+- Hosting URL: `https://pmv2-851ae.web.app`
+- Deploy emitted existing warnings for local Node/npm engine mismatch, npm audit moderate vulnerabilities, stale Browserslist data, and large frontend bundle size.
+
+---
+
+## 2026-05-25 — Calcsheet Inactive Proposal Status
+
+### Summary
+
+Added an `inactive` Calcsheet proposal status to distinguish dormant/on-hold proposals from truly lost proposals.
+
+### Files Changed
+
+- `src/types/Quotation.ts` — added `inactive` to `ProjectStatus`
+- `src/components/calcsheet/CalcsheetProjects.tsx` — added inactive to status colors, list filter, and New Project dialog status options
+- `src/components/calcsheet/CalcsheetProjectDetail.tsx` — added inactive to the project detail status selector
+- `docs/agent/TASK_LOG.md` — recorded the change
+- `docs/agent/PROJECT_STATE.md` — updated completed state
+- `CLAUDE.md` — recorded the status semantics
+
+### Checks Run
+
+- `npx tsc --noEmit`
+- `node --check server.js`
+- `CI=true npm run build`
+
+### Result
+
+Done
+
+### Notes
+
+- `inactive` does not trigger Project List sync or OneDrive execution promotion. Only `won` keeps that behavior.
+
+---
+
+## 2026-05-25 — Calcsheet Unauthorized Status Update Fix
+
+### Summary
+
+Hardened custom auth handling after TJ hit `Unauthorized` while changing a Calcsheet proposal status. The likely failure mode was a stale cached token pointing to a missing/old user document: `/api/auth/me` returned a 200 payload with `Invalid token`, and the frontend kept the stale cached user instead of forcing a clean login.
+
+### Files Changed
+
+- `server.js` — `/api/auth/me` now returns HTTP 401 for invalid/inactive tokens; login now handles duplicate usernames deterministically by selecting a matching active account; Calcsheet write routes now use a shared active-user check
+- `src/contexts/AuthContext.tsx` — clears cached auth on any unsuccessful `/api/auth/me` payload, including `Invalid token`
+- `docs/agent/TASK_LOG.md` — recorded the fix and user audit
+- `docs/agent/PROJECT_STATE.md` — updated duplicate-user follow-up
+- `docs/agent/KNOWN_ISSUES.md` — corrected duplicate-user issue from stale TJC note to current admin/projects duplicates
+- `CLAUDE.md` — recorded the auth hardening and current user audit result
+
+### Checks Run
+
+- `node --check server.js`
+- `npx tsc --noEmit`
+- `CI=true npm run build`
+- Read-only Firestore users audit
+
+### Result
+
+Done
+
+### Notes
+
+- Read-only user audit found one `TJC` and one `RJR` production record. Duplicates remain for `admin` and `projects`.
+- After deploy, any browser with a stale token should be forced back to a clean login instead of failing later on Calcsheet updates.
+
+---
+
+## 2026-05-25 — Require OneDrive Login for Calcsheet Project Creation
+
+### Summary
+
+Changed Calcsheet project creation so a OneDrive sign-in is required when corporate OneDrive is configured. New projects now create/link the proposal folder before the project record is saved, so the stored project starts with `proposalFolderId` and `proposalFolderUrl`.
+
+### Files Changed
+
+- `src/components/calcsheet/CalcsheetProjects.tsx` — added OneDrive sign-in guard, visible Sign in OneDrive action, and save error handling
+- `src/store/quotationStore.ts` — `addProject` now requires an authenticated OneDrive token and creates/links the proposal folder before POSTing the project
+- `docs/agent/TASK_LOG.md` — recorded the change
+- `docs/agent/PROJECT_STATE.md` — updated current state
+- `CLAUDE.md` — recorded the behavior
+
+### Checks Run
+
+- `npx tsc --noEmit`
+- `node --check server.js`
+- `CI=true npm run build`
+
+### Result
+
+Done
+
+### Notes
+
+- If OneDrive folder creation succeeds but the project POST fails, an empty/unlinked OneDrive folder may remain and should be cleaned up manually. This is preferable to saving a Calcsheet project without its required proposal folder.
+
+---
+
+## 2026-05-25 — OneDrive Execution Folder Naming from Project List Code
+
+### Summary
+
+Updated Calcsheet won-proposal OneDrive promotion so the Project List record is created/linked before folder promotion when requested, then the moved execution folder is renamed to the operations `project_no` while the proposal-root shortcut keeps the proposal/PCS naming.
+
+### Files Changed
+
+- `src/services/onedriveFolderService.ts` — `moveProposalToExecution` now accepts an optional execution folder name and passes it to Graph's move/rename PATCH
+- `server.js` — `/api/calcsheet/projects/:id/sync-main` now returns and stores `mainProjectNo`
+- `src/store/quotationStore.ts` — stores `mainProjectNo` and uses it when moving/creating execution folders
+- `src/components/calcsheet/CalcsheetProjectDetail.tsx` — `Mark Won and Create Project` syncs the Project List record before setting status to `won`, so promotion can use the generated operations code
+- `src/components/calcsheet/CalcsheetProjects.tsx` — bulk backfill moves won proposal folders into execution with shortcut creation when `mainProjectNo` is known
+- `src/components/ProjectDetails.tsx` — main Project Details execution folder creation now prefers `project_no` over `calcsheet_code`
+- `src/types/Quotation.ts` — added optional `mainProjectNo`
+- `docs/agent/TASK_LOG.md` — recorded the change
+
+### Checks Run
+
+- `npx tsc --noEmit`
+- `node --check server.js`
+- `CI=true npm run build`
+
+### Result
+
+Done
+
+### Notes
+
+- `Mark Won Only` still cannot use a Project List code because no Project List record is created in that path.
+- Build passed with the existing Browserslist/outdated-data and bundle-size warnings.
+
+---
+
+## 2026-05-25 — User Contact Numbers and Calcsheet Staff Contact Sync
+
+### Summary
+
+Added editable user contact numbers in Settings user management and connected approved user records to Calcsheet staff/signatory contact data.
+
+### Files Changed
+
+- `server.js` — added `contact_number` to auth/user responses, user updates, default user shape, and a `/api/users/staff-contacts` endpoint for authenticated Calcsheet staff contact hydration
+- `src/components/UsersPage.tsx` — added a Contact No. column and inline editor
+- `src/types/User.ts` — added optional `contact_number`
+- `src/store/quotationStore.ts` — merges approved user-account email/designation/contact numbers into Calcsheet `salesContacts`
+- `src/components/calcsheet/CalcsheetQuotationEditor.tsx` — includes current user's contact number when overlaying user-account data into quotation signatory contacts
+- `docs/agent/TASK_LOG.md` — recorded the change
+
+### Checks Run
+
+- `node --check server.js`
+- `npx tsc --noEmit`
+- `CI=true npm run build`
+
+### Result
+
+Done
+
+### Notes
+
+- Existing Firestore user documents will get `contact_number` when edited; the default-user startup sync fills TJC's contact number only if it is missing.
+- Production needs a functions deploy before the new `/api/users/staff-contacts` endpoint is available on the hosted app.
+
+---
+
+## 2026-05-25 — Calcsheet Contacts and Summary Total Highlight
+
+### Summary
+
+Updated Calcsheet sales contact display data and quotation PDF summary styling.
+
+### Files Changed
+
+- `src/data/quotationClients.ts` — added Tyrone James Caballero's mobile number for Calcsheet signatory/contact details
+- `src/components/calcsheet/CalcsheetQuotationEditor.tsx` — treated current-user aliases such as `Reuel Rivera` as the same person as the existing `Reuel Joshua Rivera` contact when building signature dropdown options
+- `src/utils/calcsheet/pdfExport.tsx` — added a muted background and border to Summary total rows in exported quotation PDFs
+- `docs/agent/TASK_LOG.md` — recorded the change
+
+### Checks Run
+
+- `npx tsc --noEmit`
+- `CI=true npm run build`
+
+### Result
+
+Done
+
+### Notes
+
+- The Reuel dropdown cleanup keeps the fuller seeded contact row so existing phone/email details remain available.
+
+---
+
 ## 2026-05-25 — Calcsheet Quotation PDF Footer Page Number Fix
 
 ### Summary

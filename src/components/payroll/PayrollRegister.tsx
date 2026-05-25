@@ -9,9 +9,6 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { PayrollRun } from '../../types/Payroll';
 import { getPayrollRuns, approvePayrollRun, markRunPaid } from '../../utils/firebasePayroll';
 
-const fmt = (n: number) =>
-  new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n);
-
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
 

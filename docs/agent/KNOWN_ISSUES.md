@@ -268,11 +268,13 @@ Open
 
 ---
 
-## Duplicate TJC user records
+## Duplicate default user records
 
 ### Problem
 
-Firestore currently has two `TJC` user records with the same username/email. Both are approved superadmins.
+Firestore currently has duplicate default-account records for `admin` and `projects`.
+
+Resolved finding: a read-only audit on 2026-05-25 found only one `TJC` record and one `RJR` record.
 
 ### Cause
 
@@ -280,11 +282,11 @@ Historical seeding/imports created duplicate records.
 
 ### Workaround
 
-Leave both records in place until the actively used account is confirmed.
+Login now chooses a matching active account deterministically when duplicate usernames exist. Leave duplicates in place until the actively used documents are confirmed.
 
 ### Proper Fix
 
-Identify the active `TJC` document by login/session usage and safely remove or merge the duplicate.
+Identify active `admin` and `projects` documents by login/session usage and safely remove or merge the duplicates.
 
 ### Status
 

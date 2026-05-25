@@ -606,7 +606,6 @@ const MaterialRequestFormPage: React.FC = () => {
       styles: { fontSize: 7, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
       headStyles: { fillColor: MRF_HEADER_BLUE, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', fontSize: 7 },
     });
-    const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
     const totalPages = doc.getNumberOfPages();
     const docNumber = `Doc. No.: ${r.requestNo}`;
     const footerY = pageHeight - 10;

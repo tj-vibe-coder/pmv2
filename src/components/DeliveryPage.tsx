@@ -131,34 +131,6 @@ function loadOrdersFromTracker(): OrderRecord[] {
   }
 }
 
-/** Load logo and crop left edge to remove the vertical line in the image. */
-const loadLogoCroppedLeft = (url: string, cropPx: number = 14): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const img = new window.Image();
-    img.onload = () => {
-      const w = img.naturalWidth;
-      const h = img.naturalHeight;
-      const crop = Math.min(cropPx, Math.floor(w * 0.15));
-      const outW = w - crop;
-      if (outW <= 0) {
-        resolve(img.src);
-        return;
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = outW;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('No canvas context'));
-        return;
-      }
-      ctx.drawImage(img, crop, 0, outW, h, 0, 0, outW, h);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = () => reject(new Error('Failed to load image'));
-    img.src = url;
-  });
-
 const DeliveryPage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';

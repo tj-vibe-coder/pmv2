@@ -66,10 +66,11 @@ interface Actions {
   addProject: (p: Omit<Project, 'id' | 'code' | 'createdAt' | 'updatedAt'> & { code?: string }) => Promise<Project>;
   updateProject: (id: ID, patch: Partial<Project>) => Promise<void>;
   deleteProject: (id: ID) => Promise<void>;
+  syncMainProject: (id: ID, opts?: { force?: boolean }) => Promise<SyncMainProjectResult>;
 
   // Quotations
   createQuotation: (projectId: ID, kind: QuotationKind, recipientId: ID | null) => Promise<Quotation>;
-  updateQuotation: (id: ID, patch: Partial<Quotation>) => Promise<void>;
+  updateQuotation: (id: ID, patch: Partial<Quotation>) => Promise<Quotation>;
   deleteQuotation: (id: ID) => Promise<void>;
   duplicateQuotation: (id: ID) => Promise<Quotation | null>;
   // Import a fully-formed Quotation (e.g. from a legacy Excel parse) under an existing project.
@@ -84,7 +85,68 @@ interface Actions {
   resetAll: () => Promise<void>;
 }
 
+export interface SyncMainProjectResult {
+  success: boolean;
+  action: 'created' | 'recreated' | 'updated' | 'linked-existing';
+  mainProjectId: string;
+  projectNo: string;
+  quotationId: string;
+  quotationKind: QuotationKind;
+  amount: number;
+}
+
 const now = () => new Date().toISOString();
+
+function normalizeNameKey(value: string | undefined | null): string {
+  return (value || '').trim().toLowerCase();
+}
+
+function firstLastKey(value: string | undefined | null): string {
+  const parts = normalizeNameKey(value).split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  return `${parts[0]} ${parts[parts.length - 1]}`;
+}
+
+function mergeSalesContactsWithUsers(
+  seed: SalesContact[],
+  users: Array<{ id: string; full_name?: string | null; username?: string; email?: string | null; designation?: string | null; contact_number?: string | null }>,
+): SalesContact[] {
+  const merged = [...seed];
+  for (const user of users) {
+    const name = (user.full_name || '').trim();
+    if (!name) continue;
+    const userNameKey = normalizeNameKey(name);
+    const userFirstLast = firstLastKey(name);
+    const userEmail = (user.email || '').trim();
+    const idx = merged.findIndex((contact) => {
+      const contactNameKey = normalizeNameKey(contact.name);
+      const contactFirstLast = firstLastKey(contact.name);
+      return (
+        (!!userNameKey && contactNameKey === userNameKey) ||
+        (!!userFirstLast && contactFirstLast === userFirstLast) ||
+        (!!userEmail && normalizeNameKey(contact.email) === normalizeNameKey(userEmail))
+      );
+    });
+    const patch = {
+      id: user.id,
+      name,
+      position: (user.designation || '').trim(),
+      email: userEmail,
+      phone: (user.contact_number || '').trim(),
+    };
+    if (idx >= 0) {
+      merged[idx] = {
+        ...merged[idx],
+        position: patch.position || merged[idx].position,
+        email: patch.email || merged[idx].email,
+        phone: patch.phone || merged[idx].phone,
+      };
+    } else {
+      merged.push(patch);
+    }
+  }
+  return merged;
+}
 
 const blankQuotation = (
   projectId: ID,
@@ -136,17 +198,20 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
   init: async () => {
     if (get().initialized) return;
     try {
-      const [pRes, qRes, cRes, prRes, sRes] = await Promise.all([
+      const [pRes, qRes, cRes, prRes, sRes, staffRes] = await Promise.all([
         api<{ projects: Project[] }>('GET', '/projects'),
         api<{ quotations: Quotation[] }>('GET', '/quotations'),
         api<{ clients: Client[] }>('GET', '/clients'),
         api<{ presets: LaborRolePreset[] }>('GET', '/presets'),
         api<{ seq: number }>('GET', '/seq'),
+        api<{ contacts: Array<{ id: string; full_name?: string | null; username?: string; email?: string | null; designation?: string | null; contact_number?: string | null }> }>('GET', '/api/users/staff-contacts').catch(() => ({ contacts: [] })),
       ]);
+      const salesContacts = mergeSalesContactsWithUsers(seedSalesContacts(), staffRes.contacts ?? []);
       set({
         projects: pRes.projects ?? [],
         quotations: qRes.quotations ?? [],
         clients: cRes.clients.length ? cRes.clients : seedClients(),
+        salesContacts,
         laborPresets: prRes.presets.length ? prRes.presets : seedLaborPresets(),
         seq: sRes.seq ?? 1,
         initialized: true,
@@ -189,40 +254,31 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       updatedAt: now(),
       ...rest,
     };
-    const res = await api<{ project: Project }>('POST', '/projects', project);
-    const saved = res.project ?? project;
-    set({ projects: [...get().projects, saved], seq: seq + 1 });
 
-    // Fire-and-forget: create proposal folder in corporate OneDrive. Best-effort —
-    // never blocks project creation and never throws.
+    // Project creation requires a proposal folder when corporate OneDrive is
+    // configured. Create/link it before saving so the stored project has the
+    // folder reference from the start instead of relying on a background update.
+    let projectWithFolder = project;
     if (isCorporateOneDriveConfigured()) {
-      (async () => {
-        try {
-          const odStore = getOneDriveTokenStore();
-          if (!odStore.isAuthenticated) return;
-          const token = await odStore.getToken();
-          if (!token) return;
-          const ref = await ensureProposalFolder(token, saved);
-          await api('PUT', `/projects/${saved.id}`, {
-            proposalFolderId: ref.id,
-            proposalFolderUrl: ref.webUrl,
-          });
-          set({
-            projects: get().projects.map((proj) =>
-              proj.id === saved.id
-                ? { ...proj, proposalFolderId: ref.id, proposalFolderUrl: ref.webUrl }
-                : proj,
-            ),
-          });
-          // eslint-disable-next-line no-console
-          console.info('[OneDrive] proposal folder created', ref.webUrl);
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn('[OneDrive] proposal folder creation failed (non-blocking)', err);
-        }
-      })();
+      const odStore = getOneDriveTokenStore();
+      if (!odStore.isAuthenticated) {
+        throw new Error('Sign in to OneDrive before creating a Calcsheet project.');
+      }
+      const token = await odStore.getToken();
+      if (!token) {
+        throw new Error('Could not get OneDrive token. Sign in again before creating a project.');
+      }
+      const ref = await ensureProposalFolder(token, project);
+      projectWithFolder = {
+        ...project,
+        proposalFolderId: ref.id,
+        proposalFolderUrl: ref.webUrl,
+      };
     }
 
+    const res = await api<{ project: Project }>('POST', '/projects', projectWithFolder);
+    const saved = res.project ?? projectWithFolder;
+    set({ projects: [...get().projects, saved], seq: seq + 1 });
     return saved;
   },
   updateProject: async (id, patch) => {
@@ -258,6 +314,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
               code: next.code,
               name: next.name,
               proposalFolderId: next.proposalFolderId,
+              executionFolderName: next.mainProjectNo,
             });
             const patchFields = {
               // Same folder, new location → both fields point to the same URL/ID.
@@ -266,6 +323,12 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
               executionFolderUrl: moved.webUrl,
             };
             await api('PUT', `/projects/${id}`, patchFields);
+            if (next.mainProjectId) {
+              await api('PUT', `/api/projects/${next.mainProjectId}`, {
+                executionFolderId: moved.id,
+                executionFolderUrl: moved.webUrl,
+              }).catch(() => {});
+            }
             set({
               projects: get().projects.map((proj) =>
                 proj.id === id ? { ...proj, ...patchFields } : proj,
@@ -276,11 +339,20 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
           } else {
             // Fallback: no proposal folder yet (legacy projects). Create a fresh one
             // at the execution location.
-            const ref = await ensureExecutionFolder(token, next);
+            const executionProject = next.mainProjectNo
+              ? { code: next.mainProjectNo, name: '' }
+              : next;
+            const ref = await ensureExecutionFolder(token, executionProject);
             await api('PUT', `/projects/${id}`, {
               executionFolderId: ref.id,
               executionFolderUrl: ref.webUrl,
             });
+            if (next.mainProjectId) {
+              await api('PUT', `/api/projects/${next.mainProjectId}`, {
+                executionFolderId: ref.id,
+                executionFolderUrl: ref.webUrl,
+              }).catch(() => {});
+            }
             set({
               projects: get().projects.map((proj) =>
                 proj.id === id
@@ -304,6 +376,31 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       projects: get().projects.filter((p) => p.id !== id),
       quotations: get().quotations.filter((q) => q.projectId !== id),
     });
+  },
+  syncMainProject: async (id, opts = {}) => {
+    const res = await api<SyncMainProjectResult>('POST', `/projects/${id}/sync-main`, {
+      force: !!opts.force,
+    });
+    const nowIso = now();
+    set({
+      projects: get().projects.map((p) =>
+        p.id === id
+          ? {
+              ...p,
+              mainProjectId: res.mainProjectId,
+              mainProjectNo: res.projectNo,
+              mainProjectLinkedAt: p.mainProjectLinkedAt || nowIso,
+              mainProjectLastSyncedAt: nowIso,
+              mainProjectSyncStatus: 'linked',
+              mainProjectSyncError: '',
+              mainProjectStatus: p.mainProjectStatus || 'Not Started',
+              mainProjectProgressPercent: p.mainProjectProgressPercent ?? 0,
+              mainProjectStatusSyncedAt: nowIso,
+            }
+          : p,
+      ),
+    });
+    return res;
   },
 
   // ── Quotations ─────────────────────────────────────────────────────────────
@@ -331,11 +428,17 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       if (v !== undefined) cleaned[k] = v;
     }
     await api('PUT', `/quotations/${id}`, cleaned);
+    const updatedAt = now();
+    let saved: Quotation | null = null;
     set({
-      quotations: get().quotations.map((q) =>
-        q.id === id ? { ...q, ...patch, updatedAt: now() } : q,
-      ),
+      quotations: get().quotations.map((q) => {
+        if (q.id !== id) return q;
+        saved = { ...q, ...patch, updatedAt };
+        return saved;
+      }),
     });
+    if (!saved) throw new Error('Quotation not found after update');
+    return saved;
   },
   deleteQuotation: async (id) => {
     await api('DELETE', `/quotations/${id}`);

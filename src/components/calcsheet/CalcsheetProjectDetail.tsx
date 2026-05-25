@@ -19,7 +19,7 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import CloudOffIcon from '@mui/icons-material/CloudOff';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
-import type { Quotation, QuotationKind } from '../../types/Quotation';
+import type { ProjectStatus, Quotation, QuotationKind } from '../../types/Quotation';
 import { parseLegacyWorkbook } from '../../utils/calcsheet/legacyImport';
 import type { ParsedProject, ParsedQuotation } from '../../utils/calcsheet/legacyImport';
 import { parseLegacyPdf } from '../../utils/calcsheet/legacyPdfImport';
@@ -52,6 +52,7 @@ export default function ProjectDetail() {
   const duplicateQuotation = useQuotationStore((s) => s.duplicateQuotation);
   const importQuotation = useQuotationStore((s) => s.importQuotation);
   const updateProject = useQuotationStore((s) => s.updateProject);
+  const syncMainProject = useQuotationStore((s) => s.syncMainProject);
 
   // OneDrive corporate folder integration
   const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
@@ -61,6 +62,62 @@ export default function ProjectDetail() {
   // user when auto-detect matched an existing historical folder (instead of
   // creating a new one) so they don't think the system silently misbehaved.
   const [oneDriveInfo, setOneDriveInfo] = useState<string>('');
+  const [statusConfirmOpen, setStatusConfirmOpen] = useState(false);
+  const [mainSyncBusy, setMainSyncBusy] = useState(false);
+  const [mainSyncErr, setMainSyncErr] = useState('');
+  const [mainSyncInfo, setMainSyncInfo] = useState('');
+
+  const syncToMainProject = async (force = false) => {
+    if (!project) return null;
+    setMainSyncBusy(true);
+    setMainSyncErr('');
+    setMainSyncInfo('');
+    try {
+      const result = await syncMainProject(project.id, { force });
+      const verb = result.action === 'linked-existing'
+        ? 'Linked existing Project List record'
+        : result.action === 'recreated'
+          ? 'Recreated Project List record'
+          : result.action === 'updated'
+            ? 'Updated Project List record'
+            : 'Created Project List record';
+      setMainSyncInfo(`${verb} using ${result.quotationKind} quotation (${PHP(result.amount)}).`);
+      return result;
+    } catch (e) {
+      setMainSyncErr(e instanceof Error ? e.message : 'Failed to sync Project List record');
+      return null;
+    } finally {
+      setMainSyncBusy(false);
+    }
+  };
+
+  const changeStatus = async (nextStatus: ProjectStatus) => {
+    if (!project) return;
+    setMainSyncErr('');
+    setMainSyncInfo('');
+    if (nextStatus === 'won' && project.status !== 'won') {
+      setStatusConfirmOpen(true);
+      return;
+    }
+    await updateProject(project.id, { status: nextStatus });
+  };
+
+  const confirmWon = async (sync: boolean) => {
+    if (!project) return;
+    setStatusConfirmOpen(false);
+    setMainSyncErr('');
+    setMainSyncInfo('');
+    try {
+      const result = sync ? await syncToMainProject(false) : null;
+      if (sync && !result) return;
+      await updateProject(project.id, {
+        status: 'won',
+        ...(result ? { mainProjectId: result.mainProjectId, mainProjectNo: result.projectNo } : {}),
+      });
+    } catch (e) {
+      setMainSyncErr(e instanceof Error ? e.message : 'Failed to mark project as won');
+    }
+  };
 
   const createProposalFolderManually = async () => {
     if (!project) return;
@@ -202,6 +259,13 @@ export default function ProjectDetail() {
         ? { proposalFolderId: ref.id, proposalFolderUrl: ref.webUrl }
         : { executionFolderId: ref.id, executionFolderUrl: ref.webUrl };
       await updateProject(project.id, patch);
+      if (linkDialogOpen === 'execution' && project.mainProjectId) {
+        await fetch(`/api/projects/${project.mainProjectId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ executionFolderId: ref.id, executionFolderUrl: ref.webUrl }),
+        }).catch(() => {});
+      }
       setLinkDialogOpen(null);
     } catch (e) {
       setLinkErr(e instanceof Error ? e.message : 'Failed to link folder');
@@ -229,6 +293,13 @@ export default function ProjectDetail() {
         ? { proposalFolderId: ref.id, proposalFolderUrl: ref.webUrl }
         : { executionFolderId: ref.id, executionFolderUrl: ref.webUrl };
       await updateProject(project.id, patch);
+      if (linkDialogOpen === 'execution' && project.mainProjectId) {
+        await fetch(`/api/projects/${project.mainProjectId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ executionFolderId: ref.id, executionFolderUrl: ref.webUrl }),
+        }).catch(() => {});
+      }
       setLinkDialogOpen(null);
     } catch (e) {
       setLinkErr(e instanceof Error ? e.message : 'Failed to resolve URL');
@@ -269,23 +340,41 @@ export default function ProjectDetail() {
           code: project.code,
           name: project.name,
           proposalFolderId: project.proposalFolderId,
+          executionFolderName: project.mainProjectNo,
         });
         await updateProject(project.id, {
           proposalFolderUrl: moved.webUrl,
           executionFolderId: moved.id,
           executionFolderUrl: moved.webUrl,
         });
+        if (project.mainProjectId) {
+          await fetch(`/api/projects/${project.mainProjectId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ executionFolderId: moved.id, executionFolderUrl: moved.webUrl }),
+          }).catch(() => {});
+        }
       } else {
         // Either no proposal folder ever existed, or it was deleted out-of-band.
         // Create a fresh execution folder and clear any stale proposal refs so
         // future clicks don't try to re-promote a ghost.
-        const ref = await ensureExecutionFolder(token, project);
+        const executionProject = project.mainProjectNo
+          ? { code: project.mainProjectNo, name: '' }
+          : project;
+        const ref = await ensureExecutionFolder(token, executionProject);
         await updateProject(project.id, {
           proposalFolderId: '',
           proposalFolderUrl: '',
           executionFolderId: ref.id,
           executionFolderUrl: ref.webUrl,
         });
+        if (project.mainProjectId) {
+          await fetch(`/api/projects/${project.mainProjectId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ executionFolderId: ref.id, executionFolderUrl: ref.webUrl }),
+          }).catch(() => {});
+        }
         if (ref.matchedExisting) {
           setOneDriveInfo(`Linked to existing folder: "${ref.folderName}"`);
         }
@@ -756,7 +845,7 @@ export default function ProjectDetail() {
                 size="small"
                 variant="standard"
                 value={project.status}
-                onChange={(e) => updateProject(project.id, { status: e.target.value as typeof project.status })}
+                onChange={(e) => { void changeStatus(e.target.value as ProjectStatus); }}
                 InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
                 sx={{ minWidth: 80 }}
               >
@@ -764,9 +853,31 @@ export default function ProjectDetail() {
                 <MenuItem value="sent">sent</MenuItem>
                 <MenuItem value="won">won</MenuItem>
                 <MenuItem value="lost">lost</MenuItem>
+                <MenuItem value="inactive">inactive</MenuItem>
               </TextField>
             </Box>
           </Box>
+          {project.mainProjectId && (
+            <Box>
+              <Typography variant="caption" color="text.secondary">Project List status</Typography>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Chip
+                  size="small"
+                  label={project.mainProjectStatus || 'Not Started'}
+                  color={
+                    String(project.mainProjectStatus || '').toLowerCase().includes('complete') ||
+                    String(project.mainProjectStatus || '').toLowerCase().includes('closed')
+                      ? 'success'
+                      : 'default'
+                  }
+                  variant="outlined"
+                />
+                <Typography variant="caption" color="text.secondary">
+                  {project.mainProjectProgressPercent ?? 0}%
+                </Typography>
+              </Stack>
+            </Box>
+          )}
           <Box>
             <Typography variant="caption" color="text.secondary">Date</Typography>
             <Box>
@@ -781,20 +892,54 @@ export default function ProjectDetail() {
               />
             </Box>
           </Box>
-          <Box sx={{ ml: 'auto' }}>
-            <FormControlLabel
-              control={
-                <Switch
-                  size="small"
-                  checked={!!project.ongoing}
-                  onChange={(e) => updateProject(project.id, { ongoing: e.target.checked })}
-                />
-              }
-              label={<Typography variant="caption">Ongoing project</Typography>}
-            />
-          </Box>
         </Stack>
       </Paper>
+
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ rowGap: 1 }}>
+        {project.mainProjectId ? (
+          <>
+            <Button
+              component={Link}
+              to="/dashboard"
+              variant="outlined"
+              size="small"
+              color="success"
+              startIcon={<LinkIcon />}
+            >
+              Linked to Project List
+            </Button>
+            <Button
+              variant="text"
+              size="small"
+              disabled={mainSyncBusy}
+              onClick={() => { void syncToMainProject(true); }}
+            >
+              {mainSyncBusy ? 'Syncing...' : 'Resync'}
+            </Button>
+          </>
+        ) : project.status === 'won' ? (
+          <Button
+            variant="contained"
+            size="small"
+            color="success"
+            disabled={mainSyncBusy}
+            startIcon={<LinkIcon />}
+            onClick={() => { void syncToMainProject(false); }}
+          >
+            {mainSyncBusy ? 'Creating...' : 'Create Project List record'}
+          </Button>
+        ) : null}
+        {mainSyncErr && (
+          <Typography variant="caption" color="error.main">
+            {mainSyncErr}
+          </Typography>
+        )}
+        {mainSyncInfo && !mainSyncErr && (
+          <Typography variant="caption" color="success.main">
+            {mainSyncInfo}
+          </Typography>
+        )}
+      </Stack>
 
       {isCorporateOneDriveConfigured() && (
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ rowGap: 1 }}>
@@ -1513,6 +1658,27 @@ export default function ProjectDetail() {
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancel</Button>
           <Button variant="contained" onClick={create}>Create</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={statusConfirmOpen} onClose={() => setStatusConfirmOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Mark proposal as won?</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ mt: 1 }}>
+            <Typography variant="body2">
+              This can create or link a record in the original Project List module using the latest IOCT quotation amount. If no IOCT quotation exists, ACTI is used as the fallback.
+            </Typography>
+            <Alert severity="info" variant="outlined">
+              Changing the status back later will not delete the Project List record. You can unlink or edit it separately.
+            </Alert>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setStatusConfirmOpen(false)}>Cancel</Button>
+          <Button onClick={() => { void confirmWon(false); }}>Mark Won Only</Button>
+          <Button variant="contained" color="success" onClick={() => { void confirmWon(true); }}>
+            Mark Won and Create Project
+          </Button>
         </DialogActions>
       </Dialog>
 

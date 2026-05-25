@@ -7,6 +7,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (credentials: LoginCredentials) => Promise<{ success: boolean; error?: string }>;
+  updateCachedUser: (nextUser: User) => void;
   logout: () => void;
 }
 
@@ -68,8 +69,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         if (data.success && data.user) {
           setUser(data.user);
           localStorage.setItem('netpacific_user', JSON.stringify(data.user));
-        } else if (data?.error === 'Unauthorized' || data?.code === 401) {
-          // Server returned 200 with an explicit unauthorized payload (some APIs do this).
+        } else if (!data.success || data?.error === 'Unauthorized' || data?.error === 'Invalid token' || data?.code === 401) {
+          // Server returned 200 with an explicit auth failure payload (older APIs did this).
           localStorage.removeItem('netpacific_user');
           localStorage.removeItem('netpacific_token');
           setUser(null);
@@ -110,6 +111,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
+  const updateCachedUser = (nextUser: User) => {
+    setUser(nextUser);
+    localStorage.setItem('netpacific_user', JSON.stringify(nextUser));
+  };
+
   const logout = () => {
     setUser(null);
     localStorage.removeItem('netpacific_user');
@@ -121,6 +127,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     isAuthenticated: !!user,
     isLoading,
     login,
+    updateCachedUser,
     logout,
   };
 

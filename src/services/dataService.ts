@@ -79,7 +79,7 @@ class DataService {
       });
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
-        return { success: false, error: err.error || response.statusText };
+        return { success: false, error: err.details || err.error || response.statusText };
       }
       return { success: true };
     } catch (error) {

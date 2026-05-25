@@ -175,6 +175,11 @@ const styles = StyleSheet.create({
   sumFooterRow: {
     flexDirection: 'row', justifyContent: 'flex-end', padding: '3 6', fontSize: 9.5,
   },
+  sumTotalRow: {
+    backgroundColor: SECTION_BG,
+    borderTop: `0.5px solid ${BORDER}`,
+    borderBottom: `0.5px solid ${BORDER}`,
+  },
   sumFooterLabel: { fontWeight: 700, marginRight: 16 },
   sumFooterValue: { fontWeight: 700, width: '20%', textAlign: 'right' },
 
@@ -470,7 +475,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               <Text style={styles.sumPrice}>{PHP(totals.servicesSubtotal)}</Text>
             </View>
           )}
-          <View style={styles.sumFooterRow}>
+          <View style={[styles.sumFooterRow, styles.sumTotalRow]}>
             <Text style={styles.sumFooterLabel}>TOTAL PRICE, PHP (VAT-EX)</Text>
             <Text style={styles.sumFooterValue}>{PHP(totals.subtotal)}</Text>
           </View>
@@ -492,7 +497,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
                 <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
               </View>
-              <View style={styles.sumFooterRow}>
+              <View style={[styles.sumFooterRow, styles.sumTotalRow]}>
                 <Text style={styles.sumFooterLabel}>TOTAL PRICE, PHP (VAT-IN)</Text>
                 <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
               </View>

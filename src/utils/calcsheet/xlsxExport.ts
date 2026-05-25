@@ -8,6 +8,11 @@ import {
 
 const PHP_FMT = '"₱" #,##0.00;[Red]"₱" -#,##0.00';
 
+function quotationDate(value: string | undefined): Date {
+  const dateOnly = (value || format(new Date(), 'yyyy-MM-dd')).slice(0, 10);
+  return new Date(`${dateOnly}T00:00:00`);
+}
+
 export async function exportQuotationXlsx(
   quotation: Quotation, project: Project, recipient: Client | null, customer: Client | null,
 ) {
@@ -44,7 +49,7 @@ export async function exportQuotationXlsx(
   ws.getCell('E1').alignment = { horizontal: 'right' };
   ws.getCell('F2').value = `Ref: ${refNo}`;
   ws.getCell('F2').alignment = { horizontal: 'right' };
-  ws.getCell('F3').value = `Date: ${format(new Date(project.date), 'dd MMM yyyy')}`;
+  ws.getCell('F3').value = `Date: ${format(quotationDate(quotation.dateSent), 'dd MMM yyyy')}`;
   ws.getCell('F3').alignment = { horizontal: 'right' };
 
   ws.mergeCells('A4:F4');

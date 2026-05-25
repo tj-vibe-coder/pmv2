@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import {
   Box,
-  Container,
   Paper,
   Typography,
   TextField,
@@ -63,8 +62,17 @@ const ReportsPage: React.FC = () => {
 
   useEffect(() => {
     setPreparedBy((prev) => {
-      const name = prev.name === '' ? (currentUser?.full_name?.trim() || currentUser?.username || currentUser?.email || '') : prev.name;
-      const designation = prev.designation === '' ? (currentUser?.designation?.trim() || '') : prev.designation;
+      const userName = (currentUser?.full_name?.trim() || currentUser?.username || currentUser?.email || '').trim();
+      const userDesignation = (currentUser?.designation?.trim() || '').trim();
+      const preparedName = (prev.name || '').trim();
+      const matchesCurrentUser = !!userName && (
+        preparedName === '' ||
+        preparedName.toLowerCase() === userName.toLowerCase() ||
+        preparedName.toLowerCase() === (currentUser?.username || '').toLowerCase() ||
+        preparedName.toLowerCase() === (currentUser?.email || '').toLowerCase()
+      );
+      const name = matchesCurrentUser ? userName : prev.name;
+      const designation = matchesCurrentUser && userDesignation ? userDesignation : prev.designation;
       if (name !== prev.name || designation !== prev.designation) return { ...prev, name, designation };
       return prev;
     });

@@ -24,12 +24,17 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 - Payroll module (employee management, PH labor code computation, payslip generation)
 - User management (superadmin approvals, user database)
 - Settings-based user management with username/email/name/company position/role/password reset editing
+- Settings-based user management now includes editable user contact numbers, and Calcsheet staff/signatory contact details hydrate from approved user records when available
 - RJR and TJC production user records are approved superadmins
+- Custom auth now clears stale invalid cached tokens, login selects an active matching account when duplicate usernames exist, and Calcsheet write routes consistently require an active approved user
 - Investment tracker
 - System documentation (ARCHITECTURE.md, API.md, DATA_MODEL.md)
 - Agent memory setup (README_AGENT_MEMORY_SETUP.md)
 - Calcsheet won-proposal handoff into Project List with `IOCTYYMM###` operations numbering
+- Calcsheet proposal statuses now include `inactive` to separate dormant/on-hold proposals from `lost`
+- Calcsheet project creation requires OneDrive sign-in when corporate OneDrive is configured; proposal folder creation/linking happens before the project record is saved
 - OneDrive execution folder linking/backfill for Project List records
+- Calcsheet won-proposal OneDrive promotion now creates/links the Project List record first when requested, renames the moved execution folder to the operations `project_no`, and leaves a proposal-root shortcut with the proposal/PCS naming
 - Report PDF logo/header polish and service-report upload to execution folders
 - Calcsheet quotation signatory titles resolve from the logged-in user account when the signatory matches that user; fallback staff seed keeps TJ as General Manager and Reuel as Solutions Manager
 - Calcsheet quotation PDF export now supports `Date Sent`, non-repeating continuation-page header, Summary pagination guard, Terms heading pagination guard, muted A/B/C section bars, and middle-row grouped `1 LOT` display for GenReq/manpower service groups
@@ -52,7 +57,7 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 4. Fix latent `{id: ref.id, ...data}` bug pattern in remaining API endpoints
 5. Migrate custom auth to Firebase Auth
 6. Add automated test coverage
-7. Clean up duplicate `TJC` Firestore user records after confirming which account is actively used
+7. Clean up duplicate `admin` and `projects` Firestore user records after confirming which documents are actively used
 
 ## Blockers
 
@@ -65,6 +70,7 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 - The repo's `server.js` is the source of truth; `functions/server.js` is overwritten by the deploy script
 - Graphify is currently not configured in this checkout because `.planning/config.json` is missing
 - User profile designation is the source of truth for current-user report signatures; refresh/login again after editing user account fields so `/api/auth/me` updates browser cache
+- Read-only Firestore user audit on 2026-05-25 found one `TJC` and one `RJR` record; duplicate usernames currently remain for `admin` and `projects`
 
 ## Agent Notes
 
