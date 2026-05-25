@@ -1,6 +1,7 @@
 import { Document, Page, Text, View, Image, StyleSheet, pdf } from '@react-pdf/renderer';
 import { saveAs } from 'file-saver';
 import { format } from 'date-fns';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { Client, Project, Quotation, SalesContact } from '../../types/Quotation';
 import { resolveContact } from '../../types/Client';
 import {
@@ -11,6 +12,7 @@ import {
 const PRIMARY = '#2c5aa0';
 const TEXT = '#222';
 const TEXT_LIGHT = '#666';
+const SECTION_BG = '#EAF0F8';
 const ROW_ALT = '#F2F4F7';
 const BORDER = '#999';
 const BORDER_LIGHT = '#DDD';
@@ -77,6 +79,15 @@ function honorific(gender: string | undefined): string {
   return gender === 'M' ? 'Sir' : gender === 'F' ? "Ma'am" : 'Sir/Ma\'am';
 }
 
+function groupedLotDisplayIndex(rowCount: number): number {
+  return Math.max(0, Math.floor((rowCount - 1) / 2));
+}
+
+function quotationDate(value: string | undefined): Date {
+  const dateOnly = (value || format(new Date(), 'yyyy-MM-dd')).slice(0, 10);
+  return new Date(`${dateOnly}T00:00:00`);
+}
+
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   page: {
@@ -112,8 +123,13 @@ const styles = StyleSheet.create({
 
   // Section bars
   sectionBar: {
-    backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
+    backgroundColor: SECTION_BG, color: PRIMARY, fontWeight: 700,
     fontSize: 9, padding: '4 8', marginTop: 8,
+    borderLeft: `3px solid ${PRIMARY}`,
+  },
+  summaryBar: {
+    backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
+    fontSize: 9.5, padding: '5 8',
   },
 
   // Table
@@ -121,25 +137,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row', backgroundColor: ROW_ALT,
     borderTop: `0.5px solid ${BORDER}`, borderBottom: `0.5px solid ${BORDER}`,
     padding: '4 4', fontWeight: 700, fontSize: 8.5,
+    alignItems: 'center',
   },
   tr: {
     flexDirection: 'row', borderBottom: `0.25px solid ${BORDER_LIGHT}`,
     padding: '3 4', fontSize: 8.5,
+    alignItems: 'center',
   },
   trSub: {
     flexDirection: 'row', backgroundColor: ROW_ALT,
     padding: '3 4', fontWeight: 700, fontSize: 8.5,
     borderTop: `0.5px solid ${BORDER}`,
+    alignItems: 'center',
   },
 
   cItem: { width: '10%' },
   cDesc: { width: '48%' },
-  cQty: { width: '8%', textAlign: 'center' },
-  cUom: { width: '8%', textAlign: 'center' },
-  cUnit: { width: '13%', textAlign: 'right' },
-  cTotal: { width: '13%', textAlign: 'right' },
+  cQty: { width: '8%', textAlign: 'center', lineHeight: 1.05 },
+  cUom: { width: '8%', textAlign: 'center', lineHeight: 1.05 },
+  cUnit: { width: '13%', textAlign: 'right', lineHeight: 1.05 },
+  cTotal: { width: '13%', textAlign: 'right', lineHeight: 1.05 },
 
   // Summary
+  summaryBlock: { marginTop: 8 },
   sumTh: {
     flexDirection: 'row', backgroundColor: PRIMARY, color: 'white',
     padding: '4 6', fontWeight: 700, fontSize: 9,
@@ -176,11 +196,17 @@ const styles = StyleSheet.create({
   sigEmail: { fontSize: 8.5, color: PRIMARY, textDecoration: 'underline', marginTop: 1 },
 
   // Footer
-  footer: {
-    position: 'absolute', bottom: 18, left: 36, right: 36,
-    fontSize: 8, color: TEXT_LIGHT, flexDirection: 'row',
-    justifyContent: 'space-between', borderTop: `0.5px solid ${BORDER_LIGHT}`,
-    paddingTop: 6,
+  footerRule: {
+    position: 'absolute', bottom: 40, left: 36, right: 36,
+    borderTop: `0.75px solid ${BORDER}`,
+  },
+  footerLeft: {
+    position: 'absolute', bottom: 27, left: 36, width: 210,
+    fontSize: 8.5, color: TEXT, textAlign: 'left',
+  },
+  footerCenter: {
+    position: 'absolute', bottom: 27, left: 36, right: 36,
+    fontSize: 8.5, color: TEXT, textAlign: 'center',
   },
 });
 
@@ -197,11 +223,13 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
   const issuer = ISSUER_INFO[quotation.kind];
   const refNo = `${project.code.replace(/-[A-Z]{3}-\d{2}$/, '')}-${(recipient?.code ?? 'XXX').slice(0, 3)}-${quotation.revision}`;
   const logoUrl = typeof window !== 'undefined' ? `${window.location.origin}${issuer.logo}` : issuer.logo;
+  const dateSent = quotationDate(quotation.dateSent);
 
   // Section presence
   const hasA = quotation.generalReqts.length > 0;
   const hasB = quotation.components.length > 0;
   const hasC = quotation.services.length > 0 || totals.servicesSubtotal > 0;
+  const exportGeneralReqtsAsLot = !!quotation.exportGeneralReqtsAsLot;
 
   // Authorized by (with optional staff contact info from the salesContacts seed)
   // Signatory shown on the PDF is the "Prepared by" name from the quotation editor.
@@ -217,8 +245,12 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
   return (
     <Document>
       <Page size="A4" style={styles.page}>
+        <View style={styles.footerRule} fixed />
+        <Text style={styles.footerLeft} fixed>{issuer.name}</Text>
+        <Text style={styles.footerCenter} fixed>QTN Ref: {refNo}</Text>
+
         {/* ─── HEADER ─── */}
-        <View style={styles.header} fixed>
+        <View style={styles.header}>
           <View style={styles.headerLeft}>
             {/* eslint-disable-next-line jsx-a11y/alt-text */}
             <Image src={logoUrl} style={styles.logo} />
@@ -236,7 +268,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             </View>
             <View style={styles.metaRow}>
               <Text style={styles.metaLabel}>Date</Text>
-              <Text style={styles.metaValue}>{format(new Date(project.date), 'd MMMM yyyy')}</Text>
+              <Text style={styles.metaValue}>{format(dateSent, 'd MMMM yyyy')}</Text>
             </View>
             <View style={styles.metaRow}>
               <Text style={styles.metaLabel}>Validity</Text>
@@ -280,16 +312,32 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               <Text style={styles.cUnit}>Unit Price</Text>
               <Text style={styles.cTotal}>Total , PHP</Text>
             </View>
-            {quotation.generalReqts.map((l) => (
-              <View style={styles.tr} key={l.id}>
-                <Text style={styles.cItem}>{l.code}</Text>
-                <Text style={styles.cDesc}>{l.description}</Text>
-                <Text style={styles.cQty}>{l.qty}</Text>
-                <Text style={styles.cUom}>{l.uom}</Text>
-                <Text style={styles.cUnit}>{PHP(l.unitPrice)}</Text>
-                <Text style={styles.cTotal}>{PHP(lineGeneralTotal(l))}</Text>
-              </View>
-            ))}
+            {exportGeneralReqtsAsLot ? (
+              quotation.generalReqts.map((l, i) => {
+                const showLotTotal = i === groupedLotDisplayIndex(quotation.generalReqts.length);
+                return (
+                  <View style={styles.tr} key={l.id}>
+                    <Text style={styles.cItem}>{l.code}</Text>
+                    <Text style={styles.cDesc}>{l.description}</Text>
+                    <Text style={styles.cQty}>{showLotTotal ? '1' : ''}</Text>
+                    <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
+                    <Text style={styles.cUnit}>{showLotTotal ? PHP(totals.generalReqtsSubtotal) : ''}</Text>
+                    <Text style={styles.cTotal}>{showLotTotal ? PHP(totals.generalReqtsSubtotal) : ''}</Text>
+                  </View>
+                );
+              })
+            ) : (
+              quotation.generalReqts.map((l) => (
+                <View style={styles.tr} key={l.id}>
+                  <Text style={styles.cItem}>{l.code}</Text>
+                  <Text style={styles.cDesc}>{l.description}</Text>
+                  <Text style={styles.cQty}>{l.qty}</Text>
+                  <Text style={styles.cUom}>{l.uom}</Text>
+                  <Text style={styles.cUnit}>{PHP(l.unitPrice)}</Text>
+                  <Text style={styles.cTotal}>{PHP(lineGeneralTotal(l))}</Text>
+                </View>
+              ))
+            )}
             <View style={styles.trSub}>
               <Text style={[styles.cItem]} />
               <Text style={[styles.cDesc]} />
@@ -354,15 +402,15 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             </View>
             {quotation.servicesFromManpower ? (
               quotation.services.map((l, i) => {
-                const isLast = i === quotation.services.length - 1;
+                const showLotTotal = i === groupedLotDisplayIndex(quotation.services.length);
                 return (
                   <View style={styles.tr} key={l.id}>
                     <Text style={styles.cItem}>{l.code}</Text>
                     <Text style={styles.cDesc}>{l.description}</Text>
-                    <Text style={styles.cQty}>{isLast ? '1' : ''}</Text>
-                    <Text style={styles.cUom}>{isLast ? 'LOT' : ''}</Text>
-                    <Text style={styles.cUnit}>{isLast ? PHP(totals.servicesSubtotal) : ''}</Text>
-                    <Text style={styles.cTotal}>{isLast ? PHP(totals.servicesSubtotal) : ''}</Text>
+                    <Text style={styles.cQty}>{showLotTotal ? '1' : ''}</Text>
+                    <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
+                    <Text style={styles.cUnit}>{showLotTotal ? PHP(totals.servicesSubtotal) : ''}</Text>
+                    <Text style={styles.cTotal}>{showLotTotal ? PHP(totals.servicesSubtotal) : ''}</Text>
                   </View>
                 );
               })
@@ -390,76 +438,79 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
         )}
 
         {/* ─── SUMMARY TABLE ─── */}
-        <Text style={[styles.sectionBar, { marginTop: 12 }]}>Summary</Text>
-        <View style={styles.sumTh}>
-          <Text style={styles.sumItem}>Item</Text>
-          <Text style={styles.sumQty}>QTY</Text>
-          <Text style={styles.sumUom}>UOM</Text>
-          <Text style={styles.sumPrice}>Price, PHP</Text>
+        <View style={styles.summaryBlock} wrap={false}>
+          <Text style={styles.summaryBar}>Summary</Text>
+          <View style={styles.sumTh}>
+            <Text style={styles.sumItem}>Item</Text>
+            <Text style={styles.sumQty}>QTY</Text>
+            <Text style={styles.sumUom}>UOM</Text>
+            <Text style={styles.sumPrice}>Price, PHP</Text>
+          </View>
+          {hasA && (
+            <View style={styles.sumRow}>
+              <Text style={styles.sumItem}>General Requirements</Text>
+              <Text style={styles.sumQty}>1</Text>
+              <Text style={styles.sumUom}>LOT</Text>
+              <Text style={styles.sumPrice}>{PHP(totals.generalReqtsSubtotal)}</Text>
+            </View>
+          )}
+          {hasB && (
+            <View style={styles.sumRow}>
+              <Text style={styles.sumItem}>Supply of Components</Text>
+              <Text style={styles.sumQty}>1</Text>
+              <Text style={styles.sumUom}>LOT</Text>
+              <Text style={styles.sumPrice}>{PHP(totals.componentsSubtotal)}</Text>
+            </View>
+          )}
+          {hasC && (
+            <View style={styles.sumRow}>
+              <Text style={styles.sumItem}>Engineering Services</Text>
+              <Text style={styles.sumQty}>1</Text>
+              <Text style={styles.sumUom}>LOT</Text>
+              <Text style={styles.sumPrice}>{PHP(totals.servicesSubtotal)}</Text>
+            </View>
+          )}
+          <View style={styles.sumFooterRow}>
+            <Text style={styles.sumFooterLabel}>TOTAL PRICE, PHP (VAT-EX)</Text>
+            <Text style={styles.sumFooterValue}>{PHP(totals.subtotal)}</Text>
+          </View>
+          {quotation.discountPct > 0 && (
+            <>
+              <View style={styles.sumFooterRow}>
+                <Text style={styles.sumFooterLabel}>DISCOUNT({quotation.discountPct}%)</Text>
+                <Text style={styles.sumFooterValue}>{PHP(totals.discount)}</Text>
+              </View>
+              <View style={styles.sumFooterRow}>
+                <Text style={styles.sumFooterLabel}>DISCOUNTED PRICE (VAT-EX)</Text>
+                <Text style={styles.sumFooterValue}>{PHP(totals.subtotal - totals.discount)}</Text>
+              </View>
+            </>
+          )}
+          {quotation.vatPct > 0 && (
+            <>
+              <View style={styles.sumFooterRow}>
+                <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
+                <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
+              </View>
+              <View style={styles.sumFooterRow}>
+                <Text style={styles.sumFooterLabel}>TOTAL PRICE, PHP (VAT-IN)</Text>
+                <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
+              </View>
+            </>
+          )}
         </View>
-        {hasA && (
-          <View style={styles.sumRow}>
-            <Text style={styles.sumItem}>General Requirements</Text>
-            <Text style={styles.sumQty}>1</Text>
-            <Text style={styles.sumUom}>LOT</Text>
-            <Text style={styles.sumPrice}>{PHP(totals.generalReqtsSubtotal)}</Text>
-          </View>
-        )}
-        {hasB && (
-          <View style={styles.sumRow}>
-            <Text style={styles.sumItem}>Supply of Components</Text>
-            <Text style={styles.sumQty}>1</Text>
-            <Text style={styles.sumUom}>LOT</Text>
-            <Text style={styles.sumPrice}>{PHP(totals.componentsSubtotal)}</Text>
-          </View>
-        )}
-        {hasC && (
-          <View style={styles.sumRow}>
-            <Text style={styles.sumItem}>Engineering Services</Text>
-            <Text style={styles.sumQty}>1</Text>
-            <Text style={styles.sumUom}>LOT</Text>
-            <Text style={styles.sumPrice}>{PHP(totals.servicesSubtotal)}</Text>
-          </View>
-        )}
-        <View style={styles.sumFooterRow}>
-          <Text style={styles.sumFooterLabel}>TOTAL PRICE, PHP (VAT-EX)</Text>
-          <Text style={styles.sumFooterValue}>{PHP(totals.subtotal)}</Text>
-        </View>
-        {quotation.discountPct > 0 && (
-          <>
-            <View style={styles.sumFooterRow}>
-              <Text style={styles.sumFooterLabel}>DISCOUNT({quotation.discountPct}%)</Text>
-              <Text style={styles.sumFooterValue}>{PHP(totals.discount)}</Text>
-            </View>
-            <View style={styles.sumFooterRow}>
-              <Text style={styles.sumFooterLabel}>DISCOUNTED PRICE (VAT-EX)</Text>
-              <Text style={styles.sumFooterValue}>{PHP(totals.subtotal - totals.discount)}</Text>
-            </View>
-          </>
-        )}
-        {quotation.vatPct > 0 && (
-          <>
-            <View style={styles.sumFooterRow}>
-              <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
-              <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
-            </View>
-            <View style={styles.sumFooterRow}>
-              <Text style={styles.sumFooterLabel}>TOTAL PRICE, PHP (VAT-IN)</Text>
-              <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
-            </View>
-          </>
-        )}
 
         {/* ─── TERMS AND CONDITIONS ─── */}
         <View style={styles.terms}>
-          <Text style={styles.termsTitle}>Terms and Conditions</Text>
-
-          <Text style={styles.termSubtitle}>Scope of Work</Text>
-          <Text style={styles.termText}>
-            - The scope of work shall be limited strictly to the items, specifications, and services explicitly stated in this proposal.
-            Any additional works, modifications, or deviations not covered herein shall be treated as a Variation Order and shall be
-            subject to separate quotation, approval, and corresponding adjustment in price and delivery schedule.
-          </Text>
+          <View wrap={false}>
+            <Text style={styles.termsTitle}>Terms and Conditions</Text>
+            <Text style={styles.termSubtitle}>Scope of Work</Text>
+            <Text style={styles.termText}>
+              - The scope of work shall be limited strictly to the items, specifications, and services explicitly stated in this proposal.
+              Any additional works, modifications, or deviations not covered herein shall be treated as a Variation Order and shall be
+              subject to separate quotation, approval, and corresponding adjustment in price and delivery schedule.
+            </Text>
+          </View>
 
           <Text style={styles.termSubtitle}>Basis of Proposal</Text>
           <Text style={styles.termText}>
@@ -516,12 +567,6 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             <Text style={styles.sigSub}>For and on behalf of {recipient?.name ?? '—'}</Text>
           </View>
         </View>
-
-        {/* ─── FOOTER ─── */}
-        <View style={styles.footer} fixed>
-          <Text>{issuer.footer}</Text>
-          <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
-        </View>
       </Page>
     </Document>
   );
@@ -555,9 +600,33 @@ export async function exportQuotationPdf(
       salesContacts={salesContacts}
     />,
   ).toBlob();
+
+  const arrayBuffer = await blob.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pages = pdfDoc.getPages();
+  const totalPages = pages.length;
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+  for (let i = 0; i < totalPages; i++) {
+    const page = pages[i];
+    const { width } = page.getSize();
+    const text = `Page ${i + 1} of ${totalPages}`;
+    const size = 8.5;
+    const textWidth = font.widthOfTextAtSize(text, size);
+    page.drawText(text, {
+      x: width - 36 - textWidth,
+      y: 27,
+      size,
+      font,
+      color: rgb(0.133, 0.133, 0.133),
+    });
+  }
+
+  const modifiedBytes = await pdfDoc.save();
+  const modifiedBlob = new Blob([modifiedBytes], { type: 'application/pdf' });
   const filename = `${project.code.replace(/-[A-Z]{3}-\d{2}$/, '')}-${(recipient?.code ?? 'XXX').slice(0, 3)}-${quotation.revision}.pdf`;
   if (options.save !== false) {
-    saveAs(blob, filename);
+    saveAs(modifiedBlob, filename);
   }
-  return { blob, filename };
+  return { blob: modifiedBlob, filename };
 }
