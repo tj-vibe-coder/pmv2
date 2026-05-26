@@ -2011,10 +2011,26 @@ app.post('/api/calcsheet/seq/increment', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    // Compute next from data, then update the meta doc as a debug breadcrumb
-    // (not the source of truth). The data-derived value is what we return.
-    const next = await computeNextProjectSeq();
-    db.collection('calcsheet_meta').doc('seq').set({ value: next, updatedAt: new Date().toISOString() }).catch(() => null);
+
+    // Use a Firestore transaction to atomically read-and-increment the sequence
+    // counter, preventing race conditions when multiple users create projects
+    // simultaneously. The meta doc is the source of truth; the data-scan
+    // fallback bootstraps the counter if the doc doesn't exist yet.
+    const metaRef = db.collection('calcsheet_meta').doc('seq');
+    let next = 0;
+
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(metaRef);
+      if (snap.exists) {
+        const current = (snap.data() || {}).value;
+        next = (typeof current === 'number' && current > 0) ? current + 1 : 1;
+      } else {
+        // Bootstrap: scan all existing project codes to catch up
+        next = await computeNextProjectSeq();
+      }
+      tx.set(metaRef, { value: next, updatedAt: new Date().toISOString() });
+    });
+
     res.json({ success: true, seq: next });
   } catch (err) {
     console.error('[calcsheet] increment seq failed:', err);

@@ -58,6 +58,7 @@ export default function ProjectDetail() {
   const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
   const [oneDriveBusy, setOneDriveBusy] = useState<'proposal' | 'execution' | null>(null);
   const [oneDriveErr, setOneDriveErr] = useState<string>('');
+  const [deleteTarget, setDeleteTarget] = useState<Quotation | null>(null);
   // Non-error info message shown next to the OneDrive buttons. Used to tell the
   // user when auto-detect matched an existing historical folder (instead of
   // creating a new one) so they don't think the system silently misbehaved.
@@ -1172,7 +1173,7 @@ export default function ProjectDetail() {
                   <TableCell align="right">
                     <IconButton size="small" component={Link} to={`/calcsheet/quotations/${q.id}`}><OpenInNewIcon fontSize="small" /></IconButton>
                     <IconButton size="small" onClick={() => duplicateQuotation(q.id)} title="Duplicate as new revision"><ContentCopyIcon fontSize="small" /></IconButton>
-                    <IconButton size="small" onClick={() => deleteQuotation(q.id)}><DeleteIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" onClick={() => setDeleteTarget(q)}><DeleteIcon fontSize="small" /></IconButton>
                   </TableCell>
                 </TableRow>
               );
@@ -1678,6 +1679,27 @@ export default function ProjectDetail() {
           <Button onClick={() => { void confirmWon(false); }}>Mark Won Only</Button>
           <Button variant="contained" color="success" onClick={() => { void confirmWon(true); }}>
             Mark Won and Create Project
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete quotation?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            Permanently delete the <strong>{deleteTarget?.kind} rev {deleteTarget?.revision}</strong> quotation? This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={() => {
+              if (deleteTarget) { deleteQuotation(deleteTarget.id); setDeleteTarget(null); }
+            }}
+          >
+            Delete
           </Button>
         </DialogActions>
       </Dialog>

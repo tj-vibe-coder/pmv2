@@ -47,7 +47,7 @@ const SIDEBAR_WIDTH = 280;
 const SIDEBAR_COLLAPSED_WIDTH = 68;
 
 const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
-const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form', '/expense-monitoring/direct-labor', '/payroll'];
+const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form', '/expense-monitoring/direct-labor', '/investment-tracker', '/payroll'];
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
 const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator', '/utilities/acknowledgement-receipt'];
 
@@ -305,6 +305,23 @@ const Sidebar: React.FC = () => {
                   />
                 </ListItemButton>
               </ListItem>
+              {/* Investment Tracker */}
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/investment-tracker'}
+                  onClick={() => navigate('/investment-tracker')}
+                  sx={navBtnSx(location.pathname === '/investment-tracker', true)}
+                >
+                  <ListItemIcon sx={iconSx(true)}>
+                    <TrendingUpIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Investment Tracker"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
               {/* Payroll — only visible to authorized users */}
               {isPayrollAuthorized(user?.username) && (
                 <ListItem disablePadding sx={{ mb: 0.5 }}>
@@ -350,28 +367,7 @@ const Sidebar: React.FC = () => {
             </Tooltip>
           </ListItem>
 
-          {/* Investment Tracker */}
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <Tooltip title={isExpanded ? '' : 'Investment Tracker'} placement="right" arrow>
-              <ListItemButton
-                selected={location.pathname === '/investment-tracker'}
-                onClick={() => navigate('/investment-tracker')}
-                sx={navBtnSx(location.pathname === '/investment-tracker')}
-              >
-                <ListItemIcon sx={iconSx()}>
-                  <TrendingUpIcon />
-                </ListItemIcon>
-                {isExpanded && (
-                  <ListItemText
-                    primary="Investment Tracker"
-                    secondary="Founder contributions & expenses"
-                    secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                )}
-              </ListItemButton>
-            </Tooltip>
-          </ListItem>
+
 
           {/* Calcsheet */}
           <ListItem disablePadding sx={{ mb: 0.5 }}>

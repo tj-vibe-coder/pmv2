@@ -2,7 +2,28 @@
 
 ---
 
-## 2026-05-25 — Firebase Deployment
+## 2026-05-26 — Calcsheet Delete Confirmation + Sequence Counter Race Condition Fix
+
+### Summary
+
+Added confirmation dialogs to both the projects list delete button and the per-project quotation delete button. Fixed a race condition in the project sequence counter that could produce duplicate project codes when multiple users create projects in rapid succession.
+
+### Files Changed
+
+- `src/components/calcsheet/CalcsheetProjects.tsx` — added `deleteTarget` state, delete confirmation dialog, wired delete button to open dialog
+- `src/components/calcsheet/CalcsheetProjectDetail.tsx` — added `deleteTarget` state for quotations, delete confirmation dialog, wired quotation delete button to open dialog
+- `server.js` — `POST /api/calcsheet/seq/increment` now uses Firestore `runTransaction` for atomic read-and-increment
+- `functions/server.js` — same transaction fix applied
+- `claude.md` — documented both changes under Recent additions
+
+### Checks Run
+
+- `npx tsc --noEmit` — clean
+
+### Notes
+
+- The race condition manifested as two projects created by different users (TJ) on the same day getting the same sequence number, resulting in duplicate `PCS2605002-XXX-00` codes. The old `computeNextProjectSeq()` read all projects to compute max, but two concurrent requests both read before either project was saved. The transaction guarantees serialized atomic increments.
+- Existing duplicate codes need manual correction in Firestore.## 2026-05-25 — Firebase Deployment
 
 ### Summary
 

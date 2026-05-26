@@ -310,11 +310,16 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
           if (next.proposalFolderId) {
             // Move path: physically relocate the proposal folder to executions, drop
             // a shortcut behind. The folder's ID is preserved.
+            const customerCodeMatch = next.code.match(/^PCS\d{7}-([A-Z0-9]+)-/i);
+            const customerSuffix = customerCodeMatch ? `-${customerCodeMatch[1].toUpperCase()}` : '';
+            const executionFolderName = next.mainProjectNo
+              ? `${next.mainProjectNo}${customerSuffix}${next.name ? ` ${next.name}` : ''}`
+              : undefined;
             const { moved } = await moveProposalToExecution(token, {
               code: next.code,
               name: next.name,
               proposalFolderId: next.proposalFolderId,
-              executionFolderName: next.mainProjectNo,
+              executionFolderName,
             });
             const patchFields = {
               // Same folder, new location → both fields point to the same URL/ID.

@@ -9,7 +9,7 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 - **Status:** Active development
 - **Current phase:** Calcsheet and Project List integration hardening
 - **Main focus:** Calcsheet/Project List integration hardening, OneDrive execution-folder continuity, reports polish, and settings/user-management hardening
-- **Last updated:** 2026-05-25
+- **Last updated:** 2026-05-26
 
 ## Completed
 
@@ -38,6 +38,9 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 - Report PDF logo/header polish and service-report upload to execution folders
 - Calcsheet quotation signatory titles resolve from the logged-in user account when the signatory matches that user; fallback staff seed keeps TJ as General Manager and Reuel as Solutions Manager
 - Calcsheet quotation PDF export now supports `Date Sent`, non-repeating continuation-page header, Summary pagination guard, Terms heading pagination guard, muted A/B/C section bars, and middle-row grouped `1 LOT` display for GenReq/manpower service groups
+- Calcsheet delete confirmation dialogs (project and quotation) with red Delete buttons that warn about permanent deletion
+- Calcsheet project sequence counter race condition fix using Firestore `runTransaction` for atomic increments
+- Investment Tracker moved into Expense Monitoring sidebar group
 
 ## In Progress
 

@@ -77,6 +77,7 @@ export default function Projects() {
   } | null>(null);
   const [bulkLinkSummary, setBulkLinkSummary] = useState<string>('');
   const oneDriveRequired = isCorporateOneDriveConfigured();
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
 
   // Projects that don't yet have a proposal folder linked. (We don't try to
   // auto-link execution folders here — those are derived from proposal folders
@@ -638,7 +639,7 @@ export default function Projects() {
                   )}
                 </TableCell>
                 <TableCell align="right">
-                  <IconButton size="small" onClick={() => deleteProject(p.id)}><DeleteIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" onClick={() => setDeleteTarget(p)}><DeleteIcon fontSize="small" /></IconButton>
                 </TableCell>
               </TableRow>
               );
@@ -655,6 +656,27 @@ export default function Projects() {
           </TableBody>
         </Table>
       </Paper>
+
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete project?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            This will permanently delete <strong>{deleteTarget?.code} — {deleteTarget?.name}</strong> and all of its quotations. This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={() => {
+              if (deleteTarget) { deleteProject(deleteTarget.id); setDeleteTarget(null); }
+            }}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>New project</DialogTitle>

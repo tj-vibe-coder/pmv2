@@ -2,6 +2,26 @@
 
 ---
 
+## Project sequence counter race condition → closed
+
+### Problem
+
+`POST /api/calcsheet/seq/increment` used a non-atomic read-then-write pattern: compute `max(seq)` from all projects, then write `max+1` to `calcsheet_meta/seq`. Two simultaneous requests could both read the same max before either project was saved, producing duplicate project codes.
+
+### Cause
+
+`computeNextProjectSeq()` scanned all `calcsheet_projects` documents but had no locking or transaction isolation.
+
+### Fix
+
+Replaced with a Firestore `runTransaction` that atomically reads and increments `calcsheet_meta/seq`. The transaction guarantees serialized execution — if two requests hit concurrently, the second retries after the first commits.
+
+### Status
+
+Closed — fixed 2026-05-26. Applied to both `server.js` and `functions/server.js`.
+
+---
+
 ## Calcsheet quotation PDF footer page number not visible
 
 ### Problem
