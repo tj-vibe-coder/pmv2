@@ -6,6 +6,7 @@
 > 2. **After completing any non-trivial work** (new feature, schema change, deploy, security cleanup, bug fix worth remembering, follow-up item resolved, etc.), update the relevant section(s) of this file inline before ending the session. Don't bother for typo fixes or one-line tweaks.
 > 3. **Keep it scannable**: append to the "Recent additions" section, then promote stable items into the right structural section over time. Trim resolved follow-ups out of the list. Target length ~10 KB max — if a section grows huge, split into a `docs/<topic>.md` and link from here.
 > 4. **Never put secrets here.** No passwords, no service account JSON, no real customer contact data. Use placeholders and reference env-var names instead.
+> 5. **Before creating or significantly modifying any page/component**, read `docs/DESIGN_PHILOSOPHY.md` first. All new pages must follow the documented design system (gradient KPI cards, Box root, h4 title, `NET_PACIFIC_COLORS`, MUI v7 Grid, etc.). The reference implementation is `src/components/Dashboard.tsx`.
 
 ---
 
@@ -182,6 +183,13 @@ End-to-end integration with the corporate shared OneDrive (the `projects@iocontr
 - **`docs/DATA_MODEL.md`** (562 lines): entity relationships, field-level details for all 13 collections/interfaces, LocalStorage keys, computed formulas, and migration path.
 - **`README_AGENT_MEMORY_SETUP.md`**: agent onboarding guide listing all memory files in priority order with update rules.
 - **`.gitignore`**: added `/graphify-out/` to exclude auto-generated Graphify obsidian notes from version control.
+
+### Recent additions (May–June 2026)
+
+- **OneDrive "Open in app" button** (`CalcsheetProjectDetail.tsx`): `DesktopMacIcon` icon button added next to each folder-open button (Proposal folder, Project folder, Proposal docs). Uses `odopen://sync?userEmail=...&weUrl=...` URI scheme to open the folder in the OneDrive desktop app rather than the browser. Requires the OneDrive desktop app to be signed in with `projects@iocontroltech.com` (one-time setup; subsequent clicks go straight to Finder).
+- **Collections & Receivables dashboard** (`/collections`): new top-level page for AR tracking. Stores invoice records in a new `invoices` Firestore collection. Each invoice has `invoice_no`, `invoice_date`, `amount`, `payment_terms_days`, `due_date`, `amount_collected`, `collection_date`. Status (`paid` / `partial` / `overdue` / `unpaid`) is computed, never stored. New API endpoints: `GET/POST /api/invoices`, `PUT/DELETE /api/invoices/:id`. New type file: `src/types/Invoice.ts`. Sidebar item "Collections & AR" added between Dashboard and Expense Monitoring. Follows the full design philosophy (gradient KPI cards, `NET_PACIFIC_COLORS`, `stickyHeader` table, etc.).
+- **InvestmentTrackerPage redesign**: ported from `GridLegacy` + custom card styles to the standard design system — gradient KPI cards, `Box height:100%` root, `h4` title, `Paper` table with `stickyHeader`, `nth-of-type(odd)` alternating rows, `NET_PACIFIC_COLORS` buttons.
+- **Design philosophy documented**: `docs/DESIGN_PHILOSOPHY.md` — mandatory reading before creating or modifying any page. Covers `NET_PACIFIC_COLORS` palette, page structure, KPI card gradients, filter bar, table patterns, Grid v7 API, button/dialog conventions, and anti-patterns. Reference implementation: `src/components/Dashboard.tsx`.
 
 ### Backups
 

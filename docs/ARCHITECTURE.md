@@ -22,6 +22,7 @@ pmv2 is a **monolithic web application** deployed as a single Render Web Service
 | **Payroll** | Employee management, payroll runs, payslip generation, government contributions | `/payroll` |
 | **Admin / Settings** | User approvals, user database, account/role/password management | `/user-approvals`, `/settings/users` |
 | **Investment Tracker** | Founder contributions & expenses | `/investment-tracker` |
+| **Collections & AR** | Invoice tracking, due dates, collection status across all projects | `/collections` |
 
 ---
 
@@ -378,6 +379,7 @@ All routes defined in `src/App.tsx`. Routes are guarded by `ProtectedRoute` (che
 | `/settings/users` | `UsersPage` | Auth + Superadmin | Settings user management |
 | `/users` | Redirect → `/settings/users` | Auth + Superadmin | Legacy redirect |
 | `/investment-tracker` | `InvestmentTrackerPage` | Auth | |
+| `/collections` | `CollectionsDashboard` | Auth | AR dashboard — invoices across all projects |
 | `/payroll` | `PayrollDashboard` | Auth + PayrollGuard | Guard checks username-based access |
 | `/` | Redirect → `/dashboard` | Auth | |
 | `/ehs` | Redirect → `/utilities/ehs` | — | Legacy redirect |

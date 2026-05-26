@@ -344,6 +344,33 @@ See `src/types/Payroll.ts::Payslip` for all fields. Key structure:
 
 Also has a static TypeScript source: `src/data/phHolidays.ts` (2026 holidays). The Firestore collection may be used for dynamic additions.
 
+### 2.14 `invoices`
+
+Top-level collection for the Collections & AR dashboard. Each document represents one invoice issued against a project.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Firestore auto-generated doc ID |
+| `project_id` | string | Firestore doc ID of the linked `projects` record |
+| `project_name` | string | Cached at write time — avoids cross-collection join on reads |
+| `project_no` | string | Cached project number (e.g. `IOCTYYMM001`) |
+| `invoice_no` | string | Invoice/SI number (e.g. `SI-2026-001`) |
+| `invoice_date` | string | `"YYYY-MM-DD"` — date the invoice was issued |
+| `amount` | number | Invoice amount (PHP) |
+| `payment_terms_days` | number | 30 / 45 / 60 / 90 |
+| `due_date` | string | `"YYYY-MM-DD"` — auto-computed as `invoice_date + payment_terms_days`, editable |
+| `amount_collected` | number | Running total of payments received |
+| `collection_date` | string? | `"YYYY-MM-DD"` — date of last / full collection |
+| `notes` | string? | Optional free-text note |
+| `created_at` | string | ISO timestamp |
+| `updated_at` | string | ISO timestamp |
+
+**Status** is computed (never stored):
+- `paid` → `amount_collected >= amount`
+- `partial` → `0 < amount_collected < amount`
+- `overdue` → `due_date < today && amount_collected < amount`
+- `unpaid` → all other cases
+
 ---
 
 ## 3. TypeScript Interfaces
@@ -491,6 +518,35 @@ interface Payslip {
   netPay: number;
 }
 ```
+
+### 3.6 `src/types/Invoice.ts`
+
+```typescript
+interface ProjectInvoice {
+  id: string;
+  project_id: string;
+  project_name?: string;        // Cached at write time
+  project_no?: string;          // Cached at write time
+  invoice_no: string;
+  invoice_date: string;         // 'YYYY-MM-DD'
+  amount: number;
+  payment_terms_days: number;   // 30 | 45 | 60 | 90
+  due_date: string;             // 'YYYY-MM-DD'
+  amount_collected: number;
+  collection_date?: string;     // 'YYYY-MM-DD'
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+type InvoiceStatus = 'paid' | 'partial' | 'overdue' | 'unpaid';
+// Status is always computed via getInvoiceStatus(inv) — never stored in Firestore
+```
+
+Helpers exported from `src/types/Invoice.ts`:
+- `getInvoiceStatus(inv)` — derives status from amounts + today's date
+- `computeDueDate(invoiceDate, termsDays)` — `invoiceDate + termsDays` days
+- `PAYMENT_TERMS_OPTIONS` — `[{ label: '30 days', value: 30 }, ...]`
 
 ---
 

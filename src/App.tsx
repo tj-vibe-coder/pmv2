@@ -28,6 +28,7 @@ import DirectLaborPage from './components/DirectLaborPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
 import UsersPage from './components/UsersPage';
 import InvestmentTrackerPage from './components/InvestmentTrackerPage';
+import CollectionsDashboard from './components/CollectionsDashboard';
 import PayrollDashboard from './components/payroll/PayrollDashboard';
 import PayrollGuard from './components/payroll/PayrollGuard';
 import CalcsheetProjects from './components/calcsheet/CalcsheetProjects';
@@ -357,6 +358,16 @@ function App() {
                     <PayrollGuard>
                       <PayrollDashboard />
                     </PayrollGuard>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/collections"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CollectionsDashboard />
                   </AppLayout>
                 </ProtectedRoute>
               }

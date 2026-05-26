@@ -40,6 +40,7 @@ import {
   Build as BuildIcon,
   TrendingUp as TrendingUpIcon,
   Payments as PaymentsIcon,
+  Paid as PaidIcon,
 } from '@mui/icons-material';
 import { isPayrollAuthorized } from '../config/payrollAccess';
 
@@ -202,6 +203,29 @@ const Sidebar: React.FC = () => {
                   <ListItemText
                     primary="Dashboard"
                     secondary="Project insights and analytics"
+                    secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                )}
+              </ListItemButton>
+            </Tooltip>
+          </ListItem>
+
+          {/* Collections & AR */}
+          <ListItem disablePadding sx={{ mb: 0.5 }}>
+            <Tooltip title={isExpanded ? '' : 'Collections & AR'} placement="right" arrow>
+              <ListItemButton
+                selected={location.pathname === '/collections'}
+                onClick={() => navigate('/collections')}
+                sx={navBtnSx(location.pathname === '/collections')}
+              >
+                <ListItemIcon sx={iconSx()}>
+                  <PaidIcon />
+                </ListItemIcon>
+                {isExpanded && (
+                  <ListItemText
+                    primary="Collections & AR"
+                    secondary="Invoices, due dates, collections"
                     secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                     sx={{ color: 'white' }}
                   />

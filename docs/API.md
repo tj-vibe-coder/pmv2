@@ -861,6 +861,61 @@ Content-Type: application/json
 
 ---
 
+## Invoices (Collections & AR)
+
+### GET /api/invoices
+
+Fetch all invoices. Optionally filter by project.
+
+| Query param | Type | Description |
+|---|---|---|
+| `project_id` | string? | Filter to invoices for a specific project |
+
+**Response:** Array of `ProjectInvoice` objects, ordered by `invoice_date` desc.
+
+---
+
+### POST /api/invoices
+
+Create a new invoice. Requires active user session.
+
+**Body:**
+```json
+{
+  "project_id": "abc123",
+  "project_name": "Batangas Plant Automation",
+  "project_no": "IOCT2601001-LBI",
+  "invoice_no": "SI-2026-001",
+  "invoice_date": "2026-01-15",
+  "amount": 150000,
+  "payment_terms_days": 30,
+  "due_date": "2026-02-14",
+  "amount_collected": 0,
+  "notes": "Milestone 1 billing"
+}
+```
+
+**Response:** The created invoice object with Firestore-generated `id`.
+
+---
+
+### PUT /api/invoices/:id
+
+Update an invoice (any field). Requires active user session.
+Commonly used to record a collection: send `{ amount_collected, collection_date }`.
+
+**Response:** `{ message: "Invoice updated" }`
+
+---
+
+### DELETE /api/invoices/:id
+
+Delete an invoice. Requires active user session.
+
+**Response:** `{ success: true }`
+
+---
+
 ## Authorization Matrix
 
 | Role | Projects | Clients | CA | Liquidation | Users | Suppliers | Payroll |

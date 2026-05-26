@@ -2250,6 +2250,72 @@ if (!process.env.K_SERVICE) {
   });
 }
 
+// ========== INVOICE / COLLECTIONS ROUTES ==========
+
+app.get('/api/invoices', async (req, res) => {
+  const { project_id } = req.query;
+  try {
+    let query = db.collection('invoices').orderBy('invoice_date', 'desc');
+    if (project_id) query = db.collection('invoices').where('project_id', '==', String(project_id)).orderBy('invoice_date', 'desc');
+    const snap = await query.get();
+    res.json(snap.docs.map(d => ({ ...d.data(), id: d.id })));
+  } catch (err) {
+    console.error('Error fetching invoices:', err);
+    res.status(500).json({ error: 'Failed to fetch invoices' });
+  }
+});
+
+app.post('/api/invoices', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.created_at = new Date().toISOString();
+    data.updated_at = new Date().toISOString();
+    const ref = await db.collection('invoices').add(data);
+    res.json({ ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error creating invoice:', err);
+    res.status(500).json({ error: 'Failed to create invoice' });
+  }
+});
+
+app.put('/api/invoices/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.updated_at = new Date().toISOString();
+    const ref = db.collection('invoices').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Invoice not found' });
+    await ref.update(data);
+    res.json({ message: 'Invoice updated' });
+  } catch (err) {
+    console.error('Error updating invoice:', err);
+    res.status(500).json({ error: 'Failed to update invoice' });
+  }
+});
+
+app.delete('/api/invoices/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const ref = db.collection('invoices').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Invoice not found' });
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting invoice:', err);
+    res.status(500).json({ error: 'Failed to delete invoice' });
+  }
+});
+
 // ========== GLOBAL ERROR HANDLER ==========
 // Must be defined after all routes. Returns JSON for all unhandled errors.
 // eslint-disable-next-line no-unused-vars
