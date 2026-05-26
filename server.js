@@ -1825,6 +1825,62 @@ app.put('/api/calcsheet/projects/:id', async (req, res) => {
   }
 });
 
+app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { mainProjectId } = req.body || {};
+    if (!mainProjectId) return res.status(400).json({ error: 'mainProjectId is required' });
+    const now = new Date().toISOString();
+    const [calcsheetDoc, mainDoc] = await Promise.all([
+      db.collection('calcsheet_projects').doc(req.params.id).get(),
+      db.collection('projects').doc(String(mainProjectId)).get(),
+    ]);
+    if (!calcsheetDoc.exists) return res.status(404).json({ error: 'Calcsheet project not found' });
+    if (!mainDoc.exists) return res.status(404).json({ error: 'Project List record not found' });
+    const calcsheet = { id: calcsheetDoc.id, ...calcsheetDoc.data() };
+    const mainData = mainDoc.data() || {};
+    const qSnap = await db.collection('calcsheet_quotations').where('projectId', '==', req.params.id).get();
+    const quotations = qSnap.docs.map((d) => { const { id: _stored, ...data } = d.data(); return { ...data, id: d.id }; });
+    const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
+    const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
+    const selectedQuotation = ioct || acti;
+    await calcsheetDoc.ref.update({
+      mainProjectId: mainDoc.id,
+      mainProjectNo: mainData.project_no || '',
+      mainProjectLinkedAt: calcsheet.mainProjectLinkedAt || now,
+      mainProjectLastSyncedAt: now,
+      mainProjectSyncStatus: 'linked',
+      mainProjectSyncError: '',
+      mainProjectStatus: mainData.project_status || '',
+      mainProjectProgressPercent: Number(mainData.actual_site_progress_percent || 0),
+      mainProjectCompletionDate: mainData.completion_date || null,
+      mainProjectStatusSyncedAt: now,
+    });
+    const mainPatch = {
+      calcsheet_project_id: req.params.id,
+      calcsheet_code: calcsheet.code || '',
+      source_module: 'calcsheet',
+      updated_at: now,
+      ...(selectedQuotation ? { calcsheet_quotation_id: selectedQuotation.id } : {}),
+    };
+    await mainDoc.ref.update(mainPatch);
+    res.json({
+      success: true,
+      mainProjectId: mainDoc.id,
+      projectNo: mainData.project_no || '',
+      ...(selectedQuotation ? {
+        quotationId: selectedQuotation.id,
+        quotationKind: selectedQuotation.kind,
+        amount: quotationGrandTotal(selectedQuotation),
+      } : {}),
+    });
+  } catch (err) {
+    console.error('[calcsheet] link-existing failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to link to existing project' });
+  }
+});
+
 app.post('/api/calcsheet/projects/:id/sync-main', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);

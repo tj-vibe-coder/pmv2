@@ -86,7 +86,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
   const [isDeleting, setIsDeleting] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const effectiveRefreshTrigger = externalRefreshTrigger + refreshTrigger;
-  const [sortConfig, setSortConfig] = useState<{key: string; direction: 'asc' | 'desc'} | null>(null);
+  const [sortConfig, setSortConfig] = useState<{key: string; direction: 'asc' | 'desc'} | null>({ key: 'project_no', direction: 'desc' });
 
   // Sorting function
   const handleSort = (key: string) => {

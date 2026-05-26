@@ -308,31 +308,38 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
           if (!token) return;
 
           if (next.proposalFolderId) {
-            // Move path: physically relocate the proposal folder to executions, drop
-            // a shortcut behind. The folder's ID is preserved.
+            // Promotion path: create the ops project folder in execution, then move
+            // the PCS proposal folder inside it as a subfolder.
             const customerCodeMatch = next.code.match(/^PCS\d{7}-([A-Z0-9]+)-/i);
             const customerSuffix = customerCodeMatch ? `-${customerCodeMatch[1].toUpperCase()}` : '';
             const executionFolderName = next.mainProjectNo
               ? `${next.mainProjectNo}${customerSuffix}${next.name ? ` ${next.name}` : ''}`
               : undefined;
-            const { moved } = await moveProposalToExecution(token, {
+            const { executionFolder, proposalFolder } = await moveProposalToExecution(token, {
               code: next.code,
               name: next.name,
               proposalFolderId: next.proposalFolderId,
               executionFolderName,
             });
             const patchFields = {
-              // Same folder, new location → both fields point to the same URL/ID.
-              proposalFolderUrl: moved.webUrl,
-              executionFolderId: moved.id,
-              executionFolderUrl: moved.webUrl,
+              // executionFolder is the new ops project folder; proposalFolder is the
+              // PCS subfolder now living inside it.
+              proposalFolderUrl: proposalFolder.webUrl,
+              executionFolderId: executionFolder.id,
+              executionFolderUrl: executionFolder.webUrl,
             };
             await api('PUT', `/projects/${id}`, patchFields);
+            // Only update the linked main project's execution folder if it doesn't
+            // already have one — avoids overwriting a manually-configured link on
+            // pre-Calcsheet projects.
             if (next.mainProjectId) {
-              await api('PUT', `/api/projects/${next.mainProjectId}`, {
-                executionFolderId: moved.id,
-                executionFolderUrl: moved.webUrl,
-              }).catch(() => {});
+              const mainResp = await fetch(`/api/projects/${next.mainProjectId}`).then((r) => r.json()).catch(() => null);
+              if (mainResp && !mainResp.executionFolderId) {
+                await api('PUT', `/api/projects/${next.mainProjectId}`, {
+                  executionFolderId: executionFolder.id,
+                  executionFolderUrl: executionFolder.webUrl,
+                }).catch(() => {});
+              }
             }
             set({
               projects: get().projects.map((proj) =>
@@ -340,10 +347,11 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
               ),
             });
             // eslint-disable-next-line no-console
-            console.info('[OneDrive] proposal folder promoted to execution', moved.webUrl);
+            console.info('[OneDrive] proposal folder promoted to execution', executionFolder.webUrl);
           } else {
-            // Fallback: no proposal folder yet (legacy projects). Create a fresh one
-            // at the execution location.
+            // Fallback: no proposal folder (legacy or manually-linked projects).
+            // Skip if we already have an execution folder linked to this calcsheet project.
+            if (next.executionFolderId) return;
             const executionProject = next.mainProjectNo
               ? { code: next.mainProjectNo, name: '' }
               : next;
@@ -352,11 +360,15 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
               executionFolderId: ref.id,
               executionFolderUrl: ref.webUrl,
             });
+            // Same guard: only set on main project if not already configured.
             if (next.mainProjectId) {
-              await api('PUT', `/api/projects/${next.mainProjectId}`, {
-                executionFolderId: ref.id,
-                executionFolderUrl: ref.webUrl,
-              }).catch(() => {});
+              const mainResp = await fetch(`/api/projects/${next.mainProjectId}`).then((r) => r.json()).catch(() => null);
+              if (mainResp && !mainResp.executionFolderId) {
+                await api('PUT', `/api/projects/${next.mainProjectId}`, {
+                  executionFolderId: ref.id,
+                  executionFolderUrl: ref.webUrl,
+                }).catch(() => {});
+              }
             }
             set({
               projects: get().projects.map((proj) =>

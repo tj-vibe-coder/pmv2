@@ -39,6 +39,7 @@ import {
 } from '../../services/onedriveFolderService';
 import { onedriveConfig } from '../../config/onedriveConfig';
 import LinkIcon from '@mui/icons-material/Link';
+import DesktopMacIcon from '@mui/icons-material/DesktopMac';
 
 export default function ProjectDetail() {
   const { id = '' } = useParams();
@@ -67,6 +68,57 @@ export default function ProjectDetail() {
   const [mainSyncBusy, setMainSyncBusy] = useState(false);
   const [mainSyncErr, setMainSyncErr] = useState('');
   const [mainSyncInfo, setMainSyncInfo] = useState('');
+
+  // Link-to-existing-project dialog
+  const [linkExistingOpen, setLinkExistingOpen] = useState(false);
+  const [linkExistingWon, setLinkExistingWon] = useState(false);
+  const [linkExistingQuery, setLinkExistingQuery] = useState('');
+  const [linkExistingProjects, setLinkExistingProjects] = useState<{ id: string; project_no: string; project_name: string; account_name: string }[]>([]);
+  const [linkExistingLoading, setLinkExistingLoading] = useState(false);
+  const [linkExistingBusy, setLinkExistingBusy] = useState(false);
+
+  const openLinkExistingDialog = (fromWon = false) => {
+    setLinkExistingWon(fromWon);
+    setLinkExistingQuery('');
+    setLinkExistingOpen(true);
+    setLinkExistingLoading(true);
+    fetch('/api/projects')
+      .then((r) => r.json())
+      .then((rows: { id: string; project_no: string; project_name: string; account_name: string }[]) => {
+        setLinkExistingProjects(rows);
+      })
+      .catch(() => setLinkExistingProjects([]))
+      .finally(() => setLinkExistingLoading(false));
+  };
+
+  const linkToExistingProject = async (mainProjectId: string) => {
+    if (!project) return;
+    setLinkExistingBusy(true);
+    setMainSyncErr('');
+    setMainSyncInfo('');
+    try {
+      const res = await fetch(`/api/calcsheet/projects/${project.id}/link-existing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('netpacific_token') || ''}` },
+        body: JSON.stringify({ mainProjectId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to link project');
+      const patch: Record<string, unknown> = {
+        mainProjectId: data.mainProjectId,
+        mainProjectNo: data.projectNo,
+        mainProjectSyncStatus: 'linked',
+        ...(linkExistingWon ? { status: 'won' } : {}),
+      };
+      await updateProject(project.id, patch);
+      setMainSyncInfo(`Linked to Project List record ${data.projectNo || data.mainProjectId}.`);
+      setLinkExistingOpen(false);
+    } catch (e) {
+      setMainSyncErr(e instanceof Error ? e.message : 'Failed to link project');
+    } finally {
+      setLinkExistingBusy(false);
+    }
+  };
 
   const syncToMainProject = async (force = false) => {
     if (!project) return null;
@@ -208,6 +260,11 @@ export default function ProjectDetail() {
     }
   };
 
+  const openFolderInApp = (folderUrl: string) => {
+    const url = `odopen://sync?userEmail=${encodeURIComponent(onedriveConfig.driveOwner)}&weUrl=${encodeURIComponent(folderUrl)}`;
+    window.location.href = url;
+  };
+
   // "Link existing folder" — the dialog auto-scans OneDrive for folders whose
   // name starts with this project's PCS code and lists them as one-click
   // suggestions. Falls back to manual URL paste at the bottom for edge cases
@@ -337,22 +394,22 @@ export default function ProjectDetail() {
       }
 
       if (!proposalGone && project.proposalFolderId) {
-        const { moved } = await moveProposalToExecution(token, {
+        const { executionFolder, proposalFolder } = await moveProposalToExecution(token, {
           code: project.code,
           name: project.name,
           proposalFolderId: project.proposalFolderId,
           executionFolderName: project.mainProjectNo,
         });
         await updateProject(project.id, {
-          proposalFolderUrl: moved.webUrl,
-          executionFolderId: moved.id,
-          executionFolderUrl: moved.webUrl,
+          proposalFolderUrl: proposalFolder.webUrl,
+          executionFolderId: executionFolder.id,
+          executionFolderUrl: executionFolder.webUrl,
         });
         if (project.mainProjectId) {
           await fetch(`/api/projects/${project.mainProjectId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ executionFolderId: moved.id, executionFolderUrl: moved.webUrl }),
+            body: JSON.stringify({ executionFolderId: executionFolder.id, executionFolderUrl: executionFolder.webUrl }),
           }).catch(() => {});
         }
       } else {
@@ -919,17 +976,36 @@ export default function ProjectDetail() {
             </Button>
           </>
         ) : project.status === 'won' ? (
+          <>
+            <Button
+              variant="contained"
+              size="small"
+              color="success"
+              disabled={mainSyncBusy}
+              startIcon={<LinkIcon />}
+              onClick={() => { void syncToMainProject(false); }}
+            >
+              {mainSyncBusy ? 'Creating...' : 'Create Project List record'}
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<LinkIcon />}
+              onClick={() => openLinkExistingDialog(false)}
+            >
+              Link to existing
+            </Button>
+          </>
+        ) : (
           <Button
-            variant="contained"
+            variant="outlined"
             size="small"
-            color="success"
-            disabled={mainSyncBusy}
             startIcon={<LinkIcon />}
-            onClick={() => { void syncToMainProject(false); }}
+            onClick={() => openLinkExistingDialog(false)}
           >
-            {mainSyncBusy ? 'Creating...' : 'Create Project List record'}
+            Link to existing project
           </Button>
-        ) : null}
+        )}
         {mainSyncErr && (
           <Typography variant="caption" color="error.main">
             {mainSyncErr}
@@ -956,23 +1032,24 @@ export default function ProjectDetail() {
             </Button>
           ) : (
             <>
-              {/*
-                After promotion to 'won', the proposal folder URL is updated to the
-                moved folder's new URL — same as executionFolderUrl. We hide the
-                "Proposal folder" button in that state since both would point to the
-                same place; the "Execution folder" button is sufficient.
-              */}
               {project.status !== 'won' && (
                 project.proposalFolderUrl ? (
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    startIcon={<FolderIcon />}
-                    endIcon={<OpenInNewIcon />}
-                    onClick={() => { void openFolderOrSelfHeal('proposal'); }}
-                  >
-                    Proposal folder
-                  </Button>
+                  <>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<FolderIcon />}
+                      endIcon={<OpenInNewIcon />}
+                      onClick={() => { void openFolderOrSelfHeal('proposal'); }}
+                    >
+                      Proposal folder
+                    </Button>
+                    <Tooltip title="Open in OneDrive desktop app">
+                      <IconButton size="small" onClick={() => openFolderInApp(project.proposalFolderUrl!)}>
+                        <DesktopMacIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </>
                 ) : (
                   <>
                     <Button
@@ -998,16 +1075,54 @@ export default function ProjectDetail() {
               )}
               {project.status === 'won' && (
                 project.executionFolderUrl ? (
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    color="success"
-                    startIcon={<FolderIcon />}
-                    endIcon={<OpenInNewIcon />}
-                    onClick={() => { void openFolderOrSelfHeal('execution'); }}
-                  >
-                    Execution folder
-                  </Button>
+                  <>
+                    {/* Project folder = the ops-named parent (IOCT2605001-LBI …) */}
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      color="success"
+                      startIcon={<FolderIcon />}
+                      endIcon={<OpenInNewIcon />}
+                      onClick={() => { void openFolderOrSelfHeal('execution'); }}
+                    >
+                      Project folder
+                    </Button>
+                    <Tooltip title="Open in OneDrive desktop app">
+                      <IconButton size="small" onClick={() => openFolderInApp(project.executionFolderUrl!)}>
+                        <DesktopMacIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    {/* Proposal docs = the PCS subfolder inside the project folder.
+                        Only shown when it has its own distinct URL (new structure).
+                        If they're the same (old records), skip to avoid duplicates. */}
+                    {project.proposalFolderUrl && project.proposalFolderUrl !== project.executionFolderUrl && (
+                      <>
+                        <Button
+                          variant="text"
+                          size="small"
+                          startIcon={<FolderIcon />}
+                          endIcon={<OpenInNewIcon />}
+                          onClick={() => { void openFolderOrSelfHeal('proposal'); }}
+                        >
+                          Proposal docs
+                        </Button>
+                        <Tooltip title="Open in OneDrive desktop app">
+                          <IconButton size="small" onClick={() => openFolderInApp(project.proposalFolderUrl!)}>
+                            <DesktopMacIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </>
+                    )}
+                    <Button
+                      variant="text"
+                      size="small"
+                      color="success"
+                      startIcon={<LinkIcon />}
+                      onClick={() => openLinkDialog('execution')}
+                    >
+                      Re-link
+                    </Button>
+                  </>
                 ) : (
                   <>
                     <Button
@@ -1674,12 +1789,86 @@ export default function ProjectDetail() {
             </Alert>
           </Stack>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ flexWrap: 'wrap', gap: 0.5 }}>
           <Button onClick={() => setStatusConfirmOpen(false)}>Cancel</Button>
           <Button onClick={() => { void confirmWon(false); }}>Mark Won Only</Button>
+          <Button
+            onClick={() => {
+              setStatusConfirmOpen(false);
+              openLinkExistingDialog(true);
+            }}
+          >
+            Link to Existing Project
+          </Button>
           <Button variant="contained" color="success" onClick={() => { void confirmWon(true); }}>
             Mark Won and Create Project
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={linkExistingOpen} onClose={() => { if (!linkExistingBusy) setLinkExistingOpen(false); }} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {linkExistingWon ? 'Mark Won — Link to Existing Project' : 'Link to Existing Project List Record'}
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {linkExistingWon && (
+              <Alert severity="info" variant="outlined">
+                The proposal will be marked as <strong>won</strong> and linked to the selected Project List record. No new record will be created.
+              </Alert>
+            )}
+            <TextField
+              label="Search by project no., name, or client"
+              size="small"
+              fullWidth
+              value={linkExistingQuery}
+              onChange={(e) => setLinkExistingQuery(e.target.value)}
+              autoFocus
+            />
+            {linkExistingLoading ? (
+              <Typography variant="body2" color="text.secondary">Loading projects…</Typography>
+            ) : (
+              <Box sx={{ maxHeight: 320, overflowY: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                {linkExistingProjects
+                  .filter((p) => {
+                    const q = linkExistingQuery.toLowerCase();
+                    if (!q) return true;
+                    return (
+                      (p.project_no || '').toLowerCase().includes(q) ||
+                      (p.project_name || '').toLowerCase().includes(q) ||
+                      (p.account_name || '').toLowerCase().includes(q)
+                    );
+                  })
+                  .map((p) => (
+                    <Box
+                      key={p.id}
+                      onClick={() => { if (!linkExistingBusy) void linkToExistingProject(p.id); }}
+                      sx={{
+                        px: 2, py: 1.25, cursor: 'pointer', borderBottom: '1px solid', borderColor: 'divider',
+                        '&:last-child': { borderBottom: 0 },
+                        '&:hover': { bgcolor: 'action.hover' },
+                      }}
+                    >
+                      <Typography variant="body2" fontWeight={600}>{p.project_no || '—'}</Typography>
+                      <Typography variant="body2">{p.project_name}</Typography>
+                      <Typography variant="caption" color="text.secondary">{p.account_name}</Typography>
+                    </Box>
+                  ))}
+                {!linkExistingLoading && linkExistingProjects.filter((p) => {
+                  const q = linkExistingQuery.toLowerCase();
+                  if (!q) return true;
+                  return (p.project_no || '').toLowerCase().includes(q) || (p.project_name || '').toLowerCase().includes(q) || (p.account_name || '').toLowerCase().includes(q);
+                }).length === 0 && (
+                  <Box sx={{ px: 2, py: 2 }}>
+                    <Typography variant="body2" color="text.secondary">No matching projects found.</Typography>
+                  </Box>
+                )}
+              </Box>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLinkExistingOpen(false)} disabled={linkExistingBusy}>Cancel</Button>
         </DialogActions>
       </Dialog>
 

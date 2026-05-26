@@ -456,8 +456,10 @@ async function ensureInRoot(
     return { ...prefixMatch, parentPath: root, folderName: prefixMatch.name || canonical, matchedExisting: true };
   }
 
-  // Step 3: create fresh with canonical name.
+  // Step 3: create fresh with canonical name, then seed standard subfolders.
   const created = await ensureFolder(token, driveId, root, canonical);
+  const createdPath = root ? `${root}/${canonical}` : canonical;
+  await createExecutionProjectSubfolders(token, driveId, createdPath);
   return { ...created, parentPath: root, folderName: canonical, matchedExisting: false };
 }
 
@@ -516,55 +518,87 @@ export async function createUrlShortcut(
   return uploadFileToFolder(token, driveId, parentPath, shortcutName, blob);
 }
 
+const EXECUTION_PROJECT_SUBFOLDERS = ['Client PO', 'Sales Invoice'] as const;
+
 /**
- * Promote a project's proposal folder to the execution location: physically moves
- * the folder from `proposalRoot` → `executionRoot`, then drops a `.url` shortcut
- * file in the original proposal location pointing to the moved folder's new web URL.
+ * Create standard subfolders inside a newly-created execution project folder.
+ * Uses ensureFolder (lookup-first) so it's safe to call on existing folders too.
+ * Failures are non-fatal and logged as warnings — missing subfolders don't block
+ * the parent folder creation.
+ */
+async function createExecutionProjectSubfolders(
+  token: string,
+  driveId: string,
+  projectFolderPath: string,
+): Promise<void> {
+  await Promise.all(
+    EXECUTION_PROJECT_SUBFOLDERS.map((name) =>
+      ensureFolder(token, driveId, projectFolderPath, name).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn(`[OneDrive] subfolder "${name}" creation failed (non-fatal)`, err);
+      }),
+    ),
+  );
+}
+
+/**
+ * Promote a project's proposal folder to the execution location:
  *
- * Idempotent-ish: if the project's folder is already at the execution root (e.g.
- * because the user toggled status won → lost → won), the move is a no-op via the
- * normal Graph PATCH (same parentReference is accepted).
+ *   1. Create (or find) a project folder in `executionRoot` named `executionFolderName`
+ *      (e.g. `IOCT2605001-LBI Batangas Power Plant`).
+ *   2. Move the PCS proposal folder inside that project folder as a subfolder — the
+ *      PCS folder keeps its original name and all its files travel with it.
+ *   3. Drop a `.url` shortcut in the original proposal location pointing to the
+ *      execution project folder (not the PCS subfolder), so browsing the proposal
+ *      root still shows where the project went.
  *
- * Returns both refs so the caller can persist the new IDs/URLs on the project.
+ * The resulting OneDrive structure:
+ *   01 Execution/
+ *     IOCT2605001-LBI Batangas Plant/      ← executionFolder (returned)
+ *       PCS2602001-LBI Batangas Plant/     ← proposalFolder moved inside
+ *
+ * Idempotent-ish: `ensureFolder` is lookup-first, and `moveItem` with the same
+ * parentReference is a no-op per the Graph API, so re-promoting (won→lost→won)
+ * is safe.
+ *
+ * Returns refs for both the new execution project folder and the moved proposal
+ * subfolder so the caller can persist the right IDs/URLs.
  */
 export async function moveProposalToExecution(
   token: string,
   project: { code: string; name: string; proposalFolderId: string; executionFolderName?: string },
-): Promise<{ moved: DriveItemRef; shortcut: DriveItemRef | null }> {
+): Promise<{ executionFolder: DriveItemRef; proposalFolder: DriveItemRef; shortcut: DriveItemRef | null }> {
   const driveId = await resolveCorporateDriveId(token);
-  const folderName = projectFolderName(project);
-  const executionFolderName = project.executionFolderName
+  const pcsFolderName = projectFolderName(project);
+  const execFolderName = project.executionFolderName
     ? sanitizeForOneDrive(project.executionFolderName)
-    : undefined;
+    : pcsFolderName;
 
-  const moved = await moveItem(
-    token,
-    driveId,
-    project.proposalFolderId,
-    onedriveConfig.executionRoot,
-    executionFolderName,
-  );
+  // Step 1: Create (or find) the execution project folder, then seed standard subfolders.
+  const executionFolder = await ensureFolder(token, driveId, onedriveConfig.executionRoot, execFolderName);
+  const execSubPath = `${onedriveConfig.executionRoot}/${execFolderName}`;
+  await createExecutionProjectSubfolders(token, driveId, execSubPath);
 
-  // Drop a shortcut in the original proposal location. If a shortcut by this name
-  // already exists (re-won after lost), uploadFileToFolder will overwrite it — that's
-  // fine since the target URL hasn't changed.
+  // Step 2: Move the PCS proposal folder inside the execution project folder.
+  const proposalFolder = await moveItem(token, driveId, project.proposalFolderId, execSubPath);
+
+  // Step 3: Drop a shortcut in the original proposal location pointing to the
+  // execution project folder. Overwrite-safe if already exists (re-won after lost).
   let shortcut: DriveItemRef | null = null;
   try {
-    const shortcutName = `${folderName} (moved to Execution).url`;
+    const shortcutName = `${pcsFolderName} (moved to Execution).url`;
     shortcut = await createUrlShortcut(
       token,
       driveId,
       onedriveConfig.proposalRoot,
       shortcutName,
-      moved.webUrl,
+      executionFolder.webUrl,
     );
   } catch (err) {
-    // Shortcut is a nice-to-have. The folder move is the meaningful operation;
-    // if the shortcut fails (e.g. permission issue on the proposal root) we
-    // still return success on the move.
+    // Shortcut is a nice-to-have; folder promotion already succeeded.
     // eslint-disable-next-line no-console
     console.warn('[OneDrive] proposal shortcut creation failed (non-fatal)', err);
   }
 
-  return { moved, shortcut };
+  return { executionFolder, proposalFolder, shortcut };
 }

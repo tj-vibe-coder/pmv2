@@ -128,18 +128,28 @@ export default function Projects() {
         // Bonus: if the project is already won, also resolve the execution folder.
         if (p.status === 'won' && !p.executionFolderId) {
           try {
-            const exRef = p.mainProjectNo
-              ? (await moveProposalToExecution(token, {
-                  code: p.code,
-                  name: p.name,
-                  proposalFolderId: ref.id,
-                  executionFolderName: p.mainProjectNo,
-                })).moved
-              : await ensureExecutionFolder(token, p);
+              let exId: string;
+            let exUrl: string;
+            let proposalUrl: string | undefined;
+            if (p.mainProjectNo) {
+              const { executionFolder, proposalFolder } = await moveProposalToExecution(token, {
+                code: p.code,
+                name: p.name,
+                proposalFolderId: ref.id,
+                executionFolderName: p.mainProjectNo,
+              });
+              exId = executionFolder.id;
+              exUrl = executionFolder.webUrl;
+              proposalUrl = proposalFolder.webUrl;
+            } else {
+              const exRef = await ensureExecutionFolder(token, p);
+              exId = exRef.id;
+              exUrl = exRef.webUrl;
+            }
             await updateProject(p.id, {
-              executionFolderId: exRef.id,
-              executionFolderUrl: exRef.webUrl,
-              ...(p.mainProjectNo ? { proposalFolderUrl: exRef.webUrl } : {}),
+              executionFolderId: exId,
+              executionFolderUrl: exUrl,
+              ...(proposalUrl ? { proposalFolderUrl: proposalUrl } : {}),
             });
           } catch (exErr) {
             // Non-fatal — proposal folder still landed.

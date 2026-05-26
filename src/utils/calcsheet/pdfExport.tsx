@@ -92,15 +92,13 @@ function quotationDate(value: string | undefined): Date {
 const styles = StyleSheet.create({
   page: {
     paddingTop: 36, paddingBottom: 50, paddingHorizontal: 36,
-    fontSize: 9, fontFamily: 'Helvetica', color: TEXT, lineHeight: 1.4,
+    fontSize: 9, fontFamily: 'Helvetica', color: TEXT, lineHeight: 1.3,
   },
 
   // Header
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
   headerLeft: { width: '55%' },
-  // Square icon mark — slightly larger than the previous 90x28 wordmark so the
-  // header has the same visual presence without the text portion.
-  logo: { width: 64, height: 64, objectFit: 'contain', marginBottom: 6 },
+  logo: { width: 64, height: 64, objectFit: 'contain', marginBottom: 0 },
   brandName: { color: PRIMARY, fontSize: 11, fontWeight: 700, marginBottom: 1 },
   brandLine: { fontSize: 8.5, color: TEXT, lineHeight: 1.3 },
   headerRight: { width: '45%', alignItems: 'flex-end' },
@@ -121,34 +119,32 @@ const styles = StyleSheet.create({
   greeting: { fontSize: 9, marginBottom: 4 },
   intro: { fontSize: 9, marginBottom: 8 },
 
-  // Section bars
+  // Section bars — solid PRIMARY fill, white text
   sectionBar: {
-    backgroundColor: SECTION_BG, color: PRIMARY, fontWeight: 700,
-    fontSize: 9, padding: '4 8', marginTop: 8,
-    borderLeft: `3px solid ${PRIMARY}`,
+    backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
+    fontSize: 9, padding: '2 8', marginTop: 8,
   },
+  // Summary label — same solid PRIMARY treatment
   summaryBar: {
     backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
-    fontSize: 9.5, padding: '5 8',
+    fontSize: 9.5, padding: '2 8',
   },
 
   // Table
   th: {
-    flexDirection: 'row', backgroundColor: ROW_ALT,
-    borderTop: `0.5px solid ${BORDER}`, borderBottom: `0.5px solid ${BORDER}`,
-    padding: '4 4', fontWeight: 700, fontSize: 8.5,
-    alignItems: 'center',
+    flexDirection: 'row', backgroundColor: SECTION_BG,
+    borderBottom: `0.5px solid ${BORDER}`,
+    padding: '2 4', fontWeight: 700, fontSize: 8.5,
   },
   tr: {
     flexDirection: 'row', borderBottom: `0.25px solid ${BORDER_LIGHT}`,
-    padding: '3 4', fontSize: 8.5,
+    padding: '2 4', fontSize: 8.5,
     alignItems: 'center',
   },
   trSub: {
-    flexDirection: 'row', backgroundColor: ROW_ALT,
-    padding: '3 4', fontWeight: 700, fontSize: 8.5,
+    flexDirection: 'row',
+    padding: '1 4', fontSize: 8.5,
     borderTop: `0.5px solid ${BORDER}`,
-    alignItems: 'center',
   },
 
   cItem: { width: '10%' },
@@ -159,26 +155,25 @@ const styles = StyleSheet.create({
   cTotal: { width: '13%', textAlign: 'right', lineHeight: 1.05 },
 
   // Summary
-  summaryBlock: { marginTop: 8 },
+  summaryBlock: { marginTop: 4 },
   sumTh: {
-    flexDirection: 'row', backgroundColor: PRIMARY, color: 'white',
-    padding: '4 6', fontWeight: 700, fontSize: 9,
+    flexDirection: 'row', backgroundColor: SECTION_BG, color: TEXT,
+    borderBottom: `0.5px solid ${BORDER}`,
+    padding: '2 6', fontWeight: 700, fontSize: 9,
   },
   sumRow: {
     flexDirection: 'row', borderBottom: `0.25px solid ${BORDER_LIGHT}`,
-    padding: '3 6', fontSize: 9,
+    padding: '2 6', fontSize: 9,
   },
   sumItem: { flex: 1 },
   sumQty: { width: '10%', textAlign: 'center' },
   sumUom: { width: '10%', textAlign: 'center' },
   sumPrice: { width: '20%', textAlign: 'right' },
   sumFooterRow: {
-    flexDirection: 'row', justifyContent: 'flex-end', padding: '3 6', fontSize: 9.5,
+    flexDirection: 'row', justifyContent: 'flex-end', padding: '2 6', fontSize: 9.5,
   },
   sumTotalRow: {
-    backgroundColor: SECTION_BG,
     borderTop: `0.5px solid ${BORDER}`,
-    borderBottom: `0.5px solid ${BORDER}`,
   },
   sumFooterLabel: { fontWeight: 700, marginRight: 16 },
   sumFooterValue: { fontWeight: 700, width: '20%', textAlign: 'right' },
@@ -254,6 +249,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
         <Text style={styles.footerLeft} fixed>{issuer.name}</Text>
         <Text style={styles.footerCenter} fixed>QTN Ref: {refNo}</Text>
 
+
+
         {/* ─── HEADER ─── */}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
@@ -315,7 +312,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               <Text style={styles.cQty}>QTY</Text>
               <Text style={styles.cUom}>UOM</Text>
               <Text style={styles.cUnit}>Unit Price</Text>
-              <Text style={styles.cTotal}>Total , PHP</Text>
+              <Text style={styles.cTotal}>Total , PhP</Text>
             </View>
             {exportGeneralReqtsAsLot ? (
               quotation.generalReqts.map((l, i) => {
@@ -337,7 +334,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   <Text style={styles.cItem}>{l.code}</Text>
                   <Text style={styles.cDesc}>{l.description}</Text>
                   <Text style={styles.cQty}>{l.qty}</Text>
-                  <Text style={styles.cUom}>{l.uom}</Text>
+                  <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                   <Text style={styles.cUnit}>{PHP(l.unitPrice)}</Text>
                   <Text style={styles.cTotal}>{PHP(lineGeneralTotal(l))}</Text>
                 </View>
@@ -364,7 +361,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               <Text style={styles.cQty}>QTY</Text>
               <Text style={styles.cUom}>UOM</Text>
               <Text style={styles.cUnit}>Unit Price</Text>
-              <Text style={styles.cTotal}>Total , PHP</Text>
+              <Text style={styles.cTotal}>Total , PhP</Text>
             </View>
             {quotation.components.map((l) => (
               <View style={styles.tr} key={l.id}>
@@ -373,7 +370,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   {[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}
                 </Text>
                 <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
-                <Text style={styles.cUom}>{l.uom}</Text>
+                <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                 <Text style={styles.cUnit}>
                   {PHP(componentSellingUnit(l, quotation.productMarkupPct))}
                 </Text>
@@ -403,7 +400,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               <Text style={styles.cQty}>QTY</Text>
               <Text style={styles.cUom}>UOM</Text>
               <Text style={styles.cUnit}>Unit Price</Text>
-              <Text style={styles.cTotal}>Total , PHP</Text>
+              <Text style={styles.cTotal}>Total , PhP</Text>
             </View>
             {quotation.servicesFromManpower ? (
               quotation.services.map((l, i) => {
@@ -449,7 +446,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             <Text style={styles.sumItem}>Item</Text>
             <Text style={styles.sumQty}>QTY</Text>
             <Text style={styles.sumUom}>UOM</Text>
-            <Text style={styles.sumPrice}>Price, PHP</Text>
+            <Text style={styles.sumPrice}>Price, PhP</Text>
           </View>
           {hasA && (
             <View style={styles.sumRow}>
@@ -476,7 +473,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             </View>
           )}
           <View style={[styles.sumFooterRow, styles.sumTotalRow]}>
-            <Text style={styles.sumFooterLabel}>TOTAL PRICE, PHP (VAT-EX)</Text>
+            <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP (VAT-EX)</Text>
             <Text style={styles.sumFooterValue}>{PHP(totals.subtotal)}</Text>
           </View>
           {quotation.discountPct > 0 && (
@@ -498,7 +495,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
               </View>
               <View style={[styles.sumFooterRow, styles.sumTotalRow]}>
-                <Text style={styles.sumFooterLabel}>TOTAL PRICE, PHP (VAT-IN)</Text>
+                <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP (VAT-IN)</Text>
                 <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
               </View>
             </>

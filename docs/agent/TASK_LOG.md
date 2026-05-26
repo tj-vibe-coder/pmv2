@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-05-26 — OneDrive Execution Folder Restructuring + Link-to-Existing + PDF Polish
+
+### Summary
+
+Restructured OneDrive execution folder layout so won proposals create a parent ops project folder in Execution with the PCS folder as a child subfolder. Added "Link to existing Project List record" workflow as an alternative to creating new records. Seeded standard `Client PO`/`Sales Invoice` subfolders in new execution folders. Polished quotation PDF styling.
+
+### Files Changed
+
+- `server.js` — new `POST /api/calcsheet/projects/:id/link-existing` endpoint
+- `src/services/onedriveFolderService.ts` — `moveProposalToExecution` now creates parent execution folder and moves PCS folder inside; new `createExecutionProjectSubfolders` seeds standard subfolders
+- `src/components/calcsheet/CalcsheetProjectDetail.tsx` — Link-to-existing UI with searchable dialog; OneDrive desktop app `odopen://` protocol links; renamed Execution folder → Project folder with separate Proposal docs subfolder button
+- `src/components/calcsheet/CalcsheetProjects.tsx` — updated auto-link/won flow to use new `{ executionFolder, proposalFolder }` return shape
+- `src/store/quotationStore.ts` — won promotion uses new move shape; guards against overwriting existing execution folder on linked main projects
+- `src/utils/calcsheet/pdfExport.tsx` — tighter spacing, solid primary section bars, `PHP`→`PhP`, UOM uppercase, removed alt-row sub-row backgrounds
+- `src/components/Dashboard.tsx` — default sort by `project_no` desc
+
+### Checks Run
+
+- `npx tsc --noEmit` — clean
+
+### Notes
+
+- OneDrive structure after won promotion: `01 Execution/IOCT2605001-LBI Batangas Plant/PCS2602001-LBI Batangas Plant/` with `Client PO`/`Sales Invoice` subfolders
+- `moveProposalToExecution` return shape changed from `{ moved }` to `{ executionFolder, proposalFolder, shortcut }`
+- Link-to-existing searches all Project List records by project number, name, or client; options include "Link to Existing Project" on the Mark Won dialog
+
+---
+
 ## 2026-05-26 — Calcsheet Delete Confirmation + Sequence Counter Race Condition Fix
 
 ### Summary

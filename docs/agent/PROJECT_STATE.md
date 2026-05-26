@@ -41,17 +41,16 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 - Calcsheet delete confirmation dialogs (project and quotation) with red Delete buttons that warn about permanent deletion
 - Calcsheet project sequence counter race condition fix using Firestore `runTransaction` for atomic increments
 - Investment Tracker moved into Expense Monitoring sidebar group
+- OneDrive execution folder restructuring: won proposals now create a parent ops project folder in Execution with the PCS folder as a child subfolder; standard `Client PO`/`Sales Invoice` subfolders seeded automatically
+- Calcsheet link-to-existing Project List record: new `POST /api/calcsheet/projects/:id/link-existing` endpoint with searchable dialog (by project number, name, or client); available from both the project detail page and the Mark Won confirmation
+- OneDrive desktop app open: `odopen://` protocol links added to both Proposal and Project folder buttons
+- Quotation PDF polish: tighter spacing, solid primary section bars with white text, `PHP`→`PhP`, UOM uppercase
 
 ## In Progress
 
 - Historical OneDrive backfill for older proposals/projects
 - Existing Project List number cleanup/remapping where old project codes do not match the chosen operations convention
 - Calcsheet quotation PDF footer now includes full company name, QTN Ref, and pdf-lib-post-processed `Page N of M` page numbering on every page
-
-## In Progress
-
-- Historical OneDrive backfill for older proposals/projects
-- Existing Project List number cleanup/remapping where old project codes do not match the chosen operations convention
 
 ## Next Priorities
 
