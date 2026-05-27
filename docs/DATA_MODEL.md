@@ -361,9 +361,20 @@ Top-level collection for the Collections & AR dashboard. Each document represent
 | `due_date` | string | `"YYYY-MM-DD"` — auto-computed as `invoice_date + payment_terms_days`, editable |
 | `amount_collected` | number | Running total of payments received |
 | `collection_date` | string? | `"YYYY-MM-DD"` — date of last / full collection |
+| `pb_number` | string? | Progress billing reference (e.g. `"PB1"`, `"PB2"`) |
+| `scan_file` | ScanFile? | OneDrive reference for the uploaded invoice scan (see below) |
 | `notes` | string? | Optional free-text note |
 | `created_at` | string | ISO timestamp |
 | `updated_at` | string | ISO timestamp |
+
+**ScanFile** (nested object, stored when a scan has been uploaded):
+
+| Field | Type | Notes |
+|---|---|---|
+| `onedrive_item_id` | string | Graph API item ID — used for direct open/download |
+| `onedrive_web_url` | string | Browser URL to the file in OneDrive |
+| `filename` | string | Original filename (e.g. `SI-2026-001.pdf`) |
+| `uploaded_at` | string | ISO timestamp of upload |
 
 **Status** is computed (never stored):
 - `paid` → `amount_collected >= amount`

@@ -891,6 +891,7 @@ Create a new invoice. Requires active user session.
   "payment_terms_days": 30,
   "due_date": "2026-02-14",
   "amount_collected": 0,
+  "pb_number": "PB1",
   "notes": "Milestone 1 billing"
 }
 ```
@@ -903,6 +904,7 @@ Create a new invoice. Requires active user session.
 
 Update an invoice (any field). Requires active user session.
 Commonly used to record a collection: send `{ amount_collected, collection_date }`.
+To attach a scan: send `{ scan_file: { onedrive_item_id, onedrive_web_url, filename, uploaded_at } }`. Upload is handled client-side via `uploadFileToFolder()` before calling this endpoint.
 
 **Response:** `{ message: "Invoice updated" }`
 
