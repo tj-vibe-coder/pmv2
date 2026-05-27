@@ -13,7 +13,6 @@ const PRIMARY = '#2c5aa0';
 const TEXT = '#222';
 const TEXT_LIGHT = '#666';
 const SECTION_BG = '#EAF0F8';
-const ROW_ALT = '#F2F4F7';
 const BORDER = '#999';
 const BORDER_LIGHT = '#DDD';
 

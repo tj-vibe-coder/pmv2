@@ -1,3 +1,6 @@
+import type { BillingMilestone } from './Invoice';
+export type { BillingMilestone };
+
 export interface Project {
   id: number;
   project_no?: string;
@@ -67,6 +70,7 @@ export interface Project {
   source_module?: 'calcsheet' | string;
   executionFolderId?: string;
   executionFolderUrl?: string;
+  billing_schedule?: BillingMilestone[];
 }
 
 export type ProjectStatus = 'OPEN' | 'CLOSED' | 'FOR_CLOSEOUT' | 'PENDING' | 'CANCELLED';

@@ -8,8 +8,8 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 
 - **Status:** Active development
 - **Current phase:** Calcsheet and Project List integration hardening
-- **Main focus:** Calcsheet/Project List integration hardening, OneDrive execution-folder continuity, reports polish, and settings/user-management hardening
-- **Last updated:** 2026-05-26
+- **Main focus:** Collections & AR integration with project monitoring completed; progress update workflow streamlined
+- **Last updated:** 2026-05-27
 
 ## Completed
 
@@ -45,12 +45,14 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 - Calcsheet link-to-existing Project List record: new `POST /api/calcsheet/projects/:id/link-existing` endpoint with searchable dialog (by project number, name, or client); available from both the project detail page and the Mark Won confirmation
 - OneDrive desktop app open: `odopen://` protocol links added to both Proposal and Project folder buttons
 - Quotation PDF polish: tighter spacing, solid primary section bars with white text, `PHP`→`PhP`, UOM uppercase
+- Collections & AR dashboard with invoice scan upload to OneDrive (Sales Invoice subfolder), bidirectional navigation with ProjectDetails (AR summary card → Collections; project name click → ProjectDetails via sessionStorage bridge)
+- Lightweight Update Progress dialog in ProjectDetails: percentage slider, PB number, notes, auto-creates progress snapshots and distributes to WBS items
+- Server.js catch-all route ordering fix: SPA fallback moved to end of file after all API routes
 
 ## In Progress
 
 - Historical OneDrive backfill for older proposals/projects
 - Existing Project List number cleanup/remapping where old project codes do not match the chosen operations convention
-- Calcsheet quotation PDF footer now includes full company name, QTN Ref, and pdf-lib-post-processed `Page N of M` page numbering on every page
 
 ## Next Priorities
 
@@ -73,6 +75,7 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 - Graphify is currently not configured in this checkout because `.planning/config.json` is missing
 - User profile designation is the source of truth for current-user report signatures; refresh/login again after editing user account fields so `/api/auth/me` updates browser cache
 - Read-only Firestore user audit on 2026-05-25 found one `TJC` and one `RJR` record; duplicate usernames currently remain for `admin` and `projects`
+- **The `/*splat` SPA fallback + `express.static('build')` must be the LAST thing in `server.js`**, after ALL API routes. Placing it before API routes causes Express to match API requests (like `/api/invoices`) against the wildcard and serve `index.html` instead of JSON.
 
 ## Agent Notes
 

@@ -158,7 +158,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           totalContractAmount: projects.reduce((sum, p) => sum + (p.updated_contract_amount || 0), 0),
           totalBilledAmount: projects.reduce((sum, p) => sum + (p.contract_billed || 0), 0),
           totalBacklogs: projects.reduce((sum, p) => sum + dataService.getUnbilled(p), 0),
-          totalOutstandingBalance: projects.reduce((sum, p) => sum + (p.updated_contract_balance_net || 0), 0)
+          totalOutstandingBalance: projects.reduce((sum, p) => sum + dataService.getUnbilled(p), 0)
         })).sort((a, b) => a.year - b.year);
         
         setYearSummaries(calculatedYearSummaries);
@@ -215,7 +215,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       totalContractAmount: filteredProjects.reduce((sum, p) => sum + (p.updated_contract_amount || 0), 0),
       totalBilledAmount: filteredProjects.reduce((sum, p) => sum + (p.contract_billed || 0), 0),
       totalBacklogs: filteredProjects.reduce((sum, p) => sum + dataService.getUnbilled(p), 0),
-      totalOutstandingBalance: filteredProjects.reduce((sum, p) => sum + (p.updated_contract_balance_net || 0), 0),
+      totalOutstandingBalance: filteredProjects.reduce((sum, p) => sum + dataService.getUnbilled(p), 0),
     };
   }, [filteredProjects]);
 

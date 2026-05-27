@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-27 — Collections & AR Integration, Progress Updates, and Bidirectional Navigation
+
+### Summary
+
+Integrated the Collections & AR dashboard with project monitoring via bidirectional links, added invoice scan upload to OneDrive, and created a lightweight progress update dialog in ProjectDetails. Fixed a server-side route ordering bug that broke API responses.
+
+### Files Changed
+
+- `src/types/Invoice.ts` — added `ScanFile` interface and optional `scan_file` field to `ProjectInvoice`
+- `src/components/CollectionsDashboard.tsx` — per-row invoice scan upload (cloud button → OneDrive `Sales Invoice` subfolder); project name clickable to navigate to ProjectDetails via sessionStorage bridge; `?project_id=` query param pre-filtering
+- `src/components/ProjectDetails.tsx` — green "Update Progress" button, AR Summary card in right column (fetches invoices, computes totals, clickable to `/collections?project_id=X`), wired `UpdateProgressDialog`
+- `src/components/UpdateProgressDialog.tsx` — new component: percentage slider (0–100), PB number, notes; auto-creates progress snapshot and distributes to WBS items
+- `src/components/ProjectMonitoringApp.tsx` — sessionStorage bridge (`selectedProjectId`) to auto-open project detail when navigated from Collections
+- `server.js` — moved `express.static('build')` + `/*splat` catch-all from line ~2243 to the very end (after all API routes), fixing Collections and Investment Tracker API responses that were getting `index.html` instead of JSON
+- `src/components/InvestmentTrackerPage.tsx` — improved error handling to check for 401 and surface API error messages
+- `claude.md`, `docs/agent/TASK_LOG.md`, `docs/agent/PROJECT_STATE.md` — updated memory and documentation
+
+### Checks Run
+
+- `npx react-scripts build` — clean (only pre-existing eslint warning on `pdfExport.tsx`)
+- Server restart verified `/api/invoices` and `/api/investments` return JSON
+
+### Notes
+
+- The `/*splat` catch-all was defined before the invoice routes, so Express matched `/api/invoices` to the wildcard and served `index.html`. Moving it to the end fixes both Collections and any future API routes added after the catch-all.
+- Invoice scans go to `01 Execution/{projectFolder}/Sales Invoice/{invoice_no}_{filename}`. The Sales Invoice subfolder is auto-created as part of `ensureExecutionFolder()`.
+- Navigation from Collections to ProjectDetails uses `sessionStorage` as a bridge since ProjectDetails is state-managed in `ProjectMonitoringApp`, not a route.
+
+---
+
 ## 2026-05-26 — OneDrive Execution Folder Restructuring + Link-to-Existing + PDF Polish
 
 ### Summary

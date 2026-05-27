@@ -1,3 +1,18 @@
+export interface BillingMilestone {
+  id: string;
+  label: string;
+  trigger_pct: number;   // progress % at which this milestone becomes eligible (0 = DP / immediate)
+  billing_pct: number;   // % of contract amount to invoice at this milestone
+  pb_number: string;     // e.g. "PB1", "PB2"
+}
+
+export interface ScanFile {
+  onedrive_item_id: string;
+  onedrive_web_url: string;
+  filename: string;
+  uploaded_at: string;
+}
+
 export interface ProjectInvoice {
   id: string;
   project_id: string;
@@ -12,6 +27,8 @@ export interface ProjectInvoice {
   due_date: string;             // 'YYYY-MM-DD'
   amount_collected: number;
   collection_date?: string;     // 'YYYY-MM-DD' — date of last / full collection
+  pb_number?: string;
+  scan_file?: ScanFile | null;
   notes?: string;
   created_at: string;
   updated_at: string;

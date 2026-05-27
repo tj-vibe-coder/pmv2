@@ -10,6 +10,8 @@ import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PaymentIcon from '@mui/icons-material/Payment';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import type { ProjectInvoice, InvoiceStatus } from '../types/Invoice';
 import {
   getInvoiceStatus,
@@ -18,6 +20,9 @@ import {
 } from '../types/Invoice';
 import type { Project } from '../types/Project';
 import { API_BASE } from '../config/api';
+import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
+import { resolveCorporateDriveId, uploadFileToFolder, projectFolderName } from '../services/onedriveFolderService';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 
 const API = `${API_BASE}/api`;
 
@@ -84,6 +89,9 @@ interface CollectForm {
 
 // ─── component ────────────────────────────────────────────────────────────────
 export default function CollectionsDashboard() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const preselectedProjectId = searchParams.get('project_id');
   const [invoices, setInvoices] = useState<ProjectInvoice[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -110,6 +118,11 @@ export default function CollectionsDashboard() {
   const [deleteTarget, setDeleteTarget] = useState<ProjectInvoice | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
 
+  // OneDrive upload
+  const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const [uploadingScanId, setUploadingScanId] = useState<string | null>(null);
+  const [uploadScanErr, setUploadScanErr] = useState('');
+
   // ─── fetch ───────────────────────────────────────────────────────────────
   const fetchInvoices = useCallback(async () => {
     try {
@@ -123,14 +136,20 @@ export default function CollectionsDashboard() {
 
   useEffect(() => {
     setLoading(true);
+    const invoiceUrl = preselectedProjectId
+      ? `${API}/invoices?project_id=${encodeURIComponent(preselectedProjectId)}`
+      : `${API}/invoices`;
     Promise.all([
       fetch(`${API}/projects`).then(r => r.json()),
-      fetch(`${API}/invoices`).then(r => r.json()),
+      fetch(invoiceUrl).then(r => r.json()),
     ])
       .then(([ps, invs]) => { setProjects(ps); setInvoices(invs); })
-      .catch(() => setError('Failed to load data.'))
+      .catch((err: unknown) => {
+        console.error('CollectionsDashboard load error:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load data.');
+      })
       .finally(() => setLoading(false));
-  }, []);
+  }, [preselectedProjectId]);
 
   // ─── derived data ────────────────────────────────────────────────────────
   const enriched = useMemo(() => invoices.map(inv => ({
@@ -289,6 +308,71 @@ export default function CollectionsDashboard() {
     }
   };
 
+  // ─── upload scan ────────────────────────────────────────────────────────
+  const handleScanUpload = async (inv: ProjectInvoice, file: File) => {
+    if (!/(\.pdf|\.png|\.jpe?g|\.tiff?|\.bmp)$/i.test(file.name)) {
+      setUploadScanErr('Please upload a PDF or image file (PDF, PNG, JPG, TIFF, BMP).');
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setUploadScanErr('File is too large. Maximum size is 25 MB.');
+      return;
+    }
+
+    if (!oneDriveSignedIn) {
+      oneDriveLogin();
+      return;
+    }
+
+    setUploadingScanId(inv.id);
+    setUploadScanErr('');
+
+    try {
+      const token = await getOneDriveToken();
+      if (!token) {
+        setUploadScanErr('Could not obtain OneDrive access token. Please sign in again.');
+        setUploadingScanId(null);
+        return;
+      }
+      const driveId = await resolveCorporateDriveId(token);
+
+      const code = inv.project_no || String(inv.project_id);
+      const name = inv.project_name || '';
+      const folderName = projectFolderName({ code, name });
+      const sanitizedInvoice = inv.invoice_no.replace(/[<>:"/\\|?*]/g, '_');
+      const filename = `${sanitizedInvoice}_${file.name}`;
+      const folderPath = `01 Execution/${folderName}/Sales Invoice`;
+
+      const result = await uploadFileToFolder(token, driveId, folderPath, filename, file);
+
+      const scanFile = {
+        onedrive_item_id: result.id,
+        onedrive_web_url: result.webUrl,
+        filename: result.name || filename,
+        uploaded_at: new Date().toISOString(),
+      };
+
+      await fetch(`${API}/invoices/${inv.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scan_file: scanFile }),
+        credentials: 'include',
+      });
+
+      await fetchInvoices();
+    } catch (e) {
+      setUploadScanErr(e instanceof Error ? e.message : 'Upload failed.');
+    } finally {
+      setUploadingScanId(null);
+    }
+  };
+
+  const handleScanPick = (inv: ProjectInvoice, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleScanUpload(inv, file);
+    e.target.value = '';
+  };
+
   // ─── render ──────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -310,6 +394,7 @@ export default function CollectionsDashboard() {
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError('')}>{error}</Alert>}
+      {uploadScanErr && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setUploadScanErr('')}>{uploadScanErr}</Alert>}
 
       {/* KPI Cards */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
@@ -429,6 +514,7 @@ export default function CollectionsDashboard() {
               <TableRow>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Invoice No.</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>PB #</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Date Issued</TableCell>
                 <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Amount</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Terms</TableCell>
@@ -442,7 +528,7 @@ export default function CollectionsDashboard() {
             <TableBody>
               {filtered.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={10} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: '0.875rem' }}>
+                  <TableCell colSpan={11} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: '0.875rem' }}>
                     {enriched.length === 0
                       ? 'No invoices yet. Click "Add Invoice" to get started.'
                       : 'No invoices match the current filters.'}
@@ -451,20 +537,46 @@ export default function CollectionsDashboard() {
               )}
               {filtered.map(inv => {
                 const isOverdue = inv._status === 'overdue';
+                const handleProjectClick = () => {
+                  sessionStorage.setItem('selectedProjectId', String(inv.project_id));
+                  navigate('/dashboard');
+                };
                 return (
                   <TableRow key={inv.id} hover sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
                     <TableCell>
-                      <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8rem' }}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontWeight: 500,
+                          fontSize: '0.8rem',
+                          color: NET_PACIFIC_COLORS.primary,
+                          cursor: 'pointer',
+                          '&:hover': { textDecoration: 'underline' },
+                        }}
+                        onClick={handleProjectClick}
+                      >
                         {inv.project_name || '—'}
                       </Typography>
                       {inv.project_no && (
-                        <Typography variant="caption" color="text.secondary">{inv.project_no}</Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ cursor: 'pointer' }}
+                          onClick={handleProjectClick}
+                        >
+                          {inv.project_no}
+                        </Typography>
                       )}
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" sx={{ fontSize: '0.8rem', fontFamily: 'monospace' }}>
                         {inv.invoice_no}
                       </Typography>
+                    </TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                      {inv.pb_number
+                        ? <Chip label={inv.pb_number} size="small" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
+                        : <Typography variant="caption" color="text.disabled">—</Typography>}
                     </TableCell>
                     <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{inv.invoice_date}</TableCell>
                     <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
@@ -502,6 +614,20 @@ export default function CollectionsDashboard() {
                         <Tooltip title="Record collection">
                           <IconButton size="small" color="success" onClick={() => openCollect(inv)}>
                             <PaymentIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                      {inv.scan_file?.onedrive_web_url ? (
+                        <Tooltip title={`View scan: ${inv.scan_file.filename}`}>
+                          <IconButton size="small" color="info" onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')}>
+                            <VisibilityIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      ) : (
+                        <Tooltip title={uploadingScanId === inv.id ? 'Uploading…' : 'Upload invoice scan'}>
+                          <IconButton size="small" color="primary" disabled={uploadingScanId === inv.id} component="label">
+                            {uploadingScanId === inv.id ? <CircularProgress size={16} /> : <CloudUploadIcon fontSize="small" />}
+                            <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
                           </IconButton>
                         </Tooltip>
                       )}

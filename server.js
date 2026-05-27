@@ -2238,18 +2238,6 @@ app.get('/api/health', (req, res) => {
 });
 
 // ========== STATIC FILES & SPA ROUTING ==========
-
-// Cloud Functions v2 sets K_SERVICE automatically; Firebase Hosting handles static files.
-if (!process.env.K_SERVICE) {
-  // Serve static files from the React app
-  app.use(express.static(path.join(__dirname, 'build')));
-
-  // Any request that doesn't match the ones above, send back index.html
-  app.get(['/', '/*splat'], (req, res) => {
-    res.sendFile(path.join(__dirname, 'build', 'index.html'));
-  });
-}
-
 // ========== INVOICE / COLLECTIONS ROUTES ==========
 
 app.get('/api/invoices', async (req, res) => {
@@ -2315,6 +2303,15 @@ app.delete('/api/invoices/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete invoice' });
   }
 });
+
+// ========== STATIC FILES & SPA FALLBACK ==========
+if (!process.env.K_SERVICE) {
+  app.use(express.static(path.join(__dirname, 'build')));
+
+  app.get('/*splat', (req, res) => {
+    res.sendFile(path.join(__dirname, 'build', 'index.html'));
+  });
+}
 
 // ========== GLOBAL ERROR HANDLER ==========
 // Must be defined after all routes. Returns JSON for all unhandled errors.

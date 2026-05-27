@@ -111,10 +111,16 @@ const InvestmentTrackerPage: React.FC = () => {
       ]);
       const invData = await invRes.json();
       const tgtData = await tgtRes.json();
+      if (invRes.status === 401) {
+        setError('Session expired. Please log in again.');
+        return;
+      }
       if (invData.success) setInvestments(invData.investments || []);
+      else if (invData.error) setError(invData.error);
       if (tgtData.success) setTarget(tgtData.target);
-    } catch {
-      setError('Failed to load investment data');
+      else if (tgtData.error) setError(prev => prev || tgtData.error);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load investment data');
     } finally {
       setLoading(false);
     }

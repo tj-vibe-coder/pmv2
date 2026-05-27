@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Container,
   Paper,
   Typography,
   Grid,
-  Card,
-  CardContent,
   Divider,
   Button,
   IconButton,
@@ -17,6 +16,18 @@ import {
   DialogTitle,
   Stack,
   Alert,
+  Chip,
+  Tooltip,
+  Table,
+  TableHead,
+  TableRow,
+  TableCell,
+  TableBody,
+  TableContainer,
+  MenuItem,
+  Select,
+  FormControl,
+  InputLabel,
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -26,12 +37,18 @@ import {
   OpenInNew as OpenInNewIcon,
   Cloud as CloudIcon,
   CloudOff as CloudOffIcon,
+  Receipt as ReceiptIcon,
+  Add as AddIcon,
+  Delete as DeleteIcon,
 } from '@mui/icons-material';
 import { Project } from '../types/Project';
+import type { ProjectInvoice, BillingMilestone } from '../types/Invoice';
+import { getInvoiceStatus, computeDueDate, PAYMENT_TERMS_OPTIONS } from '../types/Invoice';
 import dataService from '../services/dataService';
 import EditProjectDialog from './EditProjectDialog';
+import UpdateProgressDialog from './UpdateProgressDialog';
 import { getBudget, setBudget } from '../utils/projectBudgetStorage';
-import { ResponsiveContainer, BarChart, CartesianGrid, XAxis, YAxis, Bar, Cell, Tooltip } from 'recharts';
+import { ResponsiveContainer, BarChart, CartesianGrid, XAxis, YAxis, Bar, Cell, Tooltip as RechartsTooltip } from 'recharts';
 import { ORDER_TRACKER_STORAGE_KEY } from './OrderTrackerPage';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
@@ -303,7 +320,22 @@ interface ProjectDetailsProps {
 
 const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProjectUpdated }) => {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [progressDialogOpen, setProgressDialogOpen] = useState(false);
   const [budgetAmount, setBudgetAmount] = useState(0);
+  const [projectInvoices, setProjectInvoices] = useState<ProjectInvoice[]>([]);
+  const navigate = useNavigate();
+
+  // Billing schedule state
+  const [scheduleEditMode, setScheduleEditMode] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<BillingMilestone[]>([]);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleErr, setScheduleErr] = useState('');
+
+  // Invoice creation from milestone
+  const [createInvoiceForMilestone, setCreateInvoiceForMilestone] = useState<BillingMilestone | null>(null);
+  const [milestoneInvoiceForm, setMilestoneInvoiceForm] = useState({ invoice_no: '', invoice_date: '', amount: '', payment_terms_days: 30, notes: '' });
+  const [milestoneInvoiceErr, setMilestoneInvoiceErr] = useState('');
+  const [milestoneInvoiceSaving, setMilestoneInvoiceSaving] = useState(false);
   const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
   const [oneDriveBusy, setOneDriveBusy] = useState(false);
   const [oneDriveErr, setOneDriveErr] = useState('');
@@ -373,12 +405,153 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     setBudgetAmount(getBudget(project.id));
   }, [project.id]);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/invoices?project_id=${encodeURIComponent(String(project.id))}`)
+      .then(r => r.json())
+      .then((invs: ProjectInvoice[]) => {
+        if (!cancelled) setProjectInvoices(Array.isArray(invs) ? invs : []);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [project.id]);
+
+  const arSummary = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const totalInvoiced = projectInvoices.reduce((s, i) => s + i.amount, 0);
+    const totalCollected = projectInvoices.reduce((s, i) => s + (i.amount_collected || 0), 0);
+    const outstanding = projectInvoices.filter(i => (i.amount - (i.amount_collected || 0)) > 0)
+      .reduce((s, i) => s + Math.max(0, i.amount - (i.amount_collected || 0)), 0);
+    const overdueList = projectInvoices.filter(i => {
+      const rem = i.amount - (i.amount_collected || 0);
+      return rem > 0 && i.due_date && i.due_date < today;
+    });
+    return { totalInvoiced, totalCollected, outstanding, overdueCount: overdueList.length, overdueAmount: overdueList.reduce((s, i) => s + Math.max(0, i.amount - (i.amount_collected || 0)), 0) };
+  }, [projectInvoices]);
+
+  // Map pb_number → invoice for milestone matching
+  const milestoneInvoiceMap = useMemo(() => {
+    const map: Record<string, ProjectInvoice> = {};
+    projectInvoices.forEach(inv => { if (inv.pb_number) map[inv.pb_number] = inv; });
+    return map;
+  }, [projectInvoices]);
+
+  // Billing schedule handlers
+  const openScheduleEdit = () => {
+    setEditingSchedule(project.billing_schedule ? project.billing_schedule.map(m => ({ ...m })) : []);
+    setScheduleErr('');
+    setScheduleEditMode(true);
+  };
+
+  const applyTemplate = (template: '100' | '50+100' | '30+50+100') => {
+    const now = Date.now();
+    if (template === '100') {
+      setEditingSchedule([{ id: `ms-${now}`, label: 'Upon Completion', trigger_pct: 100, billing_pct: 100, pb_number: 'PB1' }]);
+    } else if (template === '50+100') {
+      setEditingSchedule([
+        { id: `ms-${now}-1`, label: '50% Progress Billing', trigger_pct: 50, billing_pct: 50, pb_number: 'PB1' },
+        { id: `ms-${now}-2`, label: 'Upon Completion', trigger_pct: 100, billing_pct: 50, pb_number: 'PB2' },
+      ]);
+    } else {
+      setEditingSchedule([
+        { id: `ms-${now}-1`, label: 'Downpayment', trigger_pct: 0, billing_pct: 30, pb_number: 'PB1' },
+        { id: `ms-${now}-2`, label: '50% Progress Billing', trigger_pct: 50, billing_pct: 50, pb_number: 'PB2' },
+        { id: `ms-${now}-3`, label: 'Upon Completion', trigger_pct: 100, billing_pct: 20, pb_number: 'PB3' },
+      ]);
+    }
+  };
+
+  const addMilestoneRow = () => {
+    const n = editingSchedule.length + 1;
+    setEditingSchedule(prev => [...prev, { id: `ms-${Date.now()}`, label: '', trigger_pct: 100, billing_pct: 0, pb_number: `PB${n}` }]);
+  };
+
+  const updateMilestoneField = (id: string, field: keyof BillingMilestone, value: string | number) => {
+    setEditingSchedule(prev => prev.map(m => m.id === id ? { ...m, [field]: value } : m));
+  };
+
+  const removeMilestoneRow = (id: string) => {
+    setEditingSchedule(prev => prev.filter(m => m.id !== id));
+  };
+
+  const saveSchedule = async () => {
+    setScheduleSaving(true);
+    setScheduleErr('');
+    try {
+      const result = await dataService.updateProject(project.id, { billing_schedule: editingSchedule });
+      if (!result.success) throw new Error(result.error || 'Failed to save billing schedule');
+      onProjectUpdated?.({ ...project, billing_schedule: editingSchedule });
+      setScheduleEditMode(false);
+    } catch (e) {
+      setScheduleErr(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setScheduleSaving(false);
+    }
+  };
+
+  // Invoice creation from milestone
+  const openCreateInvoice = (milestone: BillingMilestone) => {
+    const contract = project.updated_contract_amount || project.contract_amount || 0;
+    const suggestedAmount = contract > 0 ? Math.round((milestone.billing_pct / 100) * contract * 100) / 100 : 0;
+    const today = new Date().toISOString().slice(0, 10);
+    setMilestoneInvoiceForm({
+      invoice_no: '',
+      invoice_date: today,
+      amount: suggestedAmount > 0 ? String(suggestedAmount) : '',
+      payment_terms_days: 30,
+      notes: `${milestone.label} — ${milestone.pb_number}`,
+    });
+    setMilestoneInvoiceErr('');
+    setCreateInvoiceForMilestone(milestone);
+  };
+
+  const saveMilestoneInvoice = async () => {
+    if (!createInvoiceForMilestone) return;
+    if (!milestoneInvoiceForm.invoice_no.trim()) { setMilestoneInvoiceErr('Invoice number is required.'); return; }
+    const amount = parseFloat(milestoneInvoiceForm.amount);
+    if (!amount || amount <= 0) { setMilestoneInvoiceErr('Enter a valid amount.'); return; }
+    setMilestoneInvoiceSaving(true);
+    setMilestoneInvoiceErr('');
+    try {
+      const dueDate = computeDueDate(milestoneInvoiceForm.invoice_date, milestoneInvoiceForm.payment_terms_days);
+      const body: Partial<ProjectInvoice> = {
+        project_id: String(project.id),
+        project_name: project.project_name,
+        project_no: project.project_no || '',
+        invoice_no: milestoneInvoiceForm.invoice_no.trim(),
+        invoice_date: milestoneInvoiceForm.invoice_date,
+        amount,
+        payment_terms_days: milestoneInvoiceForm.payment_terms_days,
+        due_date: dueDate,
+        amount_collected: 0,
+        notes: milestoneInvoiceForm.notes.trim() || undefined,
+        pb_number: createInvoiceForMilestone.pb_number,
+      };
+      const res = await fetch('/api/invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error((e as { error?: string }).error || res.statusText);
+      }
+      const created: ProjectInvoice = await res.json();
+      setProjectInvoices(prev => [...prev, created]);
+      setCreateInvoiceForMilestone(null);
+    } catch (e) {
+      setMilestoneInvoiceErr(e instanceof Error ? e.message : 'Save failed.');
+    } finally {
+      setMilestoneInvoiceSaving(false);
+    }
+  };
+
   const handleBudgetChange = (value: number) => {
     setBudgetAmount(value);
     setBudget(project.id, value);
   };
 
-  const billingPercentage = ((project.contract_billed || 0) / (project.updated_contract_amount || 1)) * 100;
   const backlogsAmount = dataService.getUnbilled(project);
 
   const expenseBreakdownData = useMemo(() => {
@@ -494,6 +667,18 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
           </Stack>
         )}
         <Button
+          variant="contained"
+          size="small"
+          onClick={() => setProgressDialogOpen(true)}
+          sx={{
+            ml: 1,
+            backgroundColor: NET_PACIFIC_COLORS.success,
+            '&:hover': { backgroundColor: '#00a381' },
+          }}
+        >
+          Update Progress
+        </Button>
+        <Button
           variant="outlined"
           startIcon={<EditIcon />}
           sx={{ ml: 2 }}
@@ -543,6 +728,16 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
         onSaved={(updated) => {
           onProjectUpdated?.(updated);
           setEditDialogOpen(false);
+        }}
+      />
+
+      <UpdateProgressDialog
+        open={progressDialogOpen}
+        project={project}
+        onClose={() => setProgressDialogOpen(false)}
+        onSaved={(updated) => {
+          onProjectUpdated?.(updated);
+          setProgressDialogOpen(false);
         }}
       />
 
@@ -741,7 +936,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                 Remaining Balance
               </Typography>
               <Typography variant="h6" color="warning.main">
-                {dataService.formatCurrency(project.updated_contract_balance_net || 0)}
+                {dataService.formatCurrency(dataService.getUnbilled(project))}
               </Typography>
             </Box>
             <Divider sx={{ my: 2 }} />
@@ -770,43 +965,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
             </Box>
           </Paper>
 
-          {/* Billing Progress Card */}
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Billing Progress
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <Box
-                  sx={{
-                    width: '100%',
-                    height: 8,
-                    backgroundColor: 'grey.300',
-                    borderRadius: 4,
-                    mr: 2,
-                  }}
-                >
-                  <Box
-                    sx={{
-                      width: `${billingPercentage}%`,
-                      height: '100%',
-                      backgroundColor: billingPercentage > 90 ? 'success.main' : 
-                                     billingPercentage > 70 ? 'warning.main' : 'error.main',
-                      borderRadius: 4,
-                    }}
-                  />
-                </Box>
-                <Typography variant="body2" color="textSecondary">
-                  {billingPercentage.toFixed(1)}%
-                </Typography>
-              </Box>
-              <Typography variant="body2" color="textSecondary">
-                Duration: {project.duration_days} days
-              </Typography>
-            </CardContent>
-          </Card>
-
-          {/* Additional Details - Below Billing Progress */}
+          {/* Additional Details */}
           <Paper sx={{ p: 3, mb: 3, mt: 3 }}>
             <Typography variant="h6" gutterBottom>
               Additional Details
@@ -826,6 +985,407 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
           </Paper>
         </Grid>
       </Grid>
+
+      {/* Progress Billing Section */}
+      {(() => {
+        const schedule = project.billing_schedule || [];
+        const currentProgress = project.actual_site_progress_percent ?? 0;
+        const contract = project.updated_contract_amount || project.contract_amount || 0;
+        const PHP_FMT = new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2 });
+
+        const INVOICE_STATUS_COLORS: Record<string, 'success' | 'warning' | 'error' | 'default'> = {
+          paid: 'success', partial: 'warning', overdue: 'error', unpaid: 'default',
+        };
+
+        return (
+          <Grid container spacing={3} sx={{ mb: 1 }}>
+            <Grid size={{ xs: 12 }}>
+              <Paper sx={{ p: 3 }}>
+                {/* Header */}
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <ReceiptIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />
+                    <Typography variant="h6" sx={{ color: NET_PACIFIC_COLORS.primary, fontWeight: 600 }}>
+                      Progress Billing
+                    </Typography>
+                  </Box>
+                  <Stack direction="row" spacing={1}>
+                    {!scheduleEditMode && (
+                      <>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<EditIcon />}
+                          onClick={openScheduleEdit}
+                          sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+                        >
+                          {schedule.length > 0 ? 'Edit Schedule' : 'Set Up Schedule'}
+                        </Button>
+                        {arSummary.totalInvoiced > 0 && (
+                          <Tooltip title="View all invoices in Collections & AR">
+                            <Button
+                              size="small"
+                              variant="text"
+                              endIcon={<OpenInNewIcon fontSize="small" />}
+                              onClick={() => navigate(`/collections?project_id=${encodeURIComponent(String(project.id))}`)}
+                              sx={{ color: 'text.secondary' }}
+                            >
+                              View in AR
+                            </Button>
+                          </Tooltip>
+                        )}
+                      </>
+                    )}
+                  </Stack>
+                </Box>
+
+                {/* KPI row */}
+                <Grid container spacing={1.5} sx={{ mb: 2 }}>
+                  {[
+                    { label: 'Contract Amount', value: PHP_FMT.format(contract), color: NET_PACIFIC_COLORS.primary },
+                    { label: 'Total Billed', value: PHP_FMT.format(arSummary.totalInvoiced), color: NET_PACIFIC_COLORS.accent1 },
+                    { label: 'Collected', value: PHP_FMT.format(arSummary.totalCollected), color: NET_PACIFIC_COLORS.success },
+                    { label: 'Outstanding', value: PHP_FMT.format(arSummary.outstanding), color: arSummary.outstanding > 0 ? '#f59e0b' : 'text.secondary' },
+                  ].map(kpi => (
+                    <Grid key={kpi.label} size={{ xs: 6, sm: 3 }}>
+                      <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: 'grey.50', border: '1px solid', borderColor: 'divider' }}>
+                        <Typography variant="caption" color="text.secondary">{kpi.label}</Typography>
+                        <Typography variant="body1" fontWeight={700} sx={{ color: kpi.color }}>
+                          {kpi.value}
+                        </Typography>
+                      </Box>
+                    </Grid>
+                  ))}
+                </Grid>
+
+                {/* Schedule editor */}
+                {scheduleEditMode && (
+                  <Box sx={{ mb: 2 }}>
+                    {scheduleErr && <Alert severity="error" sx={{ mb: 1.5 }}>{scheduleErr}</Alert>}
+
+                    {/* Templates */}
+                    <Box sx={{ mb: 1.5 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>Quick templates:</Typography>
+                      <Stack direction="row" spacing={1} display="inline-flex" flexWrap="wrap" gap={0.5}>
+                        {([
+                          { key: '100', label: '100% on Completion' },
+                          { key: '50+100', label: '50% + 100%' },
+                          { key: '30+50+100', label: '30% DP + 50% + 100%' },
+                        ] as const).map(t => (
+                          <Chip
+                            key={t.key}
+                            label={t.label}
+                            size="small"
+                            variant="outlined"
+                            clickable
+                            onClick={() => applyTemplate(t.key)}
+                            sx={{ fontSize: '0.7rem' }}
+                          />
+                        ))}
+                      </Stack>
+                    </Box>
+
+                    {/* Editable milestone rows */}
+                    <TableContainer>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow sx={{ '& th': { fontWeight: 600, fontSize: '0.8rem' } }}>
+                            <TableCell>PB #</TableCell>
+                            <TableCell>Label</TableCell>
+                            <TableCell align="right">Trigger %</TableCell>
+                            <TableCell align="right">Billing %</TableCell>
+                            <TableCell align="right">Amount</TableCell>
+                            <TableCell />
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {editingSchedule.length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={6} sx={{ py: 2, color: 'text.secondary', fontSize: '0.8rem', textAlign: 'center' }}>
+                                No milestones yet. Apply a template or click "+ Add Milestone".
+                              </TableCell>
+                            </TableRow>
+                          )}
+                          {editingSchedule.map(m => (
+                            <TableRow key={m.id}>
+                              <TableCell sx={{ width: 90 }}>
+                                <TextField
+                                  size="small"
+                                  value={m.pb_number}
+                                  onChange={e => updateMilestoneField(m.id, 'pb_number', e.target.value)}
+                                  inputProps={{ style: { fontSize: '0.8rem' } }}
+                                  sx={{ width: 80 }}
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <TextField
+                                  size="small"
+                                  fullWidth
+                                  value={m.label}
+                                  onChange={e => updateMilestoneField(m.id, 'label', e.target.value)}
+                                  placeholder="e.g. 50% Progress Billing"
+                                  inputProps={{ style: { fontSize: '0.8rem' } }}
+                                />
+                              </TableCell>
+                              <TableCell align="right" sx={{ width: 110 }}>
+                                <TextField
+                                  size="small"
+                                  type="number"
+                                  value={m.trigger_pct}
+                                  onChange={e => updateMilestoneField(m.id, 'trigger_pct', Number(e.target.value))}
+                                  inputProps={{ min: 0, max: 100, style: { fontSize: '0.8rem', textAlign: 'right' } }}
+                                  InputProps={{ endAdornment: <Typography variant="caption">%</Typography> }}
+                                  sx={{ width: 100 }}
+                                />
+                              </TableCell>
+                              <TableCell align="right" sx={{ width: 110 }}>
+                                <TextField
+                                  size="small"
+                                  type="number"
+                                  value={m.billing_pct}
+                                  onChange={e => updateMilestoneField(m.id, 'billing_pct', Number(e.target.value))}
+                                  inputProps={{ min: 0, max: 100, style: { fontSize: '0.8rem', textAlign: 'right' } }}
+                                  InputProps={{ endAdornment: <Typography variant="caption">%</Typography> }}
+                                  sx={{ width: 100 }}
+                                />
+                              </TableCell>
+                              <TableCell align="right" sx={{ width: 130 }}>
+                                <Typography variant="caption" color="text.secondary">
+                                  {contract > 0 ? PHP_FMT.format((m.billing_pct / 100) * contract) : '—'}
+                                </Typography>
+                              </TableCell>
+                              <TableCell align="right" sx={{ width: 50 }}>
+                                <IconButton size="small" color="error" onClick={() => removeMilestoneRow(m.id)}>
+                                  <DeleteIcon fontSize="small" />
+                                </IconButton>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+
+                    <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+                      <Button size="small" startIcon={<AddIcon />} variant="text" onClick={addMilestoneRow}>
+                        Add Milestone
+                      </Button>
+                      <Box sx={{ flexGrow: 1 }} />
+                      <Button size="small" onClick={() => setScheduleEditMode(false)} disabled={scheduleSaving}>
+                        Cancel
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="contained"
+                        onClick={() => { void saveSchedule(); }}
+                        disabled={scheduleSaving}
+                        sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+                      >
+                        {scheduleSaving ? 'Saving…' : 'Save Schedule'}
+                      </Button>
+                    </Stack>
+                  </Box>
+                )}
+
+                {/* Milestone table (read mode) */}
+                {!scheduleEditMode && schedule.length > 0 && (
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow sx={{ '& th': { fontWeight: 600, fontSize: '0.8rem', backgroundColor: `${NET_PACIFIC_COLORS.primary}15` } }}>
+                          <TableCell>PB #</TableCell>
+                          <TableCell>Milestone</TableCell>
+                          <TableCell align="right">Trigger</TableCell>
+                          <TableCell align="right">Billing %</TableCell>
+                          <TableCell align="right">Amount</TableCell>
+                          <TableCell>Invoice</TableCell>
+                          <TableCell align="right">Collected</TableCell>
+                          <TableCell>Status</TableCell>
+                          <TableCell align="center">Action</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {schedule.map(m => {
+                          const milestoneAmount = contract > 0 ? (m.billing_pct / 100) * contract : 0;
+                          const linkedInvoice = milestoneInvoiceMap[m.pb_number];
+                          const isEligible = currentProgress >= m.trigger_pct;
+                          const invoiceStatus = linkedInvoice ? getInvoiceStatus(linkedInvoice) : null;
+                          return (
+                            <TableRow
+                              key={m.id}
+                              sx={{
+                                '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' },
+                                ...(isEligible && !linkedInvoice ? { backgroundColor: '#fffbe6 !important' } : {}),
+                              }}
+                            >
+                              <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+                                {m.pb_number}
+                              </TableCell>
+                              <TableCell sx={{ fontSize: '0.85rem' }}>{m.label || '—'}</TableCell>
+                              <TableCell align="right" sx={{ fontSize: '0.8rem', color: isEligible ? 'success.main' : 'text.secondary' }}>
+                                {m.trigger_pct === 0 ? 'Upon PO / DP' : `${m.trigger_pct}%`}
+                              </TableCell>
+                              <TableCell align="right" sx={{ fontSize: '0.8rem' }}>{m.billing_pct}%</TableCell>
+                              <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                                {milestoneAmount > 0 ? PHP_FMT.format(milestoneAmount) : '—'}
+                              </TableCell>
+                              <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                                {linkedInvoice ? (
+                                  <Typography variant="body2" sx={{ fontSize: '0.8rem', fontFamily: 'monospace' }}>
+                                    {linkedInvoice.invoice_no}
+                                  </Typography>
+                                ) : (
+                                  <Typography variant="caption" color="text.disabled">—</Typography>
+                                )}
+                              </TableCell>
+                              <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: (linkedInvoice?.amount_collected ?? 0) > 0 ? 'success.main' : 'text.secondary' }}>
+                                {linkedInvoice ? PHP_FMT.format(linkedInvoice.amount_collected || 0) : '—'}
+                              </TableCell>
+                              <TableCell>
+                                {invoiceStatus ? (
+                                  <Chip
+                                    label={invoiceStatus.charAt(0).toUpperCase() + invoiceStatus.slice(1)}
+                                    color={INVOICE_STATUS_COLORS[invoiceStatus]}
+                                    size="small"
+                                    variant="outlined"
+                                  />
+                                ) : isEligible ? (
+                                  <Chip label="Eligible" size="small" color="warning" variant="outlined" />
+                                ) : (
+                                  <Chip label="Pending" size="small" variant="outlined" />
+                                )}
+                              </TableCell>
+                              <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                                {linkedInvoice ? (
+                                  <Tooltip title="View in Collections & AR">
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => navigate(`/collections?project_id=${encodeURIComponent(String(project.id))}`)}
+                                    >
+                                      <OpenInNewIcon fontSize="small" />
+                                    </IconButton>
+                                  </Tooltip>
+                                ) : isEligible ? (
+                                  <Tooltip title={`Create invoice for ${m.pb_number}`}>
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      startIcon={<AddIcon />}
+                                      onClick={() => openCreateInvoice(m)}
+                                      sx={{
+                                        fontSize: '0.7rem',
+                                        borderColor: NET_PACIFIC_COLORS.primary,
+                                        color: NET_PACIFIC_COLORS.primary,
+                                        py: 0.25,
+                                      }}
+                                    >
+                                      Invoice
+                                    </Button>
+                                  </Tooltip>
+                                ) : null}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+
+                {/* Empty state */}
+                {!scheduleEditMode && schedule.length === 0 && (
+                  <Box sx={{ py: 4, textAlign: 'center' }}>
+                    <ReceiptIcon sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                      No billing schedule set up for this project.
+                    </Typography>
+                    <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={openScheduleEdit}>
+                      Set Up Billing Schedule
+                    </Button>
+                  </Box>
+                )}
+              </Paper>
+            </Grid>
+          </Grid>
+        );
+      })()}
+
+      {/* Create Invoice from Milestone dialog */}
+      <Dialog open={!!createInvoiceForMilestone} onClose={() => !milestoneInvoiceSaving && setCreateInvoiceForMilestone(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Create Invoice — {createInvoiceForMilestone?.pb_number}: {createInvoiceForMilestone?.label}
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {milestoneInvoiceErr && <Alert severity="error">{milestoneInvoiceErr}</Alert>}
+            <TextField
+              label="Invoice No."
+              size="small"
+              fullWidth
+              required
+              value={milestoneInvoiceForm.invoice_no}
+              onChange={e => setMilestoneInvoiceForm(prev => ({ ...prev, invoice_no: e.target.value }))}
+              placeholder="e.g. SI-2026-001"
+            />
+            <Grid container spacing={2}>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  label="Invoice Date"
+                  type="date"
+                  size="small"
+                  fullWidth
+                  value={milestoneInvoiceForm.invoice_date}
+                  onChange={e => setMilestoneInvoiceForm(prev => ({ ...prev, invoice_date: e.target.value }))}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  label="Amount (PHP)"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  required
+                  value={milestoneInvoiceForm.amount}
+                  onChange={e => setMilestoneInvoiceForm(prev => ({ ...prev, amount: e.target.value }))}
+                  inputProps={{ min: 0, step: 0.01 }}
+                />
+              </Grid>
+            </Grid>
+            <FormControl size="small" fullWidth>
+              <InputLabel>Payment Terms</InputLabel>
+              <Select
+                label="Payment Terms"
+                value={milestoneInvoiceForm.payment_terms_days}
+                onChange={e => setMilestoneInvoiceForm(prev => ({ ...prev, payment_terms_days: Number(e.target.value) }))}
+              >
+                {PAYMENT_TERMS_OPTIONS.map(opt => (
+                  <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <TextField
+              label="Notes (optional)"
+              size="small"
+              multiline
+              rows={2}
+              fullWidth
+              value={milestoneInvoiceForm.notes}
+              onChange={e => setMilestoneInvoiceForm(prev => ({ ...prev, notes: e.target.value }))}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCreateInvoiceForMilestone(null)} disabled={milestoneInvoiceSaving}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => { void saveMilestoneInvoice(); }}
+            disabled={milestoneInvoiceSaving}
+            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+          >
+            {milestoneInvoiceSaving ? 'Creating…' : 'Create Invoice'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Project Expense Chart - Full Width Below Overview */}
       <Grid container spacing={3}>
@@ -877,7 +1437,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                   tickLine={false}
                   tick={{ fontSize: 10, fill: '#64748b' }}
                 />
-                <Tooltip 
+                <RechartsTooltip
                   formatter={(value: number) => [dataService.formatCurrency(value), 'Amount']}
                   contentStyle={{
                     backgroundColor: 'rgba(255, 255, 255, 0.95)',
