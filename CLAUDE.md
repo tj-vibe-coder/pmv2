@@ -7,6 +7,11 @@
 > 3. **Keep it scannable**: append to the "Recent additions" section, then promote stable items into the right structural section over time. Trim resolved follow-ups out of the list. Target length ~10 KB max — if a section grows huge, split into a `docs/<topic>.md` and link from here.
 > 4. **Never put secrets here.** No passwords, no service account JSON, no real customer contact data. Use placeholders and reference env-var names instead.
 > 5. **Before creating or significantly modifying any page/component**, read `docs/DESIGN_PHILOSOPHY.md` first. All new pages must follow the documented design system (gradient KPI cards, Box root, h4 title, `NET_PACIFIC_COLORS`, MUI v7 Grid, etc.). The reference implementation is `src/components/Dashboard.tsx`.
+> 6. **Branch workflow — check for conflicts before starting any work**:
+>    - RJ (Reuel) always works on `rj/dev`. Never commit directly to `main`.
+>    - At the start of every session run `git fetch origin && git log --oneline origin/main..HEAD` to see if `rj/dev` is ahead of `main`, and `git log --oneline HEAD..origin/main` to see if `main` has new commits not yet in `rj/dev`.
+>    - If `main` has new commits (teammate pushed), run `git merge origin/main` to pull them in before making new changes. Surface any merge conflicts to RJ before proceeding.
+>    - When a feature is ready to ship, remind RJ to open a Pull Request from `rj/dev` → `main` on GitHub. Merging the PR triggers the auto-deploy. Do NOT push directly to `main`.
 
 ---
 
