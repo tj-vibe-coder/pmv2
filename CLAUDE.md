@@ -67,6 +67,9 @@ App at http://localhost:3000. Server writes to **production** Firestore directly
 
 ### Deploy
 
+**Preferred (CI/CD)**: merge a PR from `rj/dev` → `main` on GitHub. The Actions workflow builds and deploys automatically. Manual dispatch also available from the Actions tab.
+
+**Local fallback** (if CI is unavailable):
 ```bash
 npm run deploy:all       # build + deploy hosting + functions
 npm run deploy:web       # build + hosting only
@@ -200,6 +203,9 @@ End-to-end integration with the corporate shared OneDrive (the `projects@iocontr
 - **AR ↔ Project Monitoring bidirectional links**: `ProjectDetails` now shows an AR Summary card in the right column (invoiced, collected, outstanding, overdue amounts/counts). Clicking the card navigates to `/collections?project_id=X` with pre-filtering. From Collections, clicking a project name sets `sessionStorage.selectedProjectId` and navigates to `/dashboard` where `ProjectMonitoringApp` auto-opens the project detail.
 - **server.js catch-all route ordering fix**: the `/*splat` SPA fallback was defined before `/api/invoices`, causing Express to serve `index.html` for invoice API requests. Moved static-file serving + catch-all to the very end after all API routes. Same fix to `server.js` line 2243 area.
 - **Investment tracker error handling**: `load()` now checks for 401 (session expired), surfaces API error messages directly from `res.json().error`, and only falls back to the generic message for true network failures.
+- **GitHub Actions CI/CD** (May 2026): `.github/workflows/deploy.yml` added. Auto-deploys to Firebase on every push to `main`. Manual dispatch available from the GitHub Actions tab with a target selector (`all` / `hosting` / `functions`). Build uses `CI: false` to avoid React warning failures. All `REACT_APP_*` vars stored as GitHub secrets. `firebase deploy` triggers `scripts/prepare-functions.js` + `functions/npm install` via `firebase.json` predeploy hooks automatically. First run: **Success** in 4m 44s.
+- **`.env.production` removed from repo** (May 2026): file contained real Azure Client ID + Tenant ID and was accidentally tracked. Removed via `git rm --cached`, added `.env.production` to `.gitignore`. File still exists locally. Repo is private so exposure risk is low; Azure app secret rotation is optional.
+- **Branch workflow established** (May 2026): RJ works on `rj/dev` branch, never directly on `main`. Pushing to `main` only via Pull Request (PR merge triggers auto-deploy). See instruction block #6 at the top of this file for per-session conflict-check steps.
 
 ### Backups
 
