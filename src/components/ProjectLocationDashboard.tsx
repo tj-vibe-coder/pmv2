@@ -224,7 +224,7 @@ const ProjectLocationDashboard: React.FC<ProjectClientDashboardProps> = () => {
                 <BusinessIcon sx={{ mr: 1 }} />
                 <Typography variant="body2">Total Projects</Typography>
               </Box>
-              <Typography variant="h4" sx={{ fontWeight: 700 }}>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>
                 {totalProjects.toLocaleString()}
               </Typography>
             </CardContent>
@@ -237,7 +237,7 @@ const ProjectLocationDashboard: React.FC<ProjectClientDashboardProps> = () => {
                 <AccountIcon sx={{ mr: 1 }} />
                 <Typography variant="body2">Clients</Typography>
               </Box>
-              <Typography variant="h4" sx={{ fontWeight: 700 }}>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>
                 {uniqueClientCount}
               </Typography>
             </CardContent>

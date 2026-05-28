@@ -422,6 +422,19 @@ export async function ensureExecutionFolder(
   return ensureInRoot(token, project, onedriveConfig.executionRoot);
 }
 
+/** Lightweight single-item lookup — returns null on 404 or any error. */
+async function tryGetItem(token: string, driveId: string, itemPath: string): Promise<DriveItemRef | null> {
+  try {
+    const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(itemPath)}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return { id: data.id, webUrl: data.webUrl || '', name: data.name } as DriveItemRef;
+  } catch {
+    return null;
+  }
+}
+
 async function ensureInRoot(
   token: string,
   project: { code: string; name: string },
@@ -430,37 +443,47 @@ async function ensureInRoot(
   const driveId = await resolveCorporateDriveId(token);
   const canonical = projectFolderName(project);
 
-  // Step 1: exact canonical name. ensureFolder does a lookup-first, but it
-  // will create on 404 — we want to know whether we matched or not, so we
-  // do the lookup explicitly here and only create when both 1 and 2 miss.
-  const exactPath = root ? `${root}/${canonical}` : canonical;
-  const exact = await (async () => {
-    try {
-      const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(exactPath)}`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (res.status === 404) return null;
-      if (!res.ok) return null;
-      const data = await res.json();
-      return { id: data.id, webUrl: data.webUrl || '', name: data.name } as DriveItemRef;
-    } catch {
-      return null;
-    }
-  })();
-  if (exact) {
-    return { ...exact, parentPath: root, folderName: exact.name || canonical, matchedExisting: true };
+  // Current operational year — new folders always land inside this subfolder.
+  const year = String(new Date().getFullYear());
+  const yearRoot = root ? `${root}/${year}` : year;
+
+  // Resolution order (year-aware + backward-compat for flat historicals):
+  //
+  //  1a. Exact canonical name inside the year subfolder  → new standard location
+  //  1b. Exact canonical name in the flat root           → pre-year historical
+  //  2a. Prefix match inside the year subfolder          → year folder, non-canonical name
+  //  2b. Prefix match in the flat root                   → flat historical, non-canonical name
+  //  3.  Create fresh in the year subfolder              → always use new structure
+
+  // 1a — year subfolder, exact
+  const yearExact = await tryGetItem(token, driveId, `${yearRoot}/${canonical}`);
+  if (yearExact) {
+    return { ...yearExact, parentPath: yearRoot, folderName: yearExact.name || canonical, matchedExisting: true };
   }
 
-  // Step 2: prefix match for historical folders with non-canonical names.
-  const prefixMatch = await findUniquePrefixMatch(token, driveId, root, project).catch(() => null);
-  if (prefixMatch) {
-    return { ...prefixMatch, parentPath: root, folderName: prefixMatch.name || canonical, matchedExisting: true };
+  // 1b — flat root, exact (backward compat)
+  const flatExact = await tryGetItem(token, driveId, root ? `${root}/${canonical}` : canonical);
+  if (flatExact) {
+    return { ...flatExact, parentPath: root, folderName: flatExact.name || canonical, matchedExisting: true };
   }
 
-  // Step 3: create fresh with canonical name, then seed standard subfolders.
-  const created = await ensureFolder(token, driveId, root, canonical);
-  const createdPath = root ? `${root}/${canonical}` : canonical;
-  await createExecutionProjectSubfolders(token, driveId, createdPath);
-  return { ...created, parentPath: root, folderName: canonical, matchedExisting: false };
+  // 2a — year subfolder, prefix scan
+  const yearPrefix = await findUniquePrefixMatch(token, driveId, yearRoot, project).catch(() => null);
+  if (yearPrefix) {
+    return { ...yearPrefix, parentPath: yearRoot, folderName: yearPrefix.name || canonical, matchedExisting: true };
+  }
+
+  // 2b — flat root, prefix scan (backward compat)
+  const flatPrefix = await findUniquePrefixMatch(token, driveId, root, project).catch(() => null);
+  if (flatPrefix) {
+    return { ...flatPrefix, parentPath: root, folderName: flatPrefix.name || canonical, matchedExisting: true };
+  }
+
+  // 3 — create in year subfolder; ensure the year folder itself exists first.
+  await ensureFolder(token, driveId, root, year);
+  const created = await ensureFolder(token, driveId, yearRoot, canonical);
+  await createExecutionProjectSubfolders(token, driveId, `${yearRoot}/${canonical}`);
+  return { ...created, parentPath: yearRoot, folderName: canonical, matchedExisting: false };
 }
 
 /**
@@ -574,15 +597,26 @@ export async function moveProposalToExecution(
     ? sanitizeForOneDrive(project.executionFolderName)
     : pcsFolderName;
 
-  // Step 1: Create (or find) the execution project folder, then seed standard subfolders.
-  const executionFolder = await ensureFolder(token, driveId, onedriveConfig.executionRoot, execFolderName);
-  const execSubPath = `${onedriveConfig.executionRoot}/${execFolderName}`;
+  // Year-aware roots — execution folder lands in e.g. "01 Execution/2026/IOCT2605001-…"
+  const year = String(new Date().getFullYear());
+  const execYearRoot = onedriveConfig.executionRoot
+    ? `${onedriveConfig.executionRoot}/${year}`
+    : year;
+  const proposalYearRoot = onedriveConfig.proposalRoot
+    ? `${onedriveConfig.proposalRoot}/${year}`
+    : year;
+
+  // Step 1: Ensure the year folder exists in execution root, then create (or
+  // find) the project folder inside it, then seed Client PO / Sales Invoice.
+  await ensureFolder(token, driveId, onedriveConfig.executionRoot, year);
+  const executionFolder = await ensureFolder(token, driveId, execYearRoot, execFolderName);
+  const execSubPath = `${execYearRoot}/${execFolderName}`;
   await createExecutionProjectSubfolders(token, driveId, execSubPath);
 
   // Step 2: Move the PCS proposal folder inside the execution project folder.
   const proposalFolder = await moveItem(token, driveId, project.proposalFolderId, execSubPath);
 
-  // Step 3: Drop a shortcut in the original proposal location pointing to the
+  // Step 3: Drop a shortcut in the year-aware proposal location pointing to the
   // execution project folder. Overwrite-safe if already exists (re-won after lost).
   let shortcut: DriveItemRef | null = null;
   try {
@@ -590,7 +624,7 @@ export async function moveProposalToExecution(
     shortcut = await createUrlShortcut(
       token,
       driveId,
-      onedriveConfig.proposalRoot,
+      proposalYearRoot,
       shortcutName,
       executionFolder.webUrl,
     );

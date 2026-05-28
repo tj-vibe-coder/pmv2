@@ -565,7 +565,7 @@ const ExpenseMonitoring: React.FC = () => {
           <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
               <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Budget</Typography>
-              <Typography variant="h4" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {formatCurrency(expenseMetrics.totalBudget)}
               </Typography>
             </CardContent>
@@ -575,7 +575,7 @@ const ExpenseMonitoring: React.FC = () => {
           <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
               <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Spent</Typography>
-              <Typography variant="h4" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {formatCurrency(expenseMetrics.totalSpent)}
               </Typography>
               <Typography variant="body2" sx={{ opacity: 0.8, fontSize: '0.75rem' }}>
@@ -595,7 +595,7 @@ const ExpenseMonitoring: React.FC = () => {
           }}>
             <CardContent sx={{ p: 2 }}>
               <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Remaining Budget</Typography>
-              <Typography variant="h4" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {formatCurrency(expenseMetrics.totalRemaining)}
               </Typography>
             </CardContent>
@@ -612,7 +612,7 @@ const ExpenseMonitoring: React.FC = () => {
               <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>
                 {selectedProjectId === '' ? 'Over Budget Projects' : 'Over Budget'}
               </Typography>
-              <Typography variant="h4" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {expenseMetrics.overBudgetCategories}
               </Typography>
             </CardContent>

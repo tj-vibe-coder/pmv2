@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import {
   Box,
@@ -12,6 +12,8 @@ import {
 } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
+import type { Client } from '../types/Client';
+import { resolveContact } from '../types/Client';
 import dataService from '../services/dataService';
 import { useAuth } from '../contexts/AuthContext';
 import { REPORT_COMPANY_KEY, REPORT_PREPARED_BY_KEY, type ReportCompanyKey } from './ProjectDetails';
@@ -59,6 +61,41 @@ const ReportsPage: React.FC = () => {
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
   const [pdfPreviewBlob, setPdfPreviewBlob] = useState<Blob | null>(null);
   const [pdfPreviewTitle, setPdfPreviewTitle] = useState('');
+
+  // Fetch the unified client record for the selected project so all report tabs
+  // can use the real client contact as the "Approved by" signatory.
+  const [projectClient, setProjectClient] = useState<Client | null>(null);
+  useEffect(() => {
+    const cid = selectedProject?.client_id;
+    if (!cid) { setProjectClient(null); return; }
+    let cancelled = false;
+    fetch(`/api/clients/${encodeURIComponent(cid)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((c: Client | null) => { if (!cancelled) setProjectClient(c ?? null); })
+      .catch(() => { if (!cancelled) setProjectClient(null); });
+    return () => { cancelled = true; };
+  }, [selectedProject?.client_id]);
+
+  // Resolve the project's designated client contact (approver for all reports)
+  const clientApprover = useMemo(() => {
+    if (!projectClient) return null;
+    const contact = resolveContact(projectClient, selectedProject?.client_contact_id);
+    if (!contact) return null;
+    return {
+      name: contact.name || '',
+      designation: contact.position || '',
+      company: projectClient.name || '',
+    };
+  }, [projectClient, selectedProject?.client_contact_id]);
+
+  // All contacts from the project's client — used for the approver autocomplete in ProgressReport
+  const clientContacts = useMemo(() =>
+    (projectClient?.contacts ?? []).map(c => ({
+      name: c.name || '',
+      designation: c.position || '',
+      company: projectClient?.name || '',
+    })),
+  [projectClient]);
 
   useEffect(() => {
     setPreparedBy((prev) => {
@@ -184,6 +221,9 @@ const ReportsPage: React.FC = () => {
                 preparedBy={preparedBy}
                 setPreparedBy={setPreparedBy}
                 onPreview={handlePreview}
+                initialPb={searchParams.get('pb') ?? undefined}
+                clientApprover={clientApprover ?? undefined}
+                clientContacts={clientContacts}
               />
             )}
             {tab === 'service' && (
@@ -195,6 +235,7 @@ const ReportsPage: React.FC = () => {
                 preparedBy={preparedBy}
                 setPreparedBy={setPreparedBy}
                 onPreview={handlePreview}
+                clientApprover={clientApprover ?? undefined}
               />
             )}
             {tab === 'completion' && (
@@ -202,10 +243,9 @@ const ReportsPage: React.FC = () => {
                 project={selectedProject}
                 currentUser={currentUser}
                 reportCompany={reportCompany}
-                setReportCompany={setReportCompany}
                 preparedBy={preparedBy}
-                setPreparedBy={setPreparedBy}
                 onPreview={handlePreview}
+                clientApprover={clientApprover ?? undefined}
               />
             )}
             {tab === 'attachments' && (

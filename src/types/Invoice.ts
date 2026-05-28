@@ -23,7 +23,7 @@ export interface ProjectInvoice {
   invoice_no: string;
   invoice_date: string;         // 'YYYY-MM-DD'
   amount: number;
-  payment_terms_days: number;   // 30 | 45 | 60 | 90 | custom
+  payment_terms_days: number;   // 0 (upon receipt) | 30 | 45 | 60 | 90 | custom
   due_date: string;             // 'YYYY-MM-DD'
   amount_collected: number;
   collection_date?: string;     // 'YYYY-MM-DD' — date of last / full collection
@@ -46,13 +46,21 @@ export function getInvoiceStatus(inv: ProjectInvoice): InvoiceStatus {
 }
 
 export function computeDueDate(invoiceDate: string, termsDays: number): string {
-  if (!invoiceDate || !termsDays) return '';
+  // Note: termsDays=0 is valid ("upon receipt") — do NOT use !termsDays as the guard
+  if (!invoiceDate || termsDays == null || isNaN(termsDays)) return '';
   const d = new Date(invoiceDate);
   d.setDate(d.getDate() + termsDays);
   return d.toISOString().slice(0, 10);
 }
 
+/** Human-readable label for a payment_terms_days value. */
+export function formatPaymentTerms(days: number): string {
+  if (days === 0) return 'Upon receipt';
+  return `${days} days`;
+}
+
 export const PAYMENT_TERMS_OPTIONS: { label: string; value: number }[] = [
+  { label: 'Upon receipt', value: 0 },
   { label: '30 days', value: 30 },
   { label: '45 days', value: 45 },
   { label: '60 days', value: 60 },

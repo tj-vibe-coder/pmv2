@@ -400,6 +400,7 @@ interface Project {
   po_date: number | null;              // Unix seconds
   client_status: string;
   client_id?: number | null;
+  client_contact_id?: string | null;   // ID of designated contact within the unified Client doc
   account_name: string;
   project_name: string;
   project_category: string;
@@ -448,6 +449,25 @@ interface Project {
   unevaluated_progress: number;
   created_at: string;                  // ISO string in Firestore
   updated_at: string;
+  // OneDrive integration (operations execution folder)
+  executionFolderId?: string;          // Microsoft Graph item id for the execution folder
+  executionFolderUrl?: string;         // WebUrl for browser-open link
+  // Billing schedule (Progress Billing module)
+  billing_schedule?: BillingMilestone[];
+  // Calcsheet sync (when project originated from a won Calcsheet proposal)
+  calcsheet_project_id?: string;
+  calcsheet_code?: string;
+  calcsheet_quotation_id?: string;
+  source_module?: 'calcsheet';
+}
+
+interface BillingMilestone {
+  id: string;               // uuid
+  label: string;            // e.g. "50% Progress Billing", "Upon Completion"
+  trigger_pct: number;      // progress % that makes this milestone eligible (0 = DP)
+  billing_pct: number;      // % of contract amount to invoice at this milestone
+  pb_number: string;        // e.g. "PB1", "PB2"
+  invoice_id?: string;      // linked invoice once created
 }
 ```
 
@@ -469,15 +489,25 @@ interface User {
 
 ### 3.3 `src/types/Client.ts`
 
+Unified client schema (migrated from dual `clients`/`calcsheet_clients` in Phase 2.5).
+
 ```typescript
+interface ClientContact {
+  id: string;           // uuid, stable — used as client_contact_id on Project
+  name: string;
+  position: string;     // job title / designation
+  email?: string;
+  phone?: string;
+  isPrimary?: boolean;
+}
+
 interface Client {
-  id: number;                          // Numeric in TS, string in Firestore
-  client_name: string;
-  address: string;
-  payment_terms: string;
-  contact_person: string;
-  designation: string;
-  email_address: string;
+  id: string;                          // Firestore doc id (string)
+  name: string;                        // Company name
+  address?: string;
+  payment_terms?: string;
+  contacts: ClientContact[];           // Multi-contact array; first is primary
+  code?: string;                       // Short company code e.g. "LBI", "ADI"
   created_at?: string;                 // ISO
   updated_at?: string;
 }

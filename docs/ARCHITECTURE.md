@@ -299,15 +299,21 @@ Four report types with PDF generation.
 
 ```
 ReportsPage.tsx                    → Tab shell, route param: /reports/:tab
-  ├── ProgressReportTab.tsx       → Progress report PDF
+  ├── ProgressReportTab.tsx       → Progress report PDF + WBS editor
   ├── ServiceReportTab.tsx        → Service report PDF
   ├── CompletionCertificateTab.tsx → Certificate of completion PDF
   └── AttachmentsTab.tsx          → OneDrive file attachments per project
 ```
 
+**Approver sync:** `ReportsPage` fetches `/api/clients/:client_id` on project selection, resolves `clientApprover` via `resolveContact()`, and passes it down to all three report tabs. Approver name fields use MUI `Autocomplete freeSolo` backed by the client's full contacts array.
+
+**OneDrive upload on export:** All three PDF report tabs auto-upload the exported blob to the project's OneDrive execution folder after saving locally. If the project has no `executionFolderId` yet, `ensureExecutionFolder(token, { code: project_no, name: project_name })` is called first — it creates `{executionRoot}/{year}/{project_no} {project_name}/` (idempotent, year-aware, backward-compat prefix scan) — then persists the new `executionFolderId`/`executionFolderUrl` to the project record via `dataService.updateProject` (best-effort, non-blocking) and caches the id in local component state for the session.
+
+**Progress ↔ Billing integration:** `ProjectDetails` milestone table links directly to `/reports/progress?projectId=X&pb=PB1`; `ProgressReportTab` syncs the PB# field on arrival. Certificate of Completion CTA appears in `ProjectDetails` when progress ≥ 100% and all milestones are invoiced.
+
 Saved progress/service reports are stored per project in localStorage. Loading a saved service report switches the save action into update mode; saved service reports and progress snapshots expose visible load/delete actions. Report prepared-by designation refreshes from the logged-in user's `designation` when the saved prepared-by identity matches the current user.
 
-**Key files:** `src/components/ReportsPage.tsx`, `src/components/reports/*.tsx`, `src/services/attachmentsService.ts`, `src/services/onedriveService.ts`, `src/contexts/OneDriveAuthContext.tsx`
+**Key files:** `src/components/ReportsPage.tsx`, `src/components/reports/*.tsx`, `src/services/onedriveFolderService.ts`, `src/contexts/OneDriveAuthContext.tsx`
 
 ### 4.7 Utilities Module
 

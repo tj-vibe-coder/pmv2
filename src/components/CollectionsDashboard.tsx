@@ -16,12 +16,14 @@ import type { ProjectInvoice, InvoiceStatus } from '../types/Invoice';
 import {
   getInvoiceStatus,
   computeDueDate,
+  formatPaymentTerms,
   PAYMENT_TERMS_OPTIONS,
 } from '../types/Invoice';
 import type { Project } from '../types/Project';
 import { API_BASE } from '../config/api';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { resolveCorporateDriveId, uploadFileToFolder, projectFolderName } from '../services/onedriveFolderService';
+import { onedriveConfig } from '../config/onedriveConfig';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 
 const API = `${API_BASE}/api`;
@@ -248,11 +250,14 @@ export default function CollectionsDashboard() {
       const url = invoiceDialog === 'edit' && editTarget
         ? `${API}/invoices/${editTarget.id}`
         : `${API}/invoices`;
+      const token = localStorage.getItem('netpacific_token');
       const res = await fetch(url, {
         method: invoiceDialog === 'edit' ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(body),
-        credentials: 'include',
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
@@ -276,11 +281,14 @@ export default function CollectionsDashboard() {
     setCollectSaving(true);
     setCollectErr('');
     try {
+      const token = localStorage.getItem('netpacific_token');
       const res = await fetch(`${API}/invoices/${collectDialog.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ amount_collected: collected, collection_date: collectForm.collection_date || undefined }),
-        credentials: 'include',
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
@@ -298,7 +306,11 @@ export default function CollectionsDashboard() {
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
-      await fetch(`${API}/invoices/${deleteTarget.id}`, { method: 'DELETE', credentials: 'include' });
+      const token = localStorage.getItem('netpacific_token');
+      await fetch(`${API}/invoices/${deleteTarget.id}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       await fetchInvoices();
     } catch {
       setError('Delete failed.');
@@ -341,9 +353,17 @@ export default function CollectionsDashboard() {
       const folderName = projectFolderName({ code, name });
       const sanitizedInvoice = inv.invoice_no.replace(/[<>:"/\\|?*]/g, '_');
       const filename = `${sanitizedInvoice}_${file.name}`;
-      const folderPath = `01 Execution/${folderName}/Sales Invoice`;
-
-      const result = await uploadFileToFolder(token, driveId, folderPath, filename, file);
+      const execRoot = onedriveConfig.executionRoot || '01 Execution';
+      const year = String(new Date().getFullYear());
+      // Try year-aware path first (new structure), fall back to flat (historical projects)
+      const yearPath = `${execRoot}/${year}/${folderName}/Sales Invoice`;
+      const flatPath = `${execRoot}/${folderName}/Sales Invoice`;
+      let result;
+      try {
+        result = await uploadFileToFolder(token, driveId, yearPath, filename, file);
+      } catch {
+        result = await uploadFileToFolder(token, driveId, flatPath, filename, file);
+      }
 
       const scanFile = {
         onedrive_item_id: result.id,
@@ -352,11 +372,14 @@ export default function CollectionsDashboard() {
         uploaded_at: new Date().toISOString(),
       };
 
+      const authToken = localStorage.getItem('netpacific_token');
       await fetch(`${API}/invoices/${inv.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
         body: JSON.stringify({ scan_file: scanFile }),
-        credentials: 'include',
       });
 
       await fetchInvoices();
@@ -583,7 +606,7 @@ export default function CollectionsDashboard() {
                       {PHP.format(inv.amount)}
                     </TableCell>
                     <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
-                      {inv.payment_terms_days} days
+                      {formatPaymentTerms(inv.payment_terms_days)}
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
                       <Typography variant="body2" sx={{ fontSize: '0.8rem', color: isOverdue ? 'error.main' : 'inherit', fontWeight: isOverdue ? 600 : 400 }}>

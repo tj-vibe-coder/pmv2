@@ -387,7 +387,7 @@ Content-Type: application/json
 
 ### PUT /api/projects/:id
 
-Update a project. Only send fields that changed.
+Update a project. Only send fields that changed. All fields in the `Project` interface are passed through — notably `billing_schedule` (array of `BillingMilestone`) and `executionFolderId` / `executionFolderUrl` (set by the client after auto-creating the OneDrive execution folder on PDF export).
 
 ```
 PUT /api/projects/proj001
@@ -395,7 +395,10 @@ Content-Type: application/json
 
 {
   "project_status": "CLOSED",
-  "actual_site_progress_percent": 100
+  "actual_site_progress_percent": 100,
+  "billing_schedule": [],
+  "executionFolderId": "abc123",
+  "executionFolderUrl": "https://..."
 }
 ```
 

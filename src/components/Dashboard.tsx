@@ -784,7 +784,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
               <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Projects</Typography>
-              <Typography variant="h4" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {summary.projectCount}
               </Typography>
             </CardContent>
