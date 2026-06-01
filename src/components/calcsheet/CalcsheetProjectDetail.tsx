@@ -225,9 +225,18 @@ export default function ProjectDetail() {
         return;
       }
       const driveId = await resolveCorporateDriveId(token);
-      const exists = await verifyDriveItem(token, driveId, folderId);
-      if (exists) {
-        window.open(folderUrl, '_blank', 'noopener');
+      const item = await verifyDriveItem(token, driveId, folderId);
+      if (item) {
+        // If the folder was moved (e.g. manually into a year subfolder), the
+        // stored webUrl is stale. Refresh it silently so subsequent opens work.
+        const freshUrl = item.webUrl || folderUrl;
+        if (freshUrl && freshUrl !== folderUrl) {
+          const urlPatch = which === 'proposal'
+            ? { proposalFolderUrl: freshUrl }
+            : { executionFolderUrl: freshUrl };
+          updateProject(project.id, urlPatch).catch(() => {});
+        }
+        window.open(freshUrl || folderUrl, '_blank', 'noopener');
         return;
       }
       // Self-heal: folder was deleted in OneDrive. Clear stored URL/id so the
@@ -288,8 +297,18 @@ export default function ProjectDetail() {
       }
       const driveId = await resolveCorporateDriveId(token);
       const root = kind === 'proposal' ? onedriveConfig.proposalRoot : onedriveConfig.executionRoot;
+      const year = String(new Date().getFullYear());
+      const yearRoot = root ? `${root}/${year}` : year;
       const prefix = projectCodePrefix(project);
-      const matches = await listFoldersWithPrefix(token, driveId, root, prefix);
+      // Scan both flat root (historical) and current year subfolder in parallel
+      const [flat, yeared] = await Promise.allSettled([
+        listFoldersWithPrefix(token, driveId, root, prefix),
+        listFoldersWithPrefix(token, driveId, yearRoot, prefix),
+      ]);
+      const matches = [
+        ...(flat.status === 'fulfilled' ? flat.value : []),
+        ...(yeared.status === 'fulfilled' ? yeared.value : []),
+      ];
       setLinkSuggestions(matches);
     } catch (e) {
       // Don't set the error red — fall back to URL input silently with a hint.
