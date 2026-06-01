@@ -18,10 +18,6 @@ import {
   SelectChangeEvent,
   Grid,
 } from '@mui/material';
-import { 
-  Business as BusinessIcon,
-  AccountBalance as AccountIcon,
-} from '@mui/icons-material';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip, Cell } from 'recharts';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
@@ -217,39 +213,31 @@ const ProjectLocationDashboard: React.FC<ProjectClientDashboardProps> = () => {
 
       {/* Summary Cards */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
+        <Grid size={{ xs: 12, sm: 4 }}>
+          <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <BusinessIcon sx={{ mr: 1 }} />
-                <Typography variant="body2">Total Projects</Typography>
-              </Box>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>
+              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Projects</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {totalProjects.toLocaleString()}
               </Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, color: 'white' }}>
+        <Grid size={{ xs: 12, sm: 4 }}>
+          <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <AccountIcon sx={{ mr: 1 }} />
-                <Typography variant="body2">Clients</Typography>
-              </Box>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>
+              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Clients</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {uniqueClientCount}
               </Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`, color: '#2d3436' }}>
+        <Grid size={{ xs: 12, sm: 4 }}>
+          <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`, color: '#2d3436' }}>
             <CardContent sx={{ p: 2 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <Typography variant="body2">Total Value</Typography>
-              </Box>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>
+              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.8 }}>Total Value</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {dataService.formatCurrency(totalValue)}
               </Typography>
             </CardContent>

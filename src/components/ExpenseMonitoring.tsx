@@ -26,7 +26,7 @@ import {
   SelectChangeEvent,
   IconButton,
 } from '@mui/material';
-import Grid from '@mui/material/GridLegacy';
+import Grid from '@mui/material/Grid';
 import {
   PieChart,
   Pie,
@@ -561,8 +561,8 @@ const ExpenseMonitoring: React.FC = () => {
 
       {/* Summary Cards */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
-        <Grid item xs={6} md={3}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
+        <Grid size={{ xs: 6, md: 3 }}>
+          <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
               <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Budget</Typography>
               <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
@@ -571,21 +571,22 @@ const ExpenseMonitoring: React.FC = () => {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={6} md={3}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
+        <Grid size={{ xs: 6, md: 3 }}>
+          <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
               <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Spent</Typography>
               <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {formatCurrency(expenseMetrics.totalSpent)}
               </Typography>
-              <Typography variant="body2" sx={{ opacity: 0.8, fontSize: '0.75rem' }}>
+              <Typography variant="body2" sx={{ opacity: 0.8, fontSize: '0.75rem', mt: 0.5 }}>
                 {expenseMetrics.spentPercentage.toFixed(1)}% of budget
               </Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={6} md={3}>
+        <Grid size={{ xs: 6, md: 3 }}>
           <Card sx={{
+            height: '100%',
             color: 'white',
             background: expenseMetrics.statusColor === 'red'
               ? 'linear-gradient(135deg, #c62828 0%, #e57373 100%)'
@@ -601,8 +602,9 @@ const ExpenseMonitoring: React.FC = () => {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={6} md={3}>
+        <Grid size={{ xs: 6, md: 3 }}>
           <Card sx={{
+            height: '100%',
             color: 'white',
             background: expenseMetrics.overBudgetCategories > 0
               ? 'linear-gradient(135deg, #c62828 0%, #e57373 100%)'
@@ -623,7 +625,7 @@ const ExpenseMonitoring: React.FC = () => {
       {/* Charts Row */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
         {/* Expense Distribution Pie Chart */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Paper sx={{ 
             p: 2, 
             borderRadius: 2,
@@ -688,7 +690,7 @@ const ExpenseMonitoring: React.FC = () => {
         </Grid>
 
         {/* Budget vs Actual Bar Chart */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Paper sx={{ 
             p: 2, 
             borderRadius: 2,
@@ -744,7 +746,7 @@ const ExpenseMonitoring: React.FC = () => {
 
       {/* Monthly Trend */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
-        <Grid item xs={12}>
+        <Grid size={{ xs: 12 }}>
           <Paper sx={{ 
             p: 2, 
             borderRadius: 2,
@@ -861,7 +863,7 @@ const ExpenseMonitoring: React.FC = () => {
         <DialogContent>
           <Box sx={{ pt: 2 }}>
             <Grid container spacing={2}>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Project</InputLabel>
                   <Select
@@ -878,7 +880,7 @@ const ExpenseMonitoring: React.FC = () => {
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -889,7 +891,7 @@ const ExpenseMonitoring: React.FC = () => {
                   inputProps={{ min: 0, step: 0.01 }}
                 />
               </Grid>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -900,7 +902,7 @@ const ExpenseMonitoring: React.FC = () => {
                   InputLabelProps={{ shrink: true }}
                 />
               </Grid>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -911,7 +913,7 @@ const ExpenseMonitoring: React.FC = () => {
                   rows={2}
                 />
               </Grid>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Category</InputLabel>
                   <Select

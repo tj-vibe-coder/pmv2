@@ -411,7 +411,8 @@ export async function ensureProposalFolder(
   token: string,
   project: { code: string; name: string },
 ): Promise<DriveItemRef & { parentPath: string; folderName: string; matchedExisting: boolean }> {
-  return ensureInRoot(token, project, onedriveConfig.proposalRoot);
+  // Proposal folders do NOT get Client PO / Sales Invoice subfolders — those are execution-only.
+  return ensureInRoot(token, project, onedriveConfig.proposalRoot, false);
 }
 
 /** Create (or look up) the execution folder for a project (status='won' transition). */
@@ -419,7 +420,8 @@ export async function ensureExecutionFolder(
   token: string,
   project: { code: string; name: string },
 ): Promise<DriveItemRef & { parentPath: string; folderName: string; matchedExisting: boolean }> {
-  return ensureInRoot(token, project, onedriveConfig.executionRoot);
+  // Execution folders always get Client PO / Sales Invoice subfolders seeded on creation.
+  return ensureInRoot(token, project, onedriveConfig.executionRoot, true);
 }
 
 /** Lightweight single-item lookup — returns null on 404 or any error. */
@@ -439,6 +441,7 @@ async function ensureInRoot(
   token: string,
   project: { code: string; name: string },
   root: string,
+  seedSubfolders = false,
 ): Promise<DriveItemRef & { parentPath: string; folderName: string; matchedExisting: boolean }> {
   const driveId = await resolveCorporateDriveId(token);
   const canonical = projectFolderName(project);
@@ -482,7 +485,9 @@ async function ensureInRoot(
   // 3 — create in year subfolder; ensure the year folder itself exists first.
   await ensureFolder(token, driveId, root, year);
   const created = await ensureFolder(token, driveId, yearRoot, canonical);
-  await createExecutionProjectSubfolders(token, driveId, `${yearRoot}/${canonical}`);
+  if (seedSubfolders) {
+    await createExecutionProjectSubfolders(token, driveId, `${yearRoot}/${canonical}`);
+  }
   return { ...created, parentPath: yearRoot, folderName: canonical, matchedExisting: false };
 }
 
