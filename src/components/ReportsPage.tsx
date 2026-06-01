@@ -243,6 +243,7 @@ const ReportsPage: React.FC = () => {
                 project={selectedProject}
                 currentUser={currentUser}
                 reportCompany={reportCompany}
+                setReportCompany={setReportCompany}
                 preparedBy={preparedBy}
                 onPreview={handlePreview}
                 clientApprover={clientApprover ?? undefined}

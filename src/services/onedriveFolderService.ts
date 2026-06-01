@@ -301,6 +301,62 @@ export async function uploadFileToFolderById(
 }
 
 /**
+ * Get or create a named child folder under a parent folder identified by its drive
+ * item ID. Tries to create with conflictBehavior:'fail'; on 409 walks the children
+ * list to return the existing folder. Safe to call concurrently for the same name.
+ */
+export async function getOrCreateChildFolderById(
+  token: string,
+  driveId: string,
+  parentFolderId: string,
+  folderName: string,
+): Promise<DriveItemRef> {
+  const childrenUrl = `${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(parentFolderId)}/children`;
+  const createRes = await fetch(childrenUrl, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: folderName, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
+  });
+  if (createRes.ok) {
+    const d = await createRes.json();
+    return { id: d.id, webUrl: d.webUrl || '', name: d.name };
+  }
+  if (createRes.status === 409) {
+    // Already exists — scan children to find the folder.
+    // Include `folder` in $select so the property is present for the type check.
+    let cursor: string | undefined = `${childrenUrl}?$top=200&$select=id,name,webUrl,folder`;
+    while (cursor) {
+      // eslint-disable-next-line no-await-in-loop
+      const scanRes: Response = await fetch(cursor, { headers: { Authorization: `Bearer ${token}` } });
+      if (!scanRes.ok) break;
+      // eslint-disable-next-line no-await-in-loop
+      const scanData: { value: Array<{ id: string; name: string; webUrl: string; folder?: unknown }>; '@odata.nextLink'?: string } = await scanRes.json();
+      const found = scanData.value.find(item => item.name === folderName && item.folder !== undefined);
+      if (found) return { id: found.id, webUrl: found.webUrl || '', name: found.name };
+      cursor = scanData['@odata.nextLink'];
+    }
+  }
+  const errText = await createRes.text().catch(() => '');
+  throw new Error(`Failed to get/create subfolder "${folderName}": ${errText.slice(0, 200)}`);
+}
+
+/**
+ * Fetch a drive item's file content and return it as a Blob.
+ * Callers are responsible for converting to a data URL (and applying EXIF
+ * orientation correction) before passing to jsPDF's addImage.
+ */
+export async function fetchDriveItemBlob(
+  token: string,
+  driveId: string,
+  itemId: string,
+): Promise<Blob> {
+  const url = `${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(itemId)}/content`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`Fetch item content failed (${res.status})`);
+  return res.blob();
+}
+
+/**
  * Upload a single file to `folderPath` under the drive root. The file is created
  * (or overwritten — Graph default is `replace`) at `${folderPath}/${filename}`.
  *

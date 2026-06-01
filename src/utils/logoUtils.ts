@@ -37,9 +37,9 @@ export const loadLogoTransparentBackground = (
     img.src = url;
   });
 
-/** Default ACT logo size in PDF (mm) */
-export const ACT_LOGO_PDF_WIDTH = 18;
-export const ACT_LOGO_PDF_HEIGHT = 15;
+/** Default ACT logo size in PDF (mm). Image is 729×450 — preserve aspect ratio (width 22mm → height ~13.6mm). */
+export const ACT_LOGO_PDF_WIDTH = 22;
+export const ACT_LOGO_PDF_HEIGHT = 13.6;
 
 /** Default IOCT logo size in PDF (mm). Image is 1024×648 — preserve aspect ratio (width 18mm → height ~11.4mm). */
 export const IOCT_LOGO_PDF_WIDTH = 18;

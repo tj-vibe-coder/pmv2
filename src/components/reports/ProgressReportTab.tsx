@@ -97,6 +97,9 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   // Local copy of execution folder id — updated if we auto-create the folder on first export
   const [localExecutionFolderId, setLocalExecutionFolderId] = useState(project.executionFolderId);
   useEffect(() => { setLocalExecutionFolderId(project.executionFolderId); }, [project.id, project.executionFolderId]);
+  // Resolved via project_no — ensures PDFs land in the IOCT ops folder, not a PCS subfolder
+  const [resolvedExecFolderId, setResolvedExecFolderId] = useState<string | null>(null);
+  useEffect(() => { setResolvedExecFolderId(null); }, [project.id]);
   const [wbsItems, setWbsItems] = useState<WBSItem[]>([]);
   const [pbInput, setPbInput] = useState(initialPb ?? '');
   const [showBillingHint, setShowBillingHint] = useState(false);
@@ -582,7 +585,8 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       
       const preparedByName = (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
       const preparedByDesignation = (preparedBy.designation || '').trim() || '—';
-      const preparedByCompany = (preparedBy.company || '').trim() || '—';
+      // Always use the selected report company — not the free-text field which may be stale
+      const preparedByCompany = companyName;
       
       // One line before name for signature
       const preparedByNameY = rowY + sigLineHeight;
@@ -592,10 +596,8 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
         doc.text(preparedByDesignation, col0, preparedByY);
         preparedByY += sigLineHeight;
       }
-      if (preparedByCompany !== '—') {
-        doc.text(preparedByCompany, col0, preparedByY);
-        preparedByY += sigLineHeight;
-      }
+      doc.text(preparedByCompany, col0, preparedByY);
+      preparedByY += sigLineHeight;
       
       let maxApproverY = rowY;
       const rowGap = sigLineHeight + 4; // gap between Prepared by block and Approved by row
@@ -864,15 +866,18 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
         return;
       }
       const driveId = await resolveCorporateDriveId(token);
-      // Auto-create execution folder if the project doesn't have one yet
-      let folderId = localExecutionFolderId;
+      // Always resolve by project_no so PDFs land in the IOCT ops folder,
+      // not inside a PCS proposal subfolder pointed to by a stale executionFolderId.
+      let folderId = resolvedExecFolderId;
       if (!folderId) {
         const projectCode = project.project_no || String(project.item_no ?? project.id);
         const folder = await ensureExecutionFolder(token, { code: projectCode, name: project.project_name });
         folderId = folder.id;
-        setLocalExecutionFolderId(folderId);
-        // Best-effort persist — non-blocking
-        dataService.updateProject(project.id, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
+        setResolvedExecFolderId(folderId);
+        if (!localExecutionFolderId) {
+          setLocalExecutionFolderId(folderId);
+          dataService.updateProject(project.id, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
+        }
       }
       await uploadFileToFolderById(token, driveId, folderId, filename, blob);
       setExportFeedback({ severity: 'success', message: `PDF exported and uploaded to OneDrive: ${filename}` });

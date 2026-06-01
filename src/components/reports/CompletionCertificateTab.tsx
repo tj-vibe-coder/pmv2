@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Alert, Box, Paper, Typography, Button, TextField } from '@mui/material';
+import { Alert, Box, Paper, Typography, Button, TextField, FormControl, InputLabel, Select, MenuItem, Grid } from '@mui/material';
 import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
 import jsPDF from 'jspdf';
@@ -16,6 +16,7 @@ export interface CompletionCertificateTabProps {
   project: Project;
   currentUser: { full_name?: string | null; username?: string; email?: string } | null;
   reportCompany: ReportCompanyKey;
+  setReportCompany: (v: ReportCompanyKey) => void;
   preparedBy: { name: string; designation: string; company: string; date: string };
   onPreview: (blob: Blob, title: string) => void;
   /** Resolved client contact to use as the "Approved by" signatory */
@@ -44,6 +45,7 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
   project,
   currentUser,
   reportCompany,
+  setReportCompany,
   preparedBy,
   onPreview,
   clientApprover,
@@ -54,10 +56,25 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
   // Local copy of execution folder id — updated if we auto-create the folder on first export
   const [localExecutionFolderId, setLocalExecutionFolderId] = useState(project.executionFolderId);
   useEffect(() => { setLocalExecutionFolderId(project.executionFolderId); }, [project.id, project.executionFolderId]);
+  // Resolved via project_no — ensures uploads land in the IOCT ops folder, not a PCS subfolder
+  const [resolvedExecFolderId, setResolvedExecFolderId] = useState<string | null>(null);
+  useEffect(() => { setResolvedExecFolderId(null); }, [project.id]);
   const [completionDateOverride, setCompletionDateOverride] = useState<string>(() => completionDateToInputValue(project.completion_date));
   useEffect(() => {
     setCompletionDateOverride(completionDateToInputValue(project.completion_date));
   }, [project.id, project.completion_date]);
+
+  // Editable approver — seeded from clientApprover, overridable
+  const [approverName, setApproverName] = useState(clientApprover?.name || '');
+  const [approverDesignation, setApproverDesignation] = useState(clientApprover?.designation || '');
+  const [approverCompany, setApproverCompany] = useState(clientApprover?.company || '');
+  useEffect(() => {
+    if (clientApprover?.name || clientApprover?.designation) {
+      setApproverName(prev => prev || clientApprover.name || '');
+      setApproverDesignation(prev => prev || clientApprover.designation || '');
+      setApproverCompany(prev => prev || clientApprover.company || '');
+    }
+  }, [clientApprover?.name, clientApprover?.designation, clientApprover?.company]);
   const completionDateDisplay = useMemo(
     () => formatCompletionDateForPdf(completionDateOverride.trim() || undefined),
     [completionDateOverride]
@@ -205,29 +222,19 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     let rowY = y + signatureSpace; // 2-line space for signature
     fontBody();
     doc.setFontSize(10);
-    // Prefer the unified client DB contact; fall back to parsing the legacy text field
-    let approverName: string;
-    let approverDesignation: string;
-    let approverCompany: string;
-    if (clientApprover?.name || clientApprover?.designation) {
-      approverName = clientApprover.name || '—';
-      approverDesignation = clientApprover.designation || '—';
-      approverCompany = clientApprover.company || project.account_name || '—';
-    } else {
-      const approverParts = (project.client_approver || '').split(/\s*[–-]\s*/);
-      approverName = (approverParts[0] || '').trim() || '—';
-      approverDesignation = (approverParts[1] || '').trim() || '—';
-      approverCompany = (project.account_name || '').trim() || '—';
-    }
+    // Use editable state (pre-filled from client DB, overridable by user)
+    const approverNamePdf = approverName.trim() || (project.account_name || '—');
+    const approverDesignationPdf = approverDesignation.trim() || '—';
+    const approverCompanyPdf = approverCompany.trim() || project.account_name || '—';
     doc.setDrawColor(180, 180, 180);
     doc.line(leftColX, rowY + 2, leftColX + lineWidth, rowY + 2);
-    doc.text(approverName, leftColX, rowY);
+    doc.text(approverNamePdf, leftColX, rowY);
     rowY += sigLineHeight;
     doc.line(leftColX, rowY + 2, leftColX + lineWidth, rowY + 2);
-    doc.text(approverDesignation, leftColX, rowY);
+    doc.text(approverDesignationPdf, leftColX, rowY);
     rowY += sigLineHeight;
     doc.line(leftColX, rowY + 2, leftColX + lineWidth, rowY + 2);
-    doc.text(approverCompany, leftColX, rowY);
+    doc.text(approverCompanyPdf, leftColX, rowY);
     // Right: Contractor Representative (our company)
     rowY = y + signatureSpace; // 2-line space for signature
     fontTitle();
@@ -292,15 +299,18 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
         return;
       }
       const driveId = await resolveCorporateDriveId(token);
-      // Auto-create execution folder if the project doesn't have one yet
-      let folderId = localExecutionFolderId;
+      // Always resolve by project_no so uploads land in the IOCT ops folder,
+      // not inside a PCS proposal subfolder pointed to by a stale executionFolderId.
+      let folderId = resolvedExecFolderId;
       if (!folderId) {
         const projectCode = project.project_no || String(project.item_no ?? project.id);
         const folder = await ensureExecutionFolder(token, { code: projectCode, name: project.project_name });
         folderId = folder.id;
-        setLocalExecutionFolderId(folderId);
-        // Best-effort persist — non-blocking
-        dataService.updateProject(project.id, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
+        setResolvedExecFolderId(folderId);
+        if (!localExecutionFolderId) {
+          setLocalExecutionFolderId(folderId);
+          dataService.updateProject(project.id, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
+        }
       }
       await uploadFileToFolderById(token, driveId, folderId, filename, blob);
       setExportFeedback({ severity: 'success', message: `PDF exported and uploaded to OneDrive: ${filename}` });
@@ -319,21 +329,40 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Generate the Final Project Completion Certificate. Preview or Export to PDF.
       </Typography>
-      <TextField
-        label="Completion Date"
-        type="date"
-        value={completionDateOverride}
-        onChange={(e) => setCompletionDateOverride(e.target.value)}
-        size="small"
-        sx={{ minWidth: 200, mb: 2, display: 'block' }}
-        InputLabelProps={{ shrink: true }}
-      />
+      <Grid container spacing={2} sx={{ mb: 2 }}>
+        <Grid size={{ xs: 12, sm: 'auto' }}>
+          <TextField
+            label="Completion Date"
+            type="date"
+            value={completionDateOverride}
+            onChange={(e) => setCompletionDateOverride(e.target.value)}
+            size="small"
+            sx={{ minWidth: 200 }}
+            InputLabelProps={{ shrink: true }}
+          />
+        </Grid>
+        <Grid size={{ xs: 12 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>Approved by (PDF)</Typography>
+          <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+            <TextField size="small" label="Name" value={approverName} onChange={(e) => setApproverName(e.target.value)} sx={{ width: 220 }} placeholder={clientApprover?.name || 'Client approver name'} />
+            <TextField size="small" label="Designation" value={approverDesignation} onChange={(e) => setApproverDesignation(e.target.value)} sx={{ width: 180 }} placeholder={clientApprover?.designation || 'Position'} />
+            <TextField size="small" label="Company" value={approverCompany} onChange={(e) => setApproverCompany(e.target.value)} sx={{ width: 220 }} placeholder={clientApprover?.company || 'Company'} />
+          </Box>
+        </Grid>
+      </Grid>
       {exportFeedback && (
         <Alert severity={exportFeedback.severity} onClose={() => setExportFeedback(null)} sx={{ mb: 2 }}>
           {exportFeedback.message}
         </Alert>
       )}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+        <FormControl size="small" sx={{ minWidth: 280 }}>
+          <InputLabel id="coc-report-company-label">Report as company</InputLabel>
+          <Select labelId="coc-report-company-label" value={reportCompany} label="Report as company" onChange={(e) => setReportCompany(e.target.value as ReportCompanyKey)}>
+            <MenuItem value="IOCT">{REPORT_COMPANIES.IOCT}</MenuItem>
+            <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
+          </Select>
+        </FormControl>
         <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
         <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Uploading…' : 'Export Certificate of Completion'}</Button>
       </Box>
