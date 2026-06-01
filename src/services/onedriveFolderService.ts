@@ -182,20 +182,26 @@ export async function resolveSharingUrl(
  * Used to detect stale folder URLs stored on calcsheet projects when the user
  * has deleted the folder in OneDrive directly.
  */
+/**
+ * Verify a drive item still exists. Returns the item's current metadata
+ * (including a fresh webUrl that reflects any moves) or null if deleted/gone.
+ * Throws on unexpected non-404 errors.
+ */
 export async function verifyDriveItem(
   token: string,
   driveId: string,
   itemId: string,
-): Promise<boolean> {
-  if (!itemId) return false;
-  const url = `${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(itemId)}`;
+): Promise<{ webUrl: string } | null> {
+  if (!itemId) return null;
+  const url = `${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(itemId)}?$select=id,webUrl`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 404 || res.status === 410) return false;
+  if (res.status === 404 || res.status === 410) return null;
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Item verify failed (${res.status}): ${errText.slice(0, 300)}`);
   }
-  return true;
+  const data = await res.json();
+  return { webUrl: data.webUrl || '' };
 }
 
 /**
