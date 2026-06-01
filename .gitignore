@@ -62,3 +62,9 @@ yarn-error.log*
 # Misc backup artifacts
 *.bak-jpeg
 *.bak-*
+
+# Database folder (SQLite backups, images — contains PII and old password data)
+/database/
+
+# Stale Render deployment notes
+render-env.txt

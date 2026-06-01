@@ -217,7 +217,7 @@ const InvestmentTrackerPage: React.FC = () => {
       {/* KPI Cards */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
         <Grid size={{ xs: 12, sm: 4 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
+          <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Target Capitalization</Typography>
@@ -234,7 +234,7 @@ const InvestmentTrackerPage: React.FC = () => {
           </Card>
         </Grid>
         <Grid size={{ xs: 12, sm: 4 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, color: 'white' }}>
+          <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
               <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Invested to Date</Typography>
               <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
@@ -248,6 +248,7 @@ const InvestmentTrackerPage: React.FC = () => {
         </Grid>
         <Grid size={{ xs: 12, sm: 4 }}>
           <Card sx={{
+            height: '100%',
             background: balance < 0
               ? `linear-gradient(135deg, #e53935 0%, #ef9a9a 100%)`
               : `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`,

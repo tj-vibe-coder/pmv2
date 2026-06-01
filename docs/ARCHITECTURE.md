@@ -2,11 +2,13 @@
 
 ## 1. System Overview
 
-pmv2 is a **monolithic web application** deployed as a single Render Web Service. The React frontend build is served by an Express backend that also provides a REST API backed by Firebase Firestore.
+pmv2 is a **split web application** — React frontend on Firebase Hosting (CDN) and Express API on Firebase Cloud Functions (2nd Gen, Node 22, us-central1).
 
-**Deployment (current):** Render Web Service — `server.js` serves the React build + all API routes.
+**Deployment (current):** Firebase Hosting (React build) + Cloud Functions (Express API via `server.js`). Firebase Hosting rewrites `/api/**` → Cloud Function `api`; everything else → `index.html` (SPA).
 
-**Deployment (target):** Split — React on Firebase Hosting (CDN), Express API on Render (API-only). See `CLAUDE_CODE_PREP_GUIDE.md` for details.
+**CI/CD:** GitHub Actions (`.github/workflows/deploy.yml`) — auto-deploys to Firebase on every push/merge to `main`. Manual dispatch available from the GitHub Actions tab with target selector (`all` / `hosting` / `functions`). `REACT_APP_*` env vars and `FIREBASE_TOKEN` stored as GitHub secrets.
+
+**Branch workflow:** RJ works on `rj/dev`, never directly on `main`. Merging a PR from `rj/dev` → `main` triggers the auto-deploy. See `CLAUDE.md` instruction block #6 for per-session conflict-check steps.
 
 ### Modules
 
@@ -41,7 +43,9 @@ pmv2 is a **monolithic web application** deployed as a single Render Web Service
 | **Build tool** | Create React App (react-scripts 5) |
 | **Font/PDF** | jspdf, jspdf-autotable, pdf-lib, jsbarcode |
 | **Spreadsheets** | xlsx (SheetJS) |
-| **Deployment** | Render (current), Firebase Hosting (target) |
+| **Deployment** | Firebase Hosting (React) + Cloud Functions 2nd Gen Node 22 (API) |
+| **CI/CD** | GitHub Actions — auto-deploy on push to `main` |
+| **Design system** | See `docs/DESIGN_PHILOSOPHY.md` — mandatory reading before creating/modifying pages |
 
 ---
 
@@ -66,6 +70,7 @@ pmv2/
 │   │   ├── Project.ts              # 60-field Project interface
 │   │   ├── Client.ts               # Client data model
 │   │   ├── User.ts                 # User, LoginCredentials, AuthResponse
+│   │   ├── Invoice.ts              # ProjectInvoice, ScanFile, InvoiceStatus, helpers
 │   │   └── Payroll.ts              # Employee, DTREntry, PayrollRun, Payslip, DTRInput
 │   │
 │   ├── config/                      # App configuration
@@ -122,10 +127,12 @@ pmv2/
 │   │   ├── PdfPreviewDialog.tsx    # Reusable PDF preview dialog
 │   │   ├── UserApprovalsPage.tsx   # Superadmin: approve user registrations
 │   │   ├── UsersPage.tsx           # Superadmin: user database
-│   │   ├── InvestmentTrackerPage.tsx
+│   │   ├── InvestmentTrackerPage.tsx # Redesigned to match design system (May 2026)
+│   │   ├── CollectionsDashboard.tsx  # Collections & AR — invoice tracking, OneDrive scan upload
+│   │   ├── UpdateProgressDialog.tsx  # Lightweight modal for updating project % + PB number
 │   │   ├── UtilitiesPage.tsx       # Utilities tab shell
 │   │   ├── Header.tsx              # Top app bar
-│   │   ├── Sidebar.tsx             # Navigation drawer (280px)
+│   │   ├── Sidebar.tsx             # Navigation drawer (collapsed 68px / expanded 280px)
 │   │   ├── LoginDialog.tsx         # Login dialog modal
 │   │   └── LoginPage.tsx           # Standalone login page
 │   │
@@ -292,15 +299,21 @@ Four report types with PDF generation.
 
 ```
 ReportsPage.tsx                    → Tab shell, route param: /reports/:tab
-  ├── ProgressReportTab.tsx       → Progress report PDF
+  ├── ProgressReportTab.tsx       → Progress report PDF + WBS editor
   ├── ServiceReportTab.tsx        → Service report PDF
   ├── CompletionCertificateTab.tsx → Certificate of completion PDF
   └── AttachmentsTab.tsx          → OneDrive file attachments per project
 ```
 
+**Approver sync:** `ReportsPage` fetches `/api/clients/:client_id` on project selection, resolves `clientApprover` via `resolveContact()`, and passes it down to all three report tabs. Approver name fields use MUI `Autocomplete freeSolo` backed by the client's full contacts array.
+
+**OneDrive upload on export:** All three PDF report tabs auto-upload the exported blob to the project's OneDrive execution folder after saving locally. If the project has no `executionFolderId` yet, `ensureExecutionFolder(token, { code: project_no, name: project_name })` is called first — it creates `{executionRoot}/{year}/{project_no} {project_name}/` (idempotent, year-aware, backward-compat prefix scan) — then persists the new `executionFolderId`/`executionFolderUrl` to the project record via `dataService.updateProject` (best-effort, non-blocking) and caches the id in local component state for the session.
+
+**Progress ↔ Billing integration:** `ProjectDetails` milestone table links directly to `/reports/progress?projectId=X&pb=PB1`; `ProgressReportTab` syncs the PB# field on arrival. Certificate of Completion CTA appears in `ProjectDetails` when progress ≥ 100% and all milestones are invoiced.
+
 Saved progress/service reports are stored per project in localStorage. Loading a saved service report switches the save action into update mode; saved service reports and progress snapshots expose visible load/delete actions. Report prepared-by designation refreshes from the logged-in user's `designation` when the saved prepared-by identity matches the current user.
 
-**Key files:** `src/components/ReportsPage.tsx`, `src/components/reports/*.tsx`, `src/services/attachmentsService.ts`, `src/services/onedriveService.ts`, `src/contexts/OneDriveAuthContext.tsx`
+**Key files:** `src/components/ReportsPage.tsx`, `src/components/reports/*.tsx`, `src/services/onedriveFolderService.ts`, `src/contexts/OneDriveAuthContext.tsx`
 
 ### 4.7 Utilities Module
 

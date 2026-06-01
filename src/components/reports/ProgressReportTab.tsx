@@ -1,5 +1,8 @@
 import React, { useCallback, useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
+  Alert,
+  Autocomplete,
   Box,
   Paper,
   Typography,
@@ -21,6 +24,9 @@ import {
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
+import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
+import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
+import { resolveCorporateDriveId, uploadFileToFolderById, ensureExecutionFolder } from '../../services/onedriveFolderService';
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 import dataService from '../../services/dataService';
@@ -66,6 +72,12 @@ export interface ProgressReportTabProps {
   preparedBy: { name: string; designation: string; company: string; date: string };
   setPreparedBy: React.Dispatch<React.SetStateAction<{ name: string; designation: string; company: string; date: string }>>;
   onPreview: (blob: Blob, title: string) => void;
+  /** Pre-fill the PB # field (passed from ProjectDetails milestone row link) */
+  initialPb?: string;
+  /** Resolved client contact to use as the "Approved by" signatory */
+  clientApprover?: { name: string; designation: string; company: string };
+  /** All contacts from the project's client — powers the approver name autocomplete */
+  clientContacts?: { name: string; designation: string; company: string }[];
 }
 
 const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
@@ -76,15 +88,29 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   preparedBy,
   setPreparedBy,
   onPreview,
+  initialPb,
+  clientApprover,
+  clientContacts = [],
 }) => {
+  const navigate = useNavigate();
+  const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  // Local copy of execution folder id — updated if we auto-create the folder on first export
+  const [localExecutionFolderId, setLocalExecutionFolderId] = useState(project.executionFolderId);
+  useEffect(() => { setLocalExecutionFolderId(project.executionFolderId); }, [project.id, project.executionFolderId]);
   const [wbsItems, setWbsItems] = useState<WBSItem[]>([]);
-  const [pbInput, setPbInput] = useState('');
+  const [pbInput, setPbInput] = useState(initialPb ?? '');
+  const [showBillingHint, setShowBillingHint] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportFeedback, setExportFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const [saveFeedback, setSaveFeedback] = useState(false);
   const [snapshotVersion, setSnapshotVersion] = useState(0);
   const [editingSnapshotIndex, setEditingSnapshotIndex] = useState<number | null>(null);
   const [wbsDraft, setWbsDraft] = useState<Record<string, { progress?: string; weight?: string }>>({});
   const [approvers, setApprovers] = useState<Approver[]>(() => {
-    // Initialize with project's client_approver if available
+    // Prefer client DB contact; fall back to parsing the legacy text field
+    if (clientApprover?.name || clientApprover?.designation) {
+      return [{ name: clientApprover.name, designation: clientApprover.designation, company: clientApprover.company }];
+    }
     const approverParts = (project.client_approver || '').split(/\s*[–-]\s*/);
     const approverName = (approverParts[0] || '').trim();
     const approverDesignation = (approverParts[1] || '').trim();
@@ -98,6 +124,20 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   useEffect(() => {
     setWbsItems(loadWBS(project.id));
   }, [project.id]);
+
+  // Sync initialPb into the PB# field whenever it changes (e.g. user arrives via milestone row link)
+  useEffect(() => {
+    if (initialPb) setPbInput(initialPb);
+  }, [initialPb]);
+
+  // Update the approvers list when the resolved client contact arrives (async fetch in ReportsPage).
+  // Only update slot 0 — preserve any extra approvers the user has manually added.
+  useEffect(() => {
+    if (clientApprover?.name || clientApprover?.designation) {
+      const first = { name: clientApprover.name, designation: clientApprover.designation, company: clientApprover.company };
+      setApprovers(prev => prev.length === 0 ? [first] : [first, ...prev.slice(1)]);
+    }
+  }, [clientApprover]);
 
   // snapshotVersion triggers refetch when user saves a snapshot
   // eslint-disable-next-line react-hooks/exhaustive-deps -- snapshotVersion is intentional
@@ -208,7 +248,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     const weighted = items.reduce((s, i) => s + (parseWBSNum(i.weight) * parseWBSNum(i.progress)) / 100, 0);
     const pct = totalWeight > 0 ? (weighted / totalWeight) * 100 : items.reduce((s, i) => s + parseWBSNum(i.progress), 0) / items.length;
     const rounded = Math.round(pct);
-    dataService.updateProject(project.id, { actual_site_progress_percent: rounded });
+    dataService.updateProject(project.id, { actual_site_progress_percent: rounded }).catch(() => {});
   };
 
   const handleAddWBSItem = () => {
@@ -276,7 +316,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     setSnapshotVersion((v) => v + 1);
   };
 
-  const buildPdf = async (preview: boolean): Promise<Blob | void> => {
+  const buildPdf = async (preview: boolean): Promise<Blob | { blob: Blob; filename: string } | void> => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const margin = 16;
     const contentWidth = 210 - margin * 2;
@@ -373,8 +413,19 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       currentY += lineHeight;
       doc.text(`Client: ${project.account_name || '—'}`, margin, currentY);
       currentY += lineHeight;
-      doc.text(`Project Location: ${project.project_location || '—'}`, margin, currentY);
-      currentY += lineHeight + sectionGap;
+      {
+        const locationLabel = 'Project Location: ';
+        const locationValue = project.project_location || '—';
+        const labelWidth = doc.getTextWidth(locationLabel);
+        // Wrap only the value part; indent continuation lines to align under the value
+        const valueLines = doc.splitTextToSize(locationValue, contentWidth - labelWidth);
+        doc.text(locationLabel + valueLines[0], margin, currentY);
+        for (let li = 1; li < valueLines.length; li++) {
+          currentY += lineHeight;
+          doc.text(valueLines[li], margin + labelWidth, currentY);
+        }
+        currentY += lineHeight + sectionGap;
+      }
       
       // Add Project Status and Certification Statement only on first page
       if (isFirstPage) {
@@ -778,14 +829,59 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     // Use Doc. No. as filename (without "Doc. No.: " prefix)
     const fileName = `${projectNo}-PB-${pbNum}.pdf`;
     doc.save(fileName);
+    return { blob: doc.output('blob') as Blob, filename: fileName };
   };
 
   const handlePreview = async () => {
-    const blob = await buildPdf(true);
-    if (blob) onPreview(blob, 'Progress Report');
+    const result = await buildPdf(true);
+    if (result instanceof Blob) onPreview(result, 'Progress Report');
   };
 
-  const handleExport = () => buildPdf(false);
+  const handleExport = async () => {
+    setExporting(true);
+    setExportFeedback(null);
+    try {
+      const result = await buildPdf(false);
+      // result is { blob, filename } for preview=false
+      if (!result || result instanceof Blob) return;
+      const { blob, filename } = result;
+
+      // Show billing hint if a PB# is set
+      if (pbInput.trim()) setShowBillingHint(true);
+
+      // Best-effort OneDrive upload — auto-creates the execution folder when it doesn't exist yet
+      if (!isCorporateOneDriveConfigured()) {
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. OneDrive is not configured.' });
+        return;
+      }
+      if (!oneDriveSignedIn) {
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Sign in to OneDrive to upload it.' });
+        return;
+      }
+      const token = await getOneDriveToken();
+      if (!token) {
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Could not get OneDrive access token.' });
+        return;
+      }
+      const driveId = await resolveCorporateDriveId(token);
+      // Auto-create execution folder if the project doesn't have one yet
+      let folderId = localExecutionFolderId;
+      if (!folderId) {
+        const projectCode = project.project_no || String(project.item_no ?? project.id);
+        const folder = await ensureExecutionFolder(token, { code: projectCode, name: project.project_name });
+        folderId = folder.id;
+        setLocalExecutionFolderId(folderId);
+        // Best-effort persist — non-blocking
+        dataService.updateProject(project.id, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
+      }
+      await uploadFileToFolderById(token, driveId, folderId, filename, blob);
+      setExportFeedback({ severity: 'success', message: `PDF exported and uploaded to OneDrive: ${filename}` });
+    } catch (e) {
+      setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'PDF exported locally, but OneDrive upload failed.' });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <Paper elevation={0} sx={{ p: 2, borderRadius: 2, border: '1px solid #e2e8f0', bgcolor: '#fff', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -829,16 +925,52 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
         </Box>
         {approvers.map((approver, index) => (
           <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-            <TextField
+            <Autocomplete
+              freeSolo
               size="small"
-              label={`Approver ${index + 1} - Name`}
-              value={approver.name}
-              onChange={(e) => {
-                const updated = [...approvers];
-                updated[index] = { ...updated[index], name: e.target.value };
-                setApprovers(updated);
+              options={clientContacts}
+              getOptionLabel={(opt) => (typeof opt === 'string' ? opt : opt.name)}
+              isOptionEqualToValue={(opt, val) => opt.name === (typeof val === 'string' ? val : val.name)}
+              inputValue={approver.name}
+              onInputChange={(_, newVal, reason) => {
+                // Only track typed text; selection is handled in onChange
+                if (reason === 'input' || reason === 'clear') {
+                  const updated = [...approvers];
+                  updated[index] = { ...updated[index], name: newVal };
+                  setApprovers(updated);
+                }
               }}
-              sx={{ width: 180 }}
+              onChange={(_, newVal) => {
+                if (newVal && typeof newVal !== 'string') {
+                  // Contact selected from list — auto-fill all three fields
+                  const updated = [...approvers];
+                  updated[index] = { name: newVal.name, designation: newVal.designation, company: newVal.company };
+                  setApprovers(updated);
+                }
+              }}
+              renderOption={(props, opt) => (
+                <li {...props} key={opt.name + opt.designation}>
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>{opt.name}</Typography>
+                    {(opt.designation || opt.company) && (
+                      <Typography variant="caption" color="text.secondary">
+                        {[opt.designation, opt.company].filter(Boolean).join(' · ')}
+                      </Typography>
+                    )}
+                  </Box>
+                </li>
+              )}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label={`Approver ${index + 1} - Name`}
+                  size="small"
+                  sx={{ width: 220 }}
+                  placeholder={clientContacts.length > 0 ? 'Search client contacts…' : 'Name'}
+                />
+              )}
+              sx={{ width: 220 }}
+              noOptionsText="No client contacts found"
             />
             <TextField
               size="small"
@@ -889,7 +1021,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
         </FormControl>
         <Button variant="contained" size="small" onClick={handleSaveProgress} disabled={wbsItems.length === 0} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{saveFeedback ? 'Saved' : editingSnapshotIndex !== null ? 'Update snapshot' : 'Save'}</Button>
         <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} disabled={wbsItems.length === 0} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
-        <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={wbsItems.length === 0} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Export to PDF</Button>
+        <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={wbsItems.length === 0 || exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Uploading…' : 'Export to PDF'}</Button>
         {progressSnapshots.length > 0 && (
           <FormControl size="small" sx={{ minWidth: 200 }}>
             <InputLabel id="load-snapshot-label">Load previous progress</InputLabel>
@@ -943,6 +1075,35 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           <Button size="small" variant="outlined" onClick={() => setEditingSnapshotIndex(null)}>Cancel edit</Button>
           <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={handleDeleteLoadedSnapshot}>Delete snapshot</Button>
         </Box>
+      )}
+      {/* OneDrive upload feedback */}
+      {exportFeedback && (
+        <Alert severity={exportFeedback.severity} onClose={() => setExportFeedback(null)} sx={{ mb: 1.5, flexShrink: 0 }}>
+          {exportFeedback.message}
+        </Alert>
+      )}
+
+      {/* Billing hint: shown after PDF export when a PB# is set */}
+      {showBillingHint && (
+        <Alert
+          severity="info"
+          onClose={() => setShowBillingHint(false)}
+          sx={{ mb: 1.5, flexShrink: 0 }}
+          action={
+            <Button
+              size="small"
+              color="inherit"
+              onClick={() => {
+                sessionStorage.setItem('selectedProjectId', String(project.id));
+                navigate('/dashboard');
+              }}
+            >
+              Go to Billing
+            </Button>
+          }
+        >
+          Progress report exported for <strong>{pbInput}</strong>. Ready to create the invoice? Go to the project's billing section.
+        </Alert>
       )}
       <TableContainer sx={{ flex: 1, minHeight: 0, border: '1px solid #e2e8f0', borderRadius: 1, overflow: 'auto' }}>
         <Table stickyHeader size="medium" sx={{ minWidth: 560 }}>

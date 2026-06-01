@@ -40,6 +40,7 @@ import {
   Receipt as ReceiptIcon,
   Add as AddIcon,
   Delete as DeleteIcon,
+  Description as DescriptionIcon,
 } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import type { ProjectInvoice, BillingMilestone } from '../types/Invoice';
@@ -494,11 +495,14 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     const contract = project.updated_contract_amount || project.contract_amount || 0;
     const suggestedAmount = contract > 0 ? Math.round((milestone.billing_pct / 100) * contract * 100) / 100 : 0;
     const today = new Date().toISOString().slice(0, 10);
+    // Completion milestones (trigger ≥ 100%) and downpayment milestones (trigger = 0%)
+    // are payable upon receipt of invoice — no credit period applies.
+    const defaultTermsDays = milestone.trigger_pct >= 100 || milestone.trigger_pct === 0 ? 0 : 30;
     setMilestoneInvoiceForm({
       invoice_no: '',
       invoice_date: today,
       amount: suggestedAmount > 0 ? String(suggestedAmount) : '',
-      payment_terms_days: 30,
+      payment_terms_days: defaultTermsDays,
       notes: `${milestone.label} — ${milestone.pb_number}`,
     });
     setMilestoneInvoiceErr('');
@@ -527,11 +531,14 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
         notes: milestoneInvoiceForm.notes.trim() || undefined,
         pb_number: createInvoiceForMilestone.pb_number,
       };
+      const token = localStorage.getItem('netpacific_token');
       const res = await fetch('/api/invoices', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(body),
-        credentials: 'include',
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
@@ -1255,6 +1262,16 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                                 )}
                               </TableCell>
                               <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                                {/* Progress Report link — always available for each milestone */}
+                                <Tooltip title={`Open Progress Report for ${m.pb_number}`}>
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => navigate(`/reports/progress?projectId=${encodeURIComponent(String(project.id))}&pb=${encodeURIComponent(m.pb_number)}`)}
+                                    sx={{ color: NET_PACIFIC_COLORS.accent1 }}
+                                  >
+                                    <DescriptionIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
                                 {linkedInvoice ? (
                                   <Tooltip title="View in Collections & AR">
                                     <IconButton
@@ -1289,6 +1306,29 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                       </TableBody>
                     </Table>
                   </TableContainer>
+                )}
+
+                {/* Certificate of Completion CTA — shown when 100% complete and all milestones are invoiced */}
+                {!scheduleEditMode && schedule.length > 0 && currentProgress >= 100 && schedule.every(m => !!milestoneInvoiceMap[m.pb_number]) && (
+                  <Box sx={{ mt: 2, p: 2, borderRadius: 1, bgcolor: '#f0fdf4', border: '1px solid', borderColor: 'success.300', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+                    <Box>
+                      <Typography variant="body2" fontWeight={600} color="success.dark">
+                        All milestones invoiced — project complete!
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Generate a Certificate of Completion to formally close out this project.
+                      </Typography>
+                    </Box>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      color="success"
+                      endIcon={<OpenInNewIcon fontSize="small" />}
+                      onClick={() => navigate(`/reports/completion?projectId=${encodeURIComponent(String(project.id))}`)}
+                    >
+                      Certificate of Completion
+                    </Button>
+                  </Box>
                 )}
 
                 {/* Empty state */}

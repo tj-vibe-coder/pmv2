@@ -387,7 +387,7 @@ Content-Type: application/json
 
 ### PUT /api/projects/:id
 
-Update a project. Only send fields that changed.
+Update a project. Only send fields that changed. All fields in the `Project` interface are passed through — notably `billing_schedule` (array of `BillingMilestone`) and `executionFolderId` / `executionFolderUrl` (set by the client after auto-creating the OneDrive execution folder on PDF export).
 
 ```
 PUT /api/projects/proj001
@@ -395,7 +395,10 @@ Content-Type: application/json
 
 {
   "project_status": "CLOSED",
-  "actual_site_progress_percent": 100
+  "actual_site_progress_percent": 100,
+  "billing_schedule": [],
+  "executionFolderId": "abc123",
+  "executionFolderUrl": "https://..."
 }
 ```
 
@@ -891,6 +894,7 @@ Create a new invoice. Requires active user session.
   "payment_terms_days": 30,
   "due_date": "2026-02-14",
   "amount_collected": 0,
+  "pb_number": "PB1",
   "notes": "Milestone 1 billing"
 }
 ```
@@ -903,6 +907,7 @@ Create a new invoice. Requires active user session.
 
 Update an invoice (any field). Requires active user session.
 Commonly used to record a collection: send `{ amount_collected, collection_date }`.
+To attach a scan: send `{ scan_file: { onedrive_item_id, onedrive_web_url, filename, uploaded_at } }`. Upload is handled client-side via `uploadFileToFolder()` before calling this endpoint.
 
 **Response:** `{ message: "Invoice updated" }`
 

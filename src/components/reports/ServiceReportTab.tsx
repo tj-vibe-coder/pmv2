@@ -36,7 +36,8 @@ import {
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
-import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
+import { resolveCorporateDriveId, uploadFileToFolderById, ensureExecutionFolder } from '../../services/onedriveFolderService';
+import dataService from '../../services/dataService';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
@@ -49,6 +50,8 @@ export interface ServiceReportTabProps {
   preparedBy: { name: string; designation: string; company: string; date: string };
   setPreparedBy: React.Dispatch<React.SetStateAction<{ name: string; designation: string; company: string; date: string }>>;
   onPreview: (blob: Blob, title: string) => void;
+  /** Resolved client contact to use as the "Approved by" signatory */
+  clientApprover?: { name: string; designation: string; company: string };
 }
 
 const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
@@ -59,6 +62,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   preparedBy,
   setPreparedBy,
   onPreview,
+  clientApprover,
 }) => {
   const [serviceReportDate, setServiceReportDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [serviceReportStartTime, setServiceReportStartTime] = useState('');
@@ -73,6 +77,9 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   const [exportFeedback, setExportFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const [exporting, setExporting] = useState(false);
   const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  // Local copy of execution folder id — updated if we auto-create the folder on first export
+  const [localExecutionFolderId, setLocalExecutionFolderId] = useState(project.executionFolderId);
+  useEffect(() => { setLocalExecutionFolderId(project.executionFolderId); }, [project.id, project.executionFolderId]);
 
   const resetServiceReportForm = () => {
     setServiceReportDate(new Date().toISOString().slice(0, 10));
@@ -329,13 +336,13 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     let rowY = lastPageSignatureY + signatureSpace;
     const preparedByName = (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
     drawSignatureLine(leftColX, 'Name', rowY, preparedByName);
-    drawSignatureLine(rightColX, 'Name', rowY, undefined);
+    drawSignatureLine(rightColX, 'Name', rowY, clientApprover?.name || undefined);
     rowY += sigLineHeight;
     drawSignatureLine(leftColX, 'Designation', rowY, (preparedBy.designation || '').trim() || undefined);
-    drawSignatureLine(rightColX, 'Designation', rowY, undefined);
+    drawSignatureLine(rightColX, 'Designation', rowY, clientApprover?.designation || undefined);
     rowY += sigLineHeight;
     drawSignatureLine(leftColX, 'Company', rowY, (preparedBy.company || '').trim() || undefined);
-    drawSignatureLine(rightColX, 'Company', rowY, undefined);
+    drawSignatureLine(rightColX, 'Company', rowY, clientApprover?.company || undefined);
     rowY += sigLineHeight;
     drawSignatureLine(leftColX, 'Date', rowY, (preparedBy.date || '').trim() || undefined);
     drawSignatureLine(rightColX, 'Date', rowY, undefined);
@@ -371,10 +378,6 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         setExportFeedback({ severity: 'warning', message: 'PDF exported locally. OneDrive is not configured.' });
         return;
       }
-      if (!project.executionFolderId) {
-        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Link an execution folder to upload to OneDrive.' });
-        return;
-      }
       if (!oneDriveSignedIn) {
         setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Sign in to OneDrive to upload it.' });
         return;
@@ -385,7 +388,17 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         return;
       }
       const driveId = await resolveCorporateDriveId(token);
-      await uploadFileToFolderById(token, driveId, project.executionFolderId, result.filename, result.blob);
+      // Auto-create execution folder if the project doesn't have one yet
+      let folderId = localExecutionFolderId;
+      if (!folderId) {
+        const projectCode = project.project_no || String(project.item_no ?? project.id);
+        const folder = await ensureExecutionFolder(token, { code: projectCode, name: project.project_name });
+        folderId = folder.id;
+        setLocalExecutionFolderId(folderId);
+        // Best-effort persist — non-blocking
+        dataService.updateProject(project.id, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
+      }
+      await uploadFileToFolderById(token, driveId, folderId, result.filename, result.blob);
       setExportFeedback({ severity: 'success', message: `PDF exported and uploaded to OneDrive: ${result.filename}` });
     } catch (e) {
       setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'PDF exported locally, but OneDrive upload failed.' });

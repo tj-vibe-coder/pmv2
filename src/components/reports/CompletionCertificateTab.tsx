@@ -1,10 +1,14 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Box, Paper, Typography, Button, TextField } from '@mui/material';
+import { Alert, Box, Paper, Typography, Button, TextField } from '@mui/material';
 import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
 import jsPDF from 'jspdf';
 import { REPORT_COMPANIES, type ReportCompanyKey } from '../ProjectDetails';
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
+import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
+import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
+import { resolveCorporateDriveId, uploadFileToFolderById, ensureExecutionFolder } from '../../services/onedriveFolderService';
+import dataService from '../../services/dataService';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 
@@ -12,10 +16,10 @@ export interface CompletionCertificateTabProps {
   project: Project;
   currentUser: { full_name?: string | null; username?: string; email?: string } | null;
   reportCompany: ReportCompanyKey;
-  setReportCompany: (v: ReportCompanyKey) => void;
   preparedBy: { name: string; designation: string; company: string; date: string };
-  setPreparedBy: React.Dispatch<React.SetStateAction<{ name: string; designation: string; company: string; date: string }>>;
   onPreview: (blob: Blob, title: string) => void;
+  /** Resolved client contact to use as the "Approved by" signatory */
+  clientApprover?: { name: string; designation: string; company: string };
 }
 
 const formatCompletionDateForPdf = (value: string | number | Date | null | undefined): string => {
@@ -42,7 +46,14 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
   reportCompany,
   preparedBy,
   onPreview,
+  clientApprover,
 }) => {
+  const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const [exporting, setExporting] = useState(false);
+  const [exportFeedback, setExportFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
+  // Local copy of execution folder id — updated if we auto-create the folder on first export
+  const [localExecutionFolderId, setLocalExecutionFolderId] = useState(project.executionFolderId);
+  useEffect(() => { setLocalExecutionFolderId(project.executionFolderId); }, [project.id, project.executionFolderId]);
   const [completionDateOverride, setCompletionDateOverride] = useState<string>(() => completionDateToInputValue(project.completion_date));
   useEffect(() => {
     setCompletionDateOverride(completionDateToInputValue(project.completion_date));
@@ -52,7 +63,7 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     [completionDateOverride]
   );
 
-  const buildPdf = async (preview: boolean): Promise<Blob | void> => {
+  const buildPdf = async (preview: boolean): Promise<Blob | { blob: Blob; filename: string } | void> => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const margin = 16;
     const pageWidth = 210;
@@ -194,10 +205,20 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     let rowY = y + signatureSpace; // 2-line space for signature
     fontBody();
     doc.setFontSize(10);
-    const approverParts = (project.client_approver || '').split(/\s*[–-]\s*/);
-    const approverName = (approverParts[0] || '').trim() || '—';
-    const approverDesignation = (approverParts[1] || '').trim() || '—';
-    const approverCompany = (project.account_name || '').trim() || '—';
+    // Prefer the unified client DB contact; fall back to parsing the legacy text field
+    let approverName: string;
+    let approverDesignation: string;
+    let approverCompany: string;
+    if (clientApprover?.name || clientApprover?.designation) {
+      approverName = clientApprover.name || '—';
+      approverDesignation = clientApprover.designation || '—';
+      approverCompany = clientApprover.company || project.account_name || '—';
+    } else {
+      const approverParts = (project.client_approver || '').split(/\s*[–-]\s*/);
+      approverName = (approverParts[0] || '').trim() || '—';
+      approverDesignation = (approverParts[1] || '').trim() || '—';
+      approverCompany = (project.account_name || '').trim() || '—';
+    }
     doc.setDrawColor(180, 180, 180);
     doc.line(leftColX, rowY + 2, leftColX + lineWidth, rowY + 2);
     doc.text(approverName, leftColX, rowY);
@@ -241,11 +262,53 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     if (preview) return doc.output('blob') as Blob;
     const docNoFilename = `${(projectNo === '—' ? 'COC' : String(projectNo).replace(/[/\\?%*:|"<>]/g, '-'))}-COC.pdf`;
     doc.save(docNoFilename);
+    return { blob: doc.output('blob') as Blob, filename: docNoFilename };
   };
 
   const handlePreview = async () => {
     const blob = await buildPdf(true);
-    if (blob) onPreview(blob, 'Certificate of Completion');
+    if (blob instanceof Blob) onPreview(blob, 'Certificate of Completion');
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    setExportFeedback(null);
+    try {
+      const result = await buildPdf(false);
+      if (!result || result instanceof Blob) return;
+      const { blob, filename } = result;
+
+      if (!isCorporateOneDriveConfigured()) {
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. OneDrive is not configured.' });
+        return;
+      }
+      if (!oneDriveSignedIn) {
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Sign in to OneDrive to upload it.' });
+        return;
+      }
+      const token = await getOneDriveToken();
+      if (!token) {
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Could not get OneDrive access token.' });
+        return;
+      }
+      const driveId = await resolveCorporateDriveId(token);
+      // Auto-create execution folder if the project doesn't have one yet
+      let folderId = localExecutionFolderId;
+      if (!folderId) {
+        const projectCode = project.project_no || String(project.item_no ?? project.id);
+        const folder = await ensureExecutionFolder(token, { code: projectCode, name: project.project_name });
+        folderId = folder.id;
+        setLocalExecutionFolderId(folderId);
+        // Best-effort persist — non-blocking
+        dataService.updateProject(project.id, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
+      }
+      await uploadFileToFolderById(token, driveId, folderId, filename, blob);
+      setExportFeedback({ severity: 'success', message: `PDF exported and uploaded to OneDrive: ${filename}` });
+    } catch (e) {
+      setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'PDF exported locally, but OneDrive upload failed.' });
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -265,9 +328,14 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
         sx={{ minWidth: 200, mb: 2, display: 'block' }}
         InputLabelProps={{ shrink: true }}
       />
+      {exportFeedback && (
+        <Alert severity={exportFeedback.severity} onClose={() => setExportFeedback(null)} sx={{ mb: 2 }}>
+          {exportFeedback.message}
+        </Alert>
+      )}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
         <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
-        <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={() => buildPdf(false)} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Export Certificate of Completion</Button>
+        <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Uploading…' : 'Export Certificate of Completion'}</Button>
       </Box>
     </Paper>
   );
