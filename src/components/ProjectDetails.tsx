@@ -186,6 +186,15 @@ export interface ServiceReportActivityRow {
   findingOutcome: string;
 }
 
+export interface ServiceReportPhoto {
+  id: string;           // OneDrive item ID
+  filename: string;
+  webUrl: string;
+  uploadedAt: string;
+  activityIndex?: number; // undefined = general; number = linked to that activity row
+  thumbnailDataUrl?: string; // small JPEG data URL stored at upload time for offline display
+}
+
 export interface ServiceReport {
   id: string;
   date: string;
@@ -200,6 +209,10 @@ export interface ServiceReport {
   /** New format: table rows. Legacy reports may have recommendations string. */
   recommendationsTable?: string[];
   recommendations?: string;
+  photos?: ServiceReportPhoto[];
+  approverName?: string;
+  approverDesignation?: string;
+  approverCompany?: string;
   createdAt: string;
 }
 
