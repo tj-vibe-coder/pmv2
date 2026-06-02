@@ -86,7 +86,7 @@ export interface PurchaseOrder {
   /** When PO is built from multiple MRFs, all source MRF ids and request numbers */
   mrfIds?: string[];
   mrfRequestNos?: string[];
-  projectId: number | null;
+  projectId: string | number | null;
   projectName: string;
   orderDate: string;
   expectedDelivery: string;
@@ -233,8 +233,8 @@ function projectNoWithoutPrefix(projectNo: string): string {
 }
 
 /** Next sequential PO number: "{number}-{seq}" e.g. 2602002-001 (no IOCT, no PO). */
-function getNextPONumber(projectId: number | null, existingPOs: PurchaseOrder[], projects: Project[]): string {
-  const project = projectId != null ? projects.find((p) => p.id === projectId) : undefined;
+function getNextPONumber(projectId: string | number | null, existingPOs: PurchaseOrder[], projects: Project[]): string {
+  const project = projectId != null ? projects.find((p) => String(p.id) === String(projectId)) : undefined;
   const projectNo = getProjectNo(project);
   const baseNo = projectNoWithoutPrefix(projectNo) || projectNo || 'GEN';
   // Global sequence: support "2602002-001", "IOCT2602002-PO-001", legacy formats
@@ -248,7 +248,7 @@ function getNextPONumber(projectId: number | null, existingPOs: PurchaseOrder[],
     }
   }
   const nextSeq = maxSeq + 1;
-  const seqStr = String(nextSeq).padStart(3, '0');
+  const seqStr = String(nextSeq).padStart(2, '0');
   return `${baseNo}-${seqStr}`;
 }
 
@@ -825,6 +825,7 @@ const PurchaseOrderPage: React.FC = () => {
   const [selectedMrfIds, setSelectedMrfIds] = useState<string[]>([]);
   const [addMrfId, setAddMrfId] = useState('');
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>('');
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [poNumber, setPoNumber] = useState('');
   const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [expectedDelivery, setExpectedDelivery] = useState('');
@@ -884,12 +885,16 @@ const PurchaseOrderPage: React.FC = () => {
     dataService.getProjects().then(setProjects);
   }, []);
 
-  // When MRFs are selected, suggest next PO number from first MRF's project
+  // Auto-suggest PO number from selected project (MRF-derived or direct)
   useEffect(() => {
-    if (!createOpen || selectedMrfIds.length === 0) return;
-    const firstMrf = mrfs.find((m) => m.id === selectedMrfIds[0]);
-    if (firstMrf) setPoNumber(getNextPONumber(firstMrf.projectId, orders, projects));
-  }, [createOpen, selectedMrfIds, orders, mrfs, projects]);
+    if (!createOpen) return;
+    if (selectedMrfIds.length > 0) {
+      const firstMrf = mrfs.find((m) => m.id === selectedMrfIds[0]);
+      if (firstMrf) setPoNumber(getNextPONumber(firstMrf.projectId, orders, projects));
+    } else if (selectedProjectId != null && selectedProjectId !== '') {
+      setPoNumber(getNextPONumber(selectedProjectId, orders, projects));
+    }
+  }, [createOpen, selectedMrfIds, selectedProjectId, orders, mrfs, projects]);
 
   // When supplier or MRF list changes, keep only included items that still belong to current supplier filter
   useEffect(() => {
@@ -968,6 +973,7 @@ const PurchaseOrderPage: React.FC = () => {
     setSelectedMrfIds([]);
     setAddMrfId('');
     setSelectedSupplierId('');
+    setSelectedProjectId(null);
     setPoNumber('');
     setOrderDate(new Date().toISOString().slice(0, 10));
     setExpectedDelivery('');
@@ -991,11 +997,38 @@ const PurchaseOrderPage: React.FC = () => {
     );
   };
 
+  const updateCreateItem = (itemId: string, patch: Partial<PurchaseOrderItem>) => {
+    setCreateDialogItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, ...patch } : i)));
+  };
+
+  const addCreateItem = () => {
+    const newItem: PurchaseOrderItem = {
+      id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      description: '',
+      partNo: '',
+      brand: '',
+      quantity: 1,
+      unit: 'pcs',
+      unitPrice: 0,
+      notes: '',
+    };
+    setCreateDialogItems((prev) => [...prev, newItem]);
+  };
+
+  const removeCreateItem = (itemId: string) => {
+    setCreateDialogItems((prev) => prev.filter((i) => i.id !== itemId));
+  };
+
   const handleCreatePO = () => {
-    if (!firstMRF || !selectedSupplier || selectedMrfIds.length === 0) return;
-    const finalPoNumber = poNumber.trim() || getNextPONumber(firstMRF.projectId, orders, projects);
-    const project = firstMRF.projectId != null ? projects.find((p) => p.id === firstMRF.projectId) : undefined;
+    if (!selectedSupplier) return;
+    // Project: prefer from MRF, else from direct project picker
+    const effectiveProjectId = firstMRF?.projectId ?? selectedProjectId;
+    const project = effectiveProjectId != null ? projects.find((p) => String(p.id) === String(effectiveProjectId)) : undefined;
     const projectNo = getProjectNo(project);
+    const finalPoNumber = poNumber.trim() || getNextPONumber(effectiveProjectId, orders, projects);
+    const requestedBy = selectedMrfIds.length > 1
+      ? 'Multiple'
+      : (firstMRF?.requestedBy?.trim() || currentUser?.full_name?.trim() || currentUser?.username || '—');
     const po: PurchaseOrder = {
       id: `po-${Date.now()}`,
       poNumber: finalPoNumber,
@@ -1005,18 +1038,16 @@ const PurchaseOrderPage: React.FC = () => {
       supplierPhone: selectedSupplier.phone || '',
       supplierAddress: selectedSupplier.address || '',
       supplierAttentionTo: supplierAttentionTo.trim() || undefined,
-      mrfId: firstMRF.id,
-      mrfRequestNo: firstMRF.requestNo,
+      mrfId: firstMRF?.id ?? '',
+      mrfRequestNo: firstMRF?.requestNo ?? '',
       mrfIds: selectedMrfIds.length > 1 ? selectedMrfIds : undefined,
       mrfRequestNos: selectedMrfIds.length > 1 ? selectedMrfIds.map((id) => mrfs.find((m) => m.id === id)?.requestNo ?? '') : undefined,
-      projectId: firstMRF.projectId,
+      projectId: effectiveProjectId,
       projectNo,
-      projectName: firstMRF.projectName || '—',
+      projectName: project ? (project.project_name || project.project_no || '—') : (firstMRF?.projectName || '—'),
       orderDate,
       expectedDelivery: expectedDelivery.trim() || '—',
-      requestedBy: selectedMrfIds.length === 1
-        ? (firstMRF.requestedBy?.trim() || (currentUser?.full_name?.trim() || currentUser?.username || '') || '—')
-        : 'Multiple',
+      requestedBy,
       quotationReference: quotationReference.trim(),
       paymentTerms: paymentTerms.trim() || undefined,
       leadTime: leadTime.trim() || undefined,
@@ -1293,7 +1324,22 @@ const PurchaseOrderPage: React.FC = () => {
                 )}
               </Select>
             </FormControl>
-            <Typography variant="subtitle2" color="text.secondary">Source MRFs — add one or more; items for the selected supplier (or unassigned) will appear below</Typography>
+            <FormControl fullWidth size="small">
+              <InputLabel>Project (optional)</InputLabel>
+              <Select
+                value={selectedProjectId ?? ''}
+                label="Project (optional)"
+                onChange={(e) => setSelectedProjectId(e.target.value === '' ? null : String(e.target.value))}
+              >
+                <MenuItem value="">— No project —</MenuItem>
+                {projects.map((p) => (
+                  <MenuItem key={p.id} value={p.id}>
+                    {p.project_no ? `${p.project_no} — ` : ''}{p.project_name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <Typography variant="subtitle2" color="text.secondary">Source MRFs (optional) — add one or more; items for the selected supplier (or unassigned) will appear below</Typography>
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
               <FormControl size="small" sx={{ minWidth: 280 }}>
                 <InputLabel>Add MRF</InputLabel>
@@ -1365,8 +1411,8 @@ const PurchaseOrderPage: React.FC = () => {
               <Box>
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
                   {selectedSupplierId
-                    ? `Items for ${selectedSupplier?.name ?? 'this supplier'} (and unassigned) — select which to include, then enter unit price`
-                    : 'Items from MRF(s) — select a supplier above to see only items for that supplier, then include and enter unit price'}
+                    ? `Items from MRF(s) for ${selectedSupplier?.name ?? 'this supplier'} — select which to include, then enter unit price`
+                    : 'Items from MRF(s) — select a supplier above to filter by supplier, then include and enter unit price'}
                 </Typography>
                 <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
                   <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.75rem' } }}>
@@ -1410,25 +1456,62 @@ const PurchaseOrderPage: React.FC = () => {
                     </TableBody>
                   </Table>
                 </TableContainer>
-                {createDialogItems.length > 0 && (
-                  <Box sx={{ mt: 0.5 }}>
-                    {(() => {
-                      const { subtotal, discount, discountPercent, amountVatEx, vatAmount, grandTotal } = poAmounts({ items: createDialogItems, noVat, discount: createDiscount });
-                      return (
-                        <Typography variant="caption" color="text.secondary">
-                          Subtotal: {subtotal.toFixed(2)}
-                          {createDiscount > 0 && (
-                            <Typography component="span" variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                              {` · Discount (${discountPercent.toFixed(2)}%): PHP ${discount.toFixed(2)} · Amount (VAT EX): ${amountVatEx.toFixed(2)}`}
-                            </Typography>
-                          )}
-                          {!noVat && ` · 12% VAT: ${vatAmount.toFixed(2)} · Total: ${grandTotal.toFixed(2)}`}
-                          {noVat && ` · Total: ${grandTotal.toFixed(2)}`}
-                        </Typography>
-                      );
-                    })()}
-                  </Box>
-                )}
+              </Box>
+            )}
+            {/* Manual items (not from MRF) */}
+            {createDialogItems.filter((i) => !selectedMrfIds.some((mid) => i.id.startsWith(`${mid}-`))).length > 0 && (
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>Manual line items</Typography>
+                <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                  <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.75rem' } }}>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 600 }}>Description</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Part #</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Brand</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600 }}>Qty</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Unit</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600 }}>Unit Price</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600 }}>Total</TableCell>
+                        <TableCell width={40} />
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {createDialogItems
+                        .filter((i) => !selectedMrfIds.some((mid) => i.id.startsWith(`${mid}-`)))
+                        .map((i) => (
+                          <TableRow key={i.id}>
+                            <TableCell><TextField size="small" fullWidth value={i.description} onChange={(e) => updateCreateItem(i.id, { description: e.target.value })} placeholder="Description" /></TableCell>
+                            <TableCell><TextField size="small" fullWidth value={i.partNo} onChange={(e) => updateCreateItem(i.id, { partNo: e.target.value })} placeholder="Part #" /></TableCell>
+                            <TableCell><TextField size="small" fullWidth value={i.brand} onChange={(e) => updateCreateItem(i.id, { brand: e.target.value })} placeholder="Brand" /></TableCell>
+                            <TableCell><TextField size="small" type="number" value={i.quantity} onChange={(e) => updateCreateItem(i.id, { quantity: parseInt(e.target.value, 10) || 0 })} inputProps={{ min: 0 }} sx={{ width: 64 }} /></TableCell>
+                            <TableCell><TextField size="small" fullWidth value={i.unit} onChange={(e) => updateCreateItem(i.id, { unit: e.target.value })} placeholder="pcs" sx={{ width: 60 }} /></TableCell>
+                            <TableCell><TextField size="small" type="number" value={i.unitPrice ?? ''} onChange={(e) => updateCreateItem(i.id, { unitPrice: parseFloat(e.target.value) || 0 })} inputProps={{ min: 0, step: 0.01 }} sx={{ width: 90 }} /></TableCell>
+                            <TableCell align="right">{lineTotal(i).toFixed(2)}</TableCell>
+                            <TableCell><IconButton size="small" onClick={() => removeCreateItem(i.id)} color="error"><DeleteIcon fontSize="small" /></IconButton></TableCell>
+                          </TableRow>
+                        ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            )}
+            <Button size="small" startIcon={<AddIcon />} onClick={addCreateItem} sx={{ mt: 1 }}>
+              Add item manually
+            </Button>
+            {createDialogItems.length > 0 && (
+              <Box sx={{ mt: 0.5 }}>
+                {(() => {
+                  const { subtotal, discount, discountPercent, amountVatEx, vatAmount, grandTotal } = poAmounts({ items: createDialogItems, noVat, discount: createDiscount });
+                  return (
+                    <Typography variant="caption" color="text.secondary">
+                      Subtotal: {subtotal.toFixed(2)}
+                      {createDiscount > 0 && ` · Discount (${discountPercent.toFixed(2)}%): PHP ${discount.toFixed(2)} · Amount (VAT EX): ${amountVatEx.toFixed(2)}`}
+                      {!noVat && ` · 12% VAT: ${vatAmount.toFixed(2)} · Total: ${grandTotal.toFixed(2)}`}
+                      {noVat && ` · Total: ${grandTotal.toFixed(2)}`}
+                    </Typography>
+                  );
+                })()}
               </Box>
             )}
           </Box>
@@ -1438,7 +1521,7 @@ const PurchaseOrderPage: React.FC = () => {
           <Button
             variant="contained"
             onClick={handleCreatePO}
-            disabled={selectedMrfIds.length === 0 || !selectedSupplierId || createDialogItems.length === 0}
+            disabled={!selectedSupplierId || createDialogItems.length === 0}
             sx={{ bgcolor: '#2c5aa0', '&:hover': { bgcolor: '#1e4a72' } }}
           >
             Create PO

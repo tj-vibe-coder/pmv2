@@ -53,7 +53,7 @@ export interface OrderRecord {
   orderNo: string;
   poNumber: string;
   supplier: string;
-  projectId: number | null;
+  projectId: string | number | null;
   projectName: string;
   orderDate: string;
   expectedDelivery: string;
@@ -95,7 +95,7 @@ const OrderTrackerPage: React.FC = () => {
   const [orderNo, setOrderNo] = useState('');
   const [poNumber, setPoNumber] = useState('');
   const [supplier, setSupplier] = useState('');
-  const [projectId, setProjectId] = useState<number | ''>('');
+  const [projectId, setProjectId] = useState<string | ''>('');
   const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [expectedDelivery, setExpectedDelivery] = useState('');
   const [itemsSummary, setItemsSummary] = useState('');
@@ -110,7 +110,7 @@ const OrderTrackerPage: React.FC = () => {
     setOrders(loadStored());
   }, []);
 
-  const selectedProject = projects.find((p) => p.id === projectId);
+  const selectedProject = projectId !== '' ? projects.find((p) => String(p.id) === String(projectId)) : undefined;
   const projectName = selectedProject?.project_name ?? '';
 
   const filteredOrders = statusFilter === 'All'
@@ -138,7 +138,7 @@ const OrderTrackerPage: React.FC = () => {
       orderNo: no,
       poNumber: poNumber.trim(),
       supplier: supplier.trim(),
-      projectId: projectId === '' ? null : Number(projectId),
+      projectId: projectId === '' ? null : projectId,
       projectName: projectName || '—',
       orderDate: orderDate,
       expectedDelivery: expectedDelivery.trim() || '—',
@@ -475,7 +475,7 @@ const OrderTrackerPage: React.FC = () => {
               size="small"
               label="Project"
               value={projectId}
-              onChange={(e) => setProjectId(e.target.value === '' ? '' : Number(e.target.value))}
+              onChange={(e) => setProjectId(e.target.value)}
             >
               <MenuItem value="">— Select —</MenuItem>
               {projects.map((p) => (
