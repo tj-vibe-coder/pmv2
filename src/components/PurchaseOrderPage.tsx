@@ -236,9 +236,8 @@ function projectNoWithoutPrefix(projectNo: string): string {
 function getNextPONumber(projectId: string | number | null, existingPOs: PurchaseOrder[], projects: Project[]): string {
   const project = projectId != null ? projects.find((p) => String(p.id) === String(projectId)) : undefined;
   const projectNo = getProjectNo(project);
-  const baseNo = projectNoWithoutPrefix(projectNo) || projectNo || 'GEN';
-  // Global sequence: support "2602002-001", "IOCT2602002-PO-001", legacy formats
-  const regex = /-(\d+)\s*$|-PO-(\d+)\s*$| - PO - (\d+)\s*$|(?: - PO-No\.\s*)(\d+)\s*$/;
+  // Format: {fullProjectNo}-PO-{seq} e.g. IOCT2605002-PO-01
+  const regex = /-PO-(\d+)\s*$|-(\d+)\s*$| - PO - (\d+)\s*$|(?: - PO-No\.\s*)(\d+)\s*$/;
   let maxSeq = 0;
   for (const po of existingPOs) {
     const m = po.poNumber.match(regex);
@@ -249,7 +248,7 @@ function getNextPONumber(projectId: string | number | null, existingPOs: Purchas
   }
   const nextSeq = maxSeq + 1;
   const seqStr = String(nextSeq).padStart(2, '0');
-  return `${baseNo}-${seqStr}`;
+  return `${projectNo}-PO-${seqStr}`;
 }
 
 /** Optional mrfId prefixes item id so items from multiple MRFs stay unique (e.g. "mrf1-itemId"). */
@@ -395,11 +394,11 @@ async function exportPOToPDF(po: PurchaseOrder) {
     } catch (_) {}
   } else if (reportCompany === 'IOCT') {
     try {
-      const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
-      const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
+      const { loadLogoTransparentBackground, IOCT_ICON_LOGO_PDF_SIZE } = await import('../utils/logoUtils');
+      const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
       logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-      logoW = IOCT_LOGO_PDF_WIDTH;
-      logoH = IOCT_LOGO_PDF_HEIGHT;
+      logoW = IOCT_ICON_LOGO_PDF_SIZE;
+      logoH = IOCT_ICON_LOGO_PDF_SIZE;
     } catch (_) {}
   }
 
@@ -440,11 +439,7 @@ async function exportPOToPDF(po: PurchaseOrder) {
       ? String(po.orderDate).slice(2, 4)
       : String(new Date().getFullYear()).slice(-2);
   const seqDisplay = `${yy}-${seqNo}`;
-  const projectNoForDisplay =
-    po.projectNo && po.projectNo.trim() && po.projectNo !== '—' ? po.projectNo.trim() : null;
-  const baseNo = projectNoForDisplay ? projectNoWithoutPrefix(projectNoForDisplay) : null;
-  const displayPoNumber =
-    baseNo ? `${baseNo}-${seqNo}` : po.poNumber.replace(/\s*-\s*/g, '-').replace(/^IOCT/i, '').replace(/-PO-/i, '-');
+  const displayPoNumber = po.poNumber.trim();
 
   const rightX = 210 - margin;
   const bannerHeight = 6;
@@ -621,7 +616,7 @@ async function exportPOToPDF(po: PurchaseOrder) {
       formatPhp(amount),
     ];
   });
-  const tableFontSize = 6;
+  const tableFontSize = 8;
   autoTable(doc, {
     head: [headers],
     body: bodyRows,
