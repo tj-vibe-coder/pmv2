@@ -87,7 +87,7 @@ export interface MaterialRequestItem {
 export interface MaterialRequest {
   id: string;
   requestNo: string;
-  projectId: number | null;
+  projectId: string | number | null;
   projectName: string;
   projectPoNumber?: string;
   requestDate: string;
@@ -145,7 +145,7 @@ const parseMRFNumber = (requestNo: string): number => {
 const MaterialRequestFormPage: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [requests, setRequests] = useState<MaterialRequest[]>([]);
-  const [projectId, setProjectId] = useState<number | ''>('');
+  const [projectId, setProjectId] = useState<string | ''>('');
   const [requestDate, setRequestDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [dateNeeded, setDateNeeded] = useState('');
   const [requestedBy, setRequestedBy] = useState('');
@@ -173,7 +173,7 @@ const MaterialRequestFormPage: React.FC = () => {
     setPos(loadPOs());
   }, []);
 
-  const selectedProject = projects.find((p) => p.id === projectId);
+  const selectedProject = projectId !== '' ? projects.find((p) => String(p.id) === String(projectId)) : undefined;
   const projectName = selectedProject?.project_name ?? '';
   const projectNo = selectedProject
     ? (selectedProject.project_no || String(selectedProject.item_no ?? selectedProject.id))
@@ -185,18 +185,18 @@ const MaterialRequestFormPage: React.FC = () => {
       : Math.max(
           0,
           ...requests
-            .filter((r) => r.projectId === projectId)
+            .filter((r) => String(r.projectId) === String(projectId))
             .map((r) => parseMRFNumber(r.requestNo))
         ) + 1;
   const generatedRequestNo =
-    projectId && projectNo ? `${projectNo}-MRF-${nextMRFForProject}` : '';
+    projectId && projectNo ? `${projectNo}-MRF-${String(nextMRFForProject).padStart(2, '0')}` : '';
 
   const editingRequest = editingRequestId ? requests.find((r) => r.id === editingRequestId) : null;
   const displayRequestNo = editingRequest ? editingRequest.requestNo : generatedRequestNo;
 
   const handleLoadForEdit = (r: MaterialRequest) => {
     setEditingRequestId(r.id);
-    setProjectId(r.projectId ?? '');
+    setProjectId(r.projectId != null ? String(r.projectId) : '');
     setRequestDate(r.requestDate);
     setDateNeeded(r.dateNeeded ?? '');
     setRequestedBy(r.requestedBy ?? '');
@@ -656,7 +656,7 @@ const MaterialRequestFormPage: React.FC = () => {
   };
 
   const handleSubmit = (asDraft: boolean) => {
-    const pid = projectId === '' ? null : Number(projectId);
+    const pid = projectId === '' ? null : projectId;
     if (pid == null || !projectNo) {
       setMessage({ type: 'error', text: 'Please select a project to generate Request No.' });
       return;
@@ -795,7 +795,7 @@ const MaterialRequestFormPage: React.FC = () => {
               size="small"
               label="Project"
               value={projectId}
-              onChange={(e) => setProjectId(e.target.value === '' ? '' : Number(e.target.value))}
+              onChange={(e) => setProjectId(e.target.value)}
               helperText="Required to generate Request No."
             >
               <MenuItem value="">— Select project —</MenuItem>
