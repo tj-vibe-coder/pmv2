@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
+  Accordion, AccordionDetails, AccordionSummary,
   Alert, AlertTitle, Autocomplete, Box, Button, Chip, Divider, FormControlLabel, ListSubheader, MenuItem, Paper,
-  Snackbar, Stack, Switch, TableCell, TableRow, TextField, Typography,
+  Snackbar, Stack, Switch, TableCell, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import HistoryIcon from '@mui/icons-material/History';
@@ -12,6 +13,7 @@ import GridOnIcon from '@mui/icons-material/GridOn';
 import { useNavigate } from 'react-router-dom';
 import { nanoid } from 'nanoid';
 import { format } from 'date-fns';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import { useQuotationStore } from '../../store/quotationStore';
@@ -145,22 +147,23 @@ export default function QuotationEditor() {
   // margin excludes contingency — contingency is reported as a separate line
   // so the user can see the cushion without conflating it with earnings.
   //
-  // Stack on the selling-price side (subtotal): cost → +contingency → +markup.
+  // Stack on the selling-price side (subtotal): cost -> +contingency -> +markup.
   // markupOnly per category = subtotal − withContingency.
-  // Components have no contingency, so componentsWithContingency === cost.
   // Services bypass cost/contingency entirely when entered as flat amounts
   // (servicesFromManpower=false) — in that case there's no markup either.
   const marginSummary = useMemo(() => {
     if (!draft || !totals) return null;
     const servicesFromMP = !!draft.servicesFromManpower;
+    const componentsWithContingency = totals.componentsWithContingency ?? totals.componentsCost;
     const markupOnly =
       (totals.generalReqtsSubtotal - totals.generalReqtsWithContingency) +
-      (totals.componentsSubtotal - totals.componentsCost) +
+      (totals.componentsSubtotal - componentsWithContingency) +
       (servicesFromMP
         ? totals.servicesSubtotal - totals.laborWithContingency
         : 0);
     const contingency =
       (totals.generalReqtsWithContingency - totals.generalReqtsCost) +
+      (componentsWithContingency - totals.componentsCost) +
       (servicesFromMP ? totals.laborWithContingency - totals.laborCost : 0);
     const subtotal =
       totals.generalReqtsSubtotal +
@@ -249,6 +252,31 @@ export default function QuotationEditor() {
     setDraft((d) => d ? ({ ...d, [k]: v } as Quotation) : d);
   };
 
+  const setTermsOverride = (key: keyof NonNullable<Quotation['termsOverrides']>, value: string) => {
+    if (isLegacy) return;
+    setDraft((d) => {
+      if (!d) return d;
+      const existing = d.termsOverrides ?? {};
+      const updated = { ...existing, [key]: value || undefined };
+      return { ...d, termsOverrides: updated };
+    });
+  };
+
+  const setProductContingency = (value: number) => {
+    if (isLegacy) return;
+    setDraft((d) => {
+      if (!d) return d;
+      const previous = d.productContingencyPct ?? 0;
+      const components = d.components.map((line) => {
+        const isOverridden = !!line.contingencyPctOverridden || (line.contingencyPct ?? 0) !== previous;
+        return isOverridden
+          ? { ...line, contingencyPctOverridden: true }
+          : { ...line, contingencyPct: value, contingencyPctOverridden: false };
+      });
+      return { ...d, productContingencyPct: value, components };
+    });
+  };
+
   const handleSave = async () => {
     if (!isDirty || saving) return;
     setSaving(true);
@@ -304,7 +332,7 @@ export default function QuotationEditor() {
     commit('components', [
       ...quotation.components,
       { id: id(), code: '', description: '', brand: '', partNo: '',
-        qty: 1, uom: 'pc', unitCost: 0, forex: 1, contingencyPct: 0, discountPct: 0 },
+        qty: 1, uom: 'pc', unitCost: 0, forex: 1, contingencyPct: quotation.productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0 },
     ] as ComponentLine[]);
 
   const compCols: Column<ComponentLine>[] = [
@@ -316,6 +344,7 @@ export default function QuotationEditor() {
     { key: 'uom', label: 'UOM', width: 60 },
     { key: 'unitCost', label: 'Unit Cost', width: 110, type: 'number', align: 'right', step: 0.01 },
     { key: 'forex', label: 'FX', width: 60, type: 'number', align: 'right', step: 0.0001 },
+    { key: 'contingencyPct', label: 'Cont %', width: 80, type: 'number', align: 'right', step: 0.01 },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
       render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
     { key: 'total', label: 'Total', width: 130, align: 'right',
@@ -431,7 +460,11 @@ export default function QuotationEditor() {
 
   const updateRow = (section: Section, idx: number, key: any, value: any) => {
     const list = [...(quotation as any)[section]];
-    list[idx] = { ...list[idx], [key]: value };
+    list[idx] = {
+      ...list[idx],
+      [key]: value,
+      ...(section === 'components' && key === 'contingencyPct' ? { contingencyPctOverridden: true } : {}),
+    };
     // Don't renumber on field edits — only on structural changes (add/delete/reorder)
     setField(section, list);
   };
@@ -445,6 +478,10 @@ export default function QuotationEditor() {
   };
 
   const isCustomPayment = !PAYMENT_TERM_OPTIONS.includes(quotation.paymentTerms);
+  const generalReqtsExportQty = Math.max(1, quotation.generalReqtsExportQty || 1);
+  const generalReqtsExportUnitPrice = totals.generalReqtsSubtotal / generalReqtsExportQty;
+  const engineeringServicesQty = Math.max(1, quotation.engineeringServicesQty || 1);
+  const engineeringServicesUnitPrice = totals.servicesSubtotal / engineeringServicesQty;
 
   // OneDrive auto-upload on export. The PDF is always saved locally first;
   // upload to the project's OneDrive folder is best-effort (gated on:
@@ -731,6 +768,18 @@ export default function QuotationEditor() {
                     />
                   )}
                 />
+                <Tooltip title="Overrides the auto-resolved job title shown in the PDF signature block. Leave blank to use the title from the team member's contact record.">
+                  <TextField
+                    label="Job Title (PDF signature)"
+                    size="small"
+                    fullWidth
+                    disabled={isLegacy}
+                    value={quotation.preparedByTitle ?? ''}
+                    onChange={(e) => setField('preparedByTitle', e.target.value || undefined)}
+                    placeholder={(() => { const c = quotation.preparedBy ? effectiveSalesContacts.find((x) => x.name === quotation.preparedBy) : undefined; return c?.position || 'e.g. Sales Engineer'; })()}
+                    helperText="Leave blank to auto-resolve from team member record"
+                  />
+                </Tooltip>
                 <Autocomplete
                   freeSolo
                   options={effectiveSalesContacts.map((c) => c.name).filter(Boolean)}
@@ -754,20 +803,93 @@ export default function QuotationEditor() {
         </Box>
       </Paper>
 
+      {/* Terms & Conditions overrides */}
+      {!isLegacy && (
+        <Accordion disableGutters elevation={1} sx={{ '&:before': { display: 'none' }, borderRadius: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+              Terms &amp; Conditions
+              {quotation.termsOverrides && Object.values(quotation.termsOverrides).some(Boolean) && (
+                <Chip label="custom" size="small" color="warning" sx={{ ml: 1, height: 18, fontSize: 11 }} />
+              )}
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Stack spacing={2}>
+              <Typography variant="caption" color="text.secondary">
+                Leave any field blank to use the default text. Filled fields override the matching section in the exported PDF.
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    size="small"
+                    checked={!!quotation.pageBreakBeforeTerms}
+                    onChange={(e) => setField('pageBreakBeforeTerms', e.target.checked)}
+                    disabled={isLegacy}
+                  />
+                }
+                label={<Typography variant="caption">Start Terms on new PDF page</Typography>}
+              />
+              <TextField
+                label="Scope of Work"
+                multiline
+                minRows={3}
+                fullWidth
+                value={quotation.termsOverrides?.scopeOfWork ?? ''}
+                onChange={(e) => setTermsOverride('scopeOfWork', e.target.value)}
+                placeholder="- The scope of work shall be limited strictly to the items, specifications, and services explicitly stated in this proposal. Any additional works, modifications, or deviations not covered herein shall be treated as a Variation Order and shall be subject to separate quotation, approval, and corresponding adjustment in price and delivery schedule."
+                helperText="Replaces the default Scope of Work paragraph"
+              />
+              <TextField
+                label="Basis of Proposal"
+                multiline
+                minRows={3}
+                fullWidth
+                value={quotation.termsOverrides?.basisOfProposal ?? ''}
+                onChange={(e) => setTermsOverride('basisOfProposal', e.target.value)}
+                placeholder={`- This offer is based on the technical documents, drawings, specifications, and other references provided by the Client at the time of quotation. ${quotation.kind === 'ACTI' ? 'Advance Controle Technologie Inc.' : 'IO Control Technologie OPC'} reserves the right to revise pricing, scope, and schedule should there be significant changes, inconsistencies, or incomplete information discovered after award.`}
+                helperText="Replaces the default Basis of Proposal paragraph"
+              />
+              <TextField
+                label="Delivery — all bullet lines"
+                multiline
+                minRows={3}
+                fullWidth
+                value={quotation.termsOverrides?.deliveryLines ?? ''}
+                onChange={(e) => setTermsOverride('deliveryLines', e.target.value)}
+                placeholder={`- ${quotation.deliveryTerms || 'Delivery is 1-2 weeks, upon receipt of a technically and commercially clarified purchase order.'}\n- Delivery terms shall be DDP – Client's Plant Site, unless otherwise specified.`}
+                helperText="Replaces ALL delivery bullet lines. Each line on its own row (start with '- '). Leave blank to use the Delivery Terms field above plus the default DDP line."
+              />
+              <TextField
+                label="Warranty exclusion clause"
+                multiline
+                minRows={2}
+                fullWidth
+                value={quotation.termsOverrides?.warrantyExclusion ?? ''}
+                onChange={(e) => setTermsOverride('warrantyExclusion', e.target.value)}
+                placeholder="- Warranty excludes improper installation, unauthorized modifications, misuse, abnormal conditions, power surges, environmental damage, or force majeure events."
+                helperText="Replaces the default warranty-exclusion sentence (the coverage sentence above it stays driven by the Warranty months field)"
+              />
+            </Stack>
+          </AccordionDetails>
+        </Accordion>
+      )}
+
       {/* Markup, Contingency & Tax */}
       <Paper sx={{ p: 2 }}>
         <Stack spacing={2}>
           <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Markups, Contingency & Tax</Typography>
           <Box>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-              Markup applied per category. Global contingency adds a buffer on Labor and General Requirements only
-              (Components carry their own per-line contingency in Section B).
+              Product contingency seeds Section B rows and can be overridden per product line.
+              Manpower-priced Engineering Services use manpower cost per LOT multiplied by Qty.
             </Typography>
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
               <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} sx={{ width: 150 }} disabled={isLegacy} />
-              <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => setField('laborMarkupPct', v)} sx={{ width: 150 }} disabled={isLegacy} />
+              <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} sx={{ width: 180 }} helperText="Default for product rows" disabled={isLegacy} />
+              <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => setField('laborMarkupPct', v)} sx={{ width: 150 }} helperText="Not applied to manpower pricing" disabled={isLegacy} />
               <NumField label="Gen. Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} sx={{ width: 160 }} disabled={isLegacy} />
-              <NumField label="Global Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} sx={{ width: 170 }} helperText="Labor + Gen Req only" disabled={isLegacy} />
+              <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} sx={{ width: 170 }} helperText="Not applied to manpower pricing" disabled={isLegacy} />
               <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} sx={{ width: 130 }} disabled={isLegacy} />
               <Stack direction="row" spacing={1} alignItems="center">
                 <FormControlLabel
@@ -804,8 +926,23 @@ export default function QuotationEditor() {
                   disabled={isLegacy}
                 />
               }
-              label={<Typography variant="caption">Export as 1 LOT in PDF</Typography>}
+              label={<Typography variant="caption">Group in PDF/Excel</Typography>}
             />
+            {!!quotation.exportGeneralReqtsAsLot && (
+              <Stack direction="row" spacing={1} alignItems="center">
+                <NumField
+                  label="Qty"
+                  value={generalReqtsExportQty}
+                  onChange={(v) => setField('generalReqtsExportQty', Math.max(1, v))}
+                  integer
+                  sx={{ width: 86 }}
+                  disabled={isLegacy}
+                />
+                <Typography variant="caption" color="text.secondary">
+                  Unit: {PHP(generalReqtsExportUnitPrice)} / LOT
+                </Typography>
+              </Stack>
+            )}
           </Stack>
           {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addGeneral}>Add row</Button>}
         </Stack>
@@ -824,8 +961,17 @@ export default function QuotationEditor() {
                 <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(totals.generalReqtsCost)}</TableCell>
                 <TableCell />
               </TableRow>
+              {!!quotation.exportGeneralReqtsAsLot && (
+                <TableRow sx={{ bgcolor: 'grey.50' }}>
+                  <TableCell colSpan={5} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                    Unit Price / LOT
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(generalReqtsExportUnitPrice)}</TableCell>
+                  <TableCell />
+                </TableRow>
+              )}
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={5} align="right" sx={{ fontWeight: 600 }}>Subtotal (w/ contingency + markup)</TableCell>
+                <TableCell colSpan={5} align="right" sx={{ fontWeight: 600 }}>Subtotal (with markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.generalReqtsSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
@@ -851,12 +997,12 @@ export default function QuotationEditor() {
           footer={
             <>
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={9} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no markup)</TableCell>
+                <TableCell colSpan={10} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no contingency/markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(totals.componentsCost)}</TableCell>
                 <TableCell />
               </TableRow>
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={9} align="right" sx={{ fontWeight: 600 }}>Subtotal (with markup)</TableCell>
+                <TableCell colSpan={10} align="right" sx={{ fontWeight: 600 }}>Subtotal (with contingency + markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.componentsSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
@@ -879,6 +1025,21 @@ export default function QuotationEditor() {
               control={<Switch size="small" checked={quotation.servicesFromManpower} onChange={(e) => setField('servicesFromManpower', e.target.checked)} disabled={isLegacy} />}
               label={<Typography variant="caption">Price from manpower</Typography>}
             />
+            {quotation.servicesFromManpower && (
+              <Stack direction="row" spacing={1} alignItems="center">
+                <NumField
+                  label="Qty"
+                  value={engineeringServicesQty}
+                  onChange={(v) => setField('engineeringServicesQty', Math.max(1, v))}
+                  integer
+                  sx={{ width: 86 }}
+                  disabled={isLegacy}
+                />
+                <Typography variant="caption" color="text.secondary">
+                  Unit: {PHP(engineeringServicesUnitPrice)} / LOT
+                </Typography>
+              </Stack>
+            )}
             {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addService}>Add scope item</Button>}
           </Stack>
         </Stack>
@@ -911,7 +1072,7 @@ export default function QuotationEditor() {
               <Typography variant="body2" sx={{ fontWeight: 600 }}>Manpower (cost basis)</Typography>
               <Stack direction="row" spacing={2} alignItems="center">
                 <Typography variant="caption" color="text.secondary">
-                  Subtotal = Manpower cost × (1 + {quotation.laborMarkupPct}%)
+                  Subtotal = Manpower cost / LOT × {engineeringServicesQty} LOT
                 </Typography>
                 {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addManpower}>Add manpower</Button>}
               </Stack>
@@ -927,8 +1088,28 @@ export default function QuotationEditor() {
               footer={
                 <>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Manpower Cost</TableCell>
-                    <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(manpowerTotalCost(quotation.manpower))}</TableCell>
+                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                      {engineeringServicesQty > 1 ? 'Manpower Cost / LOT' : 'Manpower Cost'}
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
+                      {PHP(manpowerTotalCost(quotation.manpower))}
+                    </TableCell>
+                    <TableCell />
+                  </TableRow>
+                  {engineeringServicesQty > 1 && (
+                    <TableRow sx={{ bgcolor: 'grey.50' }}>
+                      <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                        Total Manpower Cost ({engineeringServicesQty} LOT)
+                      </TableCell>
+                      <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(totals.laborCost)}</TableCell>
+                      <TableCell />
+                    </TableRow>
+                  )}
+                  <TableRow sx={{ bgcolor: 'grey.50' }}>
+                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                      Unit Price / LOT
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(engineeringServicesUnitPrice)}</TableCell>
                     <TableCell />
                   </TableRow>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
@@ -995,17 +1176,17 @@ export default function QuotationEditor() {
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 2 }}>
           <BreakdownCard label="A. General Req." color="primary"
             cost={totals.generalReqtsCost}
-            contingency={totals.generalReqtsWithContingency - totals.generalReqtsCost}
-            contingencyPct={quotation.globalContingencyPct}
+            contingency={null}
+            contingencyPct={null}
             markup={totals.generalReqtsSubtotal - totals.generalReqtsWithContingency}
             markupPct={quotation.generalReqMarkupPct}
             subtotal={totals.generalReqtsSubtotal}
           />
           <BreakdownCard label="B. Components" color="secondary"
             cost={totals.componentsCost}
-            contingency={null}
-            contingencyPct={null}
-            markup={totals.componentsSubtotal - totals.componentsCost}
+            contingency={(totals.componentsWithContingency ?? totals.componentsCost) - totals.componentsCost}
+            contingencyPct={quotation.productContingencyPct ?? 0}
+            markup={totals.componentsSubtotal - (totals.componentsWithContingency ?? totals.componentsCost)}
             markupPct={quotation.productMarkupPct}
             subtotal={totals.componentsSubtotal}
           />

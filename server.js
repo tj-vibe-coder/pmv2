@@ -1555,11 +1555,12 @@ function quotationGrandTotal(q) {
   if (q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.grandTotal))) {
     return Number(q.legacyTotalsSnapshot.grandTotal);
   }
-  const cont = Number(q.globalContingencyPct || 0) / 100;
+  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, Number(q.generalReqtsExportQty || 1)) : 1;
+  const engineeringServicesQty = q.servicesFromManpower !== false ? Math.max(1, Number(q.engineeringServicesQty || 1)) : 1;
   const generalReqtsCost = (q.generalReqts || []).reduce((sum, line) => {
     return sum + Number(line.unitPrice || 0) * Number(line.qty || 0);
   }, 0);
-  const generalReqtsSubtotal = generalReqtsCost * (1 + cont) * (1 + Number(q.generalReqMarkupPct || 0) / 100);
+  const generalReqtsSubtotal = generalReqtsCost * generalReqtsQty * (1 + Number(q.generalReqMarkupPct || 0) / 100);
   const componentsSubtotal = (q.components || []).reduce((sum, line) => {
     const base = Number(line.unitCost || 0) * Number(line.forex || 1);
     const adjusted = base * (1 + Number(line.contingencyPct || 0) / 100) * (1 - Number(line.discountPct || 0) / 100);
@@ -1569,7 +1570,7 @@ function quotationGrandTotal(q) {
     return sum + Number(row.headcount || 0) * Number(row.mandays || 0) * (Number(row.dailyRate || 0) + Number(row.allowance || 0));
   }, 0);
   const servicesSubtotal = q.servicesFromManpower !== false
-    ? manpowerCost * (1 + cont) * (1 + Number(q.laborMarkupPct || 0) / 100)
+    ? manpowerCost * engineeringServicesQty
     : (q.services || []).reduce((sum, line) => sum + Number(line.amount || 0), 0);
   const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSubtotal;
   const afterDiscount = subtotal * (1 - Number(q.discountPct || 0) / 100);
@@ -2026,6 +2027,23 @@ app.delete('/api/calcsheet/presets/:id', async (req, res) => {
     await db.collection('calcsheet_presets').doc(req.params.id).delete();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete preset' }); }
+});
+
+// ── Calcsheet settings (default job titles, etc.) ────────────────────────────
+app.get('/api/calcsheet/settings', async (req, res) => {
+  try {
+    const doc = await db.collection('calcsheet_meta').doc('settings').get();
+    res.json({ success: true, settings: doc.exists ? doc.data() : {} });
+  } catch (err) { res.status(500).json({ error: 'Failed to get settings' }); }
+});
+
+app.put('/api/calcsheet/settings', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    await db.collection('calcsheet_meta').doc('settings').set(req.body, { merge: true });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to save settings' }); }
 });
 
 // ── Sequence counter (for quotation code generation) ─────────────────────────

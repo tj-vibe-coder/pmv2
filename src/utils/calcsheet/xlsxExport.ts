@@ -22,6 +22,10 @@ export async function exportQuotationXlsx(
 
   const totals = computeTotals(quotation);
   const refNo = `${project.code.replace(/-[A-Z]{3}-\d{2}$/, '')}-${(recipient?.code ?? 'XXX').slice(0, 3)}-${quotation.revision}`;
+  const generalReqtsExportQty = Math.max(1, quotation.generalReqtsExportQty || 1);
+  const generalReqtsExportUnitPrice = totals.generalReqtsSubtotal / generalReqtsExportQty;
+  const engineeringServicesQty = Math.max(1, quotation.engineeringServicesQty || 1);
+  const engineeringServicesUnitPrice = totals.servicesSubtotal / engineeringServicesQty;
 
   // Header sheet (quotation summary)
   const ws = wb.addWorksheet('Quotation', {
@@ -94,12 +98,29 @@ export async function exportQuotationXlsx(
   if (quotation.generalReqts.length) {
     sectionHeader('A. GENERAL REQUIREMENTS');
     tableHeader(['Code', 'Description', 'Qty', 'UOM', 'Unit Price', 'Total']);
-    quotation.generalReqts.forEach((l) => {
-      ws.getRow(r).values = [l.code, l.description, l.qty, l.uom, l.unitPrice, lineGeneralTotal(l)];
-      ws.getCell(r, 5).numFmt = PHP_FMT;
-      ws.getCell(r, 6).numFmt = PHP_FMT;
-      r++;
-    });
+    if (quotation.exportGeneralReqtsAsLot) {
+      const displayIdx = Math.max(0, Math.floor((quotation.generalReqts.length - 1) / 2));
+      quotation.generalReqts.forEach((l, i) => {
+        ws.getRow(r).values = [
+          l.code,
+          l.description,
+          i === displayIdx ? generalReqtsExportQty : '',
+          i === displayIdx ? 'lot' : '',
+          i === displayIdx ? generalReqtsExportUnitPrice : '',
+          i === displayIdx ? totals.generalReqtsSubtotal : '',
+        ];
+        ws.getCell(r, 5).numFmt = PHP_FMT;
+        ws.getCell(r, 6).numFmt = PHP_FMT;
+        r++;
+      });
+    } else {
+      quotation.generalReqts.forEach((l) => {
+        ws.getRow(r).values = [l.code, l.description, l.qty, l.uom, l.unitPrice, lineGeneralTotal(l)];
+        ws.getCell(r, 5).numFmt = PHP_FMT;
+        ws.getCell(r, 6).numFmt = PHP_FMT;
+        r++;
+      });
+    }
     ws.getRow(r).values = ['', '', '', '', 'Subtotal', totals.generalReqtsSubtotal];
     ws.getCell(r, 5).font = { bold: true };
     ws.getCell(r, 6).font = { bold: true };
@@ -135,7 +156,7 @@ export async function exportQuotationXlsx(
     sectionHeader('C. ENGINEERING SERVICES');
     tableHeader(['Code', 'Description', 'Qty', 'UOM', 'Unit Price', 'Total']);
     if (quotation.servicesFromManpower) {
-      ws.getRow(r).values = ['C-0010', 'Engineering Services', 1, 'lot', totals.servicesSubtotal, totals.servicesSubtotal];
+      ws.getRow(r).values = ['C-0010', 'Engineering Services', engineeringServicesQty, 'lot', engineeringServicesUnitPrice, totals.servicesSubtotal];
       ws.getCell(r, 5).numFmt = PHP_FMT;
       ws.getCell(r, 6).numFmt = PHP_FMT;
       r++;

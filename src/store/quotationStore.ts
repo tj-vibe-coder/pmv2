@@ -20,6 +20,19 @@ import { ensureProposalFolder, ensureExecutionFolder, moveProposalToExecution } 
 const API_BASE = process.env.REACT_APP_API_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
 const BASE = `${API_BASE}/api/calcsheet`;
 
+const normalizeLaborPresets = (presets: LaborRolePreset[]): LaborRolePreset[] =>
+  presets.map((p) => {
+    if (
+      p.group === 'labor' &&
+      p.allowance === 250 &&
+      p.dailyRate === 1500 &&
+      ['Technician', 'Electrician', 'Safety Officer'].includes(p.role)
+    ) {
+      return { ...p, dailyRate: 1200 };
+    }
+    return p;
+  });
+
 function authHeaders(): HeadersInit {
   const token = localStorage.getItem('netpacific_token');
   return token
@@ -43,6 +56,13 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
   return res.json();
 }
 
+export interface CalcsheetSettings {
+  defaultJobTitles?: {
+    IOCT?: string;
+    ACTI?: string;
+  };
+}
+
 interface State {
   clients: Client[];
   salesContacts: SalesContact[];
@@ -50,6 +70,7 @@ interface State {
   projects: Project[];
   quotations: Quotation[];
   seq: number;
+  settings: CalcsheetSettings;
   initialized: boolean;
 }
 
@@ -81,6 +102,9 @@ interface Actions {
   updatePreset: (id: ID, patch: Partial<LaborRolePreset>) => Promise<void>;
   deletePreset: (id: ID) => Promise<void>;
   resetPresets: () => Promise<void>;
+
+  // Settings
+  updateSettings: (patch: CalcsheetSettings) => Promise<void>;
 
   resetAll: () => Promise<void>;
 }
@@ -170,6 +194,7 @@ const blankQuotation = (
   deliveryTerms: 'Delivery is 1-2 weeks, upon receipt of a technically and commercially clarified purchase order.',
   warrantyMonths: 12,
   productMarkupPct: 30,
+  productContingencyPct: 0,
   laborMarkupPct: 30,
   generalReqMarkupPct: 0,
   globalContingencyPct: 0,
@@ -180,6 +205,10 @@ const blankQuotation = (
   services: [],
   manpower: [],
   servicesFromManpower: true,
+  engineeringServicesQty: 1,
+  exportGeneralReqtsAsLot: true,
+  generalReqtsExportQty: 1,
+  pageBreakBeforeTerms: false,
   preparedBy: defaultSignatoryName,
   authorizedBy: defaultSignatoryName,
   createdAt: now(),
@@ -193,18 +222,20 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
   projects: [],
   quotations: [],
   seq: 1,
+  settings: {},
   initialized: false,
 
   init: async () => {
     if (get().initialized) return;
     try {
-      const [pRes, qRes, cRes, prRes, sRes, staffRes] = await Promise.all([
+      const [pRes, qRes, cRes, prRes, sRes, staffRes, stRes] = await Promise.all([
         api<{ projects: Project[] }>('GET', '/projects'),
         api<{ quotations: Quotation[] }>('GET', '/quotations'),
         api<{ clients: Client[] }>('GET', '/clients'),
         api<{ presets: LaborRolePreset[] }>('GET', '/presets'),
         api<{ seq: number }>('GET', '/seq'),
         api<{ contacts: Array<{ id: string; full_name?: string | null; username?: string; email?: string | null; designation?: string | null; contact_number?: string | null }> }>('GET', '/api/users/staff-contacts').catch(() => ({ contacts: [] })),
+        api<{ settings: CalcsheetSettings }>('GET', '/settings').catch(() => ({ settings: {} })),
       ]);
       const salesContacts = mergeSalesContactsWithUsers(seedSalesContacts(), staffRes.contacts ?? []);
       set({
@@ -212,8 +243,9 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
         quotations: qRes.quotations ?? [],
         clients: cRes.clients.length ? cRes.clients : seedClients(),
         salesContacts,
-        laborPresets: prRes.presets.length ? prRes.presets : seedLaborPresets(),
+        laborPresets: prRes.presets.length ? normalizeLaborPresets(prRes.presets) : seedLaborPresets(),
         seq: sRes.seq ?? 1,
+        settings: stRes.settings ?? {},
         initialized: true,
       });
     } catch {
@@ -430,7 +462,8 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
     const amName = project?.salesContactId
       ? (get().salesContacts.find((sc) => sc.id === project.salesContactId)?.name ?? '')
       : '';
-    const q = blankQuotation(projectId, kind, recipientId, nanoid(8), amName);
+    const defaultTitle = get().settings.defaultJobTitles?.[kind] || undefined;
+    const q: Quotation = { ...blankQuotation(projectId, kind, recipientId, nanoid(8), amName), preparedByTitle: defaultTitle };
     const res = await api<{ quotation: Quotation }>('POST', '/quotations', q);
     const saved = res.quotation ?? q;
     set({ quotations: [...get().quotations, saved] });
@@ -517,6 +550,11 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       defaults.map((p) => api<{ preset: LaborRolePreset }>('POST', '/presets', p).then((r) => r.preset ?? p)),
     );
     set({ laborPresets: saved });
+  },
+
+  updateSettings: async (patch) => {
+    await api('PUT', '/settings', patch);
+    set((s) => ({ settings: { ...s.settings, ...patch, defaultJobTitles: { ...s.settings.defaultJobTitles, ...patch.defaultJobTitles } } }));
   },
 
   resetAll: async () => {

@@ -2,6 +2,114 @@
 
 ---
 
+## 2026-06-03 — Manual Terms PDF Page Break
+
+### Summary
+
+Added a quotation-level `pageBreakBeforeTerms` layout flag. The Terms & Conditions accordion now includes a `Start Terms on new PDF page` switch, and the PDF exporter applies a page break before the Terms block when enabled.
+
+### Files Changed
+
+- `src/types/Quotation.ts`
+- `src/store/quotationStore.ts`
+- `src/components/calcsheet/CalcsheetQuotationEditor.tsx`
+- `src/utils/calcsheet/pdfExport.tsx`
+- `docs/agent/PROJECT_STATE.md`
+- `docs/agent/TASK_LOG.md`
+
+### Result
+
+Users can manually force Terms & Conditions onto a new PDF page for proposal layouts that look better with a section break.
+
+---
+
+## 2026-06-03 — General Requirements Grouped Export Quantity
+
+### Summary
+
+Added `generalReqtsExportQty` for grouped General Requirements export. When `Group in PDF/Excel` is enabled, the editor shows a compact Qty field and unit price per LOT. The current-formula GenReq subtotal now multiplies by that quantity, and PDF/XLSX exports place the grouped quantity, unit price, and multiplied total on the middle GenReq row.
+
+### Files Changed
+
+- `src/types/Quotation.ts`
+- `src/store/quotationStore.ts`
+- `src/components/calcsheet/CalcsheetQuotationEditor.tsx`
+- `src/utils/calcsheet/pdfExport.tsx`
+- `src/utils/calcsheet/xlsxExport.ts`
+- `docs/agent/PROJECT_STATE.md`
+- `docs/agent/TASK_LOG.md`
+
+### Result
+
+Grouped General Requirements now calculate and export as `N LOT × unit price = subtotal`.
+
+---
+
+## 2026-06-03 — Engineering Services Export LOT Quantity
+
+### Summary
+
+Added `engineeringServicesQty` for manpower-priced Engineering Services. The quotation editor now exposes a compact Qty field and unit price per LOT. The current-formula services subtotal now multiplies manpower cost per LOT by that quantity, without applying an extra labor contingency/markup layer, and PDF/XLSX exports show the quantity, unit price, and multiplied total.
+
+### Files Changed
+
+- `src/types/Quotation.ts`
+- `src/store/quotationStore.ts`
+- `src/components/calcsheet/CalcsheetQuotationEditor.tsx`
+- `src/utils/calcsheet/pdfExport.tsx`
+- `src/utils/calcsheet/xlsxExport.ts`
+- `docs/agent/PROJECT_STATE.md`
+- `docs/agent/TASK_LOG.md`
+
+### Result
+
+Engineering Services now calculate and export as `N LOT × manpower unit price = subtotal`.
+
+---
+
+## 2026-06-03 — Calcsheet Product Contingency and GenReq Formula Update
+
+### Summary
+
+Removed current-formula contingency from General Requirements. Added Product Contingency as a default for Section B product rows, exposed each product row's `Cont %` inline, and separated product contingency from product markup in the internal margin breakdown. Manpower-priced Engineering Services use manpower cost per LOT directly.
+
+### Files Changed
+
+- `src/types/Quotation.ts`
+- `src/utils/calcsheet/calc.ts`
+- `src/store/quotationStore.ts`
+- `src/components/calcsheet/CalcsheetQuotationEditor.tsx`
+- `server.js`
+- `functions/server.js`
+- `docs/agent/PROJECT_STATE.md`
+- `docs/agent/TASK_LOG.md`
+
+### Result
+
+Existing quotations keep their saved line values. Product Contingency updates only product rows still following the quotation default; rows edited inline keep their own contingency percentage.
+
+---
+
+## 2026-06-03 — Calcsheet Labor Preset Rate Correction
+
+### Summary
+
+Updated the default Calcsheet manpower presets to match the reference manpower sheet: Technician, Electrician, and Safety Officer now use a ₱1,200 daily rate with ₱250 allowance. Added a narrow preset normalizer so old persisted default preset docs with the previous ₱1,500 rate load as ₱1,200 for future manpower selections only.
+
+### Files Changed
+
+- `src/data/quotationPresets.ts`
+- `src/store/quotationStore.ts`
+- `src/components/calcsheet/CalcsheetPresets.tsx`
+- `docs/agent/PROJECT_STATE.md`
+- `docs/agent/TASK_LOG.md`
+
+### Result
+
+Existing quotation manpower rows are not rewritten. Legacy imported quotations remain tagged through `formulaVersion: 'legacy'`; new/current quotations keep their stored row rates when saved.
+
+---
+
 ## 2026-05-27 — Collections & AR Integration, Progress Updates, and Bidirectional Navigation
 
 ### Summary

@@ -87,6 +87,7 @@ export interface ComponentLine {
   unitCost: number;
   forex: number;
   contingencyPct: number;
+  contingencyPctOverridden?: boolean;
   discountPct: number;
 }
 
@@ -129,6 +130,7 @@ export interface Quotation {
   deliveryTerms: string;
   warrantyMonths: number;
   productMarkupPct: number;
+  productContingencyPct?: number;
   laborMarkupPct: number;
   generalReqMarkupPct: number;
   globalContingencyPct: number;
@@ -139,10 +141,20 @@ export interface Quotation {
   services: ServiceLine[];
   manpower: ManpowerEntry[];
   servicesFromManpower: boolean;
+  engineeringServicesQty?: number;
   preparedBy?: string;
+  preparedByTitle?: string;       // override the auto-resolved job title in the PDF signature block
   authorizedBy?: string;
+  termsOverrides?: {
+    scopeOfWork?: string;         // replaces the hardcoded Scope of Work paragraph
+    basisOfProposal?: string;     // replaces the hardcoded Basis of Proposal paragraph
+    deliveryLines?: string;       // replaces ALL delivery bullet lines (newline-separated, each already starts with "- ")
+    warrantyExclusion?: string;   // replaces the hardcoded warranty-exclusion sentence
+  };
   notes?: string;
   exportGeneralReqtsAsLot?: boolean;
+  generalReqtsExportQty?: number;
+  pageBreakBeforeTerms?: boolean;
   formulaVersion?: FormulaVersion;
   generalReqContingencyMode?: 'standard' | 'baked';
   importedFrom?: QuotationImportMeta;
@@ -157,6 +169,7 @@ export interface QuotationTotals {
   generalReqtsSubtotal: number;
 
   componentsCost: number;
+  componentsWithContingency?: number;
   componentsSubtotal: number;
 
   laborCost: number;

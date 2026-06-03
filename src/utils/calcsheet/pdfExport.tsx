@@ -229,6 +229,10 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
   const hasB = quotation.components.length > 0;
   const hasC = quotation.services.length > 0 || totals.servicesSubtotal > 0;
   const exportGeneralReqtsAsLot = !!quotation.exportGeneralReqtsAsLot;
+  const generalReqtsExportQty = Math.max(1, quotation.generalReqtsExportQty || 1);
+  const generalReqtsExportUnitPrice = totals.generalReqtsSubtotal / generalReqtsExportQty;
+  const engineeringServicesQty = Math.max(1, quotation.engineeringServicesQty || 1);
+  const engineeringServicesUnitPrice = totals.servicesSubtotal / engineeringServicesQty;
 
   // Authorized by (with optional staff contact info from the salesContacts seed)
   // Signatory shown on the PDF is the "Prepared by" name from the quotation editor.
@@ -236,6 +240,9 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
   // signatory is shown on the issuer side.)
   const prepName = quotation.preparedBy || '';
   const staff = lookupStaff(prepName, salesContacts);
+  // Job title: explicit override wins, then resolved from salesContacts, then nothing.
+  const prepTitle = quotation.preparedByTitle?.trim() || staff?.title || '';
+  const to = quotation.termsOverrides ?? {};
 
   // Resolve which contact the quotation addresses (explicit contactId or primary)
   const recipContact = resolveContact(recipient, quotation.contactId);
@@ -320,9 +327,9 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   <View style={styles.tr} key={l.id}>
                     <Text style={styles.cItem}>{l.code}</Text>
                     <Text style={styles.cDesc}>{l.description}</Text>
-                    <Text style={styles.cQty}>{showLotTotal ? '1' : ''}</Text>
+                    <Text style={styles.cQty}>{showLotTotal ? String(generalReqtsExportQty) : ''}</Text>
                     <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
-                    <Text style={styles.cUnit}>{showLotTotal ? PHP(totals.generalReqtsSubtotal) : ''}</Text>
+                    <Text style={styles.cUnit}>{showLotTotal ? PHP(generalReqtsExportUnitPrice) : ''}</Text>
                     <Text style={styles.cTotal}>{showLotTotal ? PHP(totals.generalReqtsSubtotal) : ''}</Text>
                   </View>
                 );
@@ -408,9 +415,9 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   <View style={styles.tr} key={l.id}>
                     <Text style={styles.cItem}>{l.code}</Text>
                     <Text style={styles.cDesc}>{l.description}</Text>
-                    <Text style={styles.cQty}>{showLotTotal ? '1' : ''}</Text>
+                    <Text style={styles.cQty}>{showLotTotal ? String(engineeringServicesQty) : ''}</Text>
                     <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
-                    <Text style={styles.cUnit}>{showLotTotal ? PHP(totals.servicesSubtotal) : ''}</Text>
+                    <Text style={styles.cUnit}>{showLotTotal ? PHP(engineeringServicesUnitPrice) : ''}</Text>
                     <Text style={styles.cTotal}>{showLotTotal ? PHP(totals.servicesSubtotal) : ''}</Text>
                   </View>
                 );
@@ -502,22 +509,22 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
         </View>
 
         {/* ─── TERMS AND CONDITIONS ─── */}
-        <View style={styles.terms}>
+        <View style={styles.terms} break={!!quotation.pageBreakBeforeTerms}>
           <View wrap={false}>
             <Text style={styles.termsTitle}>Terms and Conditions</Text>
             <Text style={styles.termSubtitle}>Scope of Work</Text>
             <Text style={styles.termText}>
-              - The scope of work shall be limited strictly to the items, specifications, and services explicitly stated in this proposal.
-              Any additional works, modifications, or deviations not covered herein shall be treated as a Variation Order and shall be
-              subject to separate quotation, approval, and corresponding adjustment in price and delivery schedule.
+              {to.scopeOfWork
+                ? to.scopeOfWork
+                : '- The scope of work shall be limited strictly to the items, specifications, and services explicitly stated in this proposal. Any additional works, modifications, or deviations not covered herein shall be treated as a Variation Order and shall be subject to separate quotation, approval, and corresponding adjustment in price and delivery schedule.'}
             </Text>
           </View>
 
           <Text style={styles.termSubtitle}>Basis of Proposal</Text>
           <Text style={styles.termText}>
-            - This offer is based on the technical documents, drawings, specifications, and other references provided by the Client
-            at the time of quotation. IO Control Technologie OPC reserves the right to revise pricing, scope, and schedule should
-            there be significant changes, inconsistencies, or incomplete information discovered after award.
+            {to.basisOfProposal
+              ? to.basisOfProposal
+              : `- This offer is based on the technical documents, drawings, specifications, and other references provided by the Client at the time of quotation. ${issuer.name} reserves the right to revise pricing, scope, and schedule should there be significant changes, inconsistencies, or incomplete information discovered after award.`}
           </Text>
 
           <Text style={styles.termSubtitle}>Validity of Offer</Text>
@@ -526,8 +533,16 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
           </Text>
 
           <Text style={styles.termSubtitle}>Delivery</Text>
-          <Text style={styles.termText}>- {quotation.deliveryTerms || 'Delivery is 1-2 weeks, upon receipt of a technically and commercially clarified purchase order.'}</Text>
-          <Text style={styles.termText}>- Delivery terms shall be DDP – Client's Plant Site, unless otherwise specified.</Text>
+          {to.deliveryLines
+            ? to.deliveryLines.split('\n').filter(Boolean).map((line, i) => (
+                <Text key={i} style={styles.termText}>{line}</Text>
+              ))
+            : (
+              <>
+                <Text style={styles.termText}>- {quotation.deliveryTerms || 'Delivery is 1-2 weeks, upon receipt of a technically and commercially clarified purchase order.'}</Text>
+                <Text style={styles.termText}>- Delivery terms shall be DDP – Client's Plant Site, unless otherwise specified.</Text>
+              </>
+            )}
 
           <Text style={styles.termSubtitle}>Payment Terms</Text>
           <Text style={styles.termText}>- {quotation.paymentTerms}.</Text>
@@ -538,8 +553,9 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             from project completion and acceptance, covering defects in materials and workmanship under normal operating conditions.
           </Text>
           <Text style={styles.termText}>
-            - Warranty excludes improper installation, unauthorized modifications, misuse, abnormal conditions, power surges,
-            environmental damage, or force majeure events.
+            {to.warrantyExclusion
+              ? to.warrantyExclusion
+              : '- Warranty excludes improper installation, unauthorized modifications, misuse, abnormal conditions, power surges, environmental damage, or force majeure events.'}
           </Text>
         </View>
 
@@ -555,7 +571,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             {prepName ? (
               <>
                 <Text style={styles.sigName}>{prepName}</Text>
-                {staff?.title && <Text style={styles.sigSub}>{staff.title}</Text>}
+                {prepTitle && <Text style={styles.sigSub}>{prepTitle}</Text>}
                 {staff?.phone && <Text style={styles.sigSub}>Mobile No.: {staff.phone}</Text>}
                 {staff?.email && <Text style={styles.sigEmail}>{staff.email}</Text>}
               </>

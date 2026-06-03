@@ -12,14 +12,17 @@ export function lineGeneralTotal(l: GeneralReqLine): number {
 }
 
 export function componentSellingUnit(l: ComponentLine, productMarkupPct: number): number {
-  const base = (l.unitCost || 0) * (l.forex || 1);
-  const adjusted = base * (1 + (l.contingencyPct || 0) / 100) * (1 - (l.discountPct || 0) / 100);
+  const adjusted = componentCostUnit(l) * (1 + (l.contingencyPct || 0) / 100);
   return adjusted * (1 + (productMarkupPct || 0) / 100);
 }
 
 export function componentCostUnit(l: ComponentLine): number {
   const base = (l.unitCost || 0) * (l.forex || 1);
-  return base * (1 + (l.contingencyPct || 0) / 100) * (1 - (l.discountPct || 0) / 100);
+  return base * (1 - (l.discountPct || 0) / 100);
+}
+
+export function componentWithContingencyUnit(l: ComponentLine): number {
+  return componentCostUnit(l) * (1 + (l.contingencyPct || 0) / 100);
 }
 
 export function componentLineTotal(l: ComponentLine, productMarkupPct: number): number {
@@ -28,6 +31,10 @@ export function componentLineTotal(l: ComponentLine, productMarkupPct: number): 
 
 export function componentLineCost(l: ComponentLine): number {
   return componentCostUnit(l) * (l.qty || 0);
+}
+
+export function componentLineWithContingency(l: ComponentLine): number {
+  return componentWithContingencyUnit(l) * (l.qty || 0);
 }
 
 export function manpowerCost(m: ManpowerEntry): number {
@@ -57,28 +64,34 @@ export function computeTotals(q: Quotation): QuotationTotals {
     if (q.legacyTotalsSnapshot) return q.legacyTotalsSnapshot;
     return computeTotalsLegacy(q);
   }
-  const cont = (q.globalContingencyPct || 0) / 100;
+  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, q.generalReqtsExportQty || 1) : 1;
+  const engineeringServicesQty = q.servicesFromManpower ? Math.max(1, q.engineeringServicesQty || 1) : 1;
 
-  // General Requirements: cost → contingency → markup
-  const generalReqtsCost = q.generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0);
-  const generalReqtsWithContingency = generalReqtsCost * (1 + cont);
+  // General Requirements: cost → markup. Global contingency no longer applies.
+  const generalReqtsUnitCost = q.generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0);
+  const generalReqtsCost = generalReqtsUnitCost * generalReqtsQty;
+  const generalReqtsWithContingency = generalReqtsCost;
   const generalReqtsSubtotal = generalReqtsWithContingency * (1 + (q.generalReqMarkupPct || 0) / 100);
 
-  // Components: per-line contingency (built into componentLineTotal) + markup; no global contingency
+  // Components: raw cost → per-line contingency → markup.
   const componentsSubtotal = q.components.reduce(
     (s, l) => s + componentLineTotal(l, q.productMarkupPct),
     0,
   );
   const componentsCost = q.components.reduce((s, l) => s + componentLineCost(l), 0);
+  const componentsWithContingency = q.components.reduce(
+    (s, l) => s + componentLineWithContingency(l),
+    0,
+  );
 
-  // Labor: cost → contingency → markup (only when computing from manpower)
+  // Labor: cost → labor contingency → markup (only when computing from manpower)
   let laborCost: number;
   let servicesSub: number;
   let laborWithContingency: number;
   if (q.servicesFromManpower) {
-    laborCost = manpowerTotalCost(q.manpower);
-    laborWithContingency = laborCost * (1 + cont);
-    servicesSub = laborWithContingency * (1 + (q.laborMarkupPct || 0) / 100);
+    laborCost = manpowerTotalCost(q.manpower) * engineeringServicesQty;
+    laborWithContingency = laborCost;
+    servicesSub = laborCost;
   } else {
     // Manual lump-sum lines: take amounts as the final subtotal (user already includes their own buffer)
     servicesSub = q.services.reduce((s, l) => s + (l.amount || 0), 0);
@@ -97,6 +110,7 @@ export function computeTotals(q: Quotation): QuotationTotals {
     generalReqtsWithContingency,
     generalReqtsSubtotal,
     componentsCost,
+    componentsWithContingency,
     componentsSubtotal,
     laborCost,
     laborWithContingency,
@@ -173,6 +187,7 @@ export function computeTotalsLegacy(q: Quotation): QuotationTotals {
     generalReqtsWithContingency,
     generalReqtsSubtotal,
     componentsCost,
+    componentsWithContingency: componentsCost,
     componentsSubtotal,
     laborCost,
     laborWithContingency,

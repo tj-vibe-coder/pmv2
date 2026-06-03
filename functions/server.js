@@ -1555,11 +1555,12 @@ function quotationGrandTotal(q) {
   if (q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.grandTotal))) {
     return Number(q.legacyTotalsSnapshot.grandTotal);
   }
-  const cont = Number(q.globalContingencyPct || 0) / 100;
+  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, Number(q.generalReqtsExportQty || 1)) : 1;
+  const engineeringServicesQty = q.servicesFromManpower !== false ? Math.max(1, Number(q.engineeringServicesQty || 1)) : 1;
   const generalReqtsCost = (q.generalReqts || []).reduce((sum, line) => {
     return sum + Number(line.unitPrice || 0) * Number(line.qty || 0);
   }, 0);
-  const generalReqtsSubtotal = generalReqtsCost * (1 + cont) * (1 + Number(q.generalReqMarkupPct || 0) / 100);
+  const generalReqtsSubtotal = generalReqtsCost * generalReqtsQty * (1 + Number(q.generalReqMarkupPct || 0) / 100);
   const componentsSubtotal = (q.components || []).reduce((sum, line) => {
     const base = Number(line.unitCost || 0) * Number(line.forex || 1);
     const adjusted = base * (1 + Number(line.contingencyPct || 0) / 100) * (1 - Number(line.discountPct || 0) / 100);
@@ -1569,7 +1570,7 @@ function quotationGrandTotal(q) {
     return sum + Number(row.headcount || 0) * Number(row.mandays || 0) * (Number(row.dailyRate || 0) + Number(row.allowance || 0));
   }, 0);
   const servicesSubtotal = q.servicesFromManpower !== false
-    ? manpowerCost * (1 + cont) * (1 + Number(q.laborMarkupPct || 0) / 100)
+    ? manpowerCost * engineeringServicesQty
     : (q.services || []).reduce((sum, line) => sum + Number(line.amount || 0), 0);
   const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSubtotal;
   const afterDiscount = subtotal * (1 - Number(q.discountPct || 0) / 100);
@@ -2028,6 +2029,23 @@ app.delete('/api/calcsheet/presets/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to delete preset' }); }
 });
 
+// ── Calcsheet settings (default job titles, etc.) ────────────────────────────
+app.get('/api/calcsheet/settings', async (req, res) => {
+  try {
+    const doc = await db.collection('calcsheet_meta').doc('settings').get();
+    res.json({ success: true, settings: doc.exists ? doc.data() : {} });
+  } catch (err) { res.status(500).json({ error: 'Failed to get settings' }); }
+});
+
+app.put('/api/calcsheet/settings', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    await db.collection('calcsheet_meta').doc('settings').set(req.body, { merge: true });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to save settings' }); }
+});
+
 // ── Sequence counter (for quotation code generation) ─────────────────────────
 // The next sequence is always derived from the actual project codes — never
 // trust the `calcsheet_meta/seq` doc as the source of truth. Historical reason:
@@ -2238,14 +2256,77 @@ app.get('/api/health', (req, res) => {
 });
 
 // ========== STATIC FILES & SPA ROUTING ==========
+// ========== INVOICE / COLLECTIONS ROUTES ==========
 
-// Cloud Functions v2 sets K_SERVICE automatically; Firebase Hosting handles static files.
+app.get('/api/invoices', async (req, res) => {
+  const { project_id } = req.query;
+  try {
+    let query = db.collection('invoices').orderBy('invoice_date', 'desc');
+    if (project_id) query = db.collection('invoices').where('project_id', '==', String(project_id)).orderBy('invoice_date', 'desc');
+    const snap = await query.get();
+    res.json(snap.docs.map(d => ({ ...d.data(), id: d.id })));
+  } catch (err) {
+    console.error('Error fetching invoices:', err);
+    res.status(500).json({ error: 'Failed to fetch invoices' });
+  }
+});
+
+app.post('/api/invoices', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.created_at = new Date().toISOString();
+    data.updated_at = new Date().toISOString();
+    const ref = await db.collection('invoices').add(data);
+    res.json({ ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error creating invoice:', err);
+    res.status(500).json({ error: 'Failed to create invoice' });
+  }
+});
+
+app.put('/api/invoices/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.updated_at = new Date().toISOString();
+    const ref = db.collection('invoices').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Invoice not found' });
+    await ref.update(data);
+    res.json({ message: 'Invoice updated' });
+  } catch (err) {
+    console.error('Error updating invoice:', err);
+    res.status(500).json({ error: 'Failed to update invoice' });
+  }
+});
+
+app.delete('/api/invoices/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const ref = db.collection('invoices').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Invoice not found' });
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting invoice:', err);
+    res.status(500).json({ error: 'Failed to delete invoice' });
+  }
+});
+
+// ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {
-  // Serve static files from the React app
   app.use(express.static(path.join(__dirname, 'build')));
 
-  // Any request that doesn't match the ones above, send back index.html
-  app.get(['/', '/*splat'], (req, res) => {
+  app.get('/*splat', (req, res) => {
     res.sendFile(path.join(__dirname, 'build', 'index.html'));
   });
 }

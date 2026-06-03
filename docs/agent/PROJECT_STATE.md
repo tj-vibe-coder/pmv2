@@ -9,7 +9,7 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 - **Status:** Active development
 - **Current phase:** Calcsheet and Project List integration hardening
 - **Main focus:** Collections & AR integration with project monitoring completed; progress update workflow streamlined
-- **Last updated:** 2026-05-27
+- **Last updated:** 2026-06-03
 
 ## Completed
 
@@ -38,6 +38,11 @@ Build and maintain a comprehensive operations platform for IOCT — consolidatin
 - Report PDF logo/header polish and service-report upload to execution folders
 - Calcsheet quotation signatory titles resolve from the logged-in user account when the signatory matches that user; fallback staff seed keeps TJ as General Manager and Reuel as Solutions Manager
 - Calcsheet quotation PDF export now supports `Date Sent`, non-repeating continuation-page header, Summary pagination guard, Terms heading pagination guard, muted A/B/C section bars, and middle-row grouped `1 LOT` display for GenReq/manpower service groups
+- Calcsheet labor preset defaults now match the reference manpower sheet for Technician, Electrician, and Safety Officer at ₱1,200 daily rate with ₱250 allowance; existing quotation manpower rows remain frozen to their stored values
+- Calcsheet current-formula contingency now excludes General Requirements; Product Contingency seeds Section B rows while allowing per-line overrides; manpower-priced Engineering Services use manpower cost per LOT without an extra labor contingency/markup layer
+- Calcsheet Engineering Services can now multiply manpower-priced services by LOT quantity; PDF/XLSX show `qty × unit price = subtotal`
+- Calcsheet General Requirements grouped export can now multiply by LOT quantity; PDF/XLSX show `qty × unit price = subtotal`
+- Calcsheet quotation PDF export now has a manual `Start Terms on new PDF page` layout control in Terms & Conditions
 - Calcsheet delete confirmation dialogs (project and quotation) with red Delete buttons that warn about permanent deletion
 - Calcsheet project sequence counter race condition fix using Firestore `runTransaction` for atomic increments
 - Investment Tracker moved into Expense Monitoring sidebar group

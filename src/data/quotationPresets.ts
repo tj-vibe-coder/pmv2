@@ -12,9 +12,9 @@ export const seedLaborPresets = (): LaborRolePreset[] => [
   { id: nanoid(8), role: 'Project Manager',        group: 'engineering', dailyRate: 3500, allowance: 1000 },
   // Laborers
   { id: nanoid(8), role: 'Foreman',            group: 'labor', dailyRate: 1500, allowance: 250 },
-  { id: nanoid(8), role: 'Technician',         group: 'labor', dailyRate: 1500, allowance: 250 },
-  { id: nanoid(8), role: 'Electrician',        group: 'labor', dailyRate: 1500, allowance: 250 },
-  { id: nanoid(8), role: 'Safety Officer',     group: 'labor', dailyRate: 1500, allowance: 250 },
+  { id: nanoid(8), role: 'Technician',         group: 'labor', dailyRate: 1200, allowance: 250 },
+  { id: nanoid(8), role: 'Electrician',        group: 'labor', dailyRate: 1200, allowance: 250 },
+  { id: nanoid(8), role: 'Safety Officer',     group: 'labor', dailyRate: 1200, allowance: 250 },
   { id: nanoid(8), role: 'Autocad Operator',   group: 'labor', dailyRate: 1000, allowance: 250 },
   { id: nanoid(8), role: 'Welder',             group: 'labor', dailyRate: 1000, allowance: 250 },
   { id: nanoid(8), role: 'Scaffolder',         group: 'labor', dailyRate: 1000, allowance: 250 },
