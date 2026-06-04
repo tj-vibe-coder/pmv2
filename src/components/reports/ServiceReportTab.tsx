@@ -107,6 +107,27 @@ async function generateThumbnail(source: Blob): Promise<string> {
  * orientations (including the common phone-portrait case) without a library.
  * Falls back to a plain FileReader data URL if the API is unavailable.
  */
+/**
+ * Convert a HEIC/HEIF file to JPEG. Returns the original file unchanged for
+ * any other format. The returned File has a .jpg extension so browsers can
+ * render it with createObjectURL / createImageBitmap.
+ */
+async function convertHeicToJpeg(file: File): Promise<File> {
+  const name = file.name.toLowerCase();
+  const isHeic = name.endsWith('.heic') || name.endsWith('.heif') ||
+    file.type === 'image/heic' || file.type === 'image/heif';
+  if (!isHeic) return file;
+  try {
+    const heic2any = (await import('heic2any')).default;
+    const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+    const blob = Array.isArray(result) ? result[0] : result;
+    const jpegName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
+    return new File([blob], jpegName, { type: 'image/jpeg' });
+  } catch {
+    return file; // fall back to original if conversion fails
+  }
+}
+
 async function normalizeImageOrientation(source: Blob): Promise<string> {
   try {
     const bitmap = await createImageBitmap(source, { imageOrientation: 'from-image' } as unknown as ImageBitmapOptions);
@@ -252,11 +273,14 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   };
 
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+    const rawFiles = Array.from(e.target.files || []);
     e.target.value = '';
-    if (files.length === 0) return;
+    if (rawFiles.length === 0) return;
     const activityIdx = pendingActivityIndexRef.current;
     pendingActivityIndexRef.current = null;
+
+    // Convert HEIC/HEIF to JPEG before preview or upload
+    const files = await Promise.all(rawFiles.map(convertHeicToJpeg));
 
     // Add to state immediately with local previews
     const newItems: PhotoItem[] = files.map(file => ({
@@ -1099,7 +1123,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       </Grid>
 
       {/* Hidden file input shared by both per-activity and general photo pickers */}
-      <input ref={photoInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handlePhotoSelect} />
+      <input ref={photoInputRef} type="file" accept="image/*,.heic,.heif" multiple style={{ display: 'none' }} onChange={handlePhotoSelect} />
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mt: 2 }}>
         <FormControl size="small" sx={{ minWidth: 280 }}>
           <InputLabel id="sr-report-company-label">Report as company</InputLabel>

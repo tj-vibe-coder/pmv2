@@ -33,6 +33,7 @@
     "express": "^5.1.0",
     "file-saver": "^2.0.5",
     "firebase-admin": "^13.7.0",
+    "heic2any": "^0.0.4",
     "jsbarcode": "^3.12.3",
     "jspdf": "^4.1.0",
     "jspdf-autotable": "^5.0.7",
