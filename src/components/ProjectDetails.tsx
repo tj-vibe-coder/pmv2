@@ -216,71 +216,108 @@ export interface ServiceReport {
   createdAt: string;
 }
 
-export function getServiceReports(projectId: number): ServiceReport[] {
-  try {
-    const raw = localStorage.getItem(PROJECT_SERVICE_REPORTS_KEY);
-    if (!raw) return [];
-    const o: Record<string, ServiceReport[]> = JSON.parse(raw);
-    return o[String(projectId)] || [];
-  } catch (_) {
-    return [];
+function srAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem('netpacific_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+// Normalize a raw Firestore-returned doc (snake_case created_at) to ServiceReport shape.
+function normalizeServiceReport(raw: Record<string, unknown>): ServiceReport {
+  return {
+    ...(raw as unknown as ServiceReport),
+    createdAt: (raw.createdAt as string) ?? (raw.created_at as string) ?? '',
+  };
+}
+
+export async function getServiceReports(projectId: number): Promise<ServiceReport[]> {
+  const res = await fetch(`/api/service-reports?project_id=${projectId}`, {
+    headers: srAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to fetch service reports');
+  const raw: Record<string, unknown>[] = await res.json();
+  return raw.map(normalizeServiceReport);
+}
+
+export async function saveServiceReport(
+  projectId: number,
+  report: Omit<ServiceReport, 'id' | 'createdAt'>,
+): Promise<ServiceReport> {
+  const res = await fetch('/api/service-reports', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...srAuthHeaders() },
+    body: JSON.stringify({ ...report, project_id: String(projectId) }),
+  });
+  if (!res.ok) throw new Error('Failed to save service report');
+  return normalizeServiceReport(await res.json());
+}
+
+export async function updateServiceReport(
+  id: string,
+  report: Omit<ServiceReport, 'id' | 'createdAt'>,
+): Promise<void> {
+  const res = await fetch(`/api/service-reports/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...srAuthHeaders() },
+    body: JSON.stringify(report),
+  });
+  if (!res.ok) throw new Error('Failed to update service report');
+}
+
+export async function deleteServiceReport(id: string): Promise<void> {
+  const res = await fetch(`/api/service-reports/${id}`, {
+    method: 'DELETE',
+    headers: srAuthHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to delete service report');
+}
+
+export async function clearServiceReports(projectId: number): Promise<void> {
+  const reports = await getServiceReports(projectId);
+  await Promise.all(reports.map(r => deleteServiceReport(r.id)));
+}
+
+// One-time migration: moves any service reports still in localStorage to Firestore.
+// Each successfully-migrated report is removed from localStorage immediately so that
+// a partial failure on retry never creates duplicates in Firestore.
+const SR_MIGRATION_KEY = 'sr_migrated_v1';
+export async function migrateServiceReportsFromLocalStorage(): Promise<void> {
+  if (localStorage.getItem(SR_MIGRATION_KEY)) return;
+  const raw = localStorage.getItem(PROJECT_SERVICE_REPORTS_KEY);
+  if (!raw) { localStorage.setItem(SR_MIGRATION_KEY, '1'); return; }
+  let all: Record<string, ServiceReport[]>;
+  try { all = JSON.parse(raw); } catch { localStorage.setItem(SR_MIGRATION_KEY, '1'); return; }
+
+  const token = localStorage.getItem('netpacific_token') || '';
+  const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  let anyFailed = false;
+
+  for (const [projectId, reports] of Object.entries(all)) {
+    // oldest-first so Firestore orderBy(created_at desc) returns newest-first after migration
+    const inOrder = [...reports].reverse();
+    const remaining: ServiceReport[] = [];
+    for (const report of inOrder) {
+      try {
+        const res = await fetch('/api/service-reports', {
+          method: 'POST',
+          headers,
+          // Preserve original timestamp under the server's expected field name (snake_case)
+          body: JSON.stringify({ ...report, project_id: projectId, created_at: report.createdAt }),
+        });
+        if (!res.ok) { remaining.push(report); anyFailed = true; }
+      } catch { remaining.push(report); anyFailed = true; }
+    }
+    // Persist only the un-migrated remainder so retries don't re-post successes
+    if (remaining.length > 0) {
+      all[projectId] = remaining;
+    } else {
+      delete all[projectId];
+    }
+    const leftover = Object.keys(all);
+    if (leftover.length === 0) localStorage.removeItem(PROJECT_SERVICE_REPORTS_KEY);
+    else localStorage.setItem(PROJECT_SERVICE_REPORTS_KEY, JSON.stringify(all));
   }
-}
 
-export function saveServiceReport(projectId: number, report: Omit<ServiceReport, 'id' | 'createdAt'>): void {
-  try {
-    const raw = localStorage.getItem(PROJECT_SERVICE_REPORTS_KEY);
-    const o: Record<string, ServiceReport[]> = raw ? JSON.parse(raw) : {};
-    const list = o[String(projectId)] || [];
-    const newReport: ServiceReport = {
-      ...report,
-      id: `sr-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      createdAt: new Date().toISOString(),
-    };
-    list.unshift(newReport);
-    o[String(projectId)] = list.slice(0, 100);
-    localStorage.setItem(PROJECT_SERVICE_REPORTS_KEY, JSON.stringify(o));
-  } catch (_) {}
-}
-
-export function updateServiceReportAt(projectId: number, index: number, report: Omit<ServiceReport, 'id' | 'createdAt'>): void {
-  try {
-    const raw = localStorage.getItem(PROJECT_SERVICE_REPORTS_KEY);
-    const o: Record<string, ServiceReport[]> = raw ? JSON.parse(raw) : {};
-    const list = o[String(projectId)] || [];
-    if (index >= 0 && index < list.length) {
-      list[index] = {
-        ...report,
-        id: list[index].id,
-        createdAt: list[index].createdAt,
-      };
-      o[String(projectId)] = list;
-      localStorage.setItem(PROJECT_SERVICE_REPORTS_KEY, JSON.stringify(o));
-    }
-  } catch (_) {}
-}
-
-export function deleteServiceReportAt(projectId: number, index: number): void {
-  try {
-    const raw = localStorage.getItem(PROJECT_SERVICE_REPORTS_KEY);
-    const o: Record<string, ServiceReport[]> = raw ? JSON.parse(raw) : {};
-    const list = o[String(projectId)] || [];
-    if (index >= 0 && index < list.length) {
-      list.splice(index, 1);
-      if (list.length > 0) o[String(projectId)] = list;
-      else delete o[String(projectId)];
-      localStorage.setItem(PROJECT_SERVICE_REPORTS_KEY, JSON.stringify(o));
-    }
-  } catch (_) {}
-}
-
-export function clearServiceReports(projectId: number): void {
-  try {
-    const raw = localStorage.getItem(PROJECT_SERVICE_REPORTS_KEY);
-    const o: Record<string, ServiceReport[]> = raw ? JSON.parse(raw) : {};
-    delete o[String(projectId)];
-    localStorage.setItem(PROJECT_SERVICE_REPORTS_KEY, JSON.stringify(o));
-  } catch (_) {}
+  if (!anyFailed) localStorage.setItem(SR_MIGRATION_KEY, '1');
 }
 
 interface ProjectExpenseRow {

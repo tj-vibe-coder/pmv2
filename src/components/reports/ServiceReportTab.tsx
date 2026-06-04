@@ -42,9 +42,10 @@ import {
   ServiceReportPhoto,
   getServiceReports,
   saveServiceReport,
-  updateServiceReportAt,
-  deleteServiceReportAt,
+  updateServiceReport,
+  deleteServiceReport,
   clearServiceReports,
+  migrateServiceReportsFromLocalStorage,
 } from '../ProjectDetails';
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
@@ -155,8 +156,9 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   const [serviceReportTitle, setServiceReportTitle] = useState('');
   const [serviceReportActivitiesTable, setServiceReportActivitiesTable] = useState<{ activity: string; findingOutcome: string }[]>([{ activity: '', findingOutcome: '' }]);
   const [serviceReportCustomerComments, setServiceReportCustomerComments] = useState('');
-  const [serviceReportVersion, setServiceReportVersion] = useState(0);
-  const [editingServiceReportIndex, setEditingServiceReportIndex] = useState<number | null>(null);
+  const [editingServiceReportId, setEditingServiceReportId] = useState<string | null>(null);
+  const [serviceReports, setServiceReports] = useState<ServiceReport[]>([]);
+  const [srLoading, setSrLoading] = useState(false);
   const [serviceReportSaveFeedback, setServiceReportSaveFeedback] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
 
@@ -211,7 +213,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     setServiceReportTitle('');
     setServiceReportActivitiesTable([{ activity: '', findingOutcome: '' }]);
     setServiceReportCustomerComments('');
-    setEditingServiceReportIndex(null);
+    setEditingServiceReportId(null);
     setExportFeedback(null);
     setApproverName(clientApprover?.name || '');
     setApproverDesignation(clientApprover?.designation || '');
@@ -222,17 +224,27 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     });
   }, []);
 
+  const loadServiceReports = useCallback(async () => {
+    setSrLoading(true);
+    try {
+      const reports = await getServiceReports(project.id);
+      setServiceReports(reports);
+    } catch {
+      // Keep stale list on transient error — don't wipe what the user can see.
+    } finally {
+      setSrLoading(false);
+    }
+  }, [project.id]);
+
   useEffect(() => {
     resetServiceReportForm();
     setPhotosFolderId(null);
     setPhotosFolderUrl(null);
     setResolvedExecFolderId(null);
+    loadServiceReports();
+    migrateServiceReportsFromLocalStorage().catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
-
-  // serviceReportVersion triggers refetch when user saves a report
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- serviceReportVersion is intentional
-  const serviceReports = useMemo(() => getServiceReports(project.id), [project.id, serviceReportVersion]);
 
   const triggerPhotoInput = (activityIndex: number | null) => {
     pendingActivityIndexRef.current = activityIndex;
@@ -343,11 +355,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     });
   };
 
-  const handleSaveServiceReport = () => {
+  const handleSaveServiceReport = async () => {
     const projectNo = (project.project_no || String(project.item_no ?? project.id) || '').trim() || '—';
-    const reportNo = editingServiceReportIndex !== null && serviceReports[editingServiceReportIndex]?.reportNo
-      ? serviceReports[editingServiceReportIndex].reportNo
-      : `${projectNo} - SR${serviceReports.length + 1}`;
+    const editingReport = editingServiceReportId ? serviceReports.find(r => r.id === editingServiceReportId) : null;
+    const reportNo = editingReport?.reportNo || `${projectNo} - SR${serviceReports.length + 1}`;
     const table = serviceReportActivitiesTable.filter((r) => (r.activity || '').trim() || (r.findingOutcome || '').trim());
     const recs = (serviceReportCustomerComments || '').trim() ? [serviceReportCustomerComments.trim()] : [];
     const savedPhotos: ServiceReportPhoto[] = photos
@@ -373,18 +384,22 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       approverDesignation: approverDesignation.trim() || undefined,
       approverCompany: approverCompany.trim() || undefined,
     };
-    if (editingServiceReportIndex !== null && serviceReports[editingServiceReportIndex] != null) {
-      updateServiceReportAt(project.id, editingServiceReportIndex, report);
-    } else {
-      saveServiceReport(project.id, report);
+    try {
+      if (editingReport) {
+        await updateServiceReport(editingReport.id, report);
+      } else {
+        await saveServiceReport(project.id, report);
+      }
+      setServiceReportNo(reportNo);
+      setServiceReportSaveFeedback(true);
+      setTimeout(() => setServiceReportSaveFeedback(false), 2000);
+      await loadServiceReports();
+    } catch (err) {
+      setExportFeedback({ severity: 'error', message: err instanceof Error ? err.message : 'Failed to save report.' });
     }
-    setServiceReportNo(reportNo);
-    setServiceReportVersion((v) => v + 1);
-    setServiceReportSaveFeedback(true);
-    setTimeout(() => setServiceReportSaveFeedback(false), 2000);
   };
 
-  const handleLoadServiceReport = (report: ServiceReport, index: number) => {
+  const handleLoadServiceReport = (report: ServiceReport) => {
     setServiceReportDate(report.date);
     setServiceReportStartTime(report.startTime || '');
     setServiceReportEndTime(report.endTime || '');
@@ -407,7 +422,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     setApproverName(report.approverName ?? clientApprover?.name ?? '');
     setApproverDesignation(report.approverDesignation ?? clientApprover?.designation ?? '');
     setApproverCompany(report.approverCompany ?? clientApprover?.company ?? '');
-    setEditingServiceReportIndex(index);
+    setEditingServiceReportId(report.id);
     setExportFeedback(null);
     // Restore saved photos as done items (no local file/preview available)
     const loadedPhotos: PhotoItem[] = (report.photos || []).map(photo => ({
@@ -423,29 +438,40 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     setPhotos(loadedPhotos);
   };
 
-  const handleDeleteLoadedServiceReport = () => {
-    if (editingServiceReportIndex === null || serviceReports[editingServiceReportIndex] == null) return;
-    handleDeleteServiceReport(editingServiceReportIndex);
-  };
-
-  const handleDeleteServiceReport = (index: number) => {
-    const report = serviceReports[index];
+  const handleDeleteLoadedServiceReport = async () => {
+    if (!editingServiceReportId) return;
+    const report = serviceReports.find(r => r.id === editingServiceReportId);
     if (!report) return;
     if (!window.confirm(`Delete saved service report "${report.reportNo}"? This cannot be undone.`)) return;
-    deleteServiceReportAt(project.id, index);
-    setServiceReportVersion((v) => v + 1);
-    if (editingServiceReportIndex === index) {
+    try {
+      await deleteServiceReport(report.id);
       resetServiceReportForm();
-    } else if (editingServiceReportIndex !== null && index < editingServiceReportIndex) {
-      setEditingServiceReportIndex(editingServiceReportIndex - 1);
+      await loadServiceReports();
+    } catch (err) {
+      setExportFeedback({ severity: 'error', message: 'Failed to delete report.' });
     }
   };
 
-  const handleClearServiceReports = () => {
+  const handleDeleteServiceReport = async (report: ServiceReport) => {
+    if (!window.confirm(`Delete saved service report "${report.reportNo}"? This cannot be undone.`)) return;
+    try {
+      await deleteServiceReport(report.id);
+      if (editingServiceReportId === report.id) resetServiceReportForm();
+      await loadServiceReports();
+    } catch (err) {
+      setExportFeedback({ severity: 'error', message: 'Failed to delete report.' });
+    }
+  };
+
+  const handleClearServiceReports = async () => {
     if (window.confirm('Remove all saved service reports for this project? This cannot be undone.')) {
-      clearServiceReports(project.id);
-      setServiceReportVersion((v) => v + 1);
-      resetServiceReportForm();
+      try {
+        await clearServiceReports(project.id);
+        resetServiceReportForm();
+        setServiceReports([]);
+      } catch (err) {
+        setExportFeedback({ severity: 'error', message: 'Failed to clear reports.' });
+      }
     }
   };
 
@@ -1092,21 +1118,22 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           </Box>
         )}
         <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={resetServiceReportForm} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>New report</Button>
-        <Button variant="contained" size="small" onClick={handleSaveServiceReport} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{serviceReportSaveFeedback ? 'Saved' : editingServiceReportIndex !== null ? 'Update report' : 'Save report'}</Button>
+        <Button variant="contained" size="small" onClick={handleSaveServiceReport} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{serviceReportSaveFeedback ? 'Saved' : editingServiceReportId !== null ? 'Update report' : 'Save report'}</Button>
         <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
         <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Exporting...' : 'Export to PDF'}</Button>
+        {srLoading && <CircularProgress size={18} sx={{ color: NET_PACIFIC_COLORS.primary }} />}
         {serviceReports.length > 0 && (
           <>
             <FormControl size="small" sx={{ minWidth: 240 }}>
               <InputLabel id="load-service-report-label">Load previous report</InputLabel>
               <Select labelId="load-service-report-label" value="" label="Load previous report" onChange={(e) => {
-                const idx = Number(e.target.value);
-                if (!Number.isNaN(idx) && serviceReports[idx] != null) handleLoadServiceReport(serviceReports[idx], idx);
+                const report = serviceReports.find(r => r.id === e.target.value);
+                if (report) handleLoadServiceReport(report);
                 (e.target as HTMLSelectElement).value = '';
               }}>
                 <MenuItem value=""><em>— Select to load —</em></MenuItem>
-                {serviceReports.map((r, idx) => (
-                  <MenuItem key={r.id} value={idx}>{new Date(r.date).toLocaleDateString('en-US', { dateStyle: 'medium' })} · {r.reportNo}{r.title ? ` · ${r.title.slice(0, 30)}${r.title.length > 30 ? '…' : ''}` : ''}</MenuItem>
+                {serviceReports.map((r) => (
+                  <MenuItem key={r.id} value={r.id}>{new Date(r.date).toLocaleDateString('en-US', { dateStyle: 'medium' })} · {r.reportNo}{r.title ? ` · ${r.title.slice(0, 30)}${r.title.length > 30 ? '…' : ''}` : ''}</MenuItem>
                 ))}
               </Select>
             </FormControl>
@@ -1126,14 +1153,14 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
               </TableRow>
             </TableHead>
             <TableBody>
-              {serviceReports.map((r, idx) => (
-                <TableRow key={r.id} hover selected={editingServiceReportIndex === idx}>
+              {serviceReports.map((r) => (
+                <TableRow key={r.id} hover selected={editingServiceReportId === r.id}>
                   <TableCell>{r.reportNo}</TableCell>
                   <TableCell>{new Date(r.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
                   <TableCell>{r.title || 'Service Report'}</TableCell>
                   <TableCell align="right">
-                    <Button size="small" onClick={() => handleLoadServiceReport(r, idx)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
-                    <IconButton size="small" color="error" onClick={() => handleDeleteServiceReport(idx)} title="Delete report" aria-label="Delete report">
+                    <Button size="small" onClick={() => handleLoadServiceReport(r)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
+                    <IconButton size="small" color="error" onClick={() => handleDeleteServiceReport(r)} title="Delete report" aria-label="Delete report">
                       <DeleteIcon fontSize="small" />
                     </IconButton>
                   </TableCell>
@@ -1143,10 +1170,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           </Table>
         </TableContainer>
       )}
-      {editingServiceReportIndex !== null && serviceReports[editingServiceReportIndex] != null && (
+      {editingServiceReportId !== null && serviceReports.find(r => r.id === editingServiceReportId) != null && (
         <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           <Typography variant="body2" sx={{ color: 'info.main', fontSize: '0.8125rem' }}>
-            Editing: {serviceReports[editingServiceReportIndex].reportNo}. Click &quot;Update report&quot; to save changes.
+            Editing: {serviceReports.find(r => r.id === editingServiceReportId)!.reportNo}. Click &quot;Update report&quot; to save changes.
           </Typography>
           <Button size="small" variant="outlined" onClick={resetServiceReportForm}>Cancel edit</Button>
           <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={handleDeleteLoadedServiceReport}>Delete report</Button>

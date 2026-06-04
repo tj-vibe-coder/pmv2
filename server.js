@@ -2322,6 +2322,76 @@ app.delete('/api/invoices/:id', async (req, res) => {
   }
 });
 
+// ========== SERVICE REPORTS ==========
+app.get('/api/service-reports', async (req, res) => {
+  const { project_id } = req.query;
+  try {
+    let query = db.collection('service_reports').orderBy('created_at', 'desc').limit(100);
+    if (project_id) {
+      query = db.collection('service_reports')
+        .where('project_id', '==', String(project_id))
+        .orderBy('created_at', 'desc')
+        .limit(100);
+    }
+    const snap = await query.get();
+    res.json(snap.docs.map(d => ({ ...d.data(), id: d.id })));
+  } catch (err) {
+    console.error('Error fetching service reports:', err);
+    res.status(500).json({ error: 'Failed to fetch service reports' });
+  }
+});
+
+app.post('/api/service-reports', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.created_at = data.created_at || new Date().toISOString();
+    data.updated_at = new Date().toISOString();
+    const ref = await db.collection('service_reports').add(data);
+    res.json({ ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error creating service report:', err);
+    res.status(500).json({ error: 'Failed to create service report' });
+  }
+});
+
+app.put('/api/service-reports/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.updated_at = new Date().toISOString();
+    const ref = db.collection('service_reports').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Service report not found' });
+    await ref.update(data);
+    res.json({ ...doc.data(), ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error updating service report:', err);
+    res.status(500).json({ error: 'Failed to update service report' });
+  }
+});
+
+app.delete('/api/service-reports/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const ref = db.collection('service_reports').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Service report not found' });
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting service report:', err);
+    res.status(500).json({ error: 'Failed to delete service report' });
+  }
+});
+
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {
   app.use(express.static(path.join(__dirname, 'build')));
