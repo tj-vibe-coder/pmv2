@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -88,6 +88,9 @@ const saveStored = (list: OrderRecord[]) => {
 
 const OrderTrackerPage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  // Mounted under both /material-request and /sales/material-request — DR links stay in the current workspace
+  const workspacePrefix = location.pathname.startsWith('/sales/') ? '/sales' : '';
   const [projects, setProjects] = useState<Project[]>([]);
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
@@ -218,8 +221,8 @@ const OrderTrackerPage: React.FC = () => {
 
   const getDRUrlWithSelected = (orderId: string): string => {
     const ids = selectedForDR[orderId];
-    if (!ids || ids.size === 0) return `/delivery?orderId=${orderId}`;
-    return `/delivery?orderId=${orderId}&itemIds=${Array.from(ids).join(',')}`;
+    if (!ids || ids.size === 0) return `${workspacePrefix}/delivery?orderId=${orderId}`;
+    return `${workspacePrefix}/delivery?orderId=${orderId}&itemIds=${Array.from(ids).join(',')}`;
   };
 
   const selectedCount = (orderId: string) => (selectedForDR[orderId]?.size ?? 0);

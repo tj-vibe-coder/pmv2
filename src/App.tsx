@@ -32,6 +32,7 @@ import CollectionsDashboard from './components/CollectionsDashboard';
 import PayrollDashboard from './components/payroll/PayrollDashboard';
 import PayrollGuard from './components/payroll/PayrollGuard';
 import FinanceHomePage from './components/finance/FinanceHomePage';
+import SalesHomePage from './components/sales/SalesHomePage';
 import CalcsheetProjects from './components/calcsheet/CalcsheetProjects';
 import CalcsheetLegacyImport from './components/calcsheet/CalcsheetLegacyImport';
 import CalcsheetProjectDetail from './components/calcsheet/CalcsheetProjectDetail';
@@ -151,6 +152,14 @@ const RedirectEhsToUtilities: React.FC = () => {
 const RedirectWithSearch: React.FC<{ to: string }> = ({ to }) => {
   const location = useLocation();
   return <Navigate to={`${to}${location.search}`} replace />;
+};
+
+// Redirect any /calcsheet/* URL into the Sales workspace, preserving
+// dynamic segments, query string, and hash (RedirectWithSearch only keeps search).
+const RedirectCalcsheet: React.FC = () => {
+  const location = useLocation();
+  const to = location.pathname.replace(/^\/calcsheet/, '/sales/calcsheet') + location.search + location.hash;
+  return <Navigate to={to} replace />;
 };
 
 // Main App Layout component
@@ -418,21 +427,36 @@ function App() {
                 element={<DirectLaborPage />}
               />
             </Route>
-            {/* ===== CALCSHEET ===== */}
+            {/* ===== SALES WORKSPACE ===== */}
+            {/* Legacy calcsheet paths redirect into the workspace, preserving params, query, and hash */}
+            <Route path="/calcsheet/*" element={<RedirectCalcsheet />} />
+            <Route path="/calcsheet" element={<RedirectCalcsheet />} />
             <Route
-              path="/calcsheet"
+              path="/sales"
               element={
                 <ProtectedRoute>
                   <AppLayout>
                     <CalcsheetInit>
-                      <Navigate to="/calcsheet/projects" replace />
+                      <SalesHomePage />
                     </CalcsheetInit>
                   </AppLayout>
                 </ProtectedRoute>
               }
             />
             <Route
-              path="/calcsheet/projects"
+              path="/sales/calcsheet"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <Navigate to="/sales/calcsheet/projects" replace />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/calcsheet/projects"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -444,7 +468,7 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/import-legacy"
+              path="/sales/calcsheet/import-legacy"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -456,7 +480,7 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/projects/:id"
+              path="/sales/calcsheet/projects/:id"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -468,7 +492,7 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/projects/:id/compare"
+              path="/sales/calcsheet/projects/:id/compare"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -480,7 +504,7 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/quotations/:id"
+              path="/sales/calcsheet/quotations/:id"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -492,7 +516,7 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/clients"
+              path="/sales/calcsheet/clients"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -504,13 +528,74 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/presets"
+              path="/sales/calcsheet/presets"
               element={
                 <ProtectedRoute>
                   <AppLayout>
                     <CalcsheetInit>
                       <CalcsheetPresets />
                     </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            {/* Parallel mounts of Clients + Supply Chain inside the Sales workspace (same components, same data) */}
+            <Route
+              path="/sales/clients"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <ClientsPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/material-request"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <MaterialRequestFormPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/delivery"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <DeliveryPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/suppliers"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <SuppliersPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/purchase-order"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <PurchaseOrderPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/estimates"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <EstimatesPage />
                   </AppLayout>
                 </ProtectedRoute>
               }

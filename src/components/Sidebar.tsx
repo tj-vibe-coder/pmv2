@@ -33,13 +33,13 @@ import {
   PictureAsPdf as PictureAsPdfIcon,
   Cloud as CloudIcon,
   RequestQuote as EstimateIcon,
-  Calculate as CalculateIcon,
   HowToReg as HowToRegIcon,
   AccountBalance as AccountBalanceIcon,
   Badge as BadgeIcon,
   Build as BuildIcon,
 } from '@mui/icons-material';
 import FinanceNavList from './finance/FinanceNavList';
+import SalesNavList from './sales/SalesNavList';
 
 const SIDEBAR_WIDTH = 280;
 const SIDEBAR_COLLAPSED_WIDTH = 68;
@@ -55,6 +55,7 @@ const Sidebar: React.FC = () => {
   const location = useLocation();
   const { user } = useAuth();
   const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
+  const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
   const [isExpanded, setIsExpanded] = useState(false);
   const [supplyChainOpen, setSupplyChainOpen] = useState(() =>
     SUPPLY_CHAIN_PATHS.some((p) => location.pathname === p)
@@ -149,10 +150,10 @@ const Sidebar: React.FC = () => {
         {isExpanded && (
           <Box>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, color: 'white' }}>
-              {isFinanceWorkspace ? 'Finance' : 'Project Monitoring'}
+              {isFinanceWorkspace ? 'Finance' : isSalesWorkspace ? 'Sales' : 'Project Monitoring'}
             </Typography>
             <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)' }}>
-              {isFinanceWorkspace ? 'Workspace' : 'Dashboard'}
+              {isFinanceWorkspace || isSalesWorkspace ? 'Workspace' : 'Dashboard'}
             </Typography>
           </Box>
         )}
@@ -163,6 +164,8 @@ const Sidebar: React.FC = () => {
       <Box sx={{ flexGrow: 1, mt: 1, overflowY: 'auto', overflowX: 'hidden' }}>
         {isFinanceWorkspace ? (
           <FinanceNavList isExpanded={isExpanded} navBtnSx={navBtnSx} iconSx={iconSx} />
+        ) : isSalesWorkspace ? (
+          <SalesNavList isExpanded={isExpanded} navBtnSx={navBtnSx} iconSx={iconSx} />
         ) : (
         <List sx={{ px: 1 }}>
 
@@ -334,29 +337,6 @@ const Sidebar: React.FC = () => {
           </ListItem>
 
 
-
-          {/* Calcsheet */}
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <Tooltip title={isExpanded ? '' : 'Calcsheet'} placement="right" arrow>
-              <ListItemButton
-                selected={location.pathname.startsWith('/calcsheet')}
-                onClick={() => navigate('/calcsheet/projects')}
-                sx={navBtnSx(location.pathname.startsWith('/calcsheet'))}
-              >
-                <ListItemIcon sx={iconSx()}>
-                  <CalculateIcon />
-                </ListItemIcon>
-                {isExpanded && (
-                  <ListItemText
-                    primary="Calcsheet"
-                    secondary="Quotations & estimates"
-                    secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                )}
-              </ListItemButton>
-            </Tooltip>
-          </ListItem>
 
           {/* Supply Chain (collapsible) */}
           <ListItem disablePadding sx={{ mb: 0.5 }}>

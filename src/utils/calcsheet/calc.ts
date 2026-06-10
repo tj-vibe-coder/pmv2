@@ -200,6 +200,20 @@ export function computeTotalsLegacy(q: Quotation): QuotationTotals {
   };
 }
 
+// IOCT gross margin from the quotation's snapshot.
+// For non-legacy: cost fields are real, always returns a value.
+// For legacy: returns null when costs weren't backfilled — those snapshots
+// store cost=subtotal (placeholder), so margin would falsely read as zero.
+export function ioctMargin(t: QuotationTotals): { value: number; pct: number } | null {
+  const net = t.subtotal - t.discount;
+  if (net <= 0) return null;
+  const totalCost = t.generalReqtsCost + t.componentsCost + t.laborCost;
+  const totalSubtotals = t.generalReqtsSubtotal + t.componentsSubtotal + t.servicesSubtotal;
+  // Cost placeholder: totalCost equals sum of subtotals → no real cost data
+  if (Math.abs(totalCost - totalSubtotals) < 0.01) return null;
+  return { value: net - totalCost, pct: ((net - totalCost) / net) * 100 };
+}
+
 export const PHP = (n: number): string =>
   'PHP ' +
   (Number.isFinite(n) ? n : 0).toLocaleString('en-PH', {

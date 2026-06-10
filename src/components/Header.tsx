@@ -28,6 +28,8 @@ const Header: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
+  const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
+  const workspace = isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects';
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
 
   const handleUserMenuClick = (event: React.MouseEvent<HTMLElement>) => {
@@ -78,7 +80,7 @@ const Header: React.FC = () => {
             component="div"
             sx={{ fontWeight: 600, color: '#2c5aa0', letterSpacing: '0.5px' }}
           >
-            {isFinanceWorkspace ? 'Finance' : 'Project Monitoring System'}
+            {isFinanceWorkspace ? 'Finance' : isSalesWorkspace ? 'Sales' : 'Project Monitoring System'}
           </Typography>
         </Box>
         
@@ -86,12 +88,14 @@ const Header: React.FC = () => {
           {isAuthenticated ? (
             <>
               <ToggleButtonGroup
-                value={isFinanceWorkspace ? 'finance' : 'projects'}
+                value={workspace}
                 exclusive
                 size="small"
                 onChange={(_, value) => {
-                  if (value === 'projects' && isFinanceWorkspace) navigate('/dashboard');
-                  if (value === 'finance' && !isFinanceWorkspace) navigate('/finance');
+                  if (!value || value === workspace) return;
+                  if (value === 'projects') navigate('/dashboard');
+                  if (value === 'sales') navigate('/sales');
+                  if (value === 'finance') navigate('/finance');
                 }}
                 sx={{
                   '& .MuiToggleButton-root': {
@@ -111,6 +115,7 @@ const Header: React.FC = () => {
                 }}
               >
                 <ToggleButton value="projects">Projects</ToggleButton>
+                <ToggleButton value="sales">Sales</ToggleButton>
                 <ToggleButton value="finance">Finance</ToggleButton>
               </ToggleButtonGroup>
 

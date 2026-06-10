@@ -12,7 +12,7 @@ export default function CompareView() {
   const quotations = useMemo(() => allQuotations.filter((q) => q.projectId === id), [allQuotations, id]);
   const clients = useQuotationStore((s) => s.clients);
 
-  if (!project) return <Typography>Project not found. <Link to="/calcsheet/projects">Back</Link></Typography>;
+  if (!project) return <Typography>Project not found. <Link to="/sales/calcsheet/projects">Back</Link></Typography>;
 
   const ioct = quotations.find((q) => q.kind === 'IOCT');
   const acti = quotations.find((q) => q.kind === 'ACTI');
@@ -102,7 +102,7 @@ export default function CompareView() {
           <Typography variant="h5" sx={{ fontWeight: 600 }}>{project.name} · Comparison</Typography>
         </Stack>
         <Box>
-          <Link to={`/calcsheet/projects/${project.id}`} style={{ color: 'inherit' }}>← Back to project</Link>
+          <Link to={`/sales/calcsheet/projects/${project.id}`} style={{ color: 'inherit' }}>← Back to project</Link>
         </Box>
       </Stack>
 

@@ -236,7 +236,7 @@ export default function QuotationEditor() {
   }, [currentUser?.contact_number, currentUser?.designation, currentUser?.email, currentUser?.full_name, currentUser?.id, currentUser?.username, salesContacts]);
 
   if (!saved || !draft || !project || !totals) {
-    return <Typography>Quotation not found. <Link to="/calcsheet/projects">Back</Link></Typography>;
+    return <Typography>Quotation not found. <Link to="/sales/calcsheet/projects">Back</Link></Typography>;
   }
   // Alias for downstream code that previously referenced `quotation` directly.
   // All field/row operations below mutate `draft` (via setDraft); reads see the
@@ -307,7 +307,7 @@ export default function QuotationEditor() {
       if (!proceed) return;
     }
     const copy = await duplicateQuotation(quotation.id);
-    if (copy) navigate(`/calcsheet/quotations/${copy.id}`);
+    if (copy) navigate(`/sales/calcsheet/quotations/${copy.id}`);
   };
 
   // Section A — General Requirements
@@ -607,7 +607,7 @@ export default function QuotationEditor() {
           >
             Export Excel
           </Button>
-          <Button component={Link} to={`/calcsheet/projects/${project.id}`} variant="text" size="small">← Project</Button>
+          <Button component={Link} to={`/sales/calcsheet/projects/${project.id}`} variant="text" size="small">← Project</Button>
         </Stack>
       </Stack>
 
