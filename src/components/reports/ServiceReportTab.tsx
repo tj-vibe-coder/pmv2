@@ -499,7 +499,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     }
   };
 
-  const buildPdf = async (preview: boolean): Promise<{ blob: Blob; filename: string } | void> => {
+  const buildPdf = async (preview: boolean): Promise<{ blob: Blob; filename: string; missingPhotos: number } | void> => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const margin = 16;
     const contentWidth = 210 - margin * 2;
@@ -522,11 +522,14 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     const reportDateStr = serviceReportDate ? new Date(serviceReportDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
     // ------------------------------------------------------------------
-    // Pre-fetch photo data URLs (done photos only)
+    // Pre-fetch photo data URLs. A photo is embeddable when its original
+    // file is still in memory (even if the OneDrive upload failed) or when
+    // it was uploaded and can be re-fetched from OneDrive. The PDF must not
+    // silently drop attached photos just because the upload didn't succeed.
     // ------------------------------------------------------------------
-    const donePhotos = photos.filter(p => p.uploadStatus === 'done' && p.oneDriveId);
+    const exportablePhotos = photos.filter(p => p.file || (p.uploadStatus === 'done' && p.oneDriveId));
     const photoDataUrls = new Map<string, string>();
-    if (donePhotos.length > 0) {
+    if (exportablePhotos.length > 0) {
       let pdToken: string | null = null;
       let pdDriveId: string | null = null;
       if (oneDriveSignedIn) {
@@ -535,13 +538,20 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           if (pdToken) pdDriveId = await resolveCorporateDriveId(pdToken);
         } catch (_) {}
       }
-      await Promise.allSettled(donePhotos.map(async (photo) => {
+      await Promise.allSettled(exportablePhotos.map(async (photo) => {
         try {
           let blob: Blob | undefined;
           if (photo.file) {
             blob = photo.file;
           } else if (pdToken && pdDriveId && photo.oneDriveId) {
             blob = await fetchDriveItemBlob(pdToken, pdDriveId, photo.oneDriveId);
+            // Photos uploaded before HEIC→JPEG conversion existed are stored
+            // as .heic on OneDrive — browsers can't decode them directly.
+            const lowerName = (photo.filename || '').toLowerCase();
+            if (blob && (lowerName.endsWith('.heic') || lowerName.endsWith('.heif') ||
+                blob.type === 'image/heic' || blob.type === 'image/heif')) {
+              blob = await convertHeicToJpeg(new File([blob], photo.filename || 'photo.heic', { type: blob.type }));
+            }
           }
           if (blob) {
             // Bake EXIF orientation into the canvas before handing to jsPDF
@@ -551,6 +561,9 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         } catch (_) {}
       }));
     }
+    // Photos that couldn't be resolved to image data (e.g. saved-report photos
+    // with no OneDrive token, or undecodable formats) — surfaced to the user.
+    const missingPhotos = exportablePhotos.length - photoDataUrls.size;
 
     // Helper: add a grid of photos to the PDF, returns new Y
     const addPhotoGrid = async (items: PhotoItem[], startY: number): Promise<number> => {
@@ -606,7 +619,8 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         // Caption: filename under the photo
         fontBody();
         doc.setFontSize(7);
-        const caption = (photo.filename || '').replace(/^[^_]*_[^_]*_\d+\./, '').slice(0, 40) || photo.filename || '';
+        const rawName = photo.filename || photo.file?.name || '';
+        const caption = rawName.replace(/^[^_]*_[^_]*_\d+\./, '').slice(0, 40) || rawName;
         doc.text(caption, x, rowTopY + photoMaxH + captionH, { maxWidth: photoW });
 
         col++;
@@ -713,11 +727,11 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     if (photoPlacement === 'inline' && photoDataUrls.size > 0) {
       // Group: per-activity first (skip -1 which renders after recommendations), then general
       const activityIndices = Array.from(
-        new Set(donePhotos.filter(p => p.activityIndex !== undefined && p.activityIndex >= 0).map(p => p.activityIndex as number))
+        new Set(exportablePhotos.filter(p => p.activityIndex !== undefined && p.activityIndex >= 0).map(p => p.activityIndex as number))
       ).sort((a, b) => a - b);
 
       for (const idx of activityIndices) {
-        const groupPhotos = donePhotos.filter(p => p.activityIndex === idx && photoDataUrls.has(p.localId));
+        const groupPhotos = exportablePhotos.filter(p => p.activityIndex === idx && photoDataUrls.has(p.localId));
         if (groupPhotos.length === 0) continue;
         const activityLabel = tableRows[idx]?.activity?.trim() || `Activity ${idx + 1}`;
         ensurePhotoSectionFits();
@@ -729,7 +743,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         y += sectionGap;
       }
 
-      const generalPhotos = donePhotos.filter(p => p.activityIndex === undefined && photoDataUrls.has(p.localId));
+      const generalPhotos = exportablePhotos.filter(p => p.activityIndex === undefined && photoDataUrls.has(p.localId));
       if (generalPhotos.length > 0) {
         ensurePhotoSectionFits();
         fontTitle();
@@ -759,7 +773,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     y += boxHeight + sectionGap;
 
     // Recommendations photos (activityIndex === -1) — always inline, right after the box
-    const recPhotos = donePhotos.filter(p => p.activityIndex === -1 && photoDataUrls.has(p.localId));
+    const recPhotos = exportablePhotos.filter(p => p.activityIndex === -1 && photoDataUrls.has(p.localId));
     if (recPhotos.length > 0) {
       ensurePhotoSectionFits();
       fontTitle();
@@ -774,7 +788,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     // Photos — end-of-report mode: all non-recommendations photos at end
     // ------------------------------------------------------------------
     if (photoPlacement === 'end' && photoDataUrls.size > 0) {
-      const endPhotos = donePhotos.filter(p => p.activityIndex !== -1 && photoDataUrls.has(p.localId));
+      const endPhotos = exportablePhotos.filter(p => p.activityIndex !== -1 && photoDataUrls.has(p.localId));
       if (endPhotos.length > 0) {
         ensurePhotoSectionFits();
         fontTitle();
@@ -834,12 +848,22 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     const filename = `${reportNo.replace(/\s*-\s*/g, '-').replace(/\s+/g, '')}.pdf`;
     const blob = doc.output('blob') as Blob;
     if (!preview) doc.save(filename);
-    return { blob, filename };
+    return { blob, filename, missingPhotos };
   };
+
+  const missingPhotosNote = (count: number): string =>
+    count > 0
+      ? ` ${count} attached photo(s) could not be included in the PDF — sign in to OneDrive so saved photos can be fetched.`
+      : '';
 
   const handlePreview = async () => {
     const result = await buildPdf(true);
-    if (result) onPreview(result.blob, 'Service Report');
+    if (result) {
+      if (result.missingPhotos > 0) {
+        setExportFeedback({ severity: 'warning', message: missingPhotosNote(result.missingPhotos).trim() });
+      }
+      onPreview(result.blob, 'Service Report');
+    }
   };
 
   const handleExport = async () => {
@@ -848,17 +872,18 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     try {
       const result = await buildPdf(false);
       if (!result) return;
+      const photoNote = missingPhotosNote(result.missingPhotos);
       if (!isCorporateOneDriveConfigured()) {
-        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. OneDrive is not configured.' });
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. OneDrive is not configured.' + photoNote });
         return;
       }
       if (!oneDriveSignedIn) {
-        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Sign in to OneDrive to upload it.' });
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Sign in to OneDrive to upload it.' + photoNote });
         return;
       }
       const token = await getOneDriveToken();
       if (!token) {
-        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Could not get OneDrive access token.' });
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Could not get OneDrive access token.' + photoNote });
         return;
       }
       const driveId = await resolveCorporateDriveId(token);
@@ -876,7 +901,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         }
       }
       await uploadFileToFolderById(token, driveId, folderId, result.filename, result.blob);
-      setExportFeedback({ severity: 'success', message: `PDF exported and uploaded to OneDrive: ${result.filename}` });
+      setExportFeedback({
+        severity: photoNote ? 'warning' : 'success',
+        message: `PDF exported and uploaded to OneDrive: ${result.filename}.` + photoNote,
+      });
     } catch (e) {
       setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'PDF exported locally, but OneDrive upload failed.' });
     } finally {
@@ -1132,7 +1160,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
             <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
           </Select>
         </FormControl>
-        {photos.some(p => p.uploadStatus === 'done') && (
+        {photos.some(p => p.file || p.uploadStatus === 'done') && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>Photos in PDF:</Typography>
             <ToggleButtonGroup size="small" exclusive value={photoPlacement} onChange={(_, v) => { if (v) setPhotoPlacement(v); }}>
