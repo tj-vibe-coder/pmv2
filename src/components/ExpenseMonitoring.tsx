@@ -143,7 +143,8 @@ const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR + 2 - 2025 }, (_, i) => 2
 
 const ExpenseMonitoring: React.FC = () => {
   const location = useLocation();
-  const isChildRoute = location.pathname === '/expense-monitoring/ca-form' || location.pathname === '/expense-monitoring/liquidation-form' || location.pathname === '/expense-monitoring/direct-labor';
+  // Mounted under both /expense-monitoring and /finance/expense-monitoring — match by suffix
+  const isChildRoute = /\/(ca-form|liquidation-form|direct-labor)$/.test(location.pathname);
   
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [selectedYear, setSelectedYear] = useState<number>(0);
@@ -181,7 +182,7 @@ const ExpenseMonitoring: React.FC = () => {
 
   // Reload expenses when navigating within expense monitoring (e.g. back from Liquidation form) so liquidations are reflected
   useEffect(() => {
-    if (location.pathname.startsWith('/expense-monitoring')) {
+    if (location.pathname.includes('/expense-monitoring')) {
       setExpenses(loadExpenses());
     }
   }, [location.pathname]);

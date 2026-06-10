@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   AppBar,
   Toolbar,
@@ -12,7 +12,9 @@ import {
   ListItemIcon,
   ListItemText,
   Avatar,
-  Chip
+  Chip,
+  ToggleButton,
+  ToggleButtonGroup
 } from '@mui/material';
 import {
   Login as LoginIcon,
@@ -24,6 +26,8 @@ import { useAuth } from '../contexts/AuthContext';
 const Header: React.FC = () => {
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
 
   const handleUserMenuClick = (event: React.MouseEvent<HTMLElement>) => {
@@ -74,13 +78,42 @@ const Header: React.FC = () => {
             component="div"
             sx={{ fontWeight: 600, color: '#2c5aa0', letterSpacing: '0.5px' }}
           >
-            Project Monitoring System
+            {isFinanceWorkspace ? 'Finance' : 'Project Monitoring System'}
           </Typography>
         </Box>
         
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           {isAuthenticated ? (
             <>
+              <ToggleButtonGroup
+                value={isFinanceWorkspace ? 'finance' : 'projects'}
+                exclusive
+                size="small"
+                onChange={(_, value) => {
+                  if (value === 'projects' && isFinanceWorkspace) navigate('/dashboard');
+                  if (value === 'finance' && !isFinanceWorkspace) navigate('/finance');
+                }}
+                sx={{
+                  '& .MuiToggleButton-root': {
+                    textTransform: 'none',
+                    fontSize: '0.8125rem',
+                    px: 1.5,
+                    py: 0.4,
+                    color: '#2c5aa0',
+                    borderColor: 'rgba(44,90,160,0.4)',
+                    '&.Mui-selected': {
+                      backgroundColor: '#2c5aa0',
+                      color: 'white',
+                      '&:hover': { backgroundColor: '#1e4a72' },
+                    },
+                    '&:hover': { backgroundColor: 'rgba(44,90,160,0.08)' },
+                  },
+                }}
+              >
+                <ToggleButton value="projects">Projects</ToggleButton>
+                <ToggleButton value="finance">Finance</ToggleButton>
+              </ToggleButtonGroup>
+
               <Chip
                 label={user?.role.toUpperCase()}
                 size="small"

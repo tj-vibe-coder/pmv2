@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { Box } from '@mui/material';
@@ -31,6 +31,7 @@ import InvestmentTrackerPage from './components/InvestmentTrackerPage';
 import CollectionsDashboard from './components/CollectionsDashboard';
 import PayrollDashboard from './components/payroll/PayrollDashboard';
 import PayrollGuard from './components/payroll/PayrollGuard';
+import FinanceHomePage from './components/finance/FinanceHomePage';
 import CalcsheetProjects from './components/calcsheet/CalcsheetProjects';
 import CalcsheetLegacyImport from './components/calcsheet/CalcsheetLegacyImport';
 import CalcsheetProjectDetail from './components/calcsheet/CalcsheetProjectDetail';
@@ -144,6 +145,12 @@ const RedirectEhsToUtilities: React.FC = () => {
   const { tab } = useParams<{ tab?: string }>();
   const to = tab ? `/utilities/ehs/${tab}` : '/utilities/ehs';
   return <Navigate to={to} replace />;
+};
+
+// Redirect preserving the query string (e.g. /collections?project_id=X → /finance/collections?project_id=X)
+const RedirectWithSearch: React.FC<{ to: string }> = ({ to }) => {
+  const location = useLocation();
+  return <Navigate to={`${to}${location.search}`} replace />;
 };
 
 // Main App Layout component
@@ -340,8 +347,33 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            {/* ===== FINANCE WORKSPACE ===== */}
+            {/* Legacy finance paths redirect into the workspace, preserving query strings */}
+            <Route path="/investment-tracker" element={<RedirectWithSearch to="/finance/investment-tracker" />} />
+            <Route path="/payroll" element={<RedirectWithSearch to="/finance/payroll" />} />
+            <Route path="/collections" element={<RedirectWithSearch to="/finance/collections" />} />
             <Route
-              path="/investment-tracker"
+              path="/finance"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <FinanceHomePage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/collections"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CollectionsDashboard />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/investment-tracker"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -351,7 +383,7 @@ function App() {
               }
             />
             <Route
-              path="/payroll"
+              path="/finance/payroll"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -362,16 +394,30 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            {/* Parallel mount of Expense Monitoring inside the Finance workspace (same components, same data) */}
             <Route
-              path="/collections"
+              path="/finance/expense-monitoring"
               element={
                 <ProtectedRoute>
                   <AppLayout>
-                    <CollectionsDashboard />
+                    <ExpenseMonitoring />
                   </AppLayout>
                 </ProtectedRoute>
               }
-            />
+            >
+              <Route
+                path="liquidation-form"
+                element={<LiquidationFormPage />}
+              />
+              <Route
+                path="ca-form"
+                element={<CAFormPage />}
+              />
+              <Route
+                path="direct-labor"
+                element={<DirectLaborPage />}
+              />
+            </Route>
             {/* ===== CALCSHEET ===== */}
             <Route
               path="/calcsheet"

@@ -1084,7 +1084,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                               size="small"
                               variant="text"
                               endIcon={<OpenInNewIcon fontSize="small" />}
-                              onClick={() => navigate(`/collections?project_id=${encodeURIComponent(String(project.id))}`)}
+                              onClick={() => navigate(`/finance/collections?project_id=${encodeURIComponent(String(project.id))}`)}
                               sx={{ color: 'text.secondary' }}
                             >
                               View in AR
@@ -1326,7 +1326,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                                   <Tooltip title="View in Collections & AR">
                                     <IconButton
                                       size="small"
-                                      onClick={() => navigate(`/collections?project_id=${encodeURIComponent(String(project.id))}`)}
+                                      onClick={() => navigate(`/finance/collections?project_id=${encodeURIComponent(String(project.id))}`)}
                                     >
                                       <OpenInNewIcon fontSize="small" />
                                     </IconButton>
