@@ -26,12 +26,24 @@
  *   - Grant admin consent for the tenant.
  */
 
+// The app is served from multiple origins (localhost:3000, pmv2-851ae.web.app,
+// pm.iocontroltech.com — all registered as SPA redirect URIs in Azure). A redirect
+// URI baked in at build time for one origin silently breaks login on the others:
+// the auth response lands on a different origin that has no PKCE code verifier,
+// the token exchange fails, and the account is never cached — so the user is
+// asked to sign in on every visit. Only honor the env value when it matches the
+// origin the app is actually running on; otherwise use the current origin.
+function resolveRedirectUri(): string {
+  const envUri = process.env.REACT_APP_ONEDRIVE_REDIRECT_URI || '';
+  if (typeof window === 'undefined') return envUri || 'http://localhost:3000';
+  if (envUri && envUri.startsWith(window.location.origin)) return envUri;
+  return window.location.origin;
+}
+
 export const onedriveConfig = {
   clientId: process.env.REACT_APP_ONEDRIVE_CLIENT_ID || '',
   tenantId: process.env.REACT_APP_ONEDRIVE_TENANT_ID || 'common',
-  redirectUri:
-    process.env.REACT_APP_ONEDRIVE_REDIRECT_URI ||
-    (typeof window !== 'undefined' ? `${window.location.origin}/` : 'http://localhost:3000'),
+  redirectUri: resolveRedirectUri(),
 
   // Delegated Graph scopes. Files.ReadWrite.All + Sites.ReadWrite.All cover both the
   // legacy personal-OneDrive AttachmentsTab flow and the new corporate shared library.

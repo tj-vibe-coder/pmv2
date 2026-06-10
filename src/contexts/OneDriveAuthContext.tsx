@@ -50,6 +50,37 @@ function getMsalInstance(): PublicClientApplication | null {
   return msalInstance;
 }
 
+/**
+ * Acquire an access token for the cached account. Azure caps SPA refresh
+ * tokens at 24 hours, so acquireTokenSilent starts failing one day after
+ * sign-in even though the account is still cached. When that happens, fall
+ * back to ssoSilent, which renews tokens through a hidden iframe using the
+ * Microsoft session cookie — no user interaction, no page navigation. Returns
+ * null only when both paths fail (e.g. third-party cookies blocked AND the
+ * refresh token expired), in which case an interactive login is required.
+ */
+async function acquireTokenWithFallback(msal: PublicClientApplication): Promise<string | null> {
+  const accounts = msal.getAllAccounts();
+  if (accounts.length === 0) return null;
+  try {
+    const result: AuthenticationResult = await msal.acquireTokenSilent({
+      scopes: onedriveConfig.scopes,
+      account: accounts[0],
+    });
+    return result?.accessToken || null;
+  } catch {
+    try {
+      const result = await msal.ssoSilent({
+        scopes: onedriveConfig.scopes,
+        loginHint: accounts[0].username,
+      });
+      return result?.accessToken || null;
+    } catch {
+      return null;
+    }
+  }
+}
+
 export const OneDriveAuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -83,6 +114,12 @@ export const OneDriveAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }
       const accounts = msal.getAllAccounts();
       setIsAuthenticated(accounts.length > 0);
+      if (accounts.length > 0) {
+        // Warm the token cache in the background so a 24h-expired refresh
+        // token is renewed via ssoSilent at app open instead of failing
+        // mid-action (e.g. during a report upload). Best-effort.
+        void acquireTokenWithFallback(msal);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'OneDrive init failed');
     } finally {
@@ -111,7 +148,14 @@ export const OneDriveAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       // reload per session; after that, acquireTokenSilent serves all calls.
       // eslint-disable-next-line no-console
       console.info('[OneDrive] loginRedirect called; scopes=', onedriveConfig.scopes, 'redirectUri=', onedriveConfig.redirectUri);
-      await msal.loginRedirect({ scopes: onedriveConfig.scopes });
+      // redirectStartPage: after the Microsoft round-trip lands on the
+      // registered redirectUri (site root) and handleRedirectPromise()
+      // processes the response, MSAL navigates back to the page the user
+      // started from — instead of stranding them on the homepage.
+      await msal.loginRedirect({
+        scopes: onedriveConfig.scopes,
+        redirectStartPage: window.location.href,
+      });
       // Note: control does not return from loginRedirect — the browser navigates
       // away. Anything after this line only runs if the call rejected.
     } catch (e) {
@@ -140,19 +184,9 @@ export const OneDriveAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const getAccessToken = useCallback(async (): Promise<string | null> => {
     if (!isConfigured) return null;
-    try {
-      const msal = getMsalInstance();
-      if (!msal) return null;
-      const accounts = msal.getAllAccounts();
-      if (accounts.length === 0) return null;
-      const result: AuthenticationResult = await msal.acquireTokenSilent({
-        scopes: onedriveConfig.scopes,
-        account: accounts[0],
-      });
-      return result?.accessToken || null;
-    } catch {
-      return null;
-    }
+    const msal = getMsalInstance();
+    if (!msal) return null;
+    return acquireTokenWithFallback(msal);
   }, [isConfigured]);
 
   // Publish auth state to the non-React singleton so the Zustand store and other
