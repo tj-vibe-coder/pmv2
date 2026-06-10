@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton,
-  InputAdornment, LinearProgress, MenuItem, Paper, Snackbar, Stack, Switch, FormControlLabel,
+  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, FormControl,
+  IconButton, InputAdornment, InputLabel, LinearProgress, ListItemText, MenuItem, OutlinedInput, Paper,
+  Select, Snackbar, Stack, Switch, FormControlLabel,
   Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, TextField, Typography, Tooltip,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -24,6 +25,11 @@ import { ensureProposalFolder, ensureExecutionFolder, moveProposalToExecution } 
 const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error' | 'warning'> = {
   draft: 'default', sent: 'primary', won: 'success', lost: 'error', inactive: 'warning',
 };
+
+// Single source of truth for the status options used by the multi-select filter
+// and the inline status dropdown. Keep `inactive` here — it's part of ProjectStatus.
+const STATUS_OPTIONS: ProjectStatus[] = ['draft', 'sent', 'won', 'lost', 'inactive'];
+const statusLabel = (s: ProjectStatus) => s.charAt(0).toUpperCase() + s.slice(1);
 
 type SortKey = 'code' | 'name' | 'customer' | 'date' | 'status' | 'grandTotal' | 'margin';
 type SortDir = 'asc' | 'desc';
@@ -194,7 +200,7 @@ export default function Projects() {
 
   // ── filter + sort state ────────────────────────────────────────────────────
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<ProjectStatus[]>([]);
   const [customerFilter, setCustomerFilter] = useState<string>('all');
   const [yearFilter, setYearFilter] = useState<string>('all');
   const [legacyFilter, setLegacyFilter] = useState<'all' | 'legacy' | 'current'>('all');
@@ -268,7 +274,7 @@ export default function Projects() {
         const hay = `${p.code} ${p.name} ${p.location ?? ''} ${customer?.name ?? ''} ${customer?.code ?? ''} ${partner?.name ?? ''}`.toLowerCase();
         if (!hay.includes(s)) return false;
       }
-      if (statusFilter !== 'all' && p.status !== statusFilter) return false;
+      if (statusFilter.length > 0 && !statusFilter.includes(p.status)) return false;
       if (customerFilter !== 'all' && p.customerId !== customerFilter) return false;
       if (yearFilter !== 'all' && String(year) !== yearFilter) return false;
       if (legacyFilter === 'legacy' && !hasLegacy) return false;
@@ -339,11 +345,11 @@ export default function Projects() {
   }, []);
 
   const clearFilters = () => {
-    setSearch(''); setStatusFilter('all'); setCustomerFilter('all');
+    setSearch(''); setStatusFilter([]); setCustomerFilter('all');
     setYearFilter('all'); setLegacyFilter('all'); setOngoingOnly(false);
   };
 
-  const anyFilterActive = search || statusFilter !== 'all' || customerFilter !== 'all'
+  const anyFilterActive = search || statusFilter.length > 0 || customerFilter !== 'all'
     || yearFilter !== 'all' || legacyFilter !== 'all' || ongoingOnly;
 
   const SortHeader = ({ k, label, align = 'left' }: { k: SortKey; label: string; align?: 'left' | 'right' }) => (
@@ -495,18 +501,27 @@ export default function Projects() {
               ) : null,
             }}
           />
-          <TextField
-            select size="small" label="Status" value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as ProjectStatus | 'all')}
-            sx={{ minWidth: 120 }}
-          >
-            <MenuItem value="all">All</MenuItem>
-            <MenuItem value="draft">Draft</MenuItem>
-            <MenuItem value="sent">Sent</MenuItem>
-            <MenuItem value="won">Won</MenuItem>
-            <MenuItem value="lost">Lost</MenuItem>
-            <MenuItem value="inactive">Inactive</MenuItem>
-          </TextField>
+          <FormControl size="small" sx={{ minWidth: 170 }}>
+            <InputLabel>Status</InputLabel>
+            <Select
+              multiple
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as ProjectStatus[])}
+              input={<OutlinedInput label="Status" />}
+              renderValue={(selected) =>
+                selected.length === STATUS_OPTIONS.length
+                  ? 'All'
+                  : selected.map(statusLabel).join(', ')
+              }
+            >
+              {STATUS_OPTIONS.map((status) => (
+                <MenuItem key={status} value={status}>
+                  <Checkbox size="small" checked={statusFilter.includes(status)} />
+                  <ListItemText primary={statusLabel(status)} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
           <TextField
             select size="small" label="Customer" value={customerFilter}
             onChange={(e) => setCustomerFilter(e.target.value)}
@@ -611,7 +626,25 @@ export default function Projects() {
                 <TableCell>{p.date ? format(new Date(p.date), 'dd MMM yyyy') : '—'}</TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Chip size="small" label={p.status} color={statusColors[p.status]} />
+                    <Select
+                      size="small"
+                      value={p.status}
+                      onChange={(e) => updateProject(p.id, { status: e.target.value as ProjectStatus })}
+                      sx={{
+                        minWidth: 96,
+                        '& .MuiSelect-select': { py: 0.25, display: 'flex', alignItems: 'center' },
+                        '& .MuiOutlinedInput-notchedOutline': { border: 'none' },
+                        '&:hover .MuiOutlinedInput-notchedOutline': { border: '1px solid', borderColor: 'grey.400' },
+                        '&.Mui-focused .MuiOutlinedInput-notchedOutline': { border: '1px solid', borderColor: 'primary.main' },
+                      }}
+                      MenuProps={{ sx: { '& .MuiMenuItem-root': { fontSize: '0.8rem' } } }}
+                    >
+                      {STATUS_OPTIONS.map((s) => (
+                        <MenuItem key={s} value={s} dense>
+                          <Chip size="small" label={s} color={statusColors[s]} sx={{ minWidth: 60 }} />
+                        </MenuItem>
+                      ))}
+                    </Select>
                     {p.ongoing && <Chip size="small" label="active" variant="outlined" sx={{ height: 18 }} />}
                   </Stack>
                 </TableCell>
