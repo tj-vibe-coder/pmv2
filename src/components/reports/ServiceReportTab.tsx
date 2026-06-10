@@ -632,9 +632,9 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       } catch (_) {}
     } else if (reportCompany === 'IOCT') {
       try {
-        const { loadLogoTransparentBackground, IOCT_ICON_LOGO_PDF_SIZE } = await import('../../utils/logoUtils');
+        const { loadImageDataUrl, IOCT_ICON_LOGO_PDF_SIZE } = await import('../../utils/logoUtils');
         const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
-        const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+        const logoDataUrl = await loadImageDataUrl(logoUrl);
         doc.addImage(logoDataUrl, 'PNG', margin, y, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
         y += IOCT_ICON_LOGO_PDF_SIZE + 4;
       } catch (_) {}
