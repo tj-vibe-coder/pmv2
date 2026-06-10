@@ -227,11 +227,6 @@ function getProjectNo(project: Project | undefined): string {
   return (project.project_no || String(project.item_no ?? project.id)).trim() || 'GEN';
 }
 
-/** Strip IOCT (or similar) prefix from project number for PO display (e.g. IOCT2602002 -> 2602002). */
-function projectNoWithoutPrefix(projectNo: string): string {
-  return (projectNo || '').replace(/^IOCT/i, '').trim() || projectNo || '';
-}
-
 /** Next sequential PO number: "{number}-{seq}" e.g. 2602002-001 (no IOCT, no PO). */
 function getNextPONumber(projectId: string | number | null, existingPOs: PurchaseOrder[], projects: Project[]): string {
   const project = projectId != null ? projects.find((p) => String(p.id) === String(projectId)) : undefined;

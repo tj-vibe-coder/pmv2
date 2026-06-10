@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Box,
   Paper,
@@ -243,7 +243,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       prev.forEach(p => { if (p.previewUrl) URL.revokeObjectURL(p.previewUrl); });
       return [];
     });
-  }, []);
+  }, [clientApprover?.name, clientApprover?.designation, clientApprover?.company]);
 
   const loadServiceReports = useCallback(async () => {
     setSrLoading(true);
