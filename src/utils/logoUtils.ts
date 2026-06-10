@@ -47,3 +47,21 @@ export const IOCT_LOGO_PDF_HEIGHT = 11.4;
 
 /** Default IOCT icon-only mark size in PDF (mm). */
 export const IOCT_ICON_LOGO_PDF_SIZE = 16;
+
+/**
+ * Load an image as a data URL using fetch + FileReader, bypassing canvas entirely.
+ * Use this for images with opaque white backgrounds (like the IOCT icon) where
+ * dark-background removal is not needed and canvas getImageData may be restricted.
+ */
+export const loadImageDataUrl = (url: string): Promise<string> =>
+  fetch(url)
+    .then(r => {
+      if (!r.ok) throw new Error(`Failed to fetch image: ${r.status}`);
+      return r.blob();
+    })
+    .then(blob => new Promise<string>((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result as string);
+      fr.onerror = () => reject(new Error('FileReader error'));
+      fr.readAsDataURL(blob);
+    }));

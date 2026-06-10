@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Alert, Box, Paper, Typography, Button, TextField, FormControl, InputLabel, Select, MenuItem, Grid } from '@mui/material';
-import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
+import { Alert, Box, Chip, CircularProgress, Paper, Typography, Button, TextField, FormControl, InputLabel, Select, MenuItem, Grid } from '@mui/material';
+import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, CloudUpload as CloudUploadIcon, CheckCircle as CheckCircleIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
 import jsPDF from 'jspdf';
 import { REPORT_COMPANIES, type ReportCompanyKey } from '../ProjectDetails';
@@ -11,6 +11,30 @@ import { resolveCorporateDriveId, uploadFileToFolderById, ensureExecutionFolder 
 import dataService from '../../services/dataService';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
+
+// Mirror of ISSUER_INFO from pdfExport.tsx — same branding data for report headers.
+const COC_ISSUER = {
+  IOCT: {
+    addressLines: [
+      'B63, L7 Dynamism Jubilation Enclave,',
+      'Santo Niño, City of Biñan, Laguna,',
+      'Region IV-A (Calabarzon), 4024',
+    ],
+    tin: 'TIN: 697-029-976-00000',
+    logoFile: '/logo-ioct-only.png',
+    logoW: 20,
+    logoH: 20,
+    useDirectLoad: true as const,
+  },
+  ACT: {
+    addressLines: ['Block 13, Mindanao Ave., Cavite, Philippines'],
+    tin: '',
+    logoFile: '/logo-acti.png',
+    logoW: 22,
+    logoH: 13.6,
+    useDirectLoad: false as const,
+  },
+};
 
 export interface CompletionCertificateTabProps {
   project: Project;
@@ -50,7 +74,13 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
   onPreview,
   clientApprover,
 }) => {
-  const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const {
+    isConfigured: oneDriveConfigured,
+    isAuthenticated: oneDriveSignedIn,
+    isLoading: oneDriveAuthLoading,
+    login: oneDriveLogin,
+    getAccessToken: getOneDriveToken,
+  } = useOneDriveAuth();
   const [exporting, setExporting] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
   // Local copy of execution folder id — updated if we auto-create the folder on first export
@@ -106,30 +136,52 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     const clientName = project.account_name || '—';
     const completionDate = completionDateDisplay;
 
-    // Optional company logo (e.g. ACT, IOCT)
-    if (reportCompany === 'ACT') {
-      try {
-        const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
-        const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-        doc.addImage(logoDataUrl, 'PNG', margin, y, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT);
-        y += ACT_LOGO_PDF_HEIGHT + 4;
-      } catch (_) {}
-    } else if (reportCompany === 'IOCT') {
-      try {
-        const { loadLogoTransparentBackground, IOCT_ICON_LOGO_PDF_SIZE } = await import('../../utils/logoUtils');
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
-        const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-        doc.addImage(logoDataUrl, 'PNG', margin, y, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
-        y += IOCT_ICON_LOGO_PDF_SIZE + 4;
-      } catch (_) {}
-    }
+    // ── Header: logo + company info (left) | document title (right) ───────────
+    const issuerInfo = COC_ISSUER[reportCompany];
+    const rightX = pageWidth - margin;
+    const headerStartY = y;
 
-    // Main title – centered (certificate-style large)
+    // Logo (top-left)
+    let logoBottomY = headerStartY;
+    try {
+      const logoUrl = `${process.env.PUBLIC_URL || ''}${issuerInfo.logoFile}`;
+      let logoDataUrl: string;
+      if (issuerInfo.useDirectLoad) {
+        const { loadImageDataUrl } = await import('../../utils/logoUtils');
+        logoDataUrl = await loadImageDataUrl(logoUrl);
+      } else {
+        const { loadLogoTransparentBackground } = await import('../../utils/logoUtils');
+        logoDataUrl = await loadLogoTransparentBackground(logoUrl);
+      }
+      doc.addImage(logoDataUrl, 'PNG', margin, headerStartY, issuerInfo.logoW, issuerInfo.logoH);
+      logoBottomY = headerStartY + issuerInfo.logoH;
+    } catch (_) {}
+
+    // Document title (right column, large, blue)
+    doc.setTextColor(44, 90, 160);
     fontTitle();
     doc.setFontSize(20);
-    doc.text('Certificate of Completion', pageWidth / 2, y, { align: 'center' });
-    y += 7 + sectionGap;
+    doc.text('Certificate of', rightX, headerStartY + 7, { align: 'right' });
+    doc.text('Completion', rightX, headerStartY + 15, { align: 'right' });
+    doc.setTextColor(0, 0, 0);
+
+    // Company name (below logo, left column)
+    let infoY = logoBottomY + 2;
+    doc.setTextColor(44, 90, 160);
+    fontTitle();
+    doc.setFontSize(10);
+    doc.text(companyName, margin, infoY);
+    infoY += 4.5;
+    doc.setTextColor(0, 0, 0);
+
+    // Horizontal divider below header
+    y = Math.max(infoY, headerStartY + 22) + 3;
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineWidth(0.5);
+    doc.line(margin, y, rightX, y);
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.2);
+    y += 8;
 
     // Project information block (left-aligned)
     fontBody();
@@ -354,6 +406,30 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
         <Alert severity={exportFeedback.severity} onClose={() => setExportFeedback(null)} sx={{ mb: 2 }}>
           {exportFeedback.message}
         </Alert>
+      )}
+      {oneDriveConfigured && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+          {oneDriveSignedIn ? (
+            <Chip
+              size="small"
+              icon={<CheckCircleIcon />}
+              label="OneDrive connected — PDF will upload on export"
+              color="success"
+              variant="outlined"
+            />
+          ) : (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={oneDriveAuthLoading ? <CircularProgress size={14} /> : <CloudUploadIcon />}
+              disabled={oneDriveAuthLoading}
+              onClick={oneDriveLogin}
+              sx={{ textTransform: 'none', borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+            >
+              Sign in to OneDrive to enable upload
+            </Button>
+          )}
+        </Box>
       )}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
         <FormControl size="small" sx={{ minWidth: 280 }}>
