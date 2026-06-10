@@ -33,22 +33,19 @@ import {
   PictureAsPdf as PictureAsPdfIcon,
   Cloud as CloudIcon,
   RequestQuote as EstimateIcon,
-  Calculate as CalculateIcon,
   HowToReg as HowToRegIcon,
   AccountBalance as AccountBalanceIcon,
   Badge as BadgeIcon,
   Build as BuildIcon,
-  TrendingUp as TrendingUpIcon,
-  Payments as PaymentsIcon,
-  Paid as PaidIcon,
 } from '@mui/icons-material';
-import { isPayrollAuthorized } from '../config/payrollAccess';
+import FinanceNavList from './finance/FinanceNavList';
+import SalesNavList from './sales/SalesNavList';
 
 const SIDEBAR_WIDTH = 280;
 const SIDEBAR_COLLAPSED_WIDTH = 68;
 
 const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
-const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form', '/expense-monitoring/direct-labor', '/investment-tracker', '/payroll'];
+const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form', '/expense-monitoring/direct-labor'];
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
 const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator', '/utilities/acknowledgement-receipt'];
 
@@ -57,6 +54,8 @@ const Sidebar: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
+  const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
   const [isExpanded, setIsExpanded] = useState(false);
   const [supplyChainOpen, setSupplyChainOpen] = useState(() =>
     SUPPLY_CHAIN_PATHS.some((p) => location.pathname === p)
@@ -151,10 +150,10 @@ const Sidebar: React.FC = () => {
         {isExpanded && (
           <Box>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, color: 'white' }}>
-              Project Monitoring
+              {isFinanceWorkspace ? 'Finance' : isSalesWorkspace ? 'Sales' : 'Project Monitoring'}
             </Typography>
             <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)' }}>
-              Dashboard
+              {isFinanceWorkspace || isSalesWorkspace ? 'Workspace' : 'Dashboard'}
             </Typography>
           </Box>
         )}
@@ -163,6 +162,11 @@ const Sidebar: React.FC = () => {
       <Divider sx={{ borderColor: 'rgba(255,255,255,0.2)', mx: isExpanded ? 2 : 1 }} />
 
       <Box sx={{ flexGrow: 1, mt: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+        {isFinanceWorkspace ? (
+          <FinanceNavList isExpanded={isExpanded} navBtnSx={navBtnSx} iconSx={iconSx} />
+        ) : isSalesWorkspace ? (
+          <SalesNavList isExpanded={isExpanded} navBtnSx={navBtnSx} iconSx={iconSx} />
+        ) : (
         <List sx={{ px: 1 }}>
 
           {/* Project List */}
@@ -203,29 +207,6 @@ const Sidebar: React.FC = () => {
                   <ListItemText
                     primary="Dashboard"
                     secondary="Project insights and analytics"
-                    secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                )}
-              </ListItemButton>
-            </Tooltip>
-          </ListItem>
-
-          {/* Collections & AR */}
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <Tooltip title={isExpanded ? '' : 'Collections & AR'} placement="right" arrow>
-              <ListItemButton
-                selected={location.pathname === '/collections'}
-                onClick={() => navigate('/collections')}
-                sx={navBtnSx(location.pathname === '/collections')}
-              >
-                <ListItemIcon sx={iconSx()}>
-                  <PaidIcon />
-                </ListItemIcon>
-                {isExpanded && (
-                  <ListItemText
-                    primary="Collections & AR"
-                    secondary="Invoices, due dates, collections"
                     secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                     sx={{ color: 'white' }}
                   />
@@ -329,42 +310,6 @@ const Sidebar: React.FC = () => {
                   />
                 </ListItemButton>
               </ListItem>
-              {/* Investment Tracker */}
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
-                <ListItemButton
-                  selected={location.pathname === '/investment-tracker'}
-                  onClick={() => navigate('/investment-tracker')}
-                  sx={navBtnSx(location.pathname === '/investment-tracker', true)}
-                >
-                  <ListItemIcon sx={iconSx(true)}>
-                    <TrendingUpIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Investment Tracker"
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                </ListItemButton>
-              </ListItem>
-              {/* Payroll — only visible to authorized users */}
-              {isPayrollAuthorized(user?.username) && (
-                <ListItem disablePadding sx={{ mb: 0.5 }}>
-                  <ListItemButton
-                    selected={location.pathname === '/payroll'}
-                    onClick={() => navigate('/payroll')}
-                    sx={navBtnSx(location.pathname === '/payroll', true)}
-                  >
-                    <ListItemIcon sx={iconSx(true)}>
-                      <PaymentsIcon fontSize="small" />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary="Payroll"
-                      primaryTypographyProps={{ fontSize: '0.875rem' }}
-                      sx={{ color: 'white' }}
-                    />
-                  </ListItemButton>
-                </ListItem>
-              )}
             </List>
           </Collapse>
 
@@ -392,29 +337,6 @@ const Sidebar: React.FC = () => {
           </ListItem>
 
 
-
-          {/* Calcsheet */}
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <Tooltip title={isExpanded ? '' : 'Calcsheet'} placement="right" arrow>
-              <ListItemButton
-                selected={location.pathname.startsWith('/calcsheet')}
-                onClick={() => navigate('/calcsheet/projects')}
-                sx={navBtnSx(location.pathname.startsWith('/calcsheet'))}
-              >
-                <ListItemIcon sx={iconSx()}>
-                  <CalculateIcon />
-                </ListItemIcon>
-                {isExpanded && (
-                  <ListItemText
-                    primary="Calcsheet"
-                    secondary="Quotations & estimates"
-                    secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                )}
-              </ListItemButton>
-            </Tooltip>
-          </ListItem>
 
           {/* Supply Chain (collapsible) */}
           <ListItem disablePadding sx={{ mb: 0.5 }}>
@@ -736,6 +658,7 @@ const Sidebar: React.FC = () => {
           </Collapse>
 
         </List>
+        )}
       </Box>
 
       <Divider sx={{ borderColor: 'rgba(255,255,255,0.2)', mx: isExpanded ? 2 : 1 }} />

@@ -16,7 +16,7 @@ import { Link } from 'react-router-dom';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { ProjectStatus, Project } from '../../types/Quotation';
 import { format } from 'date-fns';
-import { PHP, computeTotals } from '../../utils/calcsheet/calc';
+import { PHP, computeTotals, ioctMargin } from '../../utils/calcsheet/calc';
 import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
@@ -34,19 +34,27 @@ const statusLabel = (s: ProjectStatus) => s.charAt(0).toUpperCase() + s.slice(1)
 type SortKey = 'code' | 'name' | 'customer' | 'date' | 'status' | 'grandTotal' | 'margin';
 type SortDir = 'asc' | 'desc';
 
-// IOCT gross margin from the quotation's snapshot.
-// For non-legacy: cost fields are real, always returns a value.
-// For legacy: returns null when costs weren't backfilled — those snapshots
-// store cost=subtotal (placeholder), so margin would falsely read as zero.
-function ioctMargin(t: ReturnType<typeof computeTotals>): { value: number; pct: number } | null {
-  const net = t.subtotal - t.discount;
-  if (net <= 0) return null;
-  const totalCost = t.generalReqtsCost + t.componentsCost + t.laborCost;
-  const totalSubtotals = t.generalReqtsSubtotal + t.componentsSubtotal + t.servicesSubtotal;
-  // Cost placeholder: totalCost equals sum of subtotals → no real cost data
-  if (Math.abs(totalCost - totalSubtotals) < 0.01) return null;
-  const value = net - totalCost;
-  return { value, pct: (value / net) * 100 };
+// Last-used sort persists per browser so the list reopens the way the user left it
+const SORT_PREF_KEY = 'calcsheet-projects-sort';
+const SORT_KEYS: SortKey[] = ['code', 'name', 'customer', 'date', 'status', 'grandTotal', 'margin'];
+
+function loadSortPref(): { key: SortKey; dir: SortDir } {
+  try {
+    const raw = localStorage.getItem(SORT_PREF_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (SORT_KEYS.includes(parsed.key) && (parsed.dir === 'asc' || parsed.dir === 'desc')) {
+        return { key: parsed.key, dir: parsed.dir };
+      }
+    }
+  } catch { /* corrupted pref — fall through to default */ }
+  return { key: 'code', dir: 'asc' };
+}
+
+function saveSortPref(key: SortKey, dir: SortDir) {
+  try {
+    localStorage.setItem(SORT_PREF_KEY, JSON.stringify({ key, dir }));
+  } catch { /* storage unavailable (private mode/quota) — sort still works for the session */ }
 }
 
 const empty = {
@@ -205,8 +213,8 @@ export default function Projects() {
   const [yearFilter, setYearFilter] = useState<string>('all');
   const [legacyFilter, setLegacyFilter] = useState<'all' | 'legacy' | 'current'>('all');
   const [ongoingOnly, setOngoingOnly] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>('code');
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [sortKey, setSortKey] = useState<SortKey>(() => loadSortPref().key);
+  const [sortDir, setSortDir] = useState<SortDir>(() => loadSortPref().dir);
 
   const requireOneDriveForProjectCreate = async (): Promise<boolean> => {
     if (!oneDriveRequired || oneDriveSignedIn) return true;
@@ -312,8 +320,12 @@ export default function Projects() {
   }, [filtered, sortKey, sortDir]);
 
   const toggleSort = (key: SortKey) => {
-    if (sortKey === key) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-    else { setSortKey(key); setSortDir(key === 'date' || key === 'grandTotal' ? 'desc' : 'asc'); }
+    const nextDir: SortDir = sortKey === key
+      ? (sortDir === 'asc' ? 'desc' : 'asc')
+      : (key === 'date' || key === 'grandTotal' ? 'desc' : 'asc');
+    setSortKey(key);
+    setSortDir(nextDir);
+    saveSortPref(key, nextDir);
   };
 
   // ── scroll-position memory + last-clicked row highlight ────────────────────
@@ -395,7 +407,7 @@ export default function Projects() {
           )}
           <Button
             component={Link}
-            to="/calcsheet/import-legacy"
+            to="/sales/calcsheet/import-legacy"
             variant="outlined"
             color="warning"
             startIcon={<UploadFileIcon />}
@@ -600,7 +612,7 @@ export default function Projects() {
               >
                 <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
                   <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Link to={`/calcsheet/projects/${p.id}`} style={{ color: 'inherit' }} onClick={onRowClick}>{p.code}</Link>
+                    <Link to={`/sales/calcsheet/projects/${p.id}`} style={{ color: 'inherit' }} onClick={onRowClick}>{p.code}</Link>
                     {hasLegacy && (
                       <Tooltip title="Has legacy quotation(s)">
                         <HistoryIcon fontSize="inherit" color="warning" sx={{ fontSize: '0.85rem' }} />
@@ -614,7 +626,7 @@ export default function Projects() {
                   </Stack>
                 </TableCell>
                 <TableCell>
-                  <Link to={`/calcsheet/projects/${p.id}`} style={{ color: 'inherit', textDecoration: 'none' }} onClick={onRowClick}>
+                  <Link to={`/sales/calcsheet/projects/${p.id}`} style={{ color: 'inherit', textDecoration: 'none' }} onClick={onRowClick}>
                     <Box>
                       <Typography variant="body2" sx={{ fontWeight: 500 }}>{p.name}</Typography>
                       {p.location && <Typography variant="caption" color="text.secondary">{p.location}</Typography>}

@@ -513,7 +513,7 @@ export default function ProjectDetail() {
   const [pdfError, setPdfError] = useState<string>('');
   const [pdfImporting, setPdfImporting] = useState(false);
 
-  if (!project) return <Typography>Project not found. <Link to="/calcsheet/projects">Back</Link></Typography>;
+  if (!project) return <Typography>Project not found. <Link to="/sales/calcsheet/projects">Back</Link></Typography>;
 
   const customer = clients.find((c) => c.id === project.customerId);
   const partner = clients.find((c) => c.id === project.partnerId);
@@ -526,7 +526,7 @@ export default function ProjectDetail() {
   const create = async () => {
     const q = await createQuotation(project.id, kind, recipientId || null);
     setOpen(false);
-    navigate(`/calcsheet/quotations/${q.id}`);
+    navigate(`/sales/calcsheet/quotations/${q.id}`);
   };
 
   const hasIoct = quotations.some((q) => q.kind === 'IOCT');
@@ -901,7 +901,7 @@ export default function ProjectDetail() {
             <EditIcon fontSize="small" />
           </IconButton>
         </Stack>
-        <Button component={Link} to="/calcsheet/projects" variant="text" size="small">← All projects</Button>
+        <Button component={Link} to="/sales/calcsheet/projects" variant="text" size="small">← All projects</Button>
       </Stack>
 
       <Paper sx={{ p: 2 }}>
@@ -1189,7 +1189,7 @@ export default function ProjectDetail() {
           {quotations.length >= 2 && (
             <Button
               component={Link}
-              to={`/calcsheet/projects/${project.id}/compare`}
+              to={`/sales/calcsheet/projects/${project.id}/compare`}
               variant="outlined"
               startIcon={<CompareArrowsIcon />}
               size="small"
@@ -1305,7 +1305,7 @@ export default function ProjectDetail() {
                   <TableCell align="right">{PHP(t.vat)}</TableCell>
                   <TableCell align="right" sx={{ fontWeight: 600 }}>{PHP(t.grandTotal)}</TableCell>
                   <TableCell align="right">
-                    <IconButton size="small" component={Link} to={`/calcsheet/quotations/${q.id}`}><OpenInNewIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" component={Link} to={`/sales/calcsheet/quotations/${q.id}`}><OpenInNewIcon fontSize="small" /></IconButton>
                     <IconButton size="small" onClick={() => duplicateQuotation(q.id)} title="Duplicate as new revision"><ContentCopyIcon fontSize="small" /></IconButton>
                     <IconButton size="small" onClick={() => setDeleteTarget(q)}><DeleteIcon fontSize="small" /></IconButton>
                   </TableCell>

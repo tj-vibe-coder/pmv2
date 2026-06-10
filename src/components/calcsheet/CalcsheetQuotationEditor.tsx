@@ -236,7 +236,7 @@ export default function QuotationEditor() {
   }, [currentUser?.contact_number, currentUser?.designation, currentUser?.email, currentUser?.full_name, currentUser?.id, currentUser?.username, salesContacts]);
 
   if (!saved || !draft || !project || !totals) {
-    return <Typography>Quotation not found. <Link to="/calcsheet/projects">Back</Link></Typography>;
+    return <Typography>Quotation not found. <Link to="/sales/calcsheet/projects">Back</Link></Typography>;
   }
   // Alias for downstream code that previously referenced `quotation` directly.
   // All field/row operations below mutate `draft` (via setDraft); reads see the
@@ -307,7 +307,7 @@ export default function QuotationEditor() {
       if (!proceed) return;
     }
     const copy = await duplicateQuotation(quotation.id);
-    if (copy) navigate(`/calcsheet/quotations/${copy.id}`);
+    if (copy) navigate(`/sales/calcsheet/quotations/${copy.id}`);
   };
 
   // Section A — General Requirements
@@ -607,7 +607,7 @@ export default function QuotationEditor() {
           >
             Export Excel
           </Button>
-          <Button component={Link} to={`/calcsheet/projects/${project.id}`} variant="text" size="small">← Project</Button>
+          <Button component={Link} to={`/sales/calcsheet/projects/${project.id}`} variant="text" size="small">← Project</Button>
         </Stack>
       </Stack>
 
@@ -887,7 +887,7 @@ export default function QuotationEditor() {
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
               <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} sx={{ width: 150 }} disabled={isLegacy} />
               <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} sx={{ width: 180 }} helperText="Default for product rows" disabled={isLegacy} />
-              <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => setField('laborMarkupPct', v)} sx={{ width: 150 }} helperText="Not applied to manpower pricing" disabled={isLegacy} />
+              <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => setField('laborMarkupPct', v)} sx={{ width: 150 }} helperText="Applied on top of manpower cost" disabled={isLegacy} />
               <NumField label="Gen. Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} sx={{ width: 160 }} disabled={isLegacy} />
               <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} sx={{ width: 170 }} helperText="Not applied to manpower pricing" disabled={isLegacy} />
               <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} sx={{ width: 130 }} disabled={isLegacy} />

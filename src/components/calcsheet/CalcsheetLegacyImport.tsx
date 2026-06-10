@@ -660,7 +660,7 @@ export default function CalcsheetLegacyImport() {
             with frozen totals.
           </Typography>
         </Stack>
-        <Button component={Link} to="/calcsheet/projects" variant="text" size="small">← Projects</Button>
+        <Button component={Link} to="/sales/calcsheet/projects" variant="text" size="small">← Projects</Button>
       </Stack>
 
       <Paper sx={{ p: 2 }}>
@@ -859,7 +859,7 @@ export default function CalcsheetLegacyImport() {
                       {r.importedProjectId && (
                         <IconButton
                           size="small"
-                          onClick={() => navigate(`/calcsheet/projects/${r.importedProjectId}`)}
+                          onClick={() => navigate(`/sales/calcsheet/projects/${r.importedProjectId}`)}
                           title="Open imported project"
                         >
                           <OpenInNewIcon fontSize="small" />

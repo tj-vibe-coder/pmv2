@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { Box } from '@mui/material';
@@ -31,6 +31,8 @@ import InvestmentTrackerPage from './components/InvestmentTrackerPage';
 import CollectionsDashboard from './components/CollectionsDashboard';
 import PayrollDashboard from './components/payroll/PayrollDashboard';
 import PayrollGuard from './components/payroll/PayrollGuard';
+import FinanceHomePage from './components/finance/FinanceHomePage';
+import SalesHomePage from './components/sales/SalesHomePage';
 import CalcsheetProjects from './components/calcsheet/CalcsheetProjects';
 import CalcsheetLegacyImport from './components/calcsheet/CalcsheetLegacyImport';
 import CalcsheetProjectDetail from './components/calcsheet/CalcsheetProjectDetail';
@@ -143,6 +145,20 @@ const SuperadminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) 
 const RedirectEhsToUtilities: React.FC = () => {
   const { tab } = useParams<{ tab?: string }>();
   const to = tab ? `/utilities/ehs/${tab}` : '/utilities/ehs';
+  return <Navigate to={to} replace />;
+};
+
+// Redirect preserving the query string (e.g. /collections?project_id=X → /finance/collections?project_id=X)
+const RedirectWithSearch: React.FC<{ to: string }> = ({ to }) => {
+  const location = useLocation();
+  return <Navigate to={`${to}${location.search}`} replace />;
+};
+
+// Redirect any /calcsheet/* URL into the Sales workspace, preserving
+// dynamic segments, query string, and hash (RedirectWithSearch only keeps search).
+const RedirectCalcsheet: React.FC = () => {
+  const location = useLocation();
+  const to = location.pathname.replace(/^\/calcsheet/, '/sales/calcsheet') + location.search + location.hash;
   return <Navigate to={to} replace />;
 };
 
@@ -340,8 +356,33 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            {/* ===== FINANCE WORKSPACE ===== */}
+            {/* Legacy finance paths redirect into the workspace, preserving query strings */}
+            <Route path="/investment-tracker" element={<RedirectWithSearch to="/finance/investment-tracker" />} />
+            <Route path="/payroll" element={<RedirectWithSearch to="/finance/payroll" />} />
+            <Route path="/collections" element={<RedirectWithSearch to="/finance/collections" />} />
             <Route
-              path="/investment-tracker"
+              path="/finance"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <FinanceHomePage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/collections"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CollectionsDashboard />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/investment-tracker"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -351,7 +392,7 @@ function App() {
               }
             />
             <Route
-              path="/payroll"
+              path="/finance/payroll"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -362,31 +403,60 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            {/* Parallel mount of Expense Monitoring inside the Finance workspace (same components, same data) */}
             <Route
-              path="/collections"
+              path="/finance/expense-monitoring"
               element={
                 <ProtectedRoute>
                   <AppLayout>
-                    <CollectionsDashboard />
+                    <ExpenseMonitoring />
                   </AppLayout>
                 </ProtectedRoute>
               }
-            />
-            {/* ===== CALCSHEET ===== */}
+            >
+              <Route
+                path="liquidation-form"
+                element={<LiquidationFormPage />}
+              />
+              <Route
+                path="ca-form"
+                element={<CAFormPage />}
+              />
+              <Route
+                path="direct-labor"
+                element={<DirectLaborPage />}
+              />
+            </Route>
+            {/* ===== SALES WORKSPACE ===== */}
+            {/* Legacy calcsheet paths redirect into the workspace, preserving params, query, and hash */}
+            <Route path="/calcsheet/*" element={<RedirectCalcsheet />} />
+            <Route path="/calcsheet" element={<RedirectCalcsheet />} />
             <Route
-              path="/calcsheet"
+              path="/sales"
               element={
                 <ProtectedRoute>
                   <AppLayout>
                     <CalcsheetInit>
-                      <Navigate to="/calcsheet/projects" replace />
+                      <SalesHomePage />
                     </CalcsheetInit>
                   </AppLayout>
                 </ProtectedRoute>
               }
             />
             <Route
-              path="/calcsheet/projects"
+              path="/sales/calcsheet"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <Navigate to="/sales/calcsheet/projects" replace />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/calcsheet/projects"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -398,7 +468,7 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/import-legacy"
+              path="/sales/calcsheet/import-legacy"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -410,7 +480,7 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/projects/:id"
+              path="/sales/calcsheet/projects/:id"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -422,7 +492,7 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/projects/:id/compare"
+              path="/sales/calcsheet/projects/:id/compare"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -434,7 +504,7 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/quotations/:id"
+              path="/sales/calcsheet/quotations/:id"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -446,7 +516,7 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/clients"
+              path="/sales/calcsheet/clients"
               element={
                 <ProtectedRoute>
                   <AppLayout>
@@ -458,13 +528,74 @@ function App() {
               }
             />
             <Route
-              path="/calcsheet/presets"
+              path="/sales/calcsheet/presets"
               element={
                 <ProtectedRoute>
                   <AppLayout>
                     <CalcsheetInit>
                       <CalcsheetPresets />
                     </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            {/* Parallel mounts of Clients + Supply Chain inside the Sales workspace (same components, same data) */}
+            <Route
+              path="/sales/clients"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <ClientsPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/material-request"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <MaterialRequestFormPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/delivery"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <DeliveryPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/suppliers"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <SuppliersPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/purchase-order"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <PurchaseOrderPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/estimates"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <EstimatesPage />
                   </AppLayout>
                 </ProtectedRoute>
               }

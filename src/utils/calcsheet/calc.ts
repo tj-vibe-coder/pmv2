@@ -84,14 +84,15 @@ export function computeTotals(q: Quotation): QuotationTotals {
     0,
   );
 
-  // Labor: cost → labor contingency → markup (only when computing from manpower)
+  // Labor: manpower cost → markup. No contingency layer (rates carry their own buffer);
+  // laborMarkupPct is the profit on engineering services.
   let laborCost: number;
   let servicesSub: number;
   let laborWithContingency: number;
   if (q.servicesFromManpower) {
     laborCost = manpowerTotalCost(q.manpower) * engineeringServicesQty;
     laborWithContingency = laborCost;
-    servicesSub = laborCost;
+    servicesSub = laborCost * (1 + (q.laborMarkupPct || 0) / 100);
   } else {
     // Manual lump-sum lines: take amounts as the final subtotal (user already includes their own buffer)
     servicesSub = q.services.reduce((s, l) => s + (l.amount || 0), 0);
@@ -197,6 +198,20 @@ export function computeTotalsLegacy(q: Quotation): QuotationTotals {
     vat,
     grandTotal,
   };
+}
+
+// IOCT gross margin from the quotation's snapshot.
+// For non-legacy: cost fields are real, always returns a value.
+// For legacy: returns null when costs weren't backfilled — those snapshots
+// store cost=subtotal (placeholder), so margin would falsely read as zero.
+export function ioctMargin(t: QuotationTotals): { value: number; pct: number } | null {
+  const net = t.subtotal - t.discount;
+  if (net <= 0) return null;
+  const totalCost = t.generalReqtsCost + t.componentsCost + t.laborCost;
+  const totalSubtotals = t.generalReqtsSubtotal + t.componentsSubtotal + t.servicesSubtotal;
+  // Cost placeholder: totalCost equals sum of subtotals → no real cost data
+  if (Math.abs(totalCost - totalSubtotals) < 0.01) return null;
+  return { value: net - totalCost, pct: ((net - totalCost) / net) * 100 };
 }
 
 export const PHP = (n: number): string =>
