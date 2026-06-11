@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
+  Alert,
   Box,
   Typography,
   Paper,
@@ -12,6 +13,7 @@ import {
   TableSortLabel,
   TextField,
   Button,
+  Chip,
   Select,
   MenuItem,
   IconButton,
@@ -21,6 +23,7 @@ import {
   DialogContentText,
   DialogActions,
 } from '@mui/material';
+import { useLocation } from 'react-router-dom';
 import { Add as AddIcon, Delete as DeleteIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -51,6 +54,29 @@ interface LiquidationRow {
   particulars: string;
   amount: number;
   remarks: string;
+}
+
+// Approved cash advances offered in the "Apply to CA" selector. ca_no is the
+// human-readable reference (e.g. IOCT2606001-CA01); id stays the real key.
+interface CaOption {
+  id: string;
+  ca_no?: string | null;
+  amount: number;
+  balance_remaining: number;
+  status?: string;
+  project_name?: string | null;
+  project_no?: string | null;
+  purpose?: string | null;
+}
+
+interface LoadedLiquidationOption {
+  id: string;
+  form_no: string;
+  date_of_submission: string;
+  status: string;
+  total_amount: number;
+  ca_id?: string | null;
+  reimbursement_status?: string | null;
 }
 
 const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
@@ -116,11 +142,13 @@ export default function LiquidationFormPage() {
   const [formNo, setFormNo] = useState('');
   const [rows, setRows] = useState<LiquidationRow[]>([]);
   const [draftId, setDraftId] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<{ id: string; form_no: string; date_of_submission: string; status: string; total_amount: number }[]>([]);
-  const [submittedLiquidations, setSubmittedLiquidations] = useState<{ id: string; form_no: string; date_of_submission: string; status: string; total_amount: number }[]>([]);
+  const [drafts, setDrafts] = useState<LoadedLiquidationOption[]>([]);
+  const [submittedLiquidations, setSubmittedLiquidations] = useState<LoadedLiquidationOption[]>([]);
   const [isViewingSubmitted, setIsViewingSubmitted] = useState(false);
   const [loadedOptionValue, setLoadedOptionValue] = useState<string>('');
-  const [cashAdvances, setCashAdvances] = useState<{ id: string; amount: number; balance_remaining: number }[]>([]);
+  const [cashAdvances, setCashAdvances] = useState<CaOption[]>([]);
+  // Reimbursement tracking of the currently loaded submitted no-CA liquidation.
+  const [loadedReimb, setLoadedReimb] = useState<{ id: string; status: string | null; at: number | null } | null>(null);
   const [saving, setSaving] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [caId, setCaId] = useState<string | ''>('');
@@ -131,6 +159,8 @@ export default function LiquidationFormPage() {
 
   const canDeleteLiquidation = draftId !== null || loadedOptionValue.startsWith('submitted:');
   const liquidationToDeleteId = draftId ?? (loadedOptionValue.startsWith('submitted:') ? loadedOptionValue.split(':')[1] : null);
+  const isAdmin = user?.role === 'superadmin' || user?.role === 'admin';
+  const location = useLocation();
 
   const handleSort = (key: 'date' | 'amount') => {
     setSortConfig((prev) => {
@@ -165,6 +195,13 @@ export default function LiquidationFormPage() {
 
   const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
 
+  // Arriving from the CA form's "Liquidate" button: preselect the CA.
+  useEffect(() => {
+    const fromQuery = new URLSearchParams(location.search).get('ca_id');
+    if (fromQuery) setCaId(fromQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Fetch next form number on mount (for new forms)
   useEffect(() => {
     if (!token || draftId !== null || formNo) return;
@@ -194,14 +231,9 @@ export default function LiquidationFormPage() {
     fetch(`${API_BASE}/api/cash-advances`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => r.json())
       .then((d) => {
-        if (d.success && d.cash_advances) {
-          setCashAdvances(
-            d.cash_advances.filter(
-              (ca: { status: string; balance_remaining: number }) =>
-                ca.status === 'approved' && Number(ca.balance_remaining) > 0
-            )
-          );
-        }
+        // Keep the full list — the dropdown filters to usable CAs at render
+        // time, but loaded liquidations need to resolve any linked CA's ca_no.
+        if (d.success && d.cash_advances) setCashAdvances(d.cash_advances);
       })
       .catch(() => {});
   }, [token]);
@@ -314,7 +346,34 @@ export default function LiquidationFormPage() {
     setRows(loadedRows);
     setDraftId(submitted ? null : l.id);
     setLoadedOptionValue(submitted ? `submitted:${l.id}` : `draft:${l.id}`);
+    setLoadedReimb(
+      submitted && !l.ca_id
+        ? { id: l.id, status: l.reimbursement_status || 'pending', at: l.reimbursed_at || null }
+        : null
+    );
     setSubmitSuccess(null);
+  };
+
+  // Admin: flip the reimbursement status of the loaded no-CA liquidation.
+  const updateReimbursement = async (next: 'pending' | 'reimbursed') => {
+    if (!token || !loadedReimb) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/liquidations/${loadedReimb.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ reimbursement_status: next }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        setLoadedReimb((prev) => prev && { ...prev, status: next, at: next === 'reimbursed' ? Math.floor(Date.now() / 1000) : null });
+        setSubmitSuccess(next === 'reimbursed' ? 'Marked as reimbursed.' : 'Reverted to pending reimbursement.');
+        refreshLiquidationsList();
+      } else {
+        setSubmitSuccess(data.error || 'Update failed');
+      }
+    } catch (e) {
+      setSubmitSuccess(e instanceof Error ? e.message : 'Network error');
+    }
   };
 
   const refreshLiquidationsList = () => {
@@ -360,19 +419,13 @@ export default function LiquidationFormPage() {
         setEmployeeNumber('');
         setDateOfSubmission(new Date().toISOString().slice(0, 10));
         setCaId('');
+        setLoadedReimb(null);
         setSubmitSuccess('Liquidation deleted.');
         refreshLiquidationsList();
         fetch(`${API_BASE}/api/cash-advances`, { headers: { Authorization: `Bearer ${token}` } })
           .then((r) => r.json())
           .then((d) => {
-            if (d.success && d.cash_advances) {
-              setCashAdvances(
-                d.cash_advances.filter(
-                  (ca: { status: string; balance_remaining: number }) =>
-                    ca.status === 'approved' && Number(ca.balance_remaining) > 0
-                )
-              );
-            }
+            if (d.success && d.cash_advances) setCashAdvances(d.cash_advances);
           })
           .catch(() => {});
       } else if (res.status === 404) {
@@ -389,6 +442,7 @@ export default function LiquidationFormPage() {
         setEmployeeNumber('');
         setDateOfSubmission(new Date().toISOString().slice(0, 10));
         setCaId('');
+        setLoadedReimb(null);
         setSubmitSuccess('Liquidation removed from list.');
         refreshLiquidationsList();
       } else {
@@ -439,7 +493,10 @@ export default function LiquidationFormPage() {
         setIsViewingSubmitted(false);
         setRows([newRow('', '')]);
         setFormNo('');
-        setSubmitSuccess('Liquidation submitted. Amount applied to CA has been deducted; expenses added to project expense.');
+        setSubmitSuccess(caId
+          ? 'Liquidation submitted. Amount applied to CA has been deducted; expenses added to project expense.'
+          : 'Liquidation submitted as an out-of-pocket reimbursement claim (pending payback); expenses added to project expense.');
+        setCaId('');
         // Fetch next form number for new form
         fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } })
           .then((r) => r.json())
@@ -460,7 +517,7 @@ export default function LiquidationFormPage() {
           .catch(() => {});
         fetch(`${API_BASE}/api/cash-advances`, { headers: { Authorization: `Bearer ${token}` } })
           .then((r) => r.json())
-          .then((d) => d.success && d.cash_advances && setCashAdvances(d.cash_advances.filter((ca: { status: string; balance_remaining: number }) => ca.status === 'approved' && Number(ca.balance_remaining) > 0)))
+          .then((d) => d.success && d.cash_advances && setCashAdvances(d.cash_advances))
           .catch(() => {});
       } else {
         setSubmitSuccess(data.error || 'Submit failed');
@@ -510,6 +567,16 @@ export default function LiquidationFormPage() {
   };
 
   const totalAmount = rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+
+  const selectedCa = cashAdvances.find((c) => c.id === caId);
+  // Usable for new liquidations: approved with money left. The currently
+  // selected CA is always included so loaded liquidations keep their label.
+  const availableCAs = cashAdvances.filter(
+    (c) => (c.status === 'approved' && Number(c.balance_remaining) > 0) || c.id === caId
+  );
+  const caLabel = (c: CaOption) =>
+    `${c.ca_no || `CA #${c.id}`}${c.project_name ? ` — ${c.project_name}` : c.purpose ? ` — ${c.purpose}` : ''}`;
+  const overBalance = !isViewingSubmitted && !!selectedCa && totalAmount > Number(selectedCa.balance_remaining);
 
   const exportToPDF = async () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -613,7 +680,14 @@ export default function LiquidationFormPage() {
     // Total on the right side - use Helvetica Bold
     doc.setFont('helvetica', 'bold');
     doc.text(`Total: ${totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, pageWidth - margin, y, { align: 'right' });
-    if (caId) doc.text(`Applied to CA #${caId}`, margin, y);
+    if (caId) {
+      doc.text(`Applied to: ${selectedCa?.ca_no || `CA #${caId}`}`, margin, y);
+    } else {
+      const reimbursedSuffix = loadedReimb?.status === 'reimbursed'
+        ? ` — Reimbursed${loadedReimb.at ? ` on ${new Date(loadedReimb.at * 1000).toLocaleDateString()}` : ''}`
+        : '';
+      doc.text(`For Reimbursement (out-of-pocket)${reimbursedSuffix}`, margin, y);
+    }
     y += 14;
     fontBody();
     doc.setFontSize(9);
@@ -632,7 +706,17 @@ export default function LiquidationFormPage() {
       doc.text(`Doc No.: ${docNo}`, margin, footerY);
     }
     
-    doc.save(`Liquidation_${formNo || 'form'}_${dateOfSubmission.replace(/-/g, '')}.pdf`);
+    // Filename names the CA (and therefore the project) the liquidation
+    // settles against, e.g. LQ-0005_IOCT2606001-CA01.pdf — or flags it as an
+    // out-of-pocket reimbursement claim.
+    const fnBase = formNo || 'form';
+    doc.save(
+      caId
+        ? (selectedCa?.ca_no
+            ? `${fnBase}_${selectedCa.ca_no}.pdf`
+            : `Liquidation_${fnBase}_${dateOfSubmission.replace(/-/g, '')}.pdf`)
+        : `${fnBase}_Reimbursement.pdf`
+    );
   };
 
   const handleExport = () => {
@@ -765,6 +849,7 @@ export default function LiquidationFormPage() {
                   setEmployeeNumber('');
                   setDateOfSubmission(new Date().toISOString().slice(0, 10));
                   setCaId('');
+                  setLoadedReimb(null);
                   setSubmitSuccess(null);
                   return;
                 }
@@ -774,7 +859,12 @@ export default function LiquidationFormPage() {
                 if (id) loadDraft(id, isSubmitted);
               }}
               sx={{ minWidth: 200, '& .MuiSelect-select': { py: 0.75 } }}
-              renderValue={(v: string) => (v === '' ? 'Load liquidation…' : v.includes(':') ? `#${v.split(':')[1]}` : '')}
+              renderValue={(v: string) => {
+                if (v === '') return 'Load liquidation…';
+                const id = v.includes(':') ? v.split(':')[1] : '';
+                const item = [...drafts, ...submittedLiquidations].find((d) => d.id === id);
+                return item?.form_no || `#${id}`;
+              }}
             >
               <MenuItem value="">
                 <em>Load liquidation…</em>
@@ -796,6 +886,14 @@ export default function LiquidationFormPage() {
                 ...submittedLiquidations.map((d) => (
                   <MenuItem key={`submitted-${d.id}`} value={`submitted:${d.id}`}>
                     {d.form_no || `#${d.id}`} – {d.date_of_submission || 'no date'} (₱{Number(d.total_amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })})
+                    {!d.ca_id && d.reimbursement_status && (
+                      <Chip
+                        size="small"
+                        label={d.reimbursement_status === 'reimbursed' ? 'Reimbursed' : 'Reimb. pending'}
+                        color={d.reimbursement_status === 'reimbursed' ? 'success' : 'warning'}
+                        sx={{ ml: 1, height: 18, fontSize: '0.65rem' }}
+                      />
+                    )}
                   </MenuItem>
                 )),
               ]}
@@ -901,8 +999,8 @@ export default function LiquidationFormPage() {
               sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'background.paper' } }}
             />
           </Box>
-          {cashAdvances.length > 0 && (
-            <Box sx={{ flex: '1 1 220px' }}>
+          {(availableCAs.length > 0 || caId !== '') && (
+            <Box sx={{ flex: '1 1 260px' }}>
               <Select
                 size="small"
                 fullWidth
@@ -915,39 +1013,85 @@ export default function LiquidationFormPage() {
                 }}
                 disabled={isViewingSubmitted}
                 sx={{ bgcolor: 'background.paper', minHeight: 40 }}
-                renderValue={(v) => ((v as unknown) === '' || v == null ? 'Apply to CA (optional)' : `CA #${v}`)}
+                renderValue={(v) => {
+                  if ((v as unknown) === '' || v == null) return 'Apply to CA (optional)';
+                  const ca = cashAdvances.find((c) => c.id === v);
+                  return ca ? caLabel(ca) : `CA #${v}`;
+                }}
               >
                 <MenuItem value="">
-                  <em>None</em>
+                  <em>No CA — out-of-pocket (reimbursement)</em>
                 </MenuItem>
-                {cashAdvances.map((ca) => (
+                {availableCAs.map((ca) => (
                   <MenuItem key={ca.id} value={ca.id}>
-                    CA #{ca.id} – Balance ₱{Number(ca.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                    {caLabel(ca)} · Balance ₱{Number(ca.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
                   </MenuItem>
                 ))}
               </Select>
+              {selectedCa && !isViewingSubmitted && (
+                <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: overBalance ? 'error.main' : 'text.secondary' }}>
+                  {overBalance
+                    ? `Total exceeds the remaining balance of ₱${Number(selectedCa.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`
+                    : `₱${Number(selectedCa.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })} remaining to liquidate on this CA`}
+                </Typography>
+              )}
+              {!selectedCa && caId === '' && !isViewingSubmitted && (
+                <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: 'text.secondary' }}>
+                  No CA selected — this will be tracked as a reimbursement claim.
+                </Typography>
+              )}
             </Box>
           )}
         </Box>
 
+        {overBalance && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Total ₱{totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} exceeds the CA balance ₱{Number(selectedCa?.balance_remaining || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}. Reduce the rows or split into a separate reimbursement liquidation.
+          </Alert>
+        )}
+
         {isViewingSubmitted && (
           <Box sx={{ mb: 2, p: 1.5, bgcolor: 'info.light', borderRadius: 1, border: '1px solid', borderColor: 'info.main', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
-            <Typography variant="body2" sx={{ color: 'info.dark', fontWeight: 500 }}>
-              Viewing submitted liquidation (read-only). To edit, create an editable copy below.
-            </Typography>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => {
-                setDraftId(null);
-                setLoadedOptionValue('');
-                setIsViewingSubmitted(false);
-                setSubmitSuccess(null);
-              }}
-              sx={{ borderColor: 'info.main', color: 'info.dark' }}
-            >
-              Create editable copy
-            </Button>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography variant="body2" sx={{ color: 'info.dark', fontWeight: 500 }}>
+                Viewing submitted liquidation (read-only). To edit, create an editable copy below.
+              </Typography>
+              {loadedReimb && (
+                <Chip
+                  size="small"
+                  label={loadedReimb.status === 'reimbursed'
+                    ? `Reimbursed${loadedReimb.at ? ` on ${new Date(loadedReimb.at * 1000).toLocaleDateString()}` : ''}`
+                    : 'Reimbursement pending'}
+                  color={loadedReimb.status === 'reimbursed' ? 'success' : 'warning'}
+                />
+              )}
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              {loadedReimb && isAdmin && (
+                <Button
+                  variant="outlined"
+                  size="small"
+                  color={loadedReimb.status === 'reimbursed' ? 'warning' : 'success'}
+                  onClick={() => updateReimbursement(loadedReimb.status === 'reimbursed' ? 'pending' : 'reimbursed')}
+                >
+                  {loadedReimb.status === 'reimbursed' ? 'Revert to pending' : 'Mark reimbursed'}
+                </Button>
+              )}
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => {
+                  setDraftId(null);
+                  setLoadedOptionValue('');
+                  setIsViewingSubmitted(false);
+                  setLoadedReimb(null);
+                  setSubmitSuccess(null);
+                }}
+                sx={{ borderColor: 'info.main', color: 'info.dark' }}
+              >
+                Create editable copy
+              </Button>
+            </Box>
           </Box>
         )}
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
@@ -1147,7 +1291,8 @@ export default function LiquidationFormPage() {
               variant="contained"
               startIcon={<SendIcon />}
               onClick={submitLiquidation}
-              disabled={saving || isViewingSubmitted}
+              disabled={saving || isViewingSubmitted || overBalance}
+              title={overBalance ? 'Total exceeds the selected CA balance' : undefined}
               sx={{ bgcolor: theme.secondary, '&:hover': { bgcolor: theme.primary } }}
             >
               Submit liquidation
