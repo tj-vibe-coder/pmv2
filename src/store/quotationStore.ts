@@ -7,6 +7,7 @@ import type {
   Project,
   Quotation,
   QuotationKind,
+  QuotationVersion,
   SalesContact,
 } from '../types/Quotation';
 import { seedClients, seedSalesContacts } from '../data/quotationClients';
@@ -96,6 +97,9 @@ interface Actions {
   duplicateQuotation: (id: ID) => Promise<Quotation | null>;
   // Import a fully-formed Quotation (e.g. from a legacy Excel parse) under an existing project.
   importQuotation: (q: Quotation) => Promise<Quotation>;
+  // Saved-version history for a quotation (newest first). Not cached in the store —
+  // fetched on demand when the History dialog opens.
+  fetchQuotationVersions: (id: ID) => Promise<QuotationVersion[]>;
 
   // Presets
   addPreset: (p: Omit<LaborRolePreset, 'id'>) => Promise<LaborRolePreset>;
@@ -493,6 +497,10 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
   deleteQuotation: async (id) => {
     await api('DELETE', `/quotations/${id}`);
     set({ quotations: get().quotations.filter((q) => q.id !== id) });
+  },
+  fetchQuotationVersions: async (id) => {
+    const res = await api<{ versions: QuotationVersion[] }>('GET', `/quotations/${id}/versions`);
+    return res.versions ?? [];
   },
   importQuotation: async (q) => {
     const res = await api<{ quotation: Quotation }>('POST', '/quotations', q);

@@ -1913,6 +1913,9 @@ app.delete('/api/calcsheet/projects/:id', async (req, res) => {
     // Also delete all quotations for this project
     const qsnap = await db.collection('calcsheet_quotations').where('projectId', '==', req.params.id).get();
     await Promise.all(qsnap.docs.map((d) => d.ref.delete()));
+    // And their version snapshots
+    const vsnap = await db.collection('calcsheet_quotation_versions').where('projectId', '==', req.params.id).get();
+    await Promise.all(vsnap.docs.map((d) => d.ref.delete()));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete project' }); }
 });
@@ -1958,11 +1961,49 @@ app.put('/api/calcsheet/quotations/:id', async (req, res) => {
     if (!user) return;
     const { id: _ignored, ...body } = req.body || {};
     const update = { ...body, updatedAt: new Date().toISOString() };
-    await db.collection('calcsheet_quotations').doc(req.params.id).update(update);
+    const ref = db.collection('calcsheet_quotations').doc(req.params.id);
+    // Snapshot the pre-save state into calcsheet_quotation_versions so edits
+    // can be looked back at later. Best-effort — a failed snapshot must never
+    // block the save itself.
+    try {
+      const prev = await ref.get();
+      if (prev.exists) {
+        const { id: _stored, ...prevData } = prev.data();
+        await db.collection('calcsheet_quotation_versions').add({
+          quotationId: req.params.id,
+          projectId: prevData.projectId || null,
+          savedAt: new Date().toISOString(),
+          savedBy: user.full_name || user.username || null,
+          data: prevData,
+        });
+      }
+    } catch (verErr) {
+      console.warn('[calcsheet] version snapshot failed (non-blocking):', verErr && verErr.message);
+    }
+    await ref.update(update);
     res.json({ success: true });
   } catch (err) {
     console.error('[calcsheet] update quotation failed:', { id: req.params.id, err: err && err.message });
     res.status(500).json({ error: 'Failed to update quotation' });
+  }
+});
+
+app.get('/api/calcsheet/quotations/:id/versions', async (req, res) => {
+  try {
+    // Single-field where + in-memory sort avoids needing a composite index.
+    const snap = await db.collection('calcsheet_quotation_versions')
+      .where('quotationId', '==', req.params.id)
+      .get();
+    const versions = snap.docs
+      .map((d) => {
+        const { id: _stored, ...data } = d.data();
+        return { ...data, id: d.id };
+      })
+      .sort((a, b) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')));
+    res.json({ success: true, versions });
+  } catch (err) {
+    console.error('[calcsheet] get quotation versions failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to get quotation versions' });
   }
 });
 
@@ -1971,6 +2012,9 @@ app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
     const user = await requireActiveUser(req, res);
     if (!user) return;
     await db.collection('calcsheet_quotations').doc(req.params.id).delete();
+    // Remove version snapshots belonging to the deleted quotation.
+    const vsnap = await db.collection('calcsheet_quotation_versions').where('quotationId', '==', req.params.id).get();
+    await Promise.all(vsnap.docs.map((d) => d.ref.delete()));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete quotation' }); }
 });
