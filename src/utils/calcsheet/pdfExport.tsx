@@ -14,7 +14,6 @@ const TEXT = '#222';
 const TEXT_LIGHT = '#666';
 const SECTION_BG = '#EAF0F8';
 const BORDER = '#999';
-const BORDER_LIGHT = '#DDD';
 
 const ISSUER_INFO = {
   IOCT: {
@@ -133,41 +132,44 @@ const styles = StyleSheet.create({
   th: {
     flexDirection: 'row', backgroundColor: SECTION_BG,
     borderBottom: `0.5px solid ${BORDER}`,
-    padding: '2 4', fontWeight: 700, fontSize: 8.5,
+    borderTop: `0.5px solid ${BORDER}`,
+    padding: '2 0', fontWeight: 700, fontSize: 8.5,
   },
   tr: {
-    flexDirection: 'row', borderBottom: `0.25px solid ${BORDER_LIGHT}`,
-    padding: '2 4', fontSize: 8.5,
+    flexDirection: 'row', borderBottom: `0.5px solid ${BORDER}`,
+    padding: '2 0', fontSize: 8.5,
     alignItems: 'center',
   },
   trSub: {
     flexDirection: 'row',
-    padding: '1 4', fontSize: 8.5,
+    padding: '1 0', fontSize: 8.5,
     borderTop: `0.5px solid ${BORDER}`,
+    borderBottom: `0.5px solid ${BORDER}`,
   },
 
-  cItem: { width: '10%' },
-  cDesc: { width: '48%' },
-  cQty: { width: '8%', textAlign: 'center', lineHeight: 1.05 },
-  cUom: { width: '8%', textAlign: 'center', lineHeight: 1.05 },
-  cUnit: { width: '13%', textAlign: 'right', lineHeight: 1.05 },
-  cTotal: { width: '13%', textAlign: 'right', lineHeight: 1.05 },
+  cItem: { width: '10%', borderRight: `0.5px solid ${BORDER}`, paddingHorizontal: 4 },
+  cDesc: { width: '48%', borderRight: `0.5px solid ${BORDER}`, paddingHorizontal: 4 },
+  cQty: { width: '8%', textAlign: 'center', lineHeight: 1.05, borderRight: `0.5px solid ${BORDER}`, paddingHorizontal: 2 },
+  cUom: { width: '8%', textAlign: 'center', lineHeight: 1.05, borderRight: `0.5px solid ${BORDER}`, paddingHorizontal: 2 },
+  cUnit: { width: '13%', textAlign: 'right', lineHeight: 1.05, borderRight: `0.5px solid ${BORDER}`, paddingHorizontal: 4 },
+  cTotal: { width: '13%', textAlign: 'right', lineHeight: 1.05, paddingHorizontal: 4 },
 
   // Summary
   summaryBlock: { marginTop: 4 },
   sumTh: {
     flexDirection: 'row', backgroundColor: SECTION_BG, color: TEXT,
     borderBottom: `0.5px solid ${BORDER}`,
-    padding: '2 6', fontWeight: 700, fontSize: 9,
+    borderTop: `0.5px solid ${BORDER}`,
+    padding: '2 0', fontWeight: 700, fontSize: 9,
   },
   sumRow: {
-    flexDirection: 'row', borderBottom: `0.25px solid ${BORDER_LIGHT}`,
-    padding: '2 6', fontSize: 9,
+    flexDirection: 'row', borderBottom: `0.5px solid ${BORDER}`,
+    padding: '2 0', fontSize: 9,
   },
-  sumItem: { flex: 1 },
-  sumQty: { width: '10%', textAlign: 'center' },
-  sumUom: { width: '10%', textAlign: 'center' },
-  sumPrice: { width: '20%', textAlign: 'right' },
+  sumItem: { flex: 1, borderRight: `0.5px solid ${BORDER}`, paddingHorizontal: 6 },
+  sumQty: { width: '10%', textAlign: 'center', borderRight: `0.5px solid ${BORDER}`, paddingHorizontal: 2 },
+  sumUom: { width: '10%', textAlign: 'center', borderRight: `0.5px solid ${BORDER}`, paddingHorizontal: 2 },
+  sumPrice: { width: '20%', textAlign: 'right', paddingHorizontal: 6 },
   sumFooterRow: {
     flexDirection: 'row', justifyContent: 'flex-end', padding: '2 6', fontSize: 9.5,
   },
