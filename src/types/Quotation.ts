@@ -98,6 +98,7 @@ export interface ServiceLine {
   description: string;
   amount: number;
   days?: number;
+  group?: string;
 }
 
 export interface ManpowerEntry {

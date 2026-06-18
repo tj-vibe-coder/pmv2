@@ -401,25 +401,91 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
           <>
             <Text style={styles.sectionBar}>Engineering Services</Text>
             {quotation.servicesPerLinePricing ? (
-              <>
-                <View style={styles.th}>
-                  <Text style={styles.cItem}>Item No.</Text>
-                  <Text style={[styles.cDesc, { width: '70%' }]}>Description</Text>
-                  <Text style={styles.cTotal}>Total , PhP</Text>
-                </View>
-                {quotation.services.map((l) => (
-                  <View style={styles.tr} key={l.id}>
-                    <Text style={styles.cItem}>{l.code}</Text>
-                    <Text style={[styles.cDesc, { width: '70%' }]}>{l.description}</Text>
-                    <Text style={styles.cTotal}>{PHP(l.amount)}</Text>
-                  </View>
-                ))}
-                <View style={styles.trSub}>
-                  <Text style={styles.cItem} />
-                  <Text style={[styles.cDesc, { width: '70%', textAlign: 'right' }]}>sub total (vat-ex)</Text>
-                  <Text style={styles.cTotal}>{PHP(totals.servicesSubtotal)}</Text>
-                </View>
-              </>
+              (() => {
+                // Collect unique groups and track which items are grouped
+                const groups = new Map<string, typeof quotation.services>();
+                const ungrouped: typeof quotation.services = [];
+                quotation.services.forEach((l) => {
+                  if (l.group) {
+                    const arr = groups.get(l.group) || [];
+                    arr.push(l);
+                    groups.set(l.group, arr);
+                  } else {
+                    ungrouped.push(l);
+                  }
+                });
+                const hasGroups = groups.size > 0;
+                return (
+                  <>
+                    <View style={styles.th}>
+                      <Text style={styles.cItem}>Item No.</Text>
+                      <Text style={hasGroups ? styles.cDesc : [styles.cDesc, { width: '70%' }]}>Description</Text>
+                      {hasGroups && <Text style={styles.cQty}>QTY</Text>}
+                      {hasGroups && <Text style={styles.cUom}>UOM</Text>}
+                      {hasGroups && <Text style={styles.cUnit}>Unit Price</Text>}
+                      <Text style={styles.cTotal}>Total , PhP</Text>
+                    </View>
+                    {/* Render in original order, inserting group totals after last member */}
+                    {(() => {
+                      const rendered: React.ReactNode[] = [];
+                      const groupRendered = new Set<string>();
+                      quotation.services.forEach((l) => {
+                        if (l.group) {
+                          // Sub-item: show description only
+                          rendered.push(
+                            <View style={styles.tr} key={l.id}>
+                              <Text style={styles.cItem}>{l.code}</Text>
+                              <Text style={hasGroups ? styles.cDesc : [styles.cDesc, { width: '70%' }]}>{l.description}</Text>
+                              {hasGroups && <Text style={styles.cQty} />}
+                              {hasGroups && <Text style={styles.cUom} />}
+                              {hasGroups && <Text style={styles.cUnit} />}
+                              <Text style={styles.cTotal} />
+                            </View>,
+                          );
+                          // After last item in this group, render the group total
+                          const members = groups.get(l.group)!;
+                          if (members[members.length - 1].id === l.id && !groupRendered.has(l.group)) {
+                            groupRendered.add(l.group);
+                            const groupTotal = members.reduce((s, m) => s + (m.amount || 0), 0);
+                            rendered.push(
+                              <View style={styles.tr} key={`grp-${l.group}`}>
+                                <Text style={styles.cItem} />
+                                <Text style={[styles.cDesc, { fontFamily: 'Helvetica-Bold' }]}>{l.group}</Text>
+                                <Text style={styles.cQty}>1</Text>
+                                <Text style={styles.cUom}>LOT</Text>
+                                <Text style={styles.cUnit}>{PHP(groupTotal)}</Text>
+                                <Text style={styles.cTotal}>{PHP(groupTotal)}</Text>
+                              </View>,
+                            );
+                          }
+                        } else {
+                          // Ungrouped: show with amount
+                          rendered.push(
+                            <View style={styles.tr} key={l.id}>
+                              <Text style={styles.cItem}>{l.code}</Text>
+                              <Text style={hasGroups ? styles.cDesc : [styles.cDesc, { width: '70%' }]}>{l.description}</Text>
+                              {hasGroups && <Text style={styles.cQty} />}
+                              {hasGroups && <Text style={styles.cUom} />}
+                              {hasGroups && <Text style={styles.cUnit} />}
+                              <Text style={styles.cTotal}>{PHP(l.amount)}</Text>
+                            </View>,
+                          );
+                        }
+                      });
+                      return rendered;
+                    })()}
+                    <View style={styles.trSub}>
+                      <Text style={styles.cItem} />
+                      <Text style={hasGroups ? styles.cDesc : [styles.cDesc, { width: '70%' }]} />
+                      {hasGroups && <Text style={styles.cQty} />}
+                      {hasGroups && <Text style={styles.cUom} />}
+                      {hasGroups && <Text style={[styles.cUnit, { textAlign: 'right' }]}>sub total (vat-ex)</Text>}
+                      {!hasGroups && <Text style={{ textAlign: 'right', fontSize: 7, width: '70%' }}>sub total (vat-ex)</Text>}
+                      <Text style={styles.cTotal}>{PHP(totals.servicesSubtotal)}</Text>
+                    </View>
+                  </>
+                );
+              })()
             ) : (
               <>
                 <View style={styles.th}>

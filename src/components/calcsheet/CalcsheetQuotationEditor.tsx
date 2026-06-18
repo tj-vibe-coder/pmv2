@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Accordion, AccordionDetails, AccordionSummary,
-  Alert, AlertTitle, Autocomplete, Box, Button, Chip, CircularProgress,
+  Alert, AlertTitle, Autocomplete, Box, Button, Checkbox, Chip, CircularProgress,
   Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel, ListSubheader, MenuItem, Paper,
   Snackbar, Stack, Switch, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
@@ -129,6 +129,9 @@ export default function QuotationEditor() {
   const fetchQuotationVersions = useQuotationStore((s) => s.fetchQuotationVersions);
 
   const [draft, setDraft] = useState<Quotation | undefined>(saved);
+  const [selectedSvcIds, setSelectedSvcIds] = useState<Set<string>>(new Set());
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const [groupLabel, setGroupLabel] = useState('');
 
   // Re-init the draft when the URL points at a different quotation OR when the
   // saved record changes via some path we don't control (e.g. another browser
@@ -408,10 +411,35 @@ export default function QuotationEditor() {
     setField('services', list);
   };
 
+  const applyGroup = () => {
+    if (!groupLabel.trim() || selectedSvcIds.size < 2) return;
+    const updated = quotation.services.map((s) =>
+      selectedSvcIds.has(s.id) ? { ...s, group: groupLabel.trim() } : s,
+    );
+    setField('services', updated);
+    setSelectedSvcIds(new Set());
+    setGroupDialogOpen(false);
+    setGroupLabel('');
+  };
+  const ungroupItem = (svcId: string) => {
+    setField('services', quotation.services.map((s) => s.id === svcId ? { ...s, group: undefined } : s));
+  };
+
   const svcCols: Column<ServiceLine>[] = perLinePricing
     ? [
+        { key: '_select', label: '', width: 36, render: (r) => (
+          <Checkbox size="small" sx={{ p: 0 }}
+            checked={selectedSvcIds.has(r.id)}
+            onChange={(e) => setSelectedSvcIds((prev) => { const n = new Set(prev); e.target.checked ? n.add(r.id) : n.delete(r.id); return n; })}
+          />
+        ) },
         { key: 'code', label: 'Code', width: 90, mono: true },
-        { key: 'description', label: 'Description' },
+        { key: 'description', label: 'Description', render: (r) => (
+          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+            <Box sx={{ flex: 1, fontSize: '0.8125rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.description}</Box>
+            {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupItem(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
+          </Stack>
+        ) },
         { key: 'days', label: 'Days', width: 80, type: 'number', align: 'right', min: 0 },
         { key: 'amount', label: 'Amount', width: 140, type: 'number', align: 'right', step: 0.01 },
       ]
@@ -1159,6 +1187,11 @@ export default function QuotationEditor() {
                 )}
               </>
             )}
+            {perLinePricing && selectedSvcIds.size >= 2 && !isLegacy && (
+              <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen(true)}>
+                Group selected ({selectedSvcIds.size})
+              </Button>
+            )}
             {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addService}>Add scope item</Button>}
           </Stack>
         </Stack>
@@ -1177,7 +1210,7 @@ export default function QuotationEditor() {
           footer={
             (!quotation.servicesFromManpower || quotation.servicesPerLinePricing) ? (
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={perLinePricing ? 3 : 2} align="right" sx={{ fontWeight: 600 }}>Services Subtotal</TableCell>
+                <TableCell colSpan={perLinePricing ? 4 : 2} align="right" sx={{ fontWeight: 600 }}>Services Subtotal</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.servicesSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
@@ -1259,6 +1292,22 @@ export default function QuotationEditor() {
           </Box>
         )}
       </Paper>
+
+      {/* Group dialog */}
+      <Dialog open={groupDialogOpen} onClose={() => setGroupDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Group scope items</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {selectedSvcIds.size} items selected. They will appear as a single "1 LOT" line in the PDF with the totalized amount.
+          </Typography>
+          <TextField label="Group label" value={groupLabel} onChange={(e) => setGroupLabel(e.target.value)} fullWidth autoFocus
+            placeholder="e.g. Installation Works" onKeyDown={(e) => { if (e.key === 'Enter') applyGroup(); }} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setGroupDialogOpen(false); setGroupLabel(''); }}>Cancel</Button>
+          <Button variant="contained" disabled={!groupLabel.trim()} onClick={applyGroup}>Group</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Totals */}
       <Paper sx={{ p: 2.5, bgcolor: 'grey.50' }}>

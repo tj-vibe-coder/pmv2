@@ -161,10 +161,35 @@ export async function exportQuotationXlsx(
       ws.getCell(r, 6).numFmt = PHP_FMT;
       r++;
     } else {
+      // Group-aware rendering for per-line pricing
+      const groups = new Map<string, typeof quotation.services>();
       quotation.services.forEach((l) => {
-        ws.getRow(r).values = [l.code, l.description, '', '', '', l.amount];
-        ws.getCell(r, 6).numFmt = PHP_FMT;
-        r++;
+        if (l.group) {
+          const arr = groups.get(l.group) || [];
+          arr.push(l);
+          groups.set(l.group, arr);
+        }
+      });
+      const groupRendered = new Set<string>();
+      quotation.services.forEach((l) => {
+        if (l.group) {
+          ws.getRow(r).values = [l.code, l.description, '', '', '', ''];
+          r++;
+          const members = groups.get(l.group)!;
+          if (members[members.length - 1].id === l.id && !groupRendered.has(l.group)) {
+            groupRendered.add(l.group);
+            const groupTotal = members.reduce((s, m) => s + (m.amount || 0), 0);
+            ws.getRow(r).values = ['', l.group, 1, 'lot', groupTotal, groupTotal];
+            ws.getCell(r, 2).font = { bold: true };
+            ws.getCell(r, 5).numFmt = PHP_FMT;
+            ws.getCell(r, 6).numFmt = PHP_FMT;
+            r++;
+          }
+        } else {
+          ws.getRow(r).values = [l.code, l.description, '', '', '', l.amount];
+          ws.getCell(r, 6).numFmt = PHP_FMT;
+          r++;
+        }
       });
     }
     ws.getRow(r).values = ['', '', '', '', 'Subtotal', totals.servicesSubtotal];
