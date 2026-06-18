@@ -7,6 +7,7 @@ import type {
   Project,
   Quotation,
   QuotationKind,
+  QuotationVersion,
   SalesContact,
 } from '../types/Quotation';
 import { seedClients, seedSalesContacts } from '../data/quotationClients';
@@ -96,6 +97,9 @@ interface Actions {
   duplicateQuotation: (id: ID) => Promise<Quotation | null>;
   // Import a fully-formed Quotation (e.g. from a legacy Excel parse) under an existing project.
   importQuotation: (q: Quotation) => Promise<Quotation>;
+  // Saved-version history for a quotation (newest first). Not cached in the store —
+  // fetched on demand when the History dialog opens.
+  fetchQuotationVersions: (id: ID) => Promise<QuotationVersion[]>;
 
   // Presets
   addPreset: (p: Omit<LaborRolePreset, 'id'>) => Promise<LaborRolePreset>;
@@ -287,25 +291,41 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       ...rest,
     };
 
-    // Project creation requires a proposal folder when corporate OneDrive is
-    // configured. Create/link it before saving so the stored project has the
-    // folder reference from the start instead of relying on a background update.
+    // When corporate OneDrive is configured we try to create/link the proposal
+    // folder up front so the stored project carries the reference from the start.
+    // This is BEST-EFFORT: if OneDrive isn't signed in, or a token can't be
+    // acquired silently (e.g. the SPA refresh token expired after Azure's 24h cap
+    // and ssoSilent is blocked by third-party-cookie policy), we still save the
+    // project WITHOUT a folder. The user can sign in and create/link the proposal
+    // folder later from the project detail page. Never block project creation on
+    // OneDrive — a tokenless-but-cached MSAL session must not strand the user.
     let projectWithFolder = project;
     if (isCorporateOneDriveConfigured()) {
-      const odStore = getOneDriveTokenStore();
-      if (!odStore.isAuthenticated) {
-        throw new Error('Sign in to OneDrive before creating a Calcsheet project.');
+      try {
+        const odStore = getOneDriveTokenStore();
+        const token = odStore.isAuthenticated ? await odStore.getToken() : null;
+        if (token) {
+          const ref = await ensureProposalFolder(token, project);
+          projectWithFolder = {
+            ...project,
+            proposalFolderId: ref.id,
+            proposalFolderUrl: ref.webUrl,
+          };
+        } else {
+          // eslint-disable-next-line no-console
+          console.warn(
+            '[OneDrive] No token at project create (signed in:',
+            odStore.isAuthenticated,
+            ') — saving project without a proposal folder; link it later from the project page.',
+          );
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[OneDrive] Proposal-folder creation failed at project create — saving project without a folder; link it later.',
+          e,
+        );
       }
-      const token = await odStore.getToken();
-      if (!token) {
-        throw new Error('Could not get OneDrive token. Sign in again before creating a project.');
-      }
-      const ref = await ensureProposalFolder(token, project);
-      projectWithFolder = {
-        ...project,
-        proposalFolderId: ref.id,
-        proposalFolderUrl: ref.webUrl,
-      };
     }
 
     const res = await api<{ project: Project }>('POST', '/projects', projectWithFolder);
@@ -493,6 +513,10 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
   deleteQuotation: async (id) => {
     await api('DELETE', `/quotations/${id}`);
     set({ quotations: get().quotations.filter((q) => q.id !== id) });
+  },
+  fetchQuotationVersions: async (id) => {
+    const res = await api<{ versions: QuotationVersion[] }>('GET', `/quotations/${id}/versions`);
+    return res.versions ?? [];
   },
   importQuotation: async (q) => {
     const res = await api<{ quotation: Quotation }>('POST', '/quotations', q);

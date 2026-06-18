@@ -14,14 +14,23 @@ import {
   Alert,
   CircularProgress,
   Chip,
+  Collapse,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   IconButton,
   Autocomplete,
   FormControl,
   InputLabel,
   Select,
   MenuItem,
+  Snackbar,
+  Tooltip,
 } from '@mui/material';
-import { Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
+import { Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
 import jsPDF from 'jspdf';
@@ -42,14 +51,23 @@ interface ProjectOption {
   project_no?: string;
 }
 
+// What a stored breakdown line looks like after server normalization.
+interface BreakdownLine {
+  category?: string | null;
+  description?: string | null;
+  amount?: number;
+}
+
 interface CashAdvanceRow {
   id: string;
+  ca_no?: string | null;
   user_id: string;
   amount: number;
   balance_remaining: number;
   status: string;
   purpose: string | null;
-  breakdown: string | null;
+  // Legacy docs stored a JSON string; server-created docs store the array.
+  breakdown: string | BreakdownLine[] | null;
   project_id: string | null;
   project_name?: string | null;
   project_no?: string | null;
@@ -62,23 +80,51 @@ interface CashAdvanceRow {
   full_name?: string | null;
 }
 
+interface LiquidationRow {
+  id: string;
+  form_no?: string | null;
+  date_of_submission?: string | null;
+  total_amount?: number;
+  status?: string;
+  ca_id?: string | null;
+  created_at?: number;
+}
+
+// Parse a stored breakdown regardless of vintage: legacy docs hold a JSON
+// string, server-created docs hold the array directly.
+function parseBreakdown(raw: CashAdvanceRow['breakdown']): BreakdownLine[] {
+  try {
+    const b = typeof raw === 'string' ? JSON.parse(raw) : (raw ?? []);
+    return Array.isArray(b) ? b : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function CAFormPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [list, setList] = useState<CashAdvanceRow[]>([]);
+  const [liquidations, setLiquidations] = useState<LiquidationRow[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [snackbar, setSnackbar] = useState<string | null>(null);
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
+  const [purpose, setPurpose] = useState('');
   const [dateRequested, setDateRequested] = useState(() => new Date().toISOString().slice(0, 10));
   const [breakdown, setBreakdown] = useState<BreakdownItem[]>([{ category: 'Materials', description: '', amount: '' }]);
   const [submitting, setSubmitting] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<CashAdvanceRow | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
   const [pdfPreviewBlob, setPdfPreviewBlob] = useState<Blob | null>(null);
   const [pdfPreviewTitle, setPdfPreviewTitle] = useState('');
 
   const breakdownTotal = breakdown.reduce((sum, r) => sum + (parseFloat(String(r.amount)) || 0), 0);
-  const canSubmit = breakdownTotal > 0 && selectedProject != null;
+  const canSubmit = breakdownTotal > 0 && (selectedProject != null || purpose.trim() !== '');
 
   const isAdmin = user?.role === 'superadmin' || user?.role === 'admin';
 
@@ -101,6 +147,16 @@ export default function CAFormPage() {
       setError(e instanceof Error ? e.message : 'Network error');
     } finally {
       setLoading(false);
+    }
+    // Linked liquidations power the per-CA history rows; best-effort.
+    try {
+      const res = await fetch(`${API_BASE}/api/liquidations`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success && data.liquidations) setLiquidations(data.liquidations);
+    } catch {
+      // table still works without history
     }
   }, []);
 
@@ -160,7 +216,7 @@ export default function CAFormPage() {
       doc.setFontSize(9);
       previousCAs.forEach((ca) => {
         const reqDate = ca.requested_at ? new Date(ca.requested_at * 1000).toLocaleDateString() : '—';
-        doc.text(`CA #${ca.id}: Date ${reqDate} | Amount PHP ${Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })} | Balance remaining PHP ${Number(ca.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, margin, y);
+        doc.text(`${ca.id}: Date ${reqDate} | Amount PHP ${Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })} | Balance remaining PHP ${Number(ca.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, margin, y);
         y += lineH - 1;
       });
       y += lineH + 2;
@@ -234,20 +290,20 @@ export default function CAFormPage() {
       }))
       .filter((r) => r.amount > 0);
     const doc = buildCAFormPdf({
-      projectName: selectedProject?.project_name ?? '',
+      projectName: selectedProject?.project_name || (purpose.trim() ? `${purpose.trim()} (prospect)` : ''),
       dateRequested,
       breakdownRows: items.length > 0 ? items : [{ category: '—', description: '—', amount: breakdownTotal }],
       total: breakdownTotal,
       preparedByName,
-      documentNo: `${(selectedProject?.project_no || '—').trim() || '—'}-CA-Draft`,
+      documentNo: `${(selectedProject?.project_no || 'Prospect').trim() || 'Prospect'}-CA-Draft`,
       previousCAs: previousApprovedWithBalance.map((ca) => ({
-        id: ca.id,
+        id: ca.ca_no || ca.id,
         amount: ca.amount,
         balance_remaining: ca.balance_remaining,
         requested_at: ca.requested_at,
       })),
     });
-    doc.save(`Cash_Advance_Request_${selectedProject?.project_name?.replace(/\s/g, '_') || 'form'}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    doc.save(`${(selectedProject?.project_no || 'Prospect').trim() || 'Prospect'}-CA-Draft_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   const handlePreviewCurrentForm = () => {
@@ -263,14 +319,14 @@ export default function CAFormPage() {
       }))
       .filter((r) => r.amount > 0);
     const doc = buildCAFormPdf({
-      projectName: selectedProject?.project_name ?? '',
+      projectName: selectedProject?.project_name || (purpose.trim() ? `${purpose.trim()} (prospect)` : ''),
       dateRequested,
       breakdownRows: items.length > 0 ? items : [{ category: '—', description: '—', amount: breakdownTotal }],
       total: breakdownTotal,
       preparedByName,
-      documentNo: `${(selectedProject?.project_no || '—').trim() || '—'}-CA-Draft`,
+      documentNo: `${(selectedProject?.project_no || 'Prospect').trim() || 'Prospect'}-CA-Draft`,
       previousCAs: previousApprovedWithBalance.map((ca) => ({
-        id: ca.id,
+        id: ca.ca_no || ca.id,
         amount: ca.amount,
         balance_remaining: ca.balance_remaining,
         requested_at: ca.requested_at,
@@ -283,18 +339,11 @@ export default function CAFormPage() {
   };
 
   const exportCARowToPDF = (ca: CashAdvanceRow) => {
-    let breakdownRows: { category: string; description: string; amount: number }[] = [];
-    try {
-      if (ca.breakdown) {
-        const b = JSON.parse(ca.breakdown);
-        if (Array.isArray(b))
-          breakdownRows = b.map((r: { category?: string; description?: string; amount?: number }) => ({
-            category: String(r.category ?? '—'),
-            description: String(r.description ?? ''),
-            amount: Number(r.amount ?? 0),
-          }));
-      }
-    } catch (_) {}
+    let breakdownRows = parseBreakdown(ca.breakdown).map((r) => ({
+      category: String(r.category ?? '—'),
+      description: String(r.description ?? ''),
+      amount: Number(r.amount ?? 0),
+    }));
     if (breakdownRows.length === 0) breakdownRows = [{ category: '—', description: '—', amount: Number(ca.amount) || 0 }];
     const requestedDate = ca.requested_at
       ? new Date(ca.requested_at * 1000).toISOString().slice(0, 10)
@@ -305,21 +354,21 @@ export default function CAFormPage() {
       (c) => c.status === 'approved' && Number(c.balance_remaining) > 0 && c.id !== ca.id
     );
     const doc = buildCAFormPdf({
-      projectName: ca.project_name ?? '',
+      projectName: ca.project_name || (ca.purpose ? `${ca.purpose} (prospect)` : ''),
       dateRequested: requestedDate,
       breakdownRows,
       total: Number(ca.amount) || 0,
-      title: `Cash Advance Request #${ca.id}`,
+      title: `Cash Advance Request ${ca.ca_no || '#' + ca.id}`,
       preparedByName: (ca.full_name?.trim() || ca.username || '').trim() || '—',
-      documentNo: `${(ca.project_no || '—').trim() || '—'}-CA-${String(ca.id).padStart(3, '0')}`,
+      documentNo: ca.ca_no || `${(ca.project_no || '—').trim() || '—'}-CA-${String(ca.id).padStart(3, '0')}`,
       previousCAs: previousOthers.map((c) => ({
-        id: c.id,
+        id: c.ca_no || c.id,
         amount: c.amount,
         balance_remaining: c.balance_remaining,
         requested_at: c.requested_at,
       })),
     });
-    doc.save(`Cash_Advance_${ca.id}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    doc.save(ca.ca_no ? `${ca.ca_no}.pdf` : `Cash_Advance_${ca.id}_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   const handleRequest = async () => {
@@ -327,8 +376,8 @@ export default function CAFormPage() {
       setError('Add at least one breakdown line with an amount');
       return;
     }
-    if (!selectedProject) {
-      setError('Select a project');
+    if (!selectedProject && !purpose.trim()) {
+      setError('Select a project or describe the purpose/prospect');
       return;
     }
     const items = breakdown
@@ -348,7 +397,8 @@ export default function CAFormPage() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           amount: breakdownTotal,
-          project_id: selectedProject.id,
+          project_id: selectedProject?.id ?? null,
+          purpose: purpose.trim() || undefined,
           date_requested: dateRequested || undefined,
           breakdown: items.length > 0 ? items : undefined,
         }),
@@ -357,7 +407,9 @@ export default function CAFormPage() {
       if (data.success) {
         setDateRequested(new Date().toISOString().slice(0, 10));
         setSelectedProject(null);
+        setPurpose('');
         setBreakdown([{ category: 'Materials', description: '', amount: '' }]);
+        setSnackbar(data.ca_no ? `Cash advance ${data.ca_no} requested` : 'Cash advance requested');
         fetchList();
       } else {
         setError(data.error || 'Request failed');
@@ -381,8 +433,10 @@ export default function CAFormPage() {
         body: JSON.stringify({ status }),
       });
       const data = await res.json().catch(() => ({}));
-      if (data.success) fetchList();
-      else setError(data.error || 'Action failed');
+      if (data.success) {
+        setSnackbar(status === 'approved' ? 'Cash advance approved' : 'Cash advance rejected');
+        fetchList();
+      } else setError(data.error || 'Action failed');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Network error');
     } finally {
@@ -390,27 +444,26 @@ export default function CAFormPage() {
     }
   };
 
-  const handleDelete = async (id: string, status?: string) => {
-    const message = status === 'approved' || status === 'rejected'
-      ? 'This request is already ' + status + '. Delete the record anyway? This cannot be undone.'
-      : 'Delete this cash advance request? This cannot be undone.';
-    if (!window.confirm(message)) return;
+  const handleDelete = async (ca: CashAdvanceRow) => {
     const token = localStorage.getItem('netpacific_token');
     if (!token) return;
-    setActionId(id);
+    setActionId(ca.id);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/cash-advances/${id}`, {
+      const res = await fetch(`${API_BASE}/api/cash-advances/${ca.id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json().catch(() => ({}));
-      if (data.success) fetchList();
-      else setError(data.error || 'Delete failed');
+      if (data.success) {
+        setSnackbar(`Deleted ${ca.ca_no || 'cash advance'}`);
+        fetchList();
+      } else setError(data.error || 'Delete failed');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Network error');
     } finally {
       setActionId(null);
+      setConfirmDelete(null);
     }
   };
 
@@ -442,7 +495,7 @@ export default function CAFormPage() {
             getOptionLabel={(p) => p.project_name || ''}
             value={selectedProject}
             onChange={(_, v) => setSelectedProject(v)}
-            renderInput={(params) => <TextField {...params} label="Project" required placeholder="Select project" />}
+            renderInput={(params) => <TextField {...params} label="Project" placeholder="Select project (optional for prospects)" />}
             sx={{ minWidth: 280 }}
           />
           <TextField
@@ -454,6 +507,18 @@ export default function CAFormPage() {
             InputLabelProps={{ shrink: true }}
             sx={{ width: 160 }}
           />
+          {!selectedProject && (
+            <TextField
+              size="small"
+              label="Purpose / prospect"
+              required
+              placeholder="e.g. Site survey for prospective quotation — Client X"
+              value={purpose}
+              onChange={(e) => setPurpose(e.target.value)}
+              helperText="No project yet? Describe what this CA is for."
+              sx={{ minWidth: 320, flex: 1 }}
+            />
+          )}
         </Box>
         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: theme.primary }}>
           Breakdown by category (add child lines under Materials for item breakdown; amount is auto-computed)
@@ -566,7 +631,8 @@ export default function CAFormPage() {
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow sx={{ bgcolor: theme.primary + '12' }}>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>ID</TableCell>
+                <TableCell sx={{ width: 36 }} />
+                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>CA No.</TableCell>
                 {isAdmin && (
                   <>
                     <TableCell sx={{ fontWeight: 600, color: theme.primary }}>User</TableCell>
@@ -587,14 +653,36 @@ export default function CAFormPage() {
             <TableBody>
               {list.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 10 : 8} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                  <TableCell colSpan={isAdmin ? 11 : 9} align="center" sx={{ py: 3, color: 'text.secondary' }}>
                     No cash advance requests yet.
                   </TableCell>
                 </TableRow>
               ) : (
-                list.map((ca) => (
-                  <TableRow key={ca.id} hover>
-                    <TableCell>{ca.id}</TableCell>
+                list.map((ca) => {
+                  const linkedLiqs = liquidations.filter((l) => l.ca_id === ca.id);
+                  const liquidatedTotal = linkedLiqs
+                    .filter((l) => l.status === 'submitted')
+                    .reduce((s, l) => s + (Number(l.total_amount) || 0), 0);
+                  const expanded = expandedId === ca.id;
+                  return (
+                  <React.Fragment key={ca.id}>
+                  <TableRow hover>
+                    <TableCell sx={{ py: 0 }}>
+                      <IconButton
+                        size="small"
+                        onClick={() => setExpandedId(expanded ? null : ca.id)}
+                        title={expanded ? 'Hide liquidations' : `Show liquidations (${linkedLiqs.length})`}
+                      >
+                        {expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                      </IconButton>
+                    </TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                      {ca.ca_no || (
+                        <Tooltip title={`Internal ID: ${ca.id}`}>
+                          <span style={{ color: '#888' }}>{ca.id.slice(0, 8)}…</span>
+                        </Tooltip>
+                      )}
+                    </TableCell>
                     {isAdmin && (
                       <>
                         <TableCell>{ca.username || '—'}</TableCell>
@@ -602,22 +690,27 @@ export default function CAFormPage() {
                       </>
                     )}
                     <TableCell>{Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
-                    <TableCell>{Number(ca.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
-                    <TableCell>{ca.project_name || (ca.project_id ? `#${ca.project_id}` : '—')}</TableCell>
+                    <TableCell sx={Number(ca.balance_remaining) < 0 ? { color: 'error.main', fontWeight: 600 } : undefined}>
+                      {Number(ca.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                    </TableCell>
+                    <TableCell>
+                      {ca.project_name
+                        || (ca.purpose ? (
+                          <Tooltip title="No project yet — prospect / out-of-project CA">
+                            <em style={{ color: '#666' }}>{ca.purpose}</em>
+                          </Tooltip>
+                        ) : ca.project_id ? `#${ca.project_id}` : '—')}
+                    </TableCell>
                     <TableCell sx={{ maxWidth: 220, whiteSpace: 'pre-wrap' }}>
                       {(() => {
-                        try {
-                          const b = ca.breakdown ? JSON.parse(ca.breakdown) : [];
-                          if (!Array.isArray(b) || b.length === 0) return '—';
-                          return b.map((r: { category?: string; description?: string; amount?: number }) => {
-                            const cat = (r.category || '').trim();
-                            const desc = (r.description || '').trim();
-                            const part = cat && desc ? `${cat} – ${desc}` : cat || desc || '—';
-                            return `${part}: ${Number(r.amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`;
-                          }).join('\n');
-                        } catch {
-                          return '—';
-                        }
+                        const b = parseBreakdown(ca.breakdown);
+                        if (b.length === 0) return '—';
+                        return b.map((r) => {
+                          const cat = (r.category || '').trim();
+                          const desc = (r.description || '').trim();
+                          const part = cat && desc ? `${cat} – ${desc}` : cat || desc || '—';
+                          return `${part}: ${Number(r.amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`;
+                        }).join('\n');
                       })()}
                     </TableCell>
                     <TableCell>
@@ -660,6 +753,17 @@ export default function CAFormPage() {
                           </Button>
                         </>
                       )}
+                      {ca.status === 'approved' && Number(ca.balance_remaining) > 0 && (
+                        <Button
+                          size="small"
+                          startIcon={<ReceiptLongIcon />}
+                          onClick={() => navigate(`${location.pathname.replace(/\/ca-form\/?$/, '/liquidation-form')}?ca_id=${ca.id}`)}
+                          sx={{ color: theme.primary, mr: 0.5 }}
+                          title="Submit a liquidation against this CA"
+                        >
+                          Liquidate
+                        </Button>
+                      )}
                       <IconButton
                         size="small"
                         onClick={() => exportCARowToPDF(ca)}
@@ -674,7 +778,7 @@ export default function CAFormPage() {
                           startIcon={<DeleteIcon />}
                           color="error"
                           variant="outlined"
-                          onClick={() => handleDelete(ca.id, ca.status)}
+                          onClick={() => setConfirmDelete(ca)}
                           disabled={actionId === ca.id}
                         >
                           Delete
@@ -682,7 +786,33 @@ export default function CAFormPage() {
                       )}
                     </TableCell>
                   </TableRow>
-                ))
+                  <TableRow>
+                    <TableCell colSpan={isAdmin ? 11 : 9} sx={{ py: 0, border: expanded ? undefined : 0 }}>
+                      <Collapse in={expanded} timeout="auto" unmountOnExit>
+                        <Box sx={{ py: 1.5, pl: 6 }}>
+                          {linkedLiqs.length === 0 ? (
+                            <Typography variant="body2" color="text.secondary">
+                              No liquidations linked to this CA yet.
+                            </Typography>
+                          ) : (
+                            <>
+                              <Typography variant="caption" sx={{ fontWeight: 600, color: theme.primary, display: 'block', mb: 0.5 }}>
+                                Liquidated {liquidatedTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })} of {Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                              </Typography>
+                              {linkedLiqs.map((l) => (
+                                <Typography key={l.id} variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                                  {l.form_no || l.id} · {l.date_of_submission || (l.created_at ? new Date(l.created_at * 1000).toLocaleDateString() : '—')} · ₱{Number(l.total_amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })} · {l.status || '—'}
+                                </Typography>
+                              ))}
+                            </>
+                          )}
+                        </Box>
+                      </Collapse>
+                    </TableCell>
+                  </TableRow>
+                  </React.Fragment>
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -694,6 +824,39 @@ export default function CAFormPage() {
         pdfBlob={pdfPreviewBlob}
         title={pdfPreviewTitle}
       />
+      <Dialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)}>
+        <DialogTitle>Delete {confirmDelete?.ca_no || 'cash advance'}?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {confirmDelete?.status === 'approved' || confirmDelete?.status === 'rejected'
+              ? `This request is already ${confirmDelete.status}. Delete the record anyway? This cannot be undone.`
+              : 'Delete this cash advance request? This cannot be undone.'}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => confirmDelete && handleDelete(confirmDelete)}
+            disabled={!!actionId}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Snackbar
+        open={!!snackbar}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {snackbar ? (
+          <Alert onClose={() => setSnackbar(null)} severity="success" variant="filled" sx={{ width: '100%' }}>
+            {snackbar}
+          </Alert>
+        ) : undefined}
+      </Snackbar>
     </Box>
   );
 }

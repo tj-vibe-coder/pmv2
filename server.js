@@ -783,6 +783,42 @@ app.post('/api/expenses', (req, res) => {
 });
 
 // ========== CASH ADVANCES ==========
+
+function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Human-readable CA reference number. Per-project sequence when the CA is tied
+// to a project with a project_no (e.g. IOCT2606001-CA01); otherwise a global
+// monthly fallback (e.g. CA2606-001) for out-of-project / prospect CAs.
+// Scan-max with no transaction — same approach as nextIoctProjectNo() and
+// /api/liquidations/next-form-no; volume is low and `id` stays the real key.
+async function nextCaNo(projectId, dateLike) {
+  let projectNo = null;
+  if (projectId) {
+    const pDoc = await db.collection('projects').doc(String(projectId)).get();
+    if (pDoc.exists) projectNo = String(pDoc.data().project_no || '').trim().toUpperCase() || null;
+  }
+  if (projectNo) {
+    const snap = await db.collection('cash_advances')
+      .where('project_id', '==', String(projectId)).select('ca_no').get();
+    const re = new RegExp(`^${escapeRegExp(projectNo)}-CA(\\d+)$`);
+    let max = 0;
+    for (const d of snap.docs) {
+      const m = String(d.data().ca_no || '').trim().toUpperCase().match(re);
+      if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > max) max = n; }
+    }
+    return `${projectNo}-CA${String(max + 1).padStart(2, '0')}`;
+  }
+  const prefix = `CA${phYearMonth(dateLike)}-`;
+  const snap = await db.collection('cash_advances').select('ca_no').get();
+  const re = new RegExp(`^${escapeRegExp(prefix)}(\\d{3})$`);
+  let max = 0;
+  for (const d of snap.docs) {
+    const m = String(d.data().ca_no || '').trim().toUpperCase().match(re);
+    if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > max) max = n; }
+  }
+  return `${prefix}${String(max + 1).padStart(3, '0')}`;
+}
+
 app.get('/api/cash-advances', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -827,14 +863,19 @@ app.post('/api/cash-advances', async (req, res) => {
     if (items.length > 0) { breakdown = items; if (sum > 0) amount = sum; }
   }
   if (!amount || amount <= 0) return res.status(400).json({ success: false, error: 'Add at least one breakdown line with an amount (total is auto-computed)' });
+  // CAs may pre-date a project (e.g. prospect work before a quotation) — in
+  // that case a purpose/prospect description is required instead.
+  const purpose = String(req.body.purpose ?? '').trim() || null;
+  if (!projectId && !purpose) return res.status(400).json({ success: false, error: 'Select a project or describe the purpose/prospect' });
   let requestedAt = Math.floor(Date.now() / 1000);
   const dateRequested = req.body.date_requested;
   if (dateRequested && /^\d{4}-\d{2}-\d{2}$/.test(String(dateRequested).trim())) {
     requestedAt = Math.floor(new Date(dateRequested + 'T12:00:00').getTime() / 1000);
   }
   try {
-    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose: null, breakdown: breakdown || null, project_id: projectId || null, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt });
-    res.status(201).json({ success: true, id: ref.id, message: 'Cash advance requested' });
+    const caNo = await nextCaNo(projectId, new Date(requestedAt * 1000));
+    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt });
+    res.status(201).json({ success: true, id: ref.id, ca_no: caNo, message: `Cash advance ${caNo} requested` });
   } catch (err) {
     console.error('Error creating cash advance:', err);
     res.status(500).json({ success: false, error: 'Database error' });
@@ -878,6 +919,14 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
       if (ca.user_id !== user.id) return res.status(403).json({ success: false, error: 'You can only delete your own request' });
     }
     const liqSnap = await db.collection('liquidations').where('ca_id', '==', id).get();
+    // Submitted liquidations have already deducted from this CA's balance —
+    // silently unlinking them would orphan that money trail. Block the delete
+    // and let the user resolve the liquidations first. Drafts are just unlinked.
+    const submittedLiqs = liqSnap.docs.filter(lDoc => lDoc.data().status === 'submitted');
+    if (submittedLiqs.length > 0) {
+      const formNos = submittedLiqs.map(lDoc => lDoc.data().form_no || lDoc.id).slice(0, 5).join(', ');
+      return res.status(400).json({ success: false, error: `This CA has ${submittedLiqs.length} submitted liquidation(s) (${formNos}). Delete or unlink them first.` });
+    }
     if (!liqSnap.empty) {
       const batch = db.batch();
       liqSnap.docs.forEach(lDoc => batch.update(lDoc.ref, { ca_id: null }));
@@ -952,8 +1001,9 @@ app.get('/api/liquidations/:id', async (req, res) => {
 app.post('/api/liquidations', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
-  const { form_no, date_of_submission, employee_name, employee_number, rows_json, total_amount, status, ca_id } = req.body;
+  const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
   const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
+  const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
   const total = parseFloat(total_amount) || 0;
   const now = Math.floor(Date.now() / 1000);
   const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
@@ -962,8 +1012,17 @@ app.post('/api/liquidations', async (req, res) => {
     if (liqStatus === 'submitted' && caId) {
       const caDoc = await db.collection('cash_advances').doc(caId).get();
       if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
+      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
+      if (total > bal) return res.status(400).json({ success: false, error: `Liquidation (₱${total.toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
     }
-    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), total_amount: total, ca_id: caId, status: liqStatus, created_at: now, updated_at: now });
+    if (liqStatus === 'submitted' && form_no) {
+      const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
+      if (!dupSnap.empty) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
+    }
+    // No-CA submitted liquidations are out-of-pocket reimbursement claims —
+    // tracked so the requester gets paid back (see PATCH below).
+    const reimbursementStatus = liqStatus === 'submitted' && !caId ? 'pending' : null;
+    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
     }
@@ -985,8 +1044,9 @@ app.put('/api/liquidations/:id', async (req, res) => {
     const existing = doc.data();
     if (existing.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (existing.status === 'submitted') return res.status(400).json({ success: false, error: 'Cannot edit submitted liquidation' });
-    const { form_no, date_of_submission, employee_name, employee_number, rows_json, total_amount, status, ca_id } = req.body;
+    const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
     const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
+    const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
     const total = parseFloat(total_amount) || 0;
     const now = Math.floor(Date.now() / 1000);
     const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
@@ -994,14 +1054,50 @@ app.put('/api/liquidations/:id', async (req, res) => {
     if (liqStatus === 'submitted' && caId) {
       const caDoc = await db.collection('cash_advances').doc(caId).get();
       if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
+      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
+      if (total > bal) return res.status(400).json({ success: false, error: `Liquidation (₱${total.toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
     }
-    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), total_amount: total, ca_id: caId, status: liqStatus, updated_at: now });
+    if (liqStatus === 'submitted' && form_no) {
+      const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
+      if (dupSnap.docs.some(d => d.id !== id)) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
+    }
+    const reimbursementStatus = liqStatus === 'submitted' && !caId ? 'pending' : null;
+    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
     }
     res.json({ success: true, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
   } catch (err) {
     console.error('Error updating liquidation:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: mark an out-of-pocket (no-CA) submitted liquidation as
+// reimbursed (or revert to pending). CA-linked liquidations settle through the
+// CA balance instead, so reimbursement tracking does not apply to them.
+app.patch('/api/liquidations/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { reimbursement_status } = req.body;
+  if (reimbursement_status !== 'pending' && reimbursement_status !== 'reimbursed') return res.status(400).json({ success: false, error: 'reimbursement_status must be pending or reimbursed' });
+  try {
+    const ref = db.collection('liquidations').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    if (liq.status !== 'submitted' || liq.ca_id) return res.status(400).json({ success: false, error: 'Reimbursement status only applies to submitted liquidations without a CA' });
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({
+      reimbursement_status,
+      reimbursed_at: reimbursement_status === 'reimbursed' ? now : null,
+      reimbursed_by: reimbursement_status === 'reimbursed' ? user.id : null,
+      updated_at: now,
+    });
+    res.json({ success: true, message: reimbursement_status === 'reimbursed' ? 'Marked as reimbursed' : 'Reverted to pending reimbursement' });
+  } catch (err) {
+    console.error('Error updating liquidation reimbursement status:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
@@ -1913,6 +2009,9 @@ app.delete('/api/calcsheet/projects/:id', async (req, res) => {
     // Also delete all quotations for this project
     const qsnap = await db.collection('calcsheet_quotations').where('projectId', '==', req.params.id).get();
     await Promise.all(qsnap.docs.map((d) => d.ref.delete()));
+    // And their version snapshots
+    const vsnap = await db.collection('calcsheet_quotation_versions').where('projectId', '==', req.params.id).get();
+    await Promise.all(vsnap.docs.map((d) => d.ref.delete()));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete project' }); }
 });
@@ -1958,11 +2057,49 @@ app.put('/api/calcsheet/quotations/:id', async (req, res) => {
     if (!user) return;
     const { id: _ignored, ...body } = req.body || {};
     const update = { ...body, updatedAt: new Date().toISOString() };
-    await db.collection('calcsheet_quotations').doc(req.params.id).update(update);
+    const ref = db.collection('calcsheet_quotations').doc(req.params.id);
+    // Snapshot the pre-save state into calcsheet_quotation_versions so edits
+    // can be looked back at later. Best-effort — a failed snapshot must never
+    // block the save itself.
+    try {
+      const prev = await ref.get();
+      if (prev.exists) {
+        const { id: _stored, ...prevData } = prev.data();
+        await db.collection('calcsheet_quotation_versions').add({
+          quotationId: req.params.id,
+          projectId: prevData.projectId || null,
+          savedAt: new Date().toISOString(),
+          savedBy: user.full_name || user.username || null,
+          data: prevData,
+        });
+      }
+    } catch (verErr) {
+      console.warn('[calcsheet] version snapshot failed (non-blocking):', verErr && verErr.message);
+    }
+    await ref.update(update);
     res.json({ success: true });
   } catch (err) {
     console.error('[calcsheet] update quotation failed:', { id: req.params.id, err: err && err.message });
     res.status(500).json({ error: 'Failed to update quotation' });
+  }
+});
+
+app.get('/api/calcsheet/quotations/:id/versions', async (req, res) => {
+  try {
+    // Single-field where + in-memory sort avoids needing a composite index.
+    const snap = await db.collection('calcsheet_quotation_versions')
+      .where('quotationId', '==', req.params.id)
+      .get();
+    const versions = snap.docs
+      .map((d) => {
+        const { id: _stored, ...data } = d.data();
+        return { ...data, id: d.id };
+      })
+      .sort((a, b) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')));
+    res.json({ success: true, versions });
+  } catch (err) {
+    console.error('[calcsheet] get quotation versions failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to get quotation versions' });
   }
 });
 
@@ -1971,6 +2108,9 @@ app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
     const user = await requireActiveUser(req, res);
     if (!user) return;
     await db.collection('calcsheet_quotations').doc(req.params.id).delete();
+    // Remove version snapshots belonging to the deleted quotation.
+    const vsnap = await db.collection('calcsheet_quotation_versions').where('quotationId', '==', req.params.id).get();
+    await Promise.all(vsnap.docs.map((d) => d.ref.delete()));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete quotation' }); }
 });

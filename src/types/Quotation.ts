@@ -163,6 +163,17 @@ export interface Quotation {
   updatedAt: string;
 }
 
+// A snapshot of a quotation's state captured server-side just before a save
+// overwrote it. `data` is the full quotation as it existed before that save.
+export interface QuotationVersion {
+  id: ID;
+  quotationId: ID;
+  projectId?: ID | null;
+  savedAt: string;          // when this state was replaced by a newer save
+  savedBy?: string | null;  // who performed the save that replaced this state
+  data: Quotation;
+}
+
 export interface QuotationTotals {
   generalReqtsCost: number;
   generalReqtsWithContingency: number;

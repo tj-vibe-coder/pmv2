@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Accordion, AccordionDetails, AccordionSummary,
-  Alert, AlertTitle, Autocomplete, Box, Button, Chip, Divider, FormControlLabel, ListSubheader, MenuItem, Paper,
-  Snackbar, Stack, Switch, TableCell, TableRow, TextField, Tooltip, Typography,
+  Alert, AlertTitle, Autocomplete, Box, Button, Chip, CircularProgress,
+  Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel, ListSubheader, MenuItem, Paper,
+  Snackbar, Stack, Switch, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import HistoryIcon from '@mui/icons-material/History';
@@ -22,7 +23,7 @@ import {
   componentSellingUnit, lineGeneralTotal, manpowerCost, manpowerTotalCost,
 } from '../../utils/calcsheet/calc';
 import type {
-  ComponentLine, GeneralReqLine, ManpowerEntry, Quotation, SalesContact, ServiceLine,
+  ComponentLine, GeneralReqLine, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
 } from '../../types/Quotation';
 import { EditableTable } from './EditableTable';
 import type { Column } from './EditableTable';
@@ -125,6 +126,7 @@ export default function QuotationEditor() {
   const presets = useQuotationStore((s) => s.laborPresets);
   const update = useQuotationStore((s) => s.updateQuotation);
   const duplicateQuotation = useQuotationStore((s) => s.duplicateQuotation);
+  const fetchQuotationVersions = useQuotationStore((s) => s.fetchQuotationVersions);
 
   const [draft, setDraft] = useState<Quotation | undefined>(saved);
 
@@ -192,6 +194,12 @@ export default function QuotationEditor() {
   }, [isDirty]);
 
   const [saving, setSaving] = useState(false);
+
+  // Saved-version history (snapshots captured server-side on every save).
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [versions, setVersions] = useState<QuotationVersion[]>([]);
 
   // OneDrive auto-upload on export. Hooks must be declared unconditionally —
   // keep these above the early-return guard below.
@@ -297,6 +305,34 @@ export default function QuotationEditor() {
   const handleDiscard = () => {
     if (!saved) return;
     setDraft(saved);
+  };
+
+  const openHistory = async () => {
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      setVersions(await fetchQuotationVersions(quotation.id));
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const restoreVersion = (v: QuotationVersion) => {
+    if (isDirty) {
+      const proceed = window.confirm(
+        'Restoring this version will replace your unsaved draft edits.\n\nContinue?'
+      );
+      if (!proceed) return;
+    }
+    // Load the snapshot into the draft, keeping the live identity fields. The
+    // user reviews the restored state and clicks Save to make it permanent
+    // (which itself snapshots the current state — nothing is ever lost).
+    setDraft({ ...v.data, id: quotation.id, projectId: quotation.projectId });
+    setHistoryOpen(false);
+    setToast({ msg: 'Version loaded into the editor — review and click Save to keep it', sev: 'info' });
   };
 
   const handleDuplicateToRevise = async () => {
@@ -606,6 +642,15 @@ export default function QuotationEditor() {
             title={isDirty ? 'Save changes before exporting' : undefined}
           >
             Export Excel
+          </Button>
+          <Button
+            startIcon={<HistoryIcon />}
+            variant="outlined"
+            color="inherit"
+            onClick={openHistory}
+            title="View previously saved versions of this quotation"
+          >
+            History
           </Button>
           <Button component={Link} to={`/sales/calcsheet/projects/${project.id}`} variant="text" size="small">← Project</Button>
         </Stack>
@@ -1214,6 +1259,66 @@ export default function QuotationEditor() {
           </Box>
         </Box>
       </Paper>
+
+      {/* Saved-version history */}
+      <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          Version history — {project.code}-{quotation.revision} ({quotation.kind})
+          <Typography variant="body2" color="text.secondary">
+            A snapshot of the previous state is kept every time this quotation is saved.
+            The current state is what you see in the editor.
+          </Typography>
+        </DialogTitle>
+        <DialogContent dividers>
+          {historyLoading ? (
+            <Stack alignItems="center" sx={{ py: 4 }}><CircularProgress size={28} /></Stack>
+          ) : historyError ? (
+            <Alert severity="error">Could not load history: {historyError}</Alert>
+          ) : versions.length === 0 ? (
+            <Alert severity="info">
+              No earlier versions yet. History starts recording from the next time this quotation is saved.
+            </Alert>
+          ) : (
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>#</TableCell>
+                  <TableCell>Replaced on</TableCell>
+                  <TableCell>Saved by</TableCell>
+                  <TableCell align="right">Grand Total</TableCell>
+                  <TableCell align="right" />
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {versions.map((v, i) => {
+                  let total = '—';
+                  try { total = PHP(computeTotals(v.data).grandTotal); } catch { /* malformed snapshot */ }
+                  return (
+                    <TableRow key={v.id} hover>
+                      <TableCell sx={{ color: 'text.secondary' }}>{versions.length - i}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        {v.savedAt ? format(new Date(v.savedAt), 'yyyy-MM-dd HH:mm') : '—'}
+                      </TableCell>
+                      <TableCell>{v.savedBy || '—'}</TableCell>
+                      <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{total}</TableCell>
+                      <TableCell align="right">
+                        {!isLegacy && (
+                          <Button size="small" startIcon={<UndoIcon />} onClick={() => restoreVersion(v)}>
+                            Restore
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setHistoryOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
 
       <Snackbar
         open={!!toast}

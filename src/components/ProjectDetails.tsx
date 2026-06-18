@@ -213,6 +213,10 @@ export interface ServiceReport {
   approverName?: string;
   approverDesignation?: string;
   approverCompany?: string;
+  /** Per-report "Prepared by" override (e.g. a third-party engineer who went onsite). */
+  preparedByName?: string;
+  preparedByDesignation?: string;
+  preparedByCompany?: string;
   createdAt: string;
 }
 
