@@ -161,7 +161,7 @@ export async function exportQuotationXlsx(
       ws.getCell(r, 6).numFmt = PHP_FMT;
       r++;
     } else {
-      // Group-aware rendering for per-line pricing
+      // Group-aware rendering — pricing on middle row of each group
       const groups = new Map<string, typeof quotation.services>();
       quotation.services.forEach((l) => {
         if (l.group) {
@@ -170,21 +170,20 @@ export async function exportQuotationXlsx(
           groups.set(l.group, arr);
         }
       });
-      const groupRendered = new Set<string>();
       quotation.services.forEach((l) => {
         if (l.group) {
-          ws.getRow(r).values = [l.code, l.description, '', '', '', ''];
-          r++;
           const members = groups.get(l.group)!;
-          if (members[members.length - 1].id === l.id && !groupRendered.has(l.group)) {
-            groupRendered.add(l.group);
+          const midIdx = Math.max(0, Math.floor((members.length - 1) / 2));
+          const isMid = members[midIdx].id === l.id;
+          if (isMid) {
             const groupTotal = members.reduce((s, m) => s + (m.amount || 0), 0);
-            ws.getRow(r).values = ['', l.group, 1, 'lot', groupTotal, groupTotal];
-            ws.getCell(r, 2).font = { bold: true };
+            ws.getRow(r).values = [l.code, l.description, 1, 'lot', groupTotal, groupTotal];
             ws.getCell(r, 5).numFmt = PHP_FMT;
             ws.getCell(r, 6).numFmt = PHP_FMT;
-            r++;
+          } else {
+            ws.getRow(r).values = [l.code, l.description, '', '', '', ''];
           }
+          r++;
         } else {
           ws.getRow(r).values = [l.code, l.description, 1, 'lot', l.amount, l.amount];
           ws.getCell(r, 5).numFmt = PHP_FMT;
