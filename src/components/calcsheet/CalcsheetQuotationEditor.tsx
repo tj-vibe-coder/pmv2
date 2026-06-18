@@ -383,9 +383,12 @@ export default function QuotationEditor() {
       />
     ) },
     { key: 'code', label: 'Code', width: 90, mono: true },
-    { key: 'description', label: 'Description', render: (r) => (
+    { key: 'description', label: 'Description', render: (r, idx) => (
       <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
-        <Box sx={{ flex: 1, fontSize: '0.8125rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.description}</Box>
+        <TextField value={r.description ?? ''} onChange={(e) => updateRow('components', idx, 'description', e.target.value)}
+          variant="standard" fullWidth disabled={isLegacy}
+          InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
+          inputProps={{ style: { padding: '6px 4px' } }} />
         {r.group && <Chip label={r.group} size="small" color="warning" variant="outlined" onDelete={() => ungroupComp(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
       </Stack>
     ) },
@@ -455,9 +458,12 @@ export default function QuotationEditor() {
           />
         ) },
         { key: 'code', label: 'Code', width: 90, mono: true },
-        { key: 'description', label: 'Description', render: (r) => (
+        { key: 'description', label: 'Description', render: (r, idx) => (
           <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
-            <Box sx={{ flex: 1, fontSize: '0.8125rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.description}</Box>
+            <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)}
+              variant="standard" fullWidth disabled={isLegacy}
+              InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
+              inputProps={{ style: { padding: '6px 4px' } }} />
             {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupSvc(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
           </Stack>
         ) },
