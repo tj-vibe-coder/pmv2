@@ -444,6 +444,7 @@ export default function QuotationEditor() {
       };
     }
     setField('manpower', list);
+    recalcServiceAmounts(list);
   };
 
   const engineeringPresets = presets.filter((p) => p.group === 'engineering');
@@ -515,6 +516,20 @@ export default function QuotationEditor() {
     setField(section, prefix ? renumber(list, prefix) : list);
   };
 
+  // When manpower changes and per-line pricing is on, recalculate service amounts
+  // for any scope item that has days set.
+  const recalcServiceAmounts = (manpowerRows: ManpowerEntry[]) => {
+    if (!perLinePricing) return;
+    const rate = manpowerDailyRate(manpowerRows);
+    const mult = 1 + (quotation.laborMarkupPct || 0) / 100;
+    const updated = quotation.services.map((s) =>
+      (s.days || 0) > 0 ? { ...s, amount: (s.days || 0) * rate * mult } : s,
+    );
+    if (updated.some((s, i) => s.amount !== quotation.services[i].amount)) {
+      setField('services', updated);
+    }
+  };
+
   const updateRow = (section: Section, idx: number, key: any, value: any) => {
     const list = [...(quotation as any)[section]];
     list[idx] = {
@@ -524,11 +539,17 @@ export default function QuotationEditor() {
     };
     // Don't renumber on field edits — only on structural changes (add/delete/reorder)
     setField(section, list);
+    if (section === 'manpower' && ['headcount', 'dailyRate', 'allowance'].includes(key)) {
+      recalcServiceAmounts(list);
+    }
   };
   const deleteRow = (section: Section, idx: number) => {
     const list = [...(quotation as any)[section]];
     list.splice(idx, 1);
     commit(section, list);
+    if (section === 'manpower') {
+      recalcServiceAmounts(list);
+    }
   };
   const reorderRows = (section: Section, newRows: any[]) => {
     commit(section, newRows);
@@ -973,7 +994,7 @@ export default function QuotationEditor() {
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
               <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} sx={{ width: 150 }} disabled={isLegacy} />
               <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} sx={{ width: 180 }} helperText="Default for product rows" disabled={isLegacy} />
-              <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => setField('laborMarkupPct', v)} sx={{ width: 150 }} helperText="Applied on top of manpower cost" disabled={isLegacy} />
+              <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { const mult = 1 + (v || 0) / 100; setField('services', quotation.services.map((s) => (s.days || 0) > 0 ? { ...s, amount: (s.days || 0) * teamDailyRate * mult } : s)); } }} sx={{ width: 150 }} helperText="Applied on top of manpower cost" disabled={isLegacy} />
               <NumField label="Gen. Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} sx={{ width: 160 }} disabled={isLegacy} />
               <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} sx={{ width: 170 }} helperText="Not applied to manpower pricing" disabled={isLegacy} />
               <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} sx={{ width: 130 }} disabled={isLegacy} />
