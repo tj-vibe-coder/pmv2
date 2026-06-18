@@ -130,7 +130,8 @@ export default function QuotationEditor() {
 
   const [draft, setDraft] = useState<Quotation | undefined>(saved);
   const [selectedSvcIds, setSelectedSvcIds] = useState<Set<string>>(new Set());
-  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const [selectedCompIds, setSelectedCompIds] = useState<Set<string>>(new Set());
+  const [groupDialogOpen, setGroupDialogOpen] = useState<'services' | 'components' | false>(false);
   const [groupLabel, setGroupLabel] = useState('');
 
   // Re-init the draft when the URL points at a different quotation OR when the
@@ -375,8 +376,19 @@ export default function QuotationEditor() {
     ] as ComponentLine[]);
 
   const compCols: Column<ComponentLine>[] = [
+    { key: '_select', label: '', width: 36, render: (r) => (
+      <Checkbox size="small" sx={{ p: 0 }}
+        checked={selectedCompIds.has(r.id)}
+        onChange={(e) => setSelectedCompIds((prev) => { const n = new Set(prev); e.target.checked ? n.add(r.id) : n.delete(r.id); return n; })}
+      />
+    ) },
     { key: 'code', label: 'Code', width: 90, mono: true },
-    { key: 'description', label: 'Description' },
+    { key: 'description', label: 'Description', render: (r) => (
+      <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+        <Box sx={{ flex: 1, fontSize: '0.8125rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.description}</Box>
+        {r.group && <Chip label={r.group} size="small" color="warning" variant="outlined" onDelete={() => ungroupComp(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
+      </Stack>
+    ) },
     { key: 'brand', label: 'Brand', width: 90 },
     { key: 'partNo', label: 'Part No.', width: 100 },
     { key: 'qty', label: 'Qty', width: 60, type: 'number', align: 'right' },
@@ -412,17 +424,26 @@ export default function QuotationEditor() {
   };
 
   const applyGroup = () => {
-    if (!groupLabel.trim() || selectedSvcIds.size < 2) return;
-    const updated = quotation.services.map((s) =>
-      selectedSvcIds.has(s.id) ? { ...s, group: groupLabel.trim() } : s,
-    );
-    setField('services', updated);
-    setSelectedSvcIds(new Set());
+    if (!groupLabel.trim()) return;
+    if (groupDialogOpen === 'services' && selectedSvcIds.size >= 2) {
+      setField('services', quotation.services.map((s) =>
+        selectedSvcIds.has(s.id) ? { ...s, group: groupLabel.trim() } : s,
+      ));
+      setSelectedSvcIds(new Set());
+    } else if (groupDialogOpen === 'components' && selectedCompIds.size >= 2) {
+      setField('components', quotation.components.map((c) =>
+        selectedCompIds.has(c.id) ? { ...c, group: groupLabel.trim() } : c,
+      ));
+      setSelectedCompIds(new Set());
+    }
     setGroupDialogOpen(false);
     setGroupLabel('');
   };
-  const ungroupItem = (svcId: string) => {
+  const ungroupSvc = (svcId: string) => {
     setField('services', quotation.services.map((s) => s.id === svcId ? { ...s, group: undefined } : s));
+  };
+  const ungroupComp = (compId: string) => {
+    setField('components', quotation.components.map((c) => c.id === compId ? { ...c, group: undefined } : c));
   };
 
   const svcCols: Column<ServiceLine>[] = perLinePricing
@@ -437,7 +458,7 @@ export default function QuotationEditor() {
         { key: 'description', label: 'Description', render: (r) => (
           <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
             <Box sx={{ flex: 1, fontSize: '0.8125rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.description}</Box>
-            {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupItem(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
+            {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupSvc(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
           </Stack>
         ) },
         { key: 'days', label: 'Days', width: 80, type: 'number', align: 'right', min: 0 },
@@ -1119,7 +1140,14 @@ export default function QuotationEditor() {
       <Paper sx={{ p: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
           <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>B. Supply of Components</Typography>
-          {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addComponent}>Add row</Button>}
+          <Stack direction="row" spacing={1}>
+            {selectedCompIds.size >= 2 && !isLegacy && (
+              <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen('components')}>
+                Group selected ({selectedCompIds.size})
+              </Button>
+            )}
+            {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addComponent}>Add row</Button>}
+          </Stack>
         </Stack>
         <EditableTable
           rows={quotation.components}
@@ -1188,7 +1216,7 @@ export default function QuotationEditor() {
               </>
             )}
             {perLinePricing && selectedSvcIds.size >= 2 && !isLegacy && (
-              <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen(true)}>
+              <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen('services')}>
                 Group selected ({selectedSvcIds.size})
               </Button>
             )}
@@ -1294,11 +1322,11 @@ export default function QuotationEditor() {
       </Paper>
 
       {/* Group dialog */}
-      <Dialog open={groupDialogOpen} onClose={() => setGroupDialogOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>Group scope items</DialogTitle>
+      <Dialog open={!!groupDialogOpen} onClose={() => setGroupDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Group {groupDialogOpen === 'components' ? 'components' : 'scope items'}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            {selectedSvcIds.size} items selected. They will appear as a single "1 LOT" line in the PDF with the totalized amount.
+            {(groupDialogOpen === 'components' ? selectedCompIds.size : selectedSvcIds.size)} items selected. They will appear as a single "1 LOT" line in the PDF with the totalized amount.
           </Typography>
           <TextField label="Group label" value={groupLabel} onChange={(e) => setGroupLabel(e.target.value)} fullWidth autoFocus
             placeholder="e.g. Installation Works" onKeyDown={(e) => { if (e.key === 'Enter') applyGroup(); }} />

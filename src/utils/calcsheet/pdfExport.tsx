@@ -359,41 +359,75 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
 
         {/* ─── SECTION B — SUPPLY OF COMPONENTS ─── */}
         {hasB && (
-          <>
-            <Text style={styles.sectionBar}>Supply of Components</Text>
-            <View style={styles.th}>
-              <Text style={styles.cItem}>Item No.</Text>
-              <Text style={styles.cDesc}>Description</Text>
-              <Text style={styles.cQty}>QTY</Text>
-              <Text style={styles.cUom}>UOM</Text>
-              <Text style={styles.cUnit}>Unit Price</Text>
-              <Text style={styles.cTotal}>Total , PhP</Text>
-            </View>
-            {quotation.components.map((l) => (
-              <View style={styles.tr} key={l.id}>
-                <Text style={styles.cItem}>{l.code}</Text>
-                <Text style={styles.cDesc}>
-                  {[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}
-                </Text>
-                <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
-                <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
-                <Text style={styles.cUnit}>
-                  {PHP(componentSellingUnit(l, quotation.productMarkupPct))}
-                </Text>
-                <Text style={styles.cTotal}>
-                  {PHP(componentLineTotal(l, quotation.productMarkupPct))}
-                </Text>
-              </View>
-            ))}
-            <View style={styles.trSub}>
-              <Text style={styles.cItem} />
-              <Text style={styles.cDesc} />
-              <Text style={styles.cQty} />
-              <Text style={styles.cUom} />
-              <Text style={[styles.cUnit, { textAlign: 'right' }]}>sub total (vat-ex)</Text>
-              <Text style={styles.cTotal}>{PHP(totals.componentsSubtotal)}</Text>
-            </View>
-          </>
+          (() => {
+            const compGroups = new Map<string, typeof quotation.components>();
+            quotation.components.forEach((l) => {
+              if (l.group) {
+                const arr = compGroups.get(l.group) || [];
+                arr.push(l);
+                compGroups.set(l.group, arr);
+              }
+            });
+            return (
+              <>
+                <Text style={styles.sectionBar}>Supply of Components</Text>
+                <View style={styles.th}>
+                  <Text style={styles.cItem}>Item No.</Text>
+                  <Text style={styles.cDesc}>Description</Text>
+                  <Text style={styles.cQty}>QTY</Text>
+                  <Text style={styles.cUom}>UOM</Text>
+                  <Text style={styles.cUnit}>Unit Price</Text>
+                  <Text style={styles.cTotal}>Total , PhP</Text>
+                </View>
+                {quotation.components.map((l) => {
+                  if (l.group) {
+                    const members = compGroups.get(l.group)!;
+                    const midIdx = groupedLotDisplayIndex(members.length);
+                    const isMid = members[midIdx].id === l.id;
+                    const groupTotal = isMid
+                      ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
+                      : 0;
+                    return (
+                      <View style={styles.tr} key={l.id}>
+                        <Text style={styles.cItem}>{l.code}</Text>
+                        <Text style={styles.cDesc}>
+                          {[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}
+                        </Text>
+                        <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
+                        <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
+                        <Text style={styles.cUnit}>{isMid ? PHP(groupTotal) : ''}</Text>
+                        <Text style={styles.cTotal}>{isMid ? PHP(groupTotal) : ''}</Text>
+                      </View>
+                    );
+                  }
+                  return (
+                    <View style={styles.tr} key={l.id}>
+                      <Text style={styles.cItem}>{l.code}</Text>
+                      <Text style={styles.cDesc}>
+                        {[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}
+                      </Text>
+                      <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
+                      <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
+                      <Text style={styles.cUnit}>
+                        {PHP(componentSellingUnit(l, quotation.productMarkupPct))}
+                      </Text>
+                      <Text style={styles.cTotal}>
+                        {PHP(componentLineTotal(l, quotation.productMarkupPct))}
+                      </Text>
+                    </View>
+                  );
+                })}
+                <View style={styles.trSub}>
+                  <Text style={styles.cItem} />
+                  <Text style={styles.cDesc} />
+                  <Text style={styles.cQty} />
+                  <Text style={styles.cUom} />
+                  <Text style={[styles.cUnit, { textAlign: 'right' }]}>sub total (vat-ex)</Text>
+                  <Text style={styles.cTotal}>{PHP(totals.componentsSubtotal)}</Text>
+                </View>
+              </>
+            );
+          })()
         )}
 
         {/* ─── SECTION C — ENGINEERING SERVICES ─── */}

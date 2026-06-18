@@ -90,6 +90,7 @@ export interface ComponentLine {
   contingencyPctOverridden?: boolean;
   discountPct: number;
   leadTimeDays?: number;
+  group?: string;
 }
 
 export interface ServiceLine {

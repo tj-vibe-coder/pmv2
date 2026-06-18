@@ -132,16 +132,34 @@ export async function exportQuotationXlsx(
   if (quotation.components.length) {
     sectionHeader('B. SUPPLY OF COMPONENTS');
     tableHeader(['Code', 'Description', 'Qty', 'UOM', 'Unit Price', 'Total']);
+    // Group-aware rendering — pricing on middle row of each group
+    const compGroups = new Map<string, typeof quotation.components>();
     quotation.components.forEach((l) => {
-      ws.getRow(r).values = [
-        l.code,
-        [l.brand, l.description, l.partNo].filter(Boolean).join(' — '),
-        l.qty, l.uom,
-        componentSellingUnit(l, quotation.productMarkupPct),
-        componentLineTotal(l, quotation.productMarkupPct),
-      ];
-      ws.getCell(r, 5).numFmt = PHP_FMT;
-      ws.getCell(r, 6).numFmt = PHP_FMT;
+      if (l.group) {
+        const arr = compGroups.get(l.group) || [];
+        arr.push(l);
+        compGroups.set(l.group, arr);
+      }
+    });
+    quotation.components.forEach((l) => {
+      const desc = [l.brand, l.description, l.partNo].filter(Boolean).join(' — ');
+      if (l.group) {
+        const members = compGroups.get(l.group)!;
+        const midIdx = Math.max(0, Math.floor((members.length - 1) / 2));
+        const isMid = members[midIdx].id === l.id;
+        if (isMid) {
+          const groupTotal = members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0);
+          ws.getRow(r).values = [l.code, desc, 1, 'lot', groupTotal, groupTotal];
+          ws.getCell(r, 5).numFmt = PHP_FMT;
+          ws.getCell(r, 6).numFmt = PHP_FMT;
+        } else {
+          ws.getRow(r).values = [l.code, desc, '', '', '', ''];
+        }
+      } else {
+        ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct), componentLineTotal(l, quotation.productMarkupPct)];
+        ws.getCell(r, 5).numFmt = PHP_FMT;
+        ws.getCell(r, 6).numFmt = PHP_FMT;
+      }
       r++;
     });
     ws.getRow(r).values = ['', '', '', '', 'Subtotal', totals.componentsSubtotal];
