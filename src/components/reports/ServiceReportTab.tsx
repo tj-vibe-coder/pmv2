@@ -28,6 +28,7 @@ import {
   Add as AddIcon,
   Delete as DeleteIcon,
   PictureAsPdf as PictureAsPdfIcon,
+  GridOn as GridOnIcon,
   Visibility as VisibilityIcon,
   CameraAlt as CameraAltIcon,
   OpenInNew as OpenInNewIcon,
@@ -58,6 +59,7 @@ import {
   fetchDriveItemBlob,
 } from '../../services/onedriveFolderService';
 import dataService from '../../services/dataService';
+import { buildServiceReportXlsxBlob } from '../../utils/reports/serviceReportXlsx';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
@@ -196,7 +198,23 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       setApproverCompany(prev => prev || clientApprover.company || '');
     }
   }, [clientApprover?.name, clientApprover?.designation, clientApprover?.company]);
+
+  // Editable "Prepared by" — defaults to the shared preparedBy / logged-in user,
+  // but overridable per report (e.g. a third-party engineer who went onsite).
+  // Company defaults to the report company (blank → REPORT_COMPANIES[reportCompany]).
+  const preparedByDefaultName = (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim();
+  const [preparedByName, setPreparedByName] = useState(preparedByDefaultName);
+  const [preparedByDesignation, setPreparedByDesignation] = useState((preparedBy.designation || '').trim());
+  const [preparedByCompany, setPreparedByCompany] = useState('');
+
+  // Pull in the shared preparedBy when it resolves (e.g. account loads after mount),
+  // without clobbering a manual override.
+  useEffect(() => {
+    setPreparedByName(prev => prev || preparedByDefaultName);
+    setPreparedByDesignation(prev => prev || (preparedBy.designation || '').trim());
+  }, [preparedByDefaultName, preparedBy.designation]);
   const [exporting, setExporting] = useState(false);
+  const [exportingXlsx, setExportingXlsx] = useState(false);
   const {
     isConfigured: oneDriveConfigured,
     isAuthenticated: oneDriveSignedIn,
@@ -239,11 +257,14 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     setApproverName(clientApprover?.name || '');
     setApproverDesignation(clientApprover?.designation || '');
     setApproverCompany(clientApprover?.company || '');
+    setPreparedByName(preparedByDefaultName);
+    setPreparedByDesignation((preparedBy.designation || '').trim());
+    setPreparedByCompany('');
     setPhotos(prev => {
       prev.forEach(p => { if (p.previewUrl) URL.revokeObjectURL(p.previewUrl); });
       return [];
     });
-  }, [clientApprover?.name, clientApprover?.designation, clientApprover?.company]);
+  }, [clientApprover?.name, clientApprover?.designation, clientApprover?.company, preparedByDefaultName, preparedBy.designation]);
 
   const loadServiceReports = useCallback(async () => {
     setSrLoading(true);
@@ -407,6 +428,9 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       approverName: approverName.trim() || undefined,
       approverDesignation: approverDesignation.trim() || undefined,
       approverCompany: approverCompany.trim() || undefined,
+      preparedByName: preparedByName.trim() || undefined,
+      preparedByDesignation: preparedByDesignation.trim() || undefined,
+      preparedByCompany: preparedByCompany.trim() || undefined,
     };
     try {
       if (editingReport) {
@@ -446,6 +470,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     setApproverName(report.approverName ?? clientApprover?.name ?? '');
     setApproverDesignation(report.approverDesignation ?? clientApprover?.designation ?? '');
     setApproverCompany(report.approverCompany ?? clientApprover?.company ?? '');
+    // Restore saved prepared-by (fall back to the shared preparedBy / current user)
+    setPreparedByName(report.preparedByName ?? preparedByDefaultName);
+    setPreparedByDesignation(report.preparedByDesignation ?? (preparedBy.designation || '').trim());
+    setPreparedByCompany(report.preparedByCompany ?? '');
     setEditingServiceReportId(report.id);
     setExportFeedback(null);
     // Restore saved photos as done items (no local file/preview available)
@@ -821,14 +849,14 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     doc.text('Prepared by:', leftColX, lastPageSignatureY);
     doc.text('Approved by:', rightColX, lastPageSignatureY);
     let rowY = lastPageSignatureY + signatureSpace;
-    const preparedByName = (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
-    drawSignatureLine(leftColX, 'Name', rowY, preparedByName);
+    const preparedByNamePdf = (preparedByName.trim() || preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
+    drawSignatureLine(leftColX, 'Name', rowY, preparedByNamePdf);
     drawSignatureLine(rightColX, 'Name', rowY, approverName.trim() || undefined);
     rowY += sigLineHeight;
-    drawSignatureLine(leftColX, 'Designation', rowY, (preparedBy.designation || '').trim() || undefined);
+    drawSignatureLine(leftColX, 'Designation', rowY, preparedByDesignation.trim() || (preparedBy.designation || '').trim() || undefined);
     drawSignatureLine(rightColX, 'Designation', rowY, approverDesignation.trim() || undefined);
     rowY += sigLineHeight;
-    drawSignatureLine(leftColX, 'Company', rowY, companyName);
+    drawSignatureLine(leftColX, 'Company', rowY, preparedByCompany.trim() || companyName);
     drawSignatureLine(rightColX, 'Company', rowY, approverCompany.trim() || undefined);
     rowY += sigLineHeight;
     drawSignatureLine(leftColX, 'Date', rowY, reportDateStr);
@@ -909,6 +937,110 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'PDF exported locally, but OneDrive upload failed.' });
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleExportXlsx = async () => {
+    setExportingXlsx(true);
+    setExportFeedback(null);
+    try {
+      const companyName = REPORT_COMPANIES[reportCompany];
+      const projectNo = (project.project_no || String(project.item_no ?? project.id) || '').trim() || '—';
+      const reportNo = (serviceReportNo || '').trim() || `${projectNo} - SR${serviceReports.length + 1}`;
+      const reportDateStr = serviceReportDate
+        ? new Date(serviceReportDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+        : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+      const filename = `${reportNo.replace(/\s*-\s*/g, '-').replace(/\s+/g, '')}.xlsx`;
+
+      // Embed the same per-company logo the PDF uses (ACT = full mark with dark
+      // bg removed; IOCT = icon-only). Best-effort: a load failure just omits it.
+      const logo = await (async () => {
+        try {
+          const isAct = reportCompany === 'ACT';
+          const logoUrl = `${process.env.PUBLIC_URL || ''}/${isAct ? 'logo-acti.png' : 'logo-ioct-only.png'}`;
+          const { loadLogoTransparentBackground, loadImageDataUrl } = await import('../../utils/logoUtils');
+          const dataUrl = isAct ? await loadLogoTransparentBackground(logoUrl) : await loadImageDataUrl(logoUrl);
+          const { naturalWidth, naturalHeight } = await new Promise<{ naturalWidth: number; naturalHeight: number }>((resolve, reject) => {
+            const img = new window.Image();
+            img.onload = () => resolve({ naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight });
+            img.onerror = () => reject(new Error('logo dims'));
+            img.src = dataUrl;
+          });
+          // Match the PDF logo proportions (mm → px at ~3.78px/mm): ACT 22×13.6mm,
+          // IOCT 16×16mm icon. Derive height from the natural aspect ratio.
+          const targetWidth = isAct ? 83 : 60; // px
+          const width = targetWidth;
+          const height = Math.round((naturalHeight / naturalWidth) * width);
+          return { dataUrl, extension: 'png' as const, width: Math.round(width), height };
+        } catch {
+          return undefined;
+        }
+      })();
+
+      const data = {
+        companyName,
+        logo,
+        projectName: project.project_name || '—',
+        projectNo,
+        reportNo,
+        reportDateStr,
+        poNumber: project.po_number || '—',
+        client: project.account_name || '—',
+        startTime: serviceReportStartTime || '—',
+        endTime: serviceReportEndTime || '—',
+        activities: serviceReportActivitiesTable,
+        recommendations: serviceReportCustomerComments || '',
+        preparedBy: {
+          name: (preparedByName.trim() || preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim(),
+          designation: preparedByDesignation.trim() || (preparedBy.designation || '').trim(),
+          company: preparedByCompany.trim() || companyName,
+        },
+        approvedBy: {
+          name: approverName.trim(),
+          designation: approverDesignation.trim(),
+          company: approverCompany.trim(),
+        },
+      };
+
+      const blob = await buildServiceReportXlsxBlob(data);
+      // Trigger local download
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      // Best-effort OneDrive upload, mirroring the PDF export flow
+      if (!isCorporateOneDriveConfigured() || !oneDriveSignedIn) {
+        setExportFeedback({ severity: 'success', message: `Excel exported: ${filename}.` });
+        return;
+      }
+      const token = await getOneDriveToken();
+      if (!token) {
+        setExportFeedback({ severity: 'warning', message: `Excel exported locally. Could not get OneDrive access token.` });
+        return;
+      }
+      const driveId = await resolveCorporateDriveId(token);
+      let folderId = resolvedExecFolderId;
+      if (!folderId) {
+        const projectCode = project.project_no || String(project.item_no ?? project.id);
+        const folder = await ensureExecutionFolder(token, { code: projectCode, name: project.project_name });
+        folderId = folder.id;
+        setResolvedExecFolderId(folderId);
+        if (!localExecutionFolderId) {
+          setLocalExecutionFolderId(folderId);
+          dataService.updateProject(project.id, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
+        }
+      }
+      await uploadFileToFolderById(token, driveId, folderId, filename, blob);
+      setExportFeedback({ severity: 'success', message: `Excel exported and uploaded to OneDrive: ${filename}.` });
+    } catch (e) {
+      setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'Failed to export Excel.' });
+    } finally {
+      setExportingXlsx(false);
     }
   };
 
@@ -1063,6 +1195,20 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           )}
         </Grid>
 
+        {/* Prepared by — editable; defaults to the logged-in user but overridable
+            for reports created on behalf of another / third-party engineer */}
+        <Grid size={{ xs: 12 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>Prepared by (PDF)</Typography>
+          <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+            <TextField size="small" label="Name" value={preparedByName} onChange={(e) => setPreparedByName(e.target.value)} sx={{ width: 220 }} placeholder="Engineer name" />
+            <TextField size="small" label="Designation" value={preparedByDesignation} onChange={(e) => setPreparedByDesignation(e.target.value)} sx={{ width: 180 }} placeholder="Position" />
+            <TextField size="small" label="Company" value={preparedByCompany} onChange={(e) => setPreparedByCompany(e.target.value)} sx={{ width: 220 }} placeholder={REPORT_COMPANIES[reportCompany]} />
+          </Box>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+            Leave Company blank to use the report company ({REPORT_COMPANIES[reportCompany]}).
+          </Typography>
+        </Grid>
+
         {/* Approved by — editable, pre-filled from client record */}
         <Grid size={{ xs: 12 }}>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>Approved by (PDF)</Typography>
@@ -1173,6 +1319,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         <Button variant="contained" size="small" onClick={handleSaveServiceReport} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{serviceReportSaveFeedback ? 'Saved' : editingServiceReportId !== null ? 'Update report' : 'Save report'}</Button>
         <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
         <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Exporting...' : 'Export to PDF'}</Button>
+        <Button variant="outlined" size="small" startIcon={<GridOnIcon />} onClick={handleExportXlsx} disabled={exportingXlsx} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exportingXlsx ? 'Exporting...' : 'Export to Excel'}</Button>
         {srLoading && <CircularProgress size={18} sx={{ color: NET_PACIFIC_COLORS.primary }} />}
         {serviceReports.length > 0 && (
           <>

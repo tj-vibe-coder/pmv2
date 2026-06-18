@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Alert,
+  Badge,
   Box,
   Typography,
   Paper,
@@ -14,6 +15,7 @@ import {
   TextField,
   Button,
   Chip,
+  CircularProgress,
   Select,
   MenuItem,
   IconButton,
@@ -22,9 +24,19 @@ import {
   DialogContent,
   DialogContentText,
   DialogActions,
+  Tooltip,
 } from '@mui/material';
 import { useLocation } from 'react-router-dom';
-import { Add as AddIcon, Delete as DeleteIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
+import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
+import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
+import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
+import {
+  ensureFolder,
+  fetchDriveItemBlob,
+  resolveCorporateDriveId,
+  sanitizeForOneDrive,
+  uploadFileToFolderById,
+} from '../services/onedriveFolderService';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
@@ -55,6 +67,86 @@ interface LiquidationRow {
   amount: number;
   remarks: string;
 }
+
+// A scanned/photographed receipt attached to an expense row. Files live in
+// OneDrive under `Liquidation Receipts/{year}/{form_no}/`; the liquidation doc
+// stores only these references (as receipts_json). `file`/`uploadStatus` are
+// session-only and never persisted.
+interface ReceiptAttachment {
+  id: string;
+  rowId: string;
+  filename: string;
+  oneDriveId?: string;
+  webUrl?: string;
+  thumbnailDataUrl?: string;
+  uploadedAt?: string;
+  uploadStatus?: 'uploading' | 'done' | 'error';
+  file?: File;
+}
+
+// ── Image helpers (same approach as ServiceReportTab) ──────────────────────
+
+// Small thumbnail (~120px longest edge, JPEG 0.65) with EXIF orientation baked
+// in, so receipts render without a live OneDrive connection after reload.
+async function generateThumbnail(source: Blob): Promise<string> {
+  const MAX = 120;
+  try {
+    const bitmap = await createImageBitmap(source, { imageOrientation: 'from-image' } as unknown as ImageBitmapOptions);
+    const scale = Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
+    const w = Math.round(bitmap.width * scale);
+    const h = Math.round(bitmap.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    return canvas.toDataURL('image/jpeg', 0.65);
+  } catch {
+    return '';
+  }
+}
+
+// iPhone HEIC/HEIF → JPEG at attach time so browsers and jsPDF can render it.
+async function convertHeicToJpeg(file: File): Promise<File> {
+  const name = file.name.toLowerCase();
+  const isHeic = name.endsWith('.heic') || name.endsWith('.heif') ||
+    file.type === 'image/heic' || file.type === 'image/heif';
+  if (!isHeic) return file;
+  try {
+    const heic2any = (await import('heic2any')).default;
+    const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+    const blob = Array.isArray(result) ? result[0] : result;
+    const jpegName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
+    return new File([blob], jpegName, { type: 'image/jpeg' });
+  } catch {
+    return file;
+  }
+}
+
+// Bake EXIF orientation into a JPEG data URL so jsPDF embeds it upright.
+async function normalizeImageOrientation(source: Blob): Promise<string> {
+  try {
+    const bitmap = await createImageBitmap(source, { imageOrientation: 'from-image' } as unknown as ImageBitmapOptions);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return canvas.toDataURL('image/jpeg', 0.9);
+  } catch {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(source);
+    });
+  }
+}
+
+const isImageReceipt = (r: ReceiptAttachment): boolean =>
+  (r.file?.type || '').startsWith('image/') || /\.(jpe?g|png|gif|webp|bmp)$/i.test(r.filename);
 
 // Approved cash advances offered in the "Apply to CA" selector. ca_no is the
 // human-readable reference (e.g. IOCT2606001-CA01); id stays the real key.
@@ -149,6 +241,12 @@ export default function LiquidationFormPage() {
   const [cashAdvances, setCashAdvances] = useState<CaOption[]>([]);
   // Reimbursement tracking of the currently loaded submitted no-CA liquidation.
   const [loadedReimb, setLoadedReimb] = useState<{ id: string; status: string | null; at: number | null } | null>(null);
+  // Receipt scans/photos attached per expense row.
+  const [receipts, setReceipts] = useState<ReceiptAttachment[]>([]);
+  const receiptInputRef = useRef<HTMLInputElement>(null);
+  const receiptRowIdRef = useRef<string | null>(null);
+  const receiptsFolderRef = useRef<{ key: string; driveId: string; folderId: string } | null>(null);
+  const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken, login: oneDriveLogin } = useOneDriveAuth();
   const [saving, setSaving] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [caId, setCaId] = useState<string | ''>('');
@@ -238,6 +336,57 @@ export default function LiquidationFormPage() {
       .catch(() => {});
   }, [token]);
 
+  // Get-or-create `Liquidation Receipts/{year}/{form_no}/` in the corporate
+  // drive. Cached per form number for the session.
+  const ensureReceiptsFolder = async (): Promise<{ driveId: string; folderId: string } | null> => {
+    if (!isCorporateOneDriveConfigured() || !oneDriveSignedIn) return null;
+    const key = sanitizeForOneDrive((formNo || 'draft').trim() || 'draft');
+    if (receiptsFolderRef.current?.key === key) return receiptsFolderRef.current;
+    const odToken = await getOneDriveToken();
+    if (!odToken) return null;
+    const driveId = await resolveCorporateDriveId(odToken);
+    const year = String(new Date().getFullYear());
+    await ensureFolder(odToken, driveId, '', 'Liquidation Receipts');
+    await ensureFolder(odToken, driveId, 'Liquidation Receipts', year);
+    const folder = await ensureFolder(odToken, driveId, `Liquidation Receipts/${year}`, key);
+    receiptsFolderRef.current = { key, driveId, folderId: folder.id };
+    return receiptsFolderRef.current;
+  };
+
+  const attachReceipts = async (rowId: string, files: FileList | null) => {
+    if (!rowId || !files || files.length === 0) return;
+    for (const raw of Array.from(files)) {
+      const file = await convertHeicToJpeg(raw);
+      const thumbnailDataUrl = file.type.startsWith('image/') ? await generateThumbnail(file) : '';
+      const rec: ReceiptAttachment = {
+        id: `rcpt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        rowId,
+        filename: file.name,
+        thumbnailDataUrl: thumbnailDataUrl || undefined,
+        uploadStatus: 'uploading',
+        file,
+      };
+      setReceipts((prev) => [...prev, rec]);
+      try {
+        const folder = await ensureReceiptsFolder();
+        const odToken = folder ? await getOneDriveToken() : null;
+        if (!folder || !odToken) throw new Error('OneDrive not connected');
+        // Short unique prefix avoids two same-named phone photos overwriting
+        // each other (Graph default conflict behavior is replace).
+        const uploadName = `${rec.id.slice(-6)}_${sanitizeForOneDrive(file.name)}`;
+        const item = await uploadFileToFolderById(odToken, folder.driveId, folder.folderId, uploadName, file);
+        setReceipts((prev) => prev.map((r) => r.id === rec.id
+          ? { ...r, uploadStatus: 'done', oneDriveId: item.id, webUrl: item.webUrl, uploadedAt: new Date().toISOString() }
+          : r));
+      } catch {
+        // Kept in memory — still embeds in the PDF, but won't survive reload.
+        setReceipts((prev) => prev.map((r) => (r.id === rec.id ? { ...r, uploadStatus: 'error' } : r)));
+      }
+    }
+  };
+
+  const removeReceipt = (id: string) => setReceipts((prev) => prev.filter((r) => r.id !== id));
+
   const payload = () => ({
     form_no: formNo,
     date_of_submission: dateOfSubmission,
@@ -256,6 +405,11 @@ export default function LiquidationFormPage() {
     })),
     total_amount: totalAmount,
     ca_id: caId || null,
+    // Only successfully uploaded receipts persist — local-only files can't be
+    // recovered after a reload anyway.
+    receipts_json: receipts
+      .filter((r) => r.uploadStatus === 'done' && r.oneDriveId)
+      .map(({ file: _f, uploadStatus: _s, ...keep }) => keep),
   });
 
   const saveDraft = async () => {
@@ -344,6 +498,31 @@ export default function LiquidationFormPage() {
             };
           });
     setRows(loadedRows);
+    let loadedReceipts: ReceiptAttachment[] = [];
+    try {
+      const rawReceipts = Array.isArray(l.receipts_json)
+        ? l.receipts_json
+        : typeof l.receipts_json === 'string'
+          ? JSON.parse(l.receipts_json || '[]')
+          : [];
+      if (Array.isArray(rawReceipts)) {
+        loadedReceipts = rawReceipts
+          .filter((r: Record<string, unknown>) => r && typeof r === 'object')
+          .map((r: Record<string, unknown>) => ({
+            id: String(r.id ?? `rcpt-${Math.random().toString(36).slice(2)}`),
+            rowId: String(r.rowId ?? ''),
+            filename: String(r.filename ?? 'receipt'),
+            oneDriveId: r.oneDriveId ? String(r.oneDriveId) : undefined,
+            webUrl: r.webUrl ? String(r.webUrl) : undefined,
+            thumbnailDataUrl: r.thumbnailDataUrl ? String(r.thumbnailDataUrl) : undefined,
+            uploadedAt: r.uploadedAt ? String(r.uploadedAt) : undefined,
+            uploadStatus: 'done' as const,
+          }));
+      }
+    } catch {
+      loadedReceipts = [];
+    }
+    setReceipts(loadedReceipts);
     setDraftId(submitted ? null : l.id);
     setLoadedOptionValue(submitted ? `submitted:${l.id}` : `draft:${l.id}`);
     setLoadedReimb(
@@ -419,6 +598,7 @@ export default function LiquidationFormPage() {
         setEmployeeNumber('');
         setDateOfSubmission(new Date().toISOString().slice(0, 10));
         setCaId('');
+        setReceipts([]);
         setLoadedReimb(null);
         setSubmitSuccess('Liquidation deleted.');
         refreshLiquidationsList();
@@ -442,6 +622,7 @@ export default function LiquidationFormPage() {
         setEmployeeNumber('');
         setDateOfSubmission(new Date().toISOString().slice(0, 10));
         setCaId('');
+        setReceipts([]);
         setLoadedReimb(null);
         setSubmitSuccess('Liquidation removed from list.');
         refreshLiquidationsList();
@@ -497,6 +678,7 @@ export default function LiquidationFormPage() {
           ? 'Liquidation submitted. Amount applied to CA has been deducted; expenses added to project expense.'
           : 'Liquidation submitted as an out-of-pocket reimbursement claim (pending payback); expenses added to project expense.');
         setCaId('');
+        setReceipts([]);
         // Fetch next form number for new form
         fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } })
           .then((r) => r.json())
@@ -535,6 +717,8 @@ export default function LiquidationFormPage() {
 
   const removeRow = (id: string) => {
     setRows((prev) => prev.filter((r) => r.id !== id));
+    // Receipts belong to their row — drop them with it.
+    setReceipts((prev) => prev.filter((r) => r.rowId !== id));
   };
 
   const updateRow = (id: string, field: keyof LiquidationRow, value: string | number) => {
@@ -695,7 +879,75 @@ export default function LiquidationFormPage() {
     doc.text('Prepared by:', margin, sigY);
     const preparedByName = (employeeName || user?.full_name || user?.username || user?.email || '—').trim() || '—';
     doc.text(preparedByName, margin, sigY + 6);
-    
+
+    // ── Receipt attachments appendix ──────────────────────────────────────
+    // Image receipts embed in a 2-column grid so the signed PDF carries its
+    // own proof; non-image files (PDFs) are listed by name. Sources: the
+    // in-memory file from this session, else the stored OneDrive copy.
+    let missingReceipts = 0;
+    if (receipts.length > 0) {
+      let odToken: string | null = null;
+      let driveId: string | null = null;
+      if (isCorporateOneDriveConfigured() && oneDriveSignedIn) {
+        try {
+          odToken = await getOneDriveToken();
+          if (odToken) driveId = await resolveCorporateDriveId(odToken);
+        } catch { odToken = null; driveId = null; }
+      }
+      const entries: { caption: string; dataUrl: string | null }[] = [];
+      for (const r of receipts) {
+        const rowIdx = rows.findIndex((x) => x.id === r.rowId);
+        const caption = `Row ${rowIdx >= 0 ? rowIdx + 1 : '—'} · ${r.filename}`;
+        if (!isImageReceipt(r)) {
+          entries.push({ caption: `${caption} (file — see OneDrive)`, dataUrl: null });
+          continue;
+        }
+        try {
+          let blob: Blob | null = r.file ?? null;
+          if (!blob && r.oneDriveId && odToken && driveId) {
+            blob = await fetchDriveItemBlob(odToken, driveId, r.oneDriveId);
+          }
+          if (!blob) throw new Error('no source for receipt image');
+          entries.push({ caption, dataUrl: await normalizeImageOrientation(blob) });
+        } catch {
+          missingReceipts++;
+          entries.push({ caption: `${caption} (could not be embedded)`, dataUrl: null });
+        }
+      }
+      doc.addPage();
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.text('Receipt Attachments', margin, 18);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      const gridGap = 6;
+      const cellW = (pageWidth - margin * 2 - gridGap) / 2;
+      const maxImgH = 85;
+      let gy = 26;
+      let col = 0;
+      const textLines: string[] = [];
+      for (const e of entries) {
+        if (!e.dataUrl) { textLines.push(e.caption); continue; }
+        if (col === 0 && gy + maxImgH + 10 > footerY - 6) { doc.addPage(); gy = 18; }
+        const x = margin + col * (cellW + gridGap);
+        try {
+          const props = doc.getImageProperties(e.dataUrl);
+          const scale = Math.min(cellW / props.width, maxImgH / props.height);
+          doc.addImage(e.dataUrl, 'JPEG', x, gy, props.width * scale, props.height * scale);
+        } catch { /* unreadable image — caption still printed */ }
+        doc.text(e.caption, x, gy + maxImgH + 4, { maxWidth: cellW });
+        col = col === 0 ? 1 : 0;
+        if (col === 0) gy += maxImgH + 10;
+      }
+      if (textLines.length > 0) {
+        let ty = col === 1 ? gy + maxImgH + 10 : gy;
+        if (ty + textLines.length * 5 > footerY - 6) { doc.addPage(); ty = 18; }
+        for (const line of textLines) { doc.text(`• ${line}`, margin, ty); ty += 5; }
+      }
+      fontBody();
+      doc.setFontSize(8);
+    }
+
     // Add footer with page number and Doc No. on all pages (Doc No. is LIQ-001, not LIQ-LQ-001)
     const totalPages = doc.getNumberOfPages();
     const docNo = !formNo ? 'LIQ-001' : formNo.startsWith('LIQ-') ? formNo : formNo.startsWith('LQ-') ? 'LIQ-' + formNo.slice(3) : 'LIQ-' + formNo;
@@ -717,6 +969,9 @@ export default function LiquidationFormPage() {
             : `Liquidation_${fnBase}_${dateOfSubmission.replace(/-/g, '')}.pdf`)
         : `${fnBase}_Reimbursement.pdf`
     );
+    if (missingReceipts > 0) {
+      setSubmitSuccess(`${missingReceipts} receipt(s) could not be embedded in the PDF — sign in to OneDrive to include stored receipts.`);
+    }
   };
 
   const handleExport = () => {
@@ -849,6 +1104,7 @@ export default function LiquidationFormPage() {
                   setEmployeeNumber('');
                   setDateOfSubmission(new Date().toISOString().slice(0, 10));
                   setCaId('');
+                  setReceipts([]);
                   setLoadedReimb(null);
                   setSubmitSuccess(null);
                   return;
@@ -1094,7 +1350,27 @@ export default function LiquidationFormPage() {
             </Box>
           </Box>
         )}
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+          {isCorporateOneDriveConfigured() ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Chip
+                size="small"
+                variant="outlined"
+                icon={oneDriveSignedIn ? <CloudDoneIcon /> : <CloudOffIcon />}
+                label={oneDriveSignedIn
+                  ? 'OneDrive connected — receipts will be stored'
+                  : 'OneDrive not signed in — receipts won’t be stored'}
+                color={oneDriveSignedIn ? 'success' : 'warning'}
+              />
+              {!oneDriveSignedIn && (
+                <Button size="small" variant="outlined" onClick={() => oneDriveLogin()} sx={{ borderColor: theme.primary, color: theme.primary }}>
+                  Sign in to OneDrive
+                </Button>
+              )}
+            </Box>
+          ) : (
+            <span />
+          )}
           <Button
             variant="contained"
             startIcon={<AddIcon />}
@@ -1264,7 +1540,29 @@ export default function LiquidationFormPage() {
                         sx={{ '& .MuiInputBase-input': { py: 0.75 } }}
                       />
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                      <Tooltip title="Attach receipt (photo or PDF)">
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => {
+                              receiptRowIdRef.current = row.id;
+                              receiptInputRef.current?.click();
+                            }}
+                            disabled={isViewingSubmitted}
+                            sx={{ color: theme.primary }}
+                            aria-label="Attach receipt"
+                          >
+                            <Badge
+                              badgeContent={receipts.filter((r) => r.rowId === row.id).length}
+                              color="primary"
+                              overlap="circular"
+                            >
+                              <AttachFileIcon fontSize="small" />
+                            </Badge>
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                       <IconButton
                         size="small"
                         onClick={() => removeRow(row.id)}
@@ -1282,10 +1580,79 @@ export default function LiquidationFormPage() {
           </Table>
         </TableContainer>
 
+        <input
+          type="file"
+          ref={receiptInputRef}
+          accept="image/*,.pdf,.heic,.heif"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const rid = receiptRowIdRef.current;
+            if (rid) attachReceipts(rid, e.target.files);
+            e.target.value = '';
+          }}
+        />
+
+        {receipts.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, color: theme.primary, mb: 1 }}>
+              Receipts ({receipts.length})
+            </Typography>
+            {receipts.some((r) => r.uploadStatus === 'error') && (
+              <Alert severity="warning" sx={{ mb: 1 }}>
+                Some receipts could not be uploaded to OneDrive — they will still embed in the PDF this
+                session, but won't be kept after a reload. Sign in to OneDrive and re-attach to store them.
+              </Alert>
+            )}
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
+              {receipts.map((r) => {
+                const rowIdx = rows.findIndex((x) => x.id === r.rowId);
+                return (
+                  <Box
+                    key={r.id}
+                    sx={{ display: 'flex', alignItems: 'center', gap: 1, border: `1px solid ${theme.border}`, borderRadius: 1, p: 0.75, maxWidth: 280 }}
+                  >
+                    {r.thumbnailDataUrl ? (
+                      // eslint-disable-next-line jsx-a11y/img-redundant-alt
+                      <img src={r.thumbnailDataUrl} alt={r.filename} style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 4 }} />
+                    ) : (
+                      <AttachFileIcon sx={{ fontSize: 32, color: 'text.secondary' }} />
+                    )}
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="caption" sx={{ display: 'block', fontWeight: 600 }}>
+                        Row {rowIdx >= 0 ? rowIdx + 1 : '—'}
+                      </Typography>
+                      <Typography variant="caption" sx={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 150 }} title={r.filename}>
+                        {r.filename}
+                      </Typography>
+                    </Box>
+                    {r.uploadStatus === 'uploading' && <CircularProgress size={16} />}
+                    {r.uploadStatus === 'error' && (
+                      <Tooltip title="Not uploaded to OneDrive — sign in and re-attach to store permanently">
+                        <ErrorOutlineIcon fontSize="small" color="warning" />
+                      </Tooltip>
+                    )}
+                    {r.webUrl && (
+                      <IconButton size="small" onClick={() => window.open(r.webUrl, '_blank', 'noopener')} title="Open in OneDrive">
+                        <OpenInNewIcon fontSize="small" />
+                      </IconButton>
+                    )}
+                    {!isViewingSubmitted && (
+                      <IconButton size="small" color="error" onClick={() => removeReceipt(r.id)} title="Remove receipt">
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    )}
+                  </Box>
+                );
+              })}
+            </Box>
+          </Box>
+        )}
+
         {rows.length > 0 && (
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2, mt: 2 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, color: theme.primary }}>
-              TOTAL AMOUNT: ± {totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} 
+              TOTAL AMOUNT: ± {totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
             </Typography>
             <Button
               variant="contained"
