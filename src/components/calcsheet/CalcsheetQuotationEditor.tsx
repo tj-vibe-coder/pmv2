@@ -1062,7 +1062,11 @@ export default function QuotationEditor() {
           <Box>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>C. Engineering Services</Typography>
             <Typography variant="caption" color="text.secondary">
-              Scope of Works — deliverables shown as bullets in the quotation, priced as a lump sum below.
+              {quotation.servicesFromManpower && quotation.servicesPerLinePricing
+                ? 'Scope of Works — each deliverable priced individually. Manpower table below is the cost basis.'
+                : quotation.servicesFromManpower
+                  ? 'Scope of Works — deliverables shown as bullets in the quotation, priced as a lump sum below.'
+                  : 'Scope of Works — each deliverable priced individually.'}
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} alignItems="center">
@@ -1071,19 +1075,27 @@ export default function QuotationEditor() {
               label={<Typography variant="caption">Price from manpower</Typography>}
             />
             {quotation.servicesFromManpower && (
-              <Stack direction="row" spacing={1} alignItems="center">
-                <NumField
-                  label="Qty"
-                  value={engineeringServicesQty}
-                  onChange={(v) => setField('engineeringServicesQty', Math.max(1, v))}
-                  integer
-                  sx={{ width: 86 }}
-                  disabled={isLegacy}
+              <>
+                <FormControlLabel
+                  control={<Switch size="small" checked={!!quotation.servicesPerLinePricing} onChange={(e) => setField('servicesPerLinePricing', e.target.checked)} disabled={isLegacy} />}
+                  label={<Typography variant="caption">Per-line pricing</Typography>}
                 />
-                <Typography variant="caption" color="text.secondary">
-                  Unit: {PHP(engineeringServicesUnitPrice)} / LOT
-                </Typography>
-              </Stack>
+                {!quotation.servicesPerLinePricing && (
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <NumField
+                      label="Qty"
+                      value={engineeringServicesQty}
+                      onChange={(v) => setField('engineeringServicesQty', Math.max(1, v))}
+                      integer
+                      sx={{ width: 86 }}
+                      disabled={isLegacy}
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      Unit: {PHP(engineeringServicesUnitPrice)} / LOT
+                    </Typography>
+                  </Stack>
+                )}
+              </>
             )}
             {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addService}>Add scope item</Button>}
           </Stack>
@@ -1091,7 +1103,7 @@ export default function QuotationEditor() {
         <EditableTable
           rows={quotation.services}
           columns={
-            quotation.servicesFromManpower
+            quotation.servicesFromManpower && !quotation.servicesPerLinePricing
               ? svcCols.filter((c) => c.key !== 'amount')
               : svcCols
           }
@@ -1101,7 +1113,7 @@ export default function QuotationEditor() {
           emptyMessage="No scope items — add deliverables (e.g., 'PLC redundancy troubleshooting', 'TIA Portal integration')"
           readOnly={isLegacy}
           footer={
-            !quotation.servicesFromManpower ? (
+            (!quotation.servicesFromManpower || quotation.servicesPerLinePricing) ? (
               <TableRow sx={{ bgcolor: 'grey.50' }}>
                 <TableCell colSpan={2} align="right" sx={{ fontWeight: 600 }}>Services Subtotal</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.servicesSubtotal)}</TableCell>
@@ -1116,9 +1128,11 @@ export default function QuotationEditor() {
             <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
               <Typography variant="body2" sx={{ fontWeight: 600 }}>Manpower (cost basis)</Typography>
               <Stack direction="row" spacing={2} alignItems="center">
-                <Typography variant="caption" color="text.secondary">
-                  Subtotal = Manpower cost / LOT × {engineeringServicesQty} LOT
-                </Typography>
+                {!quotation.servicesPerLinePricing && (
+                  <Typography variant="caption" color="text.secondary">
+                    Subtotal = Manpower cost / LOT × {engineeringServicesQty} LOT
+                  </Typography>
+                )}
                 {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addManpower}>Add manpower</Button>}
               </Stack>
             </Stack>
@@ -1131,6 +1145,13 @@ export default function QuotationEditor() {
               emptyMessage="No manpower entries — pick a role from the dropdown to auto-fill rate & allowance"
               readOnly={isLegacy}
               footer={
+                quotation.servicesPerLinePricing ? (
+                  <TableRow sx={{ bgcolor: 'grey.50' }}>
+                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 600 }}>Total Manpower Cost</TableCell>
+                    <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.laborCost)}</TableCell>
+                    <TableCell />
+                  </TableRow>
+                ) : (
                 <>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
                     <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
@@ -1163,6 +1184,7 @@ export default function QuotationEditor() {
                     <TableCell />
                   </TableRow>
                 </>
+                )
               }
             />
           </Box>
@@ -1240,7 +1262,11 @@ export default function QuotationEditor() {
             contingency={quotation.servicesFromManpower ? totals.laborWithContingency - totals.laborCost : null}
             contingencyPct={quotation.servicesFromManpower ? quotation.globalContingencyPct : null}
             markup={quotation.servicesFromManpower ? totals.servicesSubtotal - totals.laborWithContingency : 0}
-            markupPct={quotation.servicesFromManpower ? quotation.laborMarkupPct : 0}
+            markupPct={quotation.servicesFromManpower
+              ? (quotation.servicesPerLinePricing
+                ? (totals.laborCost > 0 ? ((totals.servicesSubtotal - totals.laborCost) / totals.laborCost) * 100 : 0)
+                : quotation.laborMarkupPct)
+              : 0}
             subtotal={totals.servicesSubtotal}
           />
           <Box sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'grey.50' }}>

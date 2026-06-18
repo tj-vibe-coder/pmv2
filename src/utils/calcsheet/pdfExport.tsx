@@ -408,7 +408,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               <Text style={styles.cUnit}>Unit Price</Text>
               <Text style={styles.cTotal}>Total , PhP</Text>
             </View>
-            {quotation.servicesFromManpower ? (
+            {quotation.servicesFromManpower && !quotation.servicesPerLinePricing ? (
               quotation.services.map((l, i) => {
                 const showLotTotal = i === groupedLotDisplayIndex(quotation.services.length);
                 return (

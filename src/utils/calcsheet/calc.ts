@@ -92,7 +92,13 @@ export function computeTotals(q: Quotation): QuotationTotals {
   if (q.servicesFromManpower) {
     laborCost = manpowerTotalCost(q.manpower) * engineeringServicesQty;
     laborWithContingency = laborCost;
-    servicesSub = laborCost * (1 + (q.laborMarkupPct || 0) / 100);
+    if (q.servicesPerLinePricing) {
+      // Per-line pricing: scope items carry their own amounts (customer-facing);
+      // manpower remains the cost basis for margin calculation.
+      servicesSub = q.services.reduce((s, l) => s + (l.amount || 0), 0);
+    } else {
+      servicesSub = laborCost * (1 + (q.laborMarkupPct || 0) / 100);
+    }
   } else {
     // Manual lump-sum lines: take amounts as the final subtotal (user already includes their own buffer)
     servicesSub = q.services.reduce((s, l) => s + (l.amount || 0), 0);

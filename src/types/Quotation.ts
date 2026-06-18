@@ -141,6 +141,7 @@ export interface Quotation {
   services: ServiceLine[];
   manpower: ManpowerEntry[];
   servicesFromManpower: boolean;
+  servicesPerLinePricing?: boolean;
   engineeringServicesQty?: number;
   preparedBy?: string;
   preparedByTitle?: string;       // override the auto-resolved job title in the PDF signature block

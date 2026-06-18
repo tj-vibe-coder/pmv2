@@ -155,7 +155,7 @@ export async function exportQuotationXlsx(
   if (totals.servicesSubtotal > 0) {
     sectionHeader('C. ENGINEERING SERVICES');
     tableHeader(['Code', 'Description', 'Qty', 'UOM', 'Unit Price', 'Total']);
-    if (quotation.servicesFromManpower) {
+    if (quotation.servicesFromManpower && !quotation.servicesPerLinePricing) {
       ws.getRow(r).values = ['C-0010', 'Engineering Services', engineeringServicesQty, 'lot', engineeringServicesUnitPrice, totals.servicesSubtotal];
       ws.getCell(r, 5).numFmt = PHP_FMT;
       ws.getCell(r, 6).numFmt = PHP_FMT;
