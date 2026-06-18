@@ -5,7 +5,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { Client, Project, Quotation, SalesContact } from '../../types/Quotation';
 import { resolveContact } from '../../types/Client';
 import {
-  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, manpowerDailyRate, PHP,
+  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP,
 } from './calc';
 
 // ─── Branding ────────────────────────────────────────────────────────────────
@@ -400,56 +400,72 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
         {hasC && (
           <>
             <Text style={styles.sectionBar}>Engineering Services</Text>
-            <View style={styles.th}>
-              <Text style={styles.cItem}>Item No.</Text>
-              <Text style={styles.cDesc}>Description</Text>
-              <Text style={styles.cQty}>QTY</Text>
-              <Text style={styles.cUom}>UOM</Text>
-              <Text style={styles.cUnit}>Unit Price</Text>
-              <Text style={styles.cTotal}>Total , PhP</Text>
-            </View>
-            {quotation.servicesFromManpower && !quotation.servicesPerLinePricing ? (
-              quotation.services.map((l, i) => {
-                const showLotTotal = i === groupedLotDisplayIndex(quotation.services.length);
-                return (
+            {quotation.servicesPerLinePricing ? (
+              <>
+                <View style={styles.th}>
+                  <Text style={styles.cItem}>Item No.</Text>
+                  <Text style={[styles.cDesc, { width: '70%' }]}>Description</Text>
+                  <Text style={styles.cTotal}>Total , PhP</Text>
+                </View>
+                {quotation.services.map((l) => (
                   <View style={styles.tr} key={l.id}>
                     <Text style={styles.cItem}>{l.code}</Text>
-                    <Text style={styles.cDesc}>{l.description}</Text>
-                    <Text style={styles.cQty}>{showLotTotal ? String(engineeringServicesQty) : ''}</Text>
-                    <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
-                    <Text style={styles.cUnit}>{showLotTotal ? PHP(engineeringServicesUnitPrice) : ''}</Text>
-                    <Text style={styles.cTotal}>{showLotTotal ? PHP(totals.servicesSubtotal) : ''}</Text>
+                    <Text style={[styles.cDesc, { width: '70%' }]}>{l.description}</Text>
+                    <Text style={styles.cTotal}>{PHP(l.amount)}</Text>
                   </View>
-                );
-              })
+                ))}
+                <View style={styles.trSub}>
+                  <Text style={styles.cItem} />
+                  <Text style={[styles.cDesc, { width: '70%', textAlign: 'right' }]}>sub total (vat-ex)</Text>
+                  <Text style={styles.cTotal}>{PHP(totals.servicesSubtotal)}</Text>
+                </View>
+              </>
             ) : (
-              (() => {
-                const perLine = quotation.servicesFromManpower && quotation.servicesPerLinePricing;
-                const dailyRate = perLine ? manpowerDailyRate(quotation.manpower) : 0;
-                const mMult = perLine ? 1 + (quotation.laborMarkupPct || 0) / 100 : 1;
-                return quotation.services.map((l) => {
-                  const lineAmt = perLine ? (l.days || 0) * dailyRate * mMult : l.amount;
-                  return (
+              <>
+                <View style={styles.th}>
+                  <Text style={styles.cItem}>Item No.</Text>
+                  <Text style={styles.cDesc}>Description</Text>
+                  <Text style={styles.cQty}>QTY</Text>
+                  <Text style={styles.cUom}>UOM</Text>
+                  <Text style={styles.cUnit}>Unit Price</Text>
+                  <Text style={styles.cTotal}>Total , PhP</Text>
+                </View>
+                {quotation.servicesFromManpower ? (
+                  quotation.services.map((l, i) => {
+                    const showLotTotal = i === groupedLotDisplayIndex(quotation.services.length);
+                    return (
+                      <View style={styles.tr} key={l.id}>
+                        <Text style={styles.cItem}>{l.code}</Text>
+                        <Text style={styles.cDesc}>{l.description}</Text>
+                        <Text style={styles.cQty}>{showLotTotal ? String(engineeringServicesQty) : ''}</Text>
+                        <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
+                        <Text style={styles.cUnit}>{showLotTotal ? PHP(engineeringServicesUnitPrice) : ''}</Text>
+                        <Text style={styles.cTotal}>{showLotTotal ? PHP(totals.servicesSubtotal) : ''}</Text>
+                      </View>
+                    );
+                  })
+                ) : (
+                  quotation.services.map((l) => (
                     <View style={styles.tr} key={l.id}>
                       <Text style={styles.cItem}>{l.code}</Text>
                       <Text style={styles.cDesc}>{l.description}</Text>
                       <Text style={styles.cQty}>1</Text>
                       <Text style={styles.cUom}>LOT</Text>
-                      <Text style={styles.cUnit}>{PHP(lineAmt)}</Text>
-                      <Text style={styles.cTotal}>{PHP(lineAmt)}</Text>
+                      <Text style={styles.cUnit}>{PHP(l.amount)}</Text>
+                      <Text style={styles.cTotal}>{PHP(l.amount)}</Text>
                     </View>
-                  );
-                });
-              })()
+                  ))
+                )}
+                <View style={styles.trSub}>
+                  <Text style={styles.cItem} />
+                  <Text style={styles.cDesc} />
+                  <Text style={styles.cQty} />
+                  <Text style={styles.cUom} />
+                  <Text style={[styles.cUnit, { textAlign: 'right' }]}>sub total (vat-ex)</Text>
+                  <Text style={styles.cTotal}>{PHP(totals.servicesSubtotal)}</Text>
+                </View>
+              </>
             )}
-            <View style={styles.trSub}>
-              <Text style={styles.cItem} />
-              <Text style={styles.cDesc} />
-              <Text style={styles.cQty} />
-              <Text style={styles.cUom} />
-              <Text style={[styles.cUnit, { textAlign: 'right' }]}>sub total (vat-ex)</Text>
-              <Text style={styles.cTotal}>{PHP(totals.servicesSubtotal)}</Text>
-            </View>
           </>
         )}
 

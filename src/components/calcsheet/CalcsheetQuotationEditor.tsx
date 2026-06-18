@@ -398,12 +398,22 @@ export default function QuotationEditor() {
       { id: id(), code: '', description: '', amount: 0, ...(perLinePricing ? { days: 0 } : {}) },
     ] as ServiceLine[]);
 
+  const updateServiceRow = (idx: number, key: keyof ServiceLine, value: any) => {
+    const list = [...quotation.services];
+    const row = { ...list[idx], [key]: value };
+    if (perLinePricing && key === 'days') {
+      row.amount = (row.days || 0) * teamDailyRate * markupMult;
+    }
+    list[idx] = row;
+    setField('services', list);
+  };
+
   const svcCols: Column<ServiceLine>[] = perLinePricing
     ? [
         { key: 'code', label: 'Code', width: 90, mono: true },
         { key: 'description', label: 'Description' },
         { key: 'days', label: 'Days', width: 80, type: 'number', align: 'right', min: 0 },
-        { key: 'amount', label: 'Amount', width: 140, align: 'right', render: (r) => <Box sx={{ fontFamily: 'monospace', fontWeight: 500 }}>{PHP((r.days || 0) * teamDailyRate * markupMult)}</Box> },
+        { key: 'amount', label: 'Amount', width: 140, type: 'number', align: 'right', step: 0.01 },
       ]
     : [
         { key: 'code', label: 'Code', width: 90, mono: true },
@@ -1138,7 +1148,7 @@ export default function QuotationEditor() {
               ? svcCols.filter((c) => c.key !== 'amount')
               : svcCols
           }
-          onChange={(idx, key, v) => updateRow('services', idx, key, v)}
+          onChange={(idx, key, v) => updateServiceRow(idx, key as keyof ServiceLine, v)}
           onDelete={(idx) => deleteRow('services', idx)}
           onReorder={(rows) => reorderRows('services', rows)}
           emptyMessage="No scope items — add deliverables (e.g., 'PLC redundancy troubleshooting', 'TIA Portal integration')"

@@ -96,12 +96,13 @@ export function computeTotals(q: Quotation): QuotationTotals {
   let laborWithContingency: number;
   if (q.servicesFromManpower) {
     if (q.servicesPerLinePricing) {
-      // Per-line pricing: each scope item has days; amount = days × team daily rate.
-      // Manpower table defines the team; laborCost is the raw cost across all scope items.
+      // Per-line pricing: each scope item stores its own amount (auto-computed from
+      // days × team daily rate, or manually entered). laborCost is the raw manpower
+      // cost based on days for margin calculation.
       const dailyRate = manpowerDailyRate(q.manpower);
       laborCost = q.services.reduce((s, l) => s + ((l.days || 0) * dailyRate), 0);
       laborWithContingency = laborCost;
-      servicesSub = laborCost * (1 + (q.laborMarkupPct || 0) / 100);
+      servicesSub = q.services.reduce((s, l) => s + (l.amount || 0), 0);
     } else {
       laborCost = manpowerTotalCost(q.manpower) * engineeringServicesQty;
       laborWithContingency = laborCost;
