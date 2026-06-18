@@ -3,7 +3,7 @@ import { saveAs } from 'file-saver';
 import { format } from 'date-fns';
 import type { Client, Project, Quotation } from '../../types/Quotation';
 import {
-  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, manpowerCost,
+  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, manpowerCost, manpowerDailyRate,
 } from './calc';
 
 const PHP_FMT = '"₱" #,##0.00;[Red]"₱" -#,##0.00';
@@ -161,8 +161,12 @@ export async function exportQuotationXlsx(
       ws.getCell(r, 6).numFmt = PHP_FMT;
       r++;
     } else {
+      const perLine = quotation.servicesFromManpower && quotation.servicesPerLinePricing;
+      const dailyRate = perLine ? manpowerDailyRate(quotation.manpower) : 0;
+      const mMult = perLine ? 1 + (quotation.laborMarkupPct || 0) / 100 : 1;
       quotation.services.forEach((l) => {
-        ws.getRow(r).values = [l.code, l.description, 1, 'lot', l.amount, l.amount];
+        const lineAmt = perLine ? (l.days || 0) * dailyRate * mMult : l.amount;
+        ws.getRow(r).values = [l.code, l.description, 1, 'lot', lineAmt, lineAmt];
         ws.getCell(r, 5).numFmt = PHP_FMT;
         ws.getCell(r, 6).numFmt = PHP_FMT;
         r++;

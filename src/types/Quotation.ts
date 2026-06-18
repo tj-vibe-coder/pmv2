@@ -96,9 +96,7 @@ export interface ServiceLine {
   code: string;
   description: string;
   amount: number;
-  manpowerQty?: number;
   days?: number;
-  rate?: number;
 }
 
 export interface ManpowerEntry {

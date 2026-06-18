@@ -20,7 +20,7 @@ import UndoIcon from '@mui/icons-material/Undo';
 import { useQuotationStore } from '../../store/quotationStore';
 import {
   PHP, computeTotals, componentLineTotal,
-  componentSellingUnit, lineGeneralTotal, manpowerCost, manpowerTotalCost,
+  componentSellingUnit, lineGeneralTotal, manpowerCost, manpowerTotalCost, manpowerDailyRate,
 } from '../../utils/calcsheet/calc';
 import type {
   ComponentLine, GeneralReqLine, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
@@ -389,30 +389,20 @@ export default function QuotationEditor() {
 
   // Section C — Services
   const perLinePricing = quotation.servicesFromManpower && !!quotation.servicesPerLinePricing;
+  const teamDailyRate = manpowerDailyRate(quotation.manpower);
+  const markupMult = 1 + (quotation.laborMarkupPct || 0) / 100;
   const addService = () =>
     commit('services', [
       ...quotation.services,
-      { id: id(), code: '', description: '', amount: 0, ...(perLinePricing ? { manpowerQty: 0, days: 0, rate: 0 } : {}) },
+      { id: id(), code: '', description: '', amount: 0, ...(perLinePricing ? { days: 0 } : {}) },
     ] as ServiceLine[]);
-
-  const updateServiceRow = (idx: number, key: keyof ServiceLine, value: any) => {
-    const list = [...quotation.services];
-    const row = { ...list[idx], [key]: value };
-    if (perLinePricing && (key === 'manpowerQty' || key === 'days' || key === 'rate')) {
-      row.amount = (row.manpowerQty || 0) * (row.days || 0) * (row.rate || 0);
-    }
-    list[idx] = row;
-    setField('services', list);
-  };
 
   const svcCols: Column<ServiceLine>[] = perLinePricing
     ? [
         { key: 'code', label: 'Code', width: 90, mono: true },
         { key: 'description', label: 'Description' },
-        { key: 'manpowerQty', label: 'Pax', width: 70, type: 'number', align: 'right', min: 0 },
-        { key: 'days', label: 'Days', width: 70, type: 'number', align: 'right', min: 0 },
-        { key: 'rate', label: 'Rate/Day', width: 110, type: 'number', align: 'right', step: 0.01, min: 0 },
-        { key: 'amount', label: 'Amount', width: 130, align: 'right', render: (r) => <Box sx={{ fontFamily: 'monospace', fontWeight: 500 }}>{PHP((r.manpowerQty || 0) * (r.days || 0) * (r.rate || 0))}</Box> },
+        { key: 'days', label: 'Days', width: 80, type: 'number', align: 'right', min: 0 },
+        { key: 'amount', label: 'Amount', width: 140, align: 'right', render: (r) => <Box sx={{ fontFamily: 'monospace', fontWeight: 500 }}>{PHP((r.days || 0) * teamDailyRate * markupMult)}</Box> },
       ]
     : [
         { key: 'code', label: 'Code', width: 90, mono: true },
@@ -1127,7 +1117,7 @@ export default function QuotationEditor() {
               ? svcCols.filter((c) => c.key !== 'amount')
               : svcCols
           }
-          onChange={(idx, key, v) => updateServiceRow(idx, key as keyof ServiceLine, v)}
+          onChange={(idx, key, v) => updateRow('services', idx, key, v)}
           onDelete={(idx) => deleteRow('services', idx)}
           onReorder={(rows) => reorderRows('services', rows)}
           emptyMessage="No scope items — add deliverables (e.g., 'PLC redundancy troubleshooting', 'TIA Portal integration')"
@@ -1135,7 +1125,7 @@ export default function QuotationEditor() {
           footer={
             (!quotation.servicesFromManpower || quotation.servicesPerLinePricing) ? (
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={perLinePricing ? 5 : 2} align="right" sx={{ fontWeight: 600 }}>Services Subtotal</TableCell>
+                <TableCell colSpan={perLinePricing ? 3 : 2} align="right" sx={{ fontWeight: 600 }}>Services Subtotal</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.servicesSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
@@ -1166,11 +1156,18 @@ export default function QuotationEditor() {
               readOnly={isLegacy}
               footer={
                 quotation.servicesPerLinePricing ? (
+                  <>
+                  <TableRow sx={{ bgcolor: 'grey.50' }}>
+                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Team Daily Rate</TableCell>
+                    <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(teamDailyRate)}</TableCell>
+                    <TableCell />
+                  </TableRow>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
                     <TableCell colSpan={6} align="right" sx={{ fontWeight: 600 }}>Total Manpower Cost</TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.laborCost)}</TableCell>
                     <TableCell />
                   </TableRow>
+                  </>
                 ) : (
                 <>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>

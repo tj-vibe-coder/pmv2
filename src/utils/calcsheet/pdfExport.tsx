@@ -5,7 +5,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { Client, Project, Quotation, SalesContact } from '../../types/Quotation';
 import { resolveContact } from '../../types/Client';
 import {
-  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP,
+  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, manpowerDailyRate, PHP,
 } from './calc';
 
 // ─── Branding ────────────────────────────────────────────────────────────────
@@ -423,16 +423,24 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 );
               })
             ) : (
-              quotation.services.map((l) => (
-                <View style={styles.tr} key={l.id}>
-                  <Text style={styles.cItem}>{l.code}</Text>
-                  <Text style={styles.cDesc}>{l.description}</Text>
-                  <Text style={styles.cQty}>1</Text>
-                  <Text style={styles.cUom}>LOT</Text>
-                  <Text style={styles.cUnit}>{PHP(l.amount)}</Text>
-                  <Text style={styles.cTotal}>{PHP(l.amount)}</Text>
-                </View>
-              ))
+              (() => {
+                const perLine = quotation.servicesFromManpower && quotation.servicesPerLinePricing;
+                const dailyRate = perLine ? manpowerDailyRate(quotation.manpower) : 0;
+                const mMult = perLine ? 1 + (quotation.laborMarkupPct || 0) / 100 : 1;
+                return quotation.services.map((l) => {
+                  const lineAmt = perLine ? (l.days || 0) * dailyRate * mMult : l.amount;
+                  return (
+                    <View style={styles.tr} key={l.id}>
+                      <Text style={styles.cItem}>{l.code}</Text>
+                      <Text style={styles.cDesc}>{l.description}</Text>
+                      <Text style={styles.cQty}>1</Text>
+                      <Text style={styles.cUom}>LOT</Text>
+                      <Text style={styles.cUnit}>{PHP(lineAmt)}</Text>
+                      <Text style={styles.cTotal}>{PHP(lineAmt)}</Text>
+                    </View>
+                  );
+                });
+              })()
             )}
             <View style={styles.trSub}>
               <Text style={styles.cItem} />

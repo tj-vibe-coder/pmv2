@@ -45,6 +45,11 @@ export function manpowerTotalCost(rows: ManpowerEntry[]): number {
   return rows.reduce((s, m) => s + manpowerCost(m), 0);
 }
 
+/** Daily cost of the whole team (ignoring mandays — used for per-line scope pricing). */
+export function manpowerDailyRate(rows: ManpowerEntry[]): number {
+  return rows.reduce((s, m) => s + (m.headcount || 0) * ((m.dailyRate || 0) + (m.allowance || 0)), 0);
+}
+
 export function servicesSubtotal(
   services: ServiceLine[],
   manpower: ManpowerEntry[],
@@ -90,13 +95,16 @@ export function computeTotals(q: Quotation): QuotationTotals {
   let servicesSub: number;
   let laborWithContingency: number;
   if (q.servicesFromManpower) {
-    laborCost = manpowerTotalCost(q.manpower) * engineeringServicesQty;
-    laborWithContingency = laborCost;
     if (q.servicesPerLinePricing) {
-      // Per-line pricing: scope items carry their own amounts (customer-facing);
-      // manpower remains the cost basis for margin calculation.
-      servicesSub = q.services.reduce((s, l) => s + (l.amount || 0), 0);
+      // Per-line pricing: each scope item has days; amount = days × team daily rate.
+      // Manpower table defines the team; laborCost is the raw cost across all scope items.
+      const dailyRate = manpowerDailyRate(q.manpower);
+      laborCost = q.services.reduce((s, l) => s + ((l.days || 0) * dailyRate), 0);
+      laborWithContingency = laborCost;
+      servicesSub = laborCost * (1 + (q.laborMarkupPct || 0) / 100);
     } else {
+      laborCost = manpowerTotalCost(q.manpower) * engineeringServicesQty;
+      laborWithContingency = laborCost;
       servicesSub = laborCost * (1 + (q.laborMarkupPct || 0) / 100);
     }
   } else {
