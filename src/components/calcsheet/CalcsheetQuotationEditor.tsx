@@ -381,6 +381,7 @@ export default function QuotationEditor() {
     { key: 'unitCost', label: 'Unit Cost', width: 110, type: 'number', align: 'right', step: 0.01 },
     { key: 'forex', label: 'FX', width: 60, type: 'number', align: 'right', step: 0.0001 },
     { key: 'contingencyPct', label: 'Cont %', width: 80, type: 'number', align: 'right', step: 0.01 },
+    { key: 'leadTimeDays', label: 'Lead Time', width: 90, type: 'number', align: 'right', min: 0 },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
       render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
     { key: 'total', label: 'Total', width: 130, align: 'right',
@@ -776,15 +777,35 @@ export default function QuotationEditor() {
               />
             )}
           </Box>
-          <TextField
-            label="Delivery Terms"
-            value={quotation.deliveryTerms}
-            onChange={(e) => setField('deliveryTerms', e.target.value)}
-            multiline
-            minRows={2}
-            disabled={isLegacy}
-            sx={{ gridColumn: 'span 2' }}
-          />
+          {(() => {
+            const totalScopeDays = quotation.services.reduce((s, l) => s + (l.days || 0), 0);
+            const installDays = totalScopeDays > 0 ? totalScopeDays + 5 : 0;
+            const maxComponentLead = quotation.components.reduce((m, c) => Math.max(m, c.leadTimeDays || 0), 0);
+            const installWeeks = installDays > 0 ? Math.ceil(installDays / 7) : 0;
+            const deliveryWeeks = maxComponentLead > 0 ? Math.ceil(maxComponentLead / 7) : 0;
+            const parts: string[] = [];
+            if (installWeeks > 0) parts.push(`Installation is ${installWeeks} week${installWeeks > 1 ? 's' : ''} (${installDays} days)`);
+            if (deliveryWeeks > 0) parts.push(`Delivery of components is ${deliveryWeeks} week${deliveryWeeks > 1 ? 's' : ''} (${maxComponentLead} days)`);
+            const suggested = parts.length > 0
+              ? parts.join('. ') + ', upon receipt of a technically and commercially clarified purchase order.'
+              : '';
+            return (
+              <Box sx={{ gridColumn: 'span 2' }}>
+                <TextField
+                  label="Delivery Terms"
+                  value={quotation.deliveryTerms}
+                  onChange={(e) => setField('deliveryTerms', e.target.value)}
+                  multiline
+                  minRows={2}
+                  disabled={isLegacy}
+                  fullWidth
+                  helperText={suggested && suggested !== quotation.deliveryTerms
+                    ? <span>Suggested: {suggested} <Typography component="span" variant="caption" sx={{ color: 'primary.main', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => setField('deliveryTerms', suggested)}>Apply</Typography></span>
+                    : undefined}
+                />
+              </Box>
+            );
+          })()}
           {(() => {
             const staffOption = (props: any, option: string) => {
               const c = effectiveSalesContacts.find((x) => x.name === option);
