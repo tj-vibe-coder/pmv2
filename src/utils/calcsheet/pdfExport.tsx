@@ -459,14 +459,14 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                             );
                           }
                         } else {
-                          // Ungrouped: show with amount
+                          // Ungrouped: show as individual 1 LOT line
                           rendered.push(
                             <View style={styles.tr} key={l.id}>
                               <Text style={styles.cItem}>{l.code}</Text>
                               <Text style={hasGroups ? styles.cDesc : [styles.cDesc, { width: '70%' }]}>{l.description}</Text>
-                              {hasGroups && <Text style={styles.cQty} />}
-                              {hasGroups && <Text style={styles.cUom} />}
-                              {hasGroups && <Text style={styles.cUnit} />}
+                              {hasGroups && <Text style={styles.cQty}>1</Text>}
+                              {hasGroups && <Text style={styles.cUom}>LOT</Text>}
+                              {hasGroups && <Text style={styles.cUnit}>{PHP(l.amount)}</Text>}
                               <Text style={styles.cTotal}>{PHP(l.amount)}</Text>
                             </View>,
                           );

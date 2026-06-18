@@ -186,7 +186,8 @@ export async function exportQuotationXlsx(
             r++;
           }
         } else {
-          ws.getRow(r).values = [l.code, l.description, '', '', '', l.amount];
+          ws.getRow(r).values = [l.code, l.description, 1, 'lot', l.amount, l.amount];
+          ws.getCell(r, 5).numFmt = PHP_FMT;
           ws.getCell(r, 6).numFmt = PHP_FMT;
           r++;
         }
