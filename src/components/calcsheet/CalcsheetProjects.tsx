@@ -90,6 +90,7 @@ export default function Projects() {
     failures: string[];
   } | null>(null);
   const [bulkLinkSummary, setBulkLinkSummary] = useState<string>('');
+  const [createNotice, setCreateNotice] = useState<{ severity: 'success' | 'info' | 'warning' | 'error'; message: string } | null>(null);
   const oneDriveRequired = isCorporateOneDriveConfigured();
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
 
@@ -216,15 +217,12 @@ export default function Projects() {
   const [sortKey, setSortKey] = useState<SortKey>(() => loadSortPref().key);
   const [sortDir, setSortDir] = useState<SortDir>(() => loadSortPref().dir);
 
-  const requireOneDriveForProjectCreate = async (): Promise<boolean> => {
-    if (!oneDriveRequired || oneDriveSignedIn) return true;
-    setBulkLinkSummary('Sign in to OneDrive before creating a Calcsheet project so the proposal folder can be created.');
-    await oneDriveLogin();
-    return false;
-  };
-
+  // OneDrive is no longer a hard gate on project creation. When it's configured
+  // but the user isn't signed in, we still let them create the project and link
+  // the proposal folder later. This avoids stranding a colleague whose MSAL
+  // session is cached but can't acquire a token silently (24h SPA refresh-token
+  // cap + ssoSilent blocked by browser cookie policy / wrong origin).
   const startNew = async () => {
-    if (!(await requireOneDriveForProjectCreate())) return;
     setForm(empty);
     setLocationAutoFilled(false);
     setCodeManuallyEdited(false);
@@ -232,9 +230,8 @@ export default function Projects() {
   };
   const save = async () => {
     if (!form.name || !form.customerId) return;
-    if (!(await requireOneDriveForProjectCreate())) return;
     try {
-      await addProject({
+      const saved = await addProject({
         name: form.name,
         location: form.location,
         date: form.date,
@@ -245,8 +242,19 @@ export default function Projects() {
         code: form.code || undefined,
       });
       setOpen(false);
+      // If OneDrive is configured but the folder couldn't be created (not signed
+      // in, or token unavailable), let the user know the project saved fine and
+      // the folder can be linked later from the project page.
+      if (oneDriveRequired && saved && !saved.proposalFolderId) {
+        setCreateNotice({
+          severity: 'info',
+          message: oneDriveSignedIn
+            ? 'Project created. OneDrive folder could not be created right now — open the project to create or link its proposal folder.'
+            : 'Project created without a OneDrive folder. Sign in to OneDrive, then create or link the proposal folder from the project page.',
+        });
+      }
     } catch (err) {
-      setBulkLinkSummary(err instanceof Error ? err.message : 'Failed to create project.');
+      setCreateNotice({ severity: 'error', message: err instanceof Error ? err.message : 'Failed to create project.' });
     }
   };
 
@@ -495,6 +503,22 @@ export default function Projects() {
         </Alert>
       </Snackbar>
 
+      <Snackbar
+        open={!!createNotice}
+        autoHideDuration={createNotice?.severity === 'error' ? 12000 : 9000}
+        onClose={() => setCreateNotice(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setCreateNotice(null)}
+          severity={createNotice?.severity ?? 'info'}
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {createNotice?.message}
+        </Alert>
+      </Snackbar>
+
       {/* Filter bar */}
       <Paper sx={{ p: 1.5 }} variant="outlined">
         <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -736,6 +760,25 @@ export default function Projects() {
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>New project</DialogTitle>
         <DialogContent>
+          {oneDriveRequired && !oneDriveSignedIn && (
+            <Alert
+              severity="info"
+              sx={{ mb: 1 }}
+              action={
+                <Button
+                  color="inherit"
+                  size="small"
+                  onClick={() => { void oneDriveLogin(); }}
+                  disabled={oneDriveLoading}
+                >
+                  Sign in
+                </Button>
+              }
+            >
+              You're not signed in to OneDrive. You can still create this project now and link its
+              proposal folder later from the project page.
+            </Alert>
+          )}
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mt: 1 }}>
             <TextField label="Project name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ gridColumn: 'span 2' }} />
             {/* Customer first so location can auto-fill from it */}
