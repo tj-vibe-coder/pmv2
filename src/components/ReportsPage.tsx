@@ -9,6 +9,9 @@ import {
   Tab,
   Autocomplete,
   IconButton,
+  RadioGroup,
+  FormControlLabel,
+  Radio,
 } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
@@ -183,7 +186,7 @@ const ReportsPage: React.FC = () => {
           </Typography>
         </Box>
 
-        <Paper sx={{ p: 2 }}>
+        <Paper sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
           <Autocomplete
             options={projects}
             getOptionLabel={(option) => `${option.project_name} (${option.project_no || option.item_no || option.id})`}
@@ -195,8 +198,16 @@ const ReportsPage: React.FC = () => {
               }
             }}
             renderInput={(params) => <TextField {...params} label="Select Project" size="small" />}
-            sx={{ maxWidth: 600 }}
+            sx={{ flex: 1, minWidth: 300, maxWidth: 600 }}
           />
+          <RadioGroup
+            row
+            value={reportCompany}
+            onChange={(e) => setReportCompany(e.target.value as ReportCompanyKey)}
+          >
+            <FormControlLabel value="IOCT" control={<Radio size="small" />} label="IOCT" />
+            <FormControlLabel value="ACT" control={<Radio size="small" />} label="ACTI" />
+          </RadioGroup>
         </Paper>
       </Box>
 

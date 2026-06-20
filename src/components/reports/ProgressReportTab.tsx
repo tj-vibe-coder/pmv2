@@ -1017,13 +1017,6 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       </Box>
       
       <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 1.5, flexShrink: 0 }}>
-        <FormControl size="small" sx={{ minWidth: 280 }}>
-          <InputLabel id="report-company-label">Report as company</InputLabel>
-          <Select labelId="report-company-label" value={reportCompany} label="Report as company" onChange={(e) => setReportCompany(e.target.value as ReportCompanyKey)}>
-            <MenuItem value="IOCT">{REPORT_COMPANIES.IOCT}</MenuItem>
-            <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
-          </Select>
-        </FormControl>
         <Button variant="contained" size="small" onClick={handleSaveProgress} disabled={wbsItems.length === 0} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{saveFeedback ? 'Saved' : editingSnapshotIndex !== null ? 'Update snapshot' : 'Save'}</Button>
         <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} disabled={wbsItems.length === 0} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
         <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={wbsItems.length === 0 || exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Uploading…' : 'Export to PDF'}</Button>
