@@ -21,6 +21,10 @@ import {
   TableFooter,
   LinearProgress,
   IconButton,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
@@ -56,6 +60,59 @@ const wbsNumInputSx = {
   ...wbsInputSx,
   '& .MuiInputBase-input': { ...wbsInputSx['& .MuiInputBase-input'], textAlign: 'right', fontWeight: 600 },
   '& .MuiInputBase-input[type=number]': { MozAppearance: 'textfield' },
+};
+
+const WBS_TEMPLATES: Record<string, { label: string; items: { code: string; name: string }[] }> = {
+  automation: {
+    label: 'Automation Project',
+    items: [
+      { code: '1', name: 'Engineering Services' },
+      { code: '1.1', name: 'Design Documents' },
+      { code: '1.2', name: 'PLC Programming' },
+      { code: '1.3', name: 'Factory Acceptance Test' },
+      { code: '2', name: 'Installation' },
+      { code: '2.1', name: 'Panel Fabrication' },
+      { code: '2.2', name: 'Site Installation' },
+      { code: '2.3', name: 'Site Acceptance Test' },
+      { code: '3', name: 'Commissioning' },
+      { code: '3.1', name: 'System Testing' },
+      { code: '3.2', name: 'Handover' },
+    ],
+  },
+  construction: {
+    label: 'Construction Project',
+    items: [
+      { code: '1', name: 'Mobilization' },
+      { code: '1.1', name: 'Site Survey' },
+      { code: '1.2', name: 'Equipment Deployment' },
+      { code: '2', name: 'Civil Works' },
+      { code: '2.1', name: 'Structural' },
+      { code: '2.2', name: 'Finishing' },
+      { code: '3', name: 'Mechanical' },
+      { code: '3.1', name: 'Piping' },
+      { code: '3.2', name: 'Equipment Installation' },
+      { code: '4', name: 'Electrical' },
+      { code: '4.1', name: 'Roughing-in' },
+      { code: '4.2', name: 'Termination & Testing' },
+      { code: '5', name: 'Testing & Commissioning' },
+      { code: '5.1', name: 'Pre-commissioning' },
+      { code: '5.2', name: 'Commissioning & Handover' },
+    ],
+  },
+  service: {
+    label: 'Service Contract',
+    items: [
+      { code: '1', name: 'Assessment' },
+      { code: '1.1', name: 'Site Inspection' },
+      { code: '1.2', name: 'Report & Recommendations' },
+      { code: '2', name: 'Execution' },
+      { code: '2.1', name: 'Service Delivery' },
+      { code: '2.2', name: 'Verification' },
+      { code: '3', name: 'Documentation & Handover' },
+      { code: '3.1', name: 'As-built Documentation' },
+      { code: '3.2', name: 'Client Acceptance' },
+    ],
+  },
 };
 
 export interface Approver {
@@ -356,6 +413,24 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       setEditingSnapshotIndex(editingSnapshotIndex - 1);
     }
     setSnapshotVersion((v) => v + 1);
+  };
+
+  const handleApplyTemplate = (templateKey: string) => {
+    const template = WBS_TEMPLATES[templateKey];
+    if (!template) return;
+    if (wbsItems.length > 0) {
+      if (!window.confirm('Replace current WBS with template? This cannot be undone.')) return;
+    }
+    const newItems: WBSItem[] = template.items.map((t, i) => ({
+      id: `wbs-${Date.now()}-${i}`,
+      code: t.code,
+      name: t.name,
+      weight: 0,
+      progress: 0,
+    }));
+    setWbsItems(newItems);
+    saveWBS(project.id, newItems);
+    syncProjectStatusFromWBS(newItems);
   };
 
   const buildPdf = async (preview: boolean): Promise<Blob | { blob: Blob; filename: string } | void> => {
@@ -1001,6 +1076,32 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
             )}
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1, flexWrap: 'wrap' }}>
+              <FormControl size="small" sx={{ minWidth: 200 }}>
+                <InputLabel id="wbs-template-label">Template</InputLabel>
+                <Select
+                  labelId="wbs-template-label"
+                  value=""
+                  label="Template"
+                  onChange={(e) => {
+                    if (e.target.value) handleApplyTemplate(e.target.value as string);
+                  }}
+                  displayEmpty
+                >
+                  <MenuItem value="" disabled><em>Load a template...</em></MenuItem>
+                  {Object.entries(WBS_TEMPLATES).map(([key, tpl]) => (
+                    <MenuItem key={key} value={key}>{tpl.label} ({tpl.items.length} items)</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <Button
+                startIcon={<AddIcon />}
+                onClick={handleAddWBSItem}
+                sx={{ textTransform: 'none', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}
+              >
+                Add WBS item
+              </Button>
+            </Box>
             <TableContainer sx={{ border: 0, borderRadius: 0, overflow: 'auto' }}>
               <Table stickyHeader size="medium" sx={{ minWidth: 560 }}>
                 <TableHead>
@@ -1155,9 +1256,6 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                 })()}
               </Table>
             </TableContainer>
-            <Box sx={{ pt: 1, pb: 0.5, px: 1 }}>
-              <Button startIcon={<AddIcon />} onClick={handleAddWBSItem} sx={{ textTransform: 'none', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Add WBS item</Button>
-            </Box>
           </AccordionDetails>
         </Accordion>
 
