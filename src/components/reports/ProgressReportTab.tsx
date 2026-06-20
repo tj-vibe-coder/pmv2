@@ -141,7 +141,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   project,
   currentUser,
   reportCompany,
-  setReportCompany,
+  setReportCompany: _setReportCompany,
   preparedBy,
   setPreparedBy,
   onPreview,
@@ -228,7 +228,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     if (maxPb > 0) {
       setPbInput(String(maxPb + 1));
     }
-  }, [progressSnapshots, initialPb]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [progressSnapshots, initialPb]); // eslint-disable-line react-hooks/exhaustive-deps -- pbInput excluded to avoid re-triggering on user input
 
   // Helper function to check if a code is a parent (has children)
   const isParentItem = useCallback((code: string, allItems: WBSItem[]): boolean => {
