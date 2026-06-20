@@ -654,10 +654,9 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     });
 
     const totalPct = wbsOverallProgress.toFixed(2);
-    const rowsPerPage = 10;
     const dataRows = wbsRows.map((r) => [r.code, r.name, r.weight, r.progress]);
     const totalRow = ['', 'Total', '', `${totalPct}%`];
-    
+
     // Parent-only summary for last page (code, name, weight, progress)
     const parentOnlyRows = wbsRows.filter((r) => r.isParent);
     const summaryTableRows = parentOnlyRows.length > 0
@@ -666,17 +665,9 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           ['', 'Total', parentOnlyRows.reduce((s, r) => s + parseFloat(r.weight), 0).toFixed(2), totalPct],
         ]
       : [];
-    
-    // Split rows into pages
-    const rowChunks: (string | number)[][][] = [];
-    for (let i = 0; i < dataRows.length; i += rowsPerPage) {
-      rowChunks.push(dataRows.slice(i, i + rowsPerPage));
-    }
-    
-    // If no rows, add empty state
-    if (rowChunks.length === 0) {
-      rowChunks.push([['—', 'No WBS items', '—', '—']]);
-    }
+
+    // If no rows, use empty state
+    const allBodyRows = dataRows.length > 0 ? [...dataRows, totalRow] : [['—', 'No WBS items', '—', '—']];
 
     // Add signature section helper
     const addSignatureSection = (startY: number): number => {
@@ -819,136 +810,113 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       return Math.max(preparedByY, maxApproverY) + sigLineHeight;
     };
 
-    // Generate pages
+    // Generate pages — let autoTable handle pagination automatically (no manual row chunking)
     const headers = ['Code', 'Deliverables', 'Weight %', 'Progress %'];
-    let tableStartY = await addPageHeader(18, true); // First page includes Project Status and Certification
-    const pageTableEndY: number[] = []; // Track table end position for each page
-    
-    for (let pageIndex = 0; pageIndex < rowChunks.length; pageIndex++) {
-      if (pageIndex > 0) {
-        doc.addPage();
-        tableStartY = await addPageHeader(18, false); // Subsequent pages only have logo and Project Details
-      }
-      
-      const pageRows = rowChunks[pageIndex];
-      const isLastPage = pageIndex === rowChunks.length - 1;
-      const bodyRows = isLastPage ? [...pageRows, totalRow] : pageRows;
-      
+    const tableStartY = await addPageHeader(18, true); // First page includes Project Status and Certification
+
+    autoTable(doc, {
+      head: [headers],
+      body: allBodyRows,
+      startY: tableStartY,
+      margin: { left: margin, right: margin, top: 18, bottom: 20 },
+      tableWidth: 'auto',
+      columnStyles: { 0: { cellWidth: 18 }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 22 }, 3: { cellWidth: 22 } },
+      styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
+      headStyles: {
+        fillColor: DR_HEADER_BLUE,
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 8,
+        font: 'helvetica'
+      },
+      showHead: 'everyPage',
+      didParseCell: (data) => {
+        if (data.section === 'head') {
+          data.cell.styles.font = 'helvetica';
+          data.cell.styles.fontStyle = 'bold';
+        } else if (data.section === 'body') {
+          const rowIndex = data.row.index;
+          // Last row is the Total row
+          if (rowIndex === allBodyRows.length - 1 && dataRows.length > 0) {
+            data.cell.styles.fontStyle = 'bold';
+          } else if (rowIndex < wbsRows.length) {
+            const rowData = wbsRows[rowIndex];
+            if (rowData.isParent) {
+              // Parent items: bold helvetica (ArialNarrow has no real bold variant), yellow background
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [255, 250, 205]; // Light yellow (#fffacd)
+              data.cell.styles.font = 'helvetica';
+            }
+          }
+        }
+      },
+    });
+
+    const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
+    let tableFinalY = docWithTable.lastAutoTable?.finalY ?? tableStartY;
+
+    // Add parent-only summary table after the main WBS table
+    if (summaryTableRows.length > 0) {
+      const summaryGap = 6;
+      let summaryStartY = tableFinalY + summaryGap;
+
+      fontTitle();
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Summary', margin, summaryStartY);
+      fontBody();
+      summaryStartY += lineHeight + 2;
+
       autoTable(doc, {
-        head: [headers],
-        body: bodyRows,
-        startY: tableStartY,
+        head: [['Code', 'Deliverables', 'Weight %', 'Progress %']],
+        body: summaryTableRows,
+        startY: summaryStartY,
         margin: { left: margin, right: margin },
         tableWidth: 'auto',
         columnStyles: { 0: { cellWidth: 18 }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 22 }, 3: { cellWidth: 22 } },
-        styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
-        headStyles: { 
-          fillColor: DR_HEADER_BLUE, 
-          textColor: [255, 255, 255], 
-          fontStyle: 'bold', 
+        styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', fontStyle: 'bold' },
+        headStyles: {
+          fillColor: DR_HEADER_BLUE,
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
           fontSize: 8,
-          font: 'helvetica'
+          font: 'helvetica',
         },
         didParseCell: (data) => {
-          if (data.section === 'head') {
-            // Make headers bold Arial Narrow
-            data.cell.styles.font = 'helvetica';
+          if (data.section === 'body') {
             data.cell.styles.fontStyle = 'bold';
-          } else if (data.section === 'body') {
-            const rowIndex = data.row.index;
-            const globalRowIndex = pageIndex * rowsPerPage + rowIndex;
-            if (rowIndex === bodyRows.length - 1 && isLastPage) {
-              // Total row
-              data.cell.styles.fontStyle = 'bold';
-            } else if (globalRowIndex < wbsRows.length) {
-              const rowData = wbsRows[globalRowIndex];
-              if (rowData.isParent) {
-                // Parent items should be bold, yellow background, and use Arial Narrow
-                data.cell.styles.fontStyle = 'bold';
-                data.cell.styles.fillColor = [255, 250, 205]; // Light yellow (#fffacd)
-                data.cell.styles.font = hasArialNarrow ? 'ArialNarrow' : 'helvetica';
-              }
-            }
+            data.cell.styles.font = 'helvetica';
           }
         },
       });
-      
-      const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
-      let tableFinalY = docWithTable.lastAutoTable?.finalY ?? tableStartY;
-      
-      // On last page, add parent-only summary table above signature area
-      if (isLastPage && summaryTableRows.length > 0) {
-        const summaryGap = 6;
-        let summaryStartY = tableFinalY + summaryGap;
-        
-        fontTitle();
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'bold'); // Ensure Summary title is bold
-        doc.text('Summary', margin, summaryStartY);
-        fontBody();
-        summaryStartY += lineHeight + 2;
-        
-        autoTable(doc, {
-          head: [['Code', 'Deliverables', 'Weight %', 'Progress %']],
-          body: summaryTableRows,
-          startY: summaryStartY,
-          margin: { left: margin, right: margin },
-          tableWidth: 'auto',
-          columnStyles: { 0: { cellWidth: 18 }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 22 }, 3: { cellWidth: 22 } },
-          styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', fontStyle: 'bold' },
-          headStyles: {
-            fillColor: DR_HEADER_BLUE,
-            textColor: [255, 255, 255],
-            fontStyle: 'bold',
-            fontSize: 8,
-            font: 'helvetica',
-          },
-          didParseCell: (data) => {
-            // All body cells are bold (no yellow background)
-            if (data.section === 'body') {
-              data.cell.styles.fontStyle = 'bold';
-              data.cell.styles.font = 'helvetica';
-            }
-          },
-        });
-        
-        // Update tableFinalY to include summary table
-        tableFinalY = docWithTable.lastAutoTable?.finalY ?? tableFinalY;
-      }
-      
-      // Store the table end position for this page
-      pageTableEndY.push(tableFinalY);
+
+      tableFinalY = docWithTable.lastAutoTable?.finalY ?? tableFinalY;
     }
 
-    // Draw signature section (Prepared by / Approved by) at bottom of each page, then Doc. No. below it
+    // Signature section — only on the LAST page
     const projectNo = project.project_no || String(project.item_no ?? project.id) || '—';
     const pbNumRaw = pbInput.trim() || '0';
-    // Format PB number with leading zeros (2 digits: 01, 02, etc.)
     const pbNum = pbNumRaw === '—' || pbNumRaw === '' ? '01' : String(Number(pbNumRaw) || 1).padStart(2, '0');
     const docNumber = `Doc. No.: ${projectNo}-PB-${pbNum}`;
     const totalPages = doc.getNumberOfPages();
-    
-    // Determine spacing needed based on number of approvers
+
     const numApprovers = approvers.length > 0 ? Math.min(approvers.length, 3) : 1;
-    const signatureGap = numApprovers === 3 ? 10 : 8; // More spacing for 3 approvers
-    
+    const signatureGap = numApprovers === 3 ? 10 : 8;
+
+    // Add signature on last page only
+    doc.setPage(totalPages);
+    const calculatedSignatureStartY = tableFinalY + signatureGap;
+    const adjustedSignatureStartY = Math.max(calculatedSignatureStartY, signatureStartY);
+    const signatureEndY = addSignatureSection(adjustedSignatureStartY);
+
+    // Add Doc. No. and Page X of Y footer on every page
     fontBody();
     doc.setFontSize(8);
     for (let p = 1; p <= totalPages; p++) {
       doc.setPage(p);
-      
-      // Calculate signature start position dynamically based on table end position
-      // Use the stored table end Y for this page, or fallback to fixed position
-      const tableEndY = pageTableEndY[p - 1] ?? signatureStartY;
-      const calculatedSignatureStartY = tableEndY + signatureGap;
-      
-      // Ensure signature doesn't go too low (use minimum position)
-      const minSignatureY = signatureStartY;
-      const adjustedSignatureStartY = Math.max(calculatedSignatureStartY, minSignatureY);
-      
-      const signatureEndY = addSignatureSection(adjustedSignatureStartY);
-      // Ensure Doc. No. is below signature section with spacing
-      const docNoY = Math.max(signatureEndY + 4, footerY - 5);
+      const docNoY = p === totalPages
+        ? Math.max(signatureEndY + 4, footerY - 5)
+        : footerY;
       doc.text(docNumber, margin, docNoY);
       doc.text(`Page ${p} of ${totalPages}`, 210 - margin, docNoY, { align: 'right' });
     }
