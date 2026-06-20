@@ -217,6 +217,19 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- snapshotVersion is intentional
   const progressSnapshots = useMemo(() => getProgressSnapshots(project.id), [project.id, snapshotVersion]);
 
+  // Auto-suggest next PB# based on saved reports
+  useEffect(() => {
+    if (pbInput || initialPb) return; // don't override user input or initialPb
+    if (progressSnapshots.length === 0) return;
+    const maxPb = progressSnapshots.reduce((max, s) => {
+      const num = parseInt(s.pbNumber, 10);
+      return !isNaN(num) && num > max ? num : max;
+    }, 0);
+    if (maxPb > 0) {
+      setPbInput(String(maxPb + 1));
+    }
+  }, [progressSnapshots, initialPb]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Helper function to check if a code is a parent (has children)
   const isParentItem = useCallback((code: string, allItems: WBSItem[]): boolean => {
     if (!code || code.trim() === '') return false;
