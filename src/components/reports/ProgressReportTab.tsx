@@ -2,9 +2,12 @@ import React, { useCallback, useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
   Autocomplete,
   Box,
-  Paper,
+  Chip,
   Typography,
   Button,
   TextField,
@@ -22,7 +25,7 @@ import {
   MenuItem,
   IconButton,
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
@@ -123,6 +126,16 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     }
     return [];
   });
+
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    setup: true,
+    wbs: true,
+    signatories: false,
+    savedReports: false,
+  });
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
 
   useEffect(() => {
     setWbsItems(loadWBS(project.id));
@@ -889,378 +902,462 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   };
 
   return (
-    <Paper elevation={0} sx={{ p: 2, borderRadius: 2, border: '1px solid #e2e8f0', bgcolor: '#fff', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Box sx={{ flexShrink: 0 }}>
-        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
-          Progress Report (WBS)
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Define work packages and track progress. Save snapshots, then Preview or Export to PDF.
-        </Typography>
-      </Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 1.5, flexShrink: 0 }}>
-        {wbsItems.length > 0 && (
-          <Box sx={{ flex: 1, minWidth: 200 }}>
-            <Typography variant="subtitle2" color="text.secondary">Total progress: {wbsOverallProgress.toFixed(2)}%</Typography>
-            <LinearProgress variant="determinate" value={Math.min(100, wbsOverallProgress)} sx={{ height: 12, borderRadius: 6, bgcolor: 'grey.200', '& .MuiLinearProgress-bar': { borderRadius: 6, bgcolor: NET_PACIFIC_COLORS.primary } }} />
-          </Box>
-        )}
-        <TextField size="small" label="PB #" placeholder="e.g. 1" value={pbInput} onChange={(e) => setPbInput(e.target.value)} sx={{ width: 80 }} />
-        <Typography variant="body2" color="text.secondary" sx={{ alignSelf: 'center' }}>Prepared by (PDF):</Typography>
-        <TextField size="small" label="Name" value={preparedBy.name} onChange={(e) => setPreparedBy((p) => ({ ...p, name: e.target.value }))} sx={{ width: 140 }} placeholder={currentUser?.full_name || currentUser?.username || currentUser?.email || 'Name'} />
-        <TextField size="small" label="Designation" value={preparedBy.designation} onChange={(e) => setPreparedBy((p) => ({ ...p, designation: e.target.value }))} sx={{ width: 120 }} />
-        <TextField size="small" label="Company" value={preparedBy.company} onChange={(e) => setPreparedBy((p) => ({ ...p, company: e.target.value }))} sx={{ width: 120 }} />
-        <TextField size="small" label="Date" value={preparedBy.date} onChange={(e) => setPreparedBy((p) => ({ ...p, date: e.target.value }))} sx={{ width: 110 }} placeholder="MM/DD/YYYY" />
-      </Box>
-      
-      {/* Approvers section */}
-      <Box sx={{ mb: 1.5, flexShrink: 0 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-          <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>Approved by (PDF) - Maximum 3 approvers:</Typography>
-          {approvers.length < 3 && (
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={() => setApprovers((prev) => [...prev, { name: '', designation: '', company: '' }])}
-              sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}
-            >
-              Add Approver
-            </Button>
-          )}
-        </Box>
-        {approvers.map((approver, index) => (
-          <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-            <Autocomplete
-              freeSolo
-              size="small"
-              options={clientContacts}
-              getOptionLabel={(opt) => (typeof opt === 'string' ? opt : opt.name)}
-              isOptionEqualToValue={(opt, val) => opt.name === (typeof val === 'string' ? val : val.name)}
-              inputValue={approver.name}
-              onInputChange={(_, newVal, reason) => {
-                // Only track typed text; selection is handled in onChange
-                if (reason === 'input' || reason === 'clear') {
-                  const updated = [...approvers];
-                  updated[index] = { ...updated[index], name: newVal };
-                  setApprovers(updated);
-                }
-              }}
-              onChange={(_, newVal) => {
-                if (newVal && typeof newVal !== 'string') {
-                  // Contact selected from list — auto-fill all three fields
-                  const updated = [...approvers];
-                  updated[index] = { name: newVal.name, designation: newVal.designation, company: newVal.company };
-                  setApprovers(updated);
-                }
-              }}
-              renderOption={(props, opt) => (
-                <li {...props} key={opt.name + opt.designation}>
-                  <Box>
-                    <Typography variant="body2" sx={{ fontWeight: 500 }}>{opt.name}</Typography>
-                    {(opt.designation || opt.company) && (
-                      <Typography variant="caption" color="text.secondary">
-                        {[opt.designation, opt.company].filter(Boolean).join(' · ')}
-                      </Typography>
-                    )}
-                  </Box>
-                </li>
-              )}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label={`Approver ${index + 1} - Name`}
-                  size="small"
-                  sx={{ width: 220 }}
-                  placeholder={clientContacts.length > 0 ? 'Search client contacts…' : 'Name'}
-                />
-              )}
-              sx={{ width: 220 }}
-              noOptionsText="No client contacts found"
-            />
-            <TextField
-              size="small"
-              label="Designation"
-              value={approver.designation}
-              onChange={(e) => {
-                const updated = [...approvers];
-                updated[index] = { ...updated[index], designation: e.target.value };
-                setApprovers(updated);
-              }}
-              sx={{ width: 140 }}
-            />
-            <TextField
-              size="small"
-              label="Company"
-              value={approver.company}
-              onChange={(e) => {
-                const updated = [...approvers];
-                updated[index] = { ...updated[index], company: e.target.value };
-                setApprovers(updated);
-              }}
-              sx={{ width: 180 }}
-            />
-            <IconButton
-              size="small"
-              onClick={() => setApprovers((prev) => prev.filter((_, i) => i !== index))}
-              color="error"
-              title="Remove approver"
-            >
-              <DeleteIcon fontSize="small" />
-            </IconButton>
-          </Box>
-        ))}
-        {approvers.length === 0 && (
-          <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', ml: 1 }}>
-            No approvers added. Click "Add Approver" to add one.
-          </Typography>
-        )}
-      </Box>
-      
-      <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 1.5, flexShrink: 0 }}>
-        <Button variant="contained" size="small" onClick={handleSaveProgress} disabled={wbsItems.length === 0} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{saveFeedback ? 'Saved' : editingSnapshotIndex !== null ? 'Update snapshot' : 'Save'}</Button>
-        <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} disabled={wbsItems.length === 0} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
-        <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={wbsItems.length === 0 || exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Uploading…' : 'Export to PDF'}</Button>
-        {progressSnapshots.length > 0 && (
-          <FormControl size="small" sx={{ minWidth: 200 }}>
-            <InputLabel id="load-snapshot-label">Load previous progress</InputLabel>
-            <Select labelId="load-snapshot-label" value="" label="Load previous progress" onChange={(e) => {
-              const idx = Number(e.target.value);
-              if (!Number.isNaN(idx) && progressSnapshots[idx] != null) handleLoadSnapshot(progressSnapshots[idx], idx);
-              (e.target as HTMLSelectElement).value = '';
-            }}>
-              <MenuItem value=""><em>— Select to load —</em></MenuItem>
-              {progressSnapshots.map((s, idx) => (
-                <MenuItem key={s.date + s.pbNumber} value={idx}>{new Date(s.date).toLocaleDateString('en-US', { dateStyle: 'medium' })} · PB{s.pbNumber}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        )}
-      </Box>
-      {progressSnapshots.length > 0 && (
-        <TableContainer sx={{ mb: 1.5, border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 180, flexShrink: 0 }}>
-          <Table size="small" stickyHeader>
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Saved progress reports</TableCell>
-                <TableCell sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Date</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Overall</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {progressSnapshots.map((s, idx) => (
-                <TableRow key={`${s.date}-${s.pbNumber}-${idx}`} hover selected={editingSnapshotIndex === idx}>
-                  <TableCell>PB{s.pbNumber}</TableCell>
-                  <TableCell>{new Date(s.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
-                  <TableCell align="right">{Math.round(s.overallProgress * 100) / 100}%</TableCell>
-                  <TableCell align="right">
-                    <Button size="small" onClick={() => handleLoadSnapshot(s, idx)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
-                    <IconButton size="small" color="error" onClick={() => handleDeleteSnapshot(idx)} title="Delete snapshot" aria-label="Delete snapshot">
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-      {editingSnapshotIndex !== null && progressSnapshots[editingSnapshotIndex] != null && (
-        <Box sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', flexShrink: 0 }}>
-          <Typography variant="body2" sx={{ color: 'info.main', fontSize: '0.8125rem' }}>
-            Editing: {new Date(progressSnapshots[editingSnapshotIndex].date).toLocaleDateString('en-US', { dateStyle: 'medium' })} · PB{progressSnapshots[editingSnapshotIndex].pbNumber}. Click &quot;Update snapshot&quot; to save.
-          </Typography>
-          <Button size="small" variant="outlined" onClick={() => setEditingSnapshotIndex(null)}>Cancel edit</Button>
-          <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={handleDeleteLoadedSnapshot}>Delete snapshot</Button>
-        </Box>
-      )}
-      {/* OneDrive upload feedback */}
-      {exportFeedback && (
-        <Alert severity={exportFeedback.severity} onClose={() => setExportFeedback(null)} sx={{ mb: 1.5, flexShrink: 0 }}>
-          {exportFeedback.message}
-        </Alert>
-      )}
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Scrollable accordion area */}
+      <Box sx={{ flex: 1, overflow: 'auto', pb: 10 }}>
 
-      {/* Billing hint: shown after PDF export when a PB# is set */}
-      {showBillingHint && (
-        <Alert
-          severity="info"
-          onClose={() => setShowBillingHint(false)}
-          sx={{ mb: 1.5, flexShrink: 0 }}
-          action={
-            <Button
-              size="small"
-              color="inherit"
-              onClick={() => {
-                sessionStorage.setItem('selectedProjectId', String(project.id));
-                navigate('/dashboard');
-              }}
-            >
-              Go to Billing
-            </Button>
-          }
+        {/* Page-level feedback */}
+        {exportFeedback && (
+          <Alert severity={exportFeedback.severity} onClose={() => setExportFeedback(null)} sx={{ mb: 1 }}>
+            {exportFeedback.message}
+          </Alert>
+        )}
+        {showBillingHint && (
+          <Alert
+            severity="info"
+            onClose={() => setShowBillingHint(false)}
+            sx={{ mb: 1 }}
+            action={
+              <Button
+                size="small"
+                color="inherit"
+                onClick={() => {
+                  sessionStorage.setItem('selectedProjectId', String(project.id));
+                  navigate('/dashboard');
+                }}
+              >
+                Go to Billing
+              </Button>
+            }
+          >
+            Progress report exported for <strong>{pbInput}</strong>. Ready to create the invoice?
+          </Alert>
+        )}
+
+        {/* Accordion 1: Report Setup */}
+        <Accordion
+          expanded={expandedSections.setup}
+          onChange={() => toggleSection('setup')}
+          disableGutters
+          elevation={0}
+          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
         >
-          Progress report exported for <strong>{pbInput}</strong>. Ready to create the invoice? Go to the project's billing section.
-        </Alert>
-      )}
-      <TableContainer sx={{ flex: 1, minHeight: 0, border: '1px solid #e2e8f0', borderRadius: 1, overflow: 'auto' }}>
-        <Table stickyHeader size="medium" sx={{ minWidth: 560 }}>
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Code</TableCell>
-              <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, minWidth: 200 }}>Name</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Weight %</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Progress %</TableCell>
-              <TableCell align="center" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 72 }}>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {wbsItems.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 5, px: 2, color: 'text.secondary', fontSize: '0.9375rem' }}>No WBS items. Click &quot;Add WBS item&quot; below.</TableCell>
-              </TableRow>
-            ) : (
-              wbsItems.map((item, index) => {
-                const code = (item.code || '').trim();
-                const isParent = isParentItem(code, wbsItems);
-                const indentLevel = getIndentLevel(code);
-                const indentPx = indentLevel * 24; // 24px per level
-                const parentTotals = isParent ? calculateParentTotals(code, wbsItems) : null;
-                
-                return (
-                  <TableRow 
-                    key={item.id} 
-                    hover 
-                    sx={{ 
-                      bgcolor: isParent ? '#fffacd' : (index % 2 === 0 ? '#fff' : 'grey.50'),
-                      '&:hover': {
-                        bgcolor: isParent ? '#fff9c4' : undefined,
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+              Report Setup
+            </Typography>
+            {pbInput && preparedBy.date && (
+              <Chip label="Ready" size="small" color="success" variant="outlined" sx={{ mr: 1 }} />
+            )}
+          </AccordionSummary>
+          <AccordionDetails>
+            <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5 }}>
+              {wbsItems.length > 0 && (
+                <Box sx={{ flex: 1, minWidth: 200 }}>
+                  <Typography variant="subtitle2" color="text.secondary">Total progress: {wbsOverallProgress.toFixed(2)}%</Typography>
+                  <LinearProgress variant="determinate" value={Math.min(100, wbsOverallProgress)} sx={{ height: 12, borderRadius: 6, bgcolor: 'grey.200', '& .MuiLinearProgress-bar': { borderRadius: 6, bgcolor: NET_PACIFIC_COLORS.primary } }} />
+                </Box>
+              )}
+              <TextField size="small" label="PB #" placeholder="e.g. 1" value={pbInput} onChange={(e) => setPbInput(e.target.value)} sx={{ width: 80 }} />
+              <TextField size="small" label="Date" type="date" value={preparedBy.date} onChange={(e) => setPreparedBy((p) => ({ ...p, date: e.target.value }))} sx={{ width: 160 }} InputLabelProps={{ shrink: true }} />
+            </Box>
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Accordion 2: Work Breakdown Structure */}
+        <Accordion
+          expanded={expandedSections.wbs}
+          onChange={() => toggleSection('wbs')}
+          disableGutters
+          elevation={0}
+          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+              Work Breakdown Structure
+            </Typography>
+            {wbsItems.length > 0 && (
+              <Chip label={`${wbsItems.length} items`} size="small" variant="outlined" sx={{ mr: 1 }} />
+            )}
+          </AccordionSummary>
+          <AccordionDetails sx={{ p: 0 }}>
+            <TableContainer sx={{ border: 0, borderRadius: 0, overflow: 'auto' }}>
+              <Table stickyHeader size="medium" sx={{ minWidth: 560 }}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Code</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, minWidth: 200 }}>Name</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Weight %</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Progress %</TableCell>
+                    <TableCell align="center" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 72 }}>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {wbsItems.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} align="center" sx={{ py: 5, px: 2, color: 'text.secondary', fontSize: '0.9375rem' }}>No WBS items. Click &quot;Add WBS item&quot; below.</TableCell>
+                    </TableRow>
+                  ) : (
+                    wbsItems.map((item, index) => {
+                      const code = (item.code || '').trim();
+                      const isParent = isParentItem(code, wbsItems);
+                      const indentLevel = getIndentLevel(code);
+                      const indentPx = indentLevel * 24; // 24px per level
+                      const parentTotals = isParent ? calculateParentTotals(code, wbsItems) : null;
+
+                      return (
+                        <TableRow
+                          key={item.id}
+                          hover
+                          sx={{
+                            bgcolor: isParent ? '#fffacd' : (index % 2 === 0 ? '#fff' : 'grey.50'),
+                            '&:hover': {
+                              bgcolor: isParent ? '#fff9c4' : undefined,
+                            }
+                          }}
+                        >
+                          <TableCell sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                            <TextField
+                              size="small"
+                              fullWidth
+                              value={item.code}
+                              onChange={(e) => handleUpdateWBSItem(item.id, 'code', e.target.value)}
+                              placeholder="1.1"
+                              variant="outlined"
+                              sx={{
+                                ...wbsInputSx,
+                                '& .MuiInputBase-input': {
+                                  ...wbsInputSx['& .MuiInputBase-input'],
+                                  fontWeight: isParent ? 700 : 'normal',
+                                  fontFamily: isParent ? '"Arial Narrow", Arial, sans-serif' : undefined,
+                                }
+                              }}
+                              inputProps={{ maxLength: 20 }}
+                            />
+                          </TableCell>
+                          <TableCell sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                            <Box sx={{ pl: `${indentPx}px` }}>
+                              <TextField
+                                size="small"
+                                fullWidth
+                                value={item.name}
+                                onChange={(e) => handleUpdateWBSItem(item.id, 'name', e.target.value)}
+                                placeholder="Work package name"
+                                variant="outlined"
+                                sx={{
+                                  ...wbsInputSx,
+                                  '& .MuiInputBase-input': {
+                                    ...wbsInputSx['& .MuiInputBase-input'],
+                                    fontWeight: isParent ? 700 : 'normal',
+                                    fontFamily: isParent ? '"Arial Narrow", Arial, sans-serif' : undefined,
+                                  }
+                                }}
+                              />
+                            </Box>
+                          </TableCell>
+                          <TableCell align="right" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                            {isParent ? (
+                              <Typography sx={{ fontWeight: 700, fontSize: '0.9375rem', color: '#1e293b', fontFamily: '"Arial Narrow", Arial, sans-serif' }}>
+                                {parentTotals ? parentTotals.weight.toFixed(2) : '0.00'}
+                              </Typography>
+                            ) : (
+                              <TextField
+                                size="small"
+                                type="number"
+                                fullWidth
+                                value={wbsDraft[item.id]?.weight ?? parseWBSNum(item.weight).toFixed(2)}
+                                onChange={(e) => setWbsDraft((prev) => ({ ...prev, [item.id]: { ...prev[item.id], weight: e.target.value } }))}
+                                onBlur={() => { const raw = wbsDraft[item.id]?.weight; if (raw !== undefined) { handleUpdateWBSItem(item.id, 'weight', parseWBSNum(raw)); setWbsDraft((prev) => { const next = { ...prev }; if (next[item.id]) { delete next[item.id].weight; if (Object.keys(next[item.id]).length === 0) delete next[item.id]; } return next; }); } }}
+                                inputProps={{ min: 0, max: 100, step: 0.01 }}
+                                variant="outlined"
+                                sx={wbsNumInputSx}
+                              />
+                            )}
+                          </TableCell>
+                          <TableCell align="right" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                            {isParent ? (
+                              <Typography sx={{ fontWeight: 700, fontSize: '0.9375rem', color: '#1e293b', fontFamily: '"Arial Narrow", Arial, sans-serif' }}>
+                                {parentTotals ? parentTotals.progress.toFixed(2) : '0.00'}
+                              </Typography>
+                            ) : (
+                              <TextField
+                                size="small"
+                                type="number"
+                                fullWidth
+                                value={wbsDraft[item.id]?.progress ?? parseWBSNum(item.progress).toFixed(2)}
+                                onChange={(e) => setWbsDraft((prev) => ({ ...prev, [item.id]: { ...prev[item.id], progress: e.target.value } }))}
+                                onBlur={() => { const raw = wbsDraft[item.id]?.progress; if (raw !== undefined) { handleUpdateWBSItem(item.id, 'progress', parseWBSNum(raw)); setWbsDraft((prev) => { const next = { ...prev }; if (next[item.id]) { delete next[item.id].progress; if (Object.keys(next[item.id]).length === 0) delete next[item.id]; } return next; }); } }}
+                                inputProps={{ min: 0, max: 100, step: 0.01 }}
+                                variant="outlined"
+                                sx={wbsNumInputSx}
+                              />
+                            )}
+                          </TableCell>
+                          <TableCell align="center" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                            <IconButton size="small" onClick={() => handleDeleteWBSItem(item.id)} title="Delete" color="error"><DeleteIcon fontSize="small" /></IconButton>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+                {wbsItems.length > 0 && (() => {
+                  // Calculate total weight from top-level items only
+                  const topLevelItems = wbsItems.filter((item) => {
+                    const code = (item.code || '').trim();
+                    if (!code) return false;
+                    // Check if this is a top-level item (no parent exists)
+                    return !wbsItems.some((other) => {
+                      const otherCode = (other.code || '').trim();
+                      if (!otherCode || otherCode === code) return false;
+                      return code.startsWith(otherCode + '.');
+                    });
+                  });
+
+                  const totalWeight = topLevelItems.reduce((sum, item) => {
+                    const code = (item.code || '').trim();
+                    if (isParentItem(code, wbsItems)) {
+                      return sum + calculateParentTotals(code, wbsItems).weight;
+                    }
+                    return sum + parseWBSNum(item.weight);
+                  }, 0);
+
+                  return (
+                    <TableFooter>
+                      <TableRow sx={{ bgcolor: '#f8fafc' }}>
+                        <TableCell colSpan={2} sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>Total progress</TableCell>
+                        <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>{totalWeight.toFixed(2)}%</TableCell>
+                        <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>{wbsOverallProgress.toFixed(2)}%</TableCell>
+                        <TableCell sx={{ borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }} />
+                      </TableRow>
+                    </TableFooter>
+                  );
+                })()}
+              </Table>
+            </TableContainer>
+            <Box sx={{ pt: 1, pb: 0.5, px: 1 }}>
+              <Button startIcon={<AddIcon />} onClick={handleAddWBSItem} sx={{ textTransform: 'none', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Add WBS item</Button>
+            </Box>
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Accordion 3: Signatories */}
+        <Accordion
+          expanded={expandedSections.signatories}
+          onChange={() => toggleSection('signatories')}
+          disableGutters
+          elevation={0}
+          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+              Signatories
+            </Typography>
+            {(preparedBy.name || approvers.length > 0) && (
+              <Chip label="Set" size="small" color="success" variant="outlined" sx={{ mr: 1 }} />
+            )}
+          </AccordionSummary>
+          <AccordionDetails>
+            {/* Prepared by fields (Name, Designation, Company) */}
+            <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 1.5 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ alignSelf: 'center' }}>Prepared by (PDF):</Typography>
+              <TextField size="small" label="Name" value={preparedBy.name} onChange={(e) => setPreparedBy((p) => ({ ...p, name: e.target.value }))} sx={{ width: 140 }} placeholder={currentUser?.full_name || currentUser?.username || currentUser?.email || 'Name'} />
+              <TextField size="small" label="Designation" value={preparedBy.designation} onChange={(e) => setPreparedBy((p) => ({ ...p, designation: e.target.value }))} sx={{ width: 120 }} />
+              <TextField size="small" label="Company" value={preparedBy.company} onChange={(e) => setPreparedBy((p) => ({ ...p, company: e.target.value }))} sx={{ width: 120 }} />
+            </Box>
+
+            {/* Approvers section */}
+            <Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>Approved by (PDF) - Maximum 3 approvers:</Typography>
+                {approvers.length < 3 && (
+                  <Button
+                    size="small"
+                    startIcon={<AddIcon />}
+                    onClick={() => setApprovers((prev) => [...prev, { name: '', designation: '', company: '' }])}
+                    sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}
+                  >
+                    Add Approver
+                  </Button>
+                )}
+              </Box>
+              {approvers.map((approver, index) => (
+                <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+                  <Autocomplete
+                    freeSolo
+                    size="small"
+                    options={clientContacts}
+                    getOptionLabel={(opt) => (typeof opt === 'string' ? opt : opt.name)}
+                    isOptionEqualToValue={(opt, val) => opt.name === (typeof val === 'string' ? val : val.name)}
+                    inputValue={approver.name}
+                    onInputChange={(_, newVal, reason) => {
+                      // Only track typed text; selection is handled in onChange
+                      if (reason === 'input' || reason === 'clear') {
+                        const updated = [...approvers];
+                        updated[index] = { ...updated[index], name: newVal };
+                        setApprovers(updated);
                       }
                     }}
-                  >
-                    <TableCell sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
-                      <TextField 
-                        size="small" 
-                        fullWidth 
-                        value={item.code} 
-                        onChange={(e) => handleUpdateWBSItem(item.id, 'code', e.target.value)} 
-                        placeholder="1.1" 
-                        variant="outlined" 
-                        sx={{ 
-                          ...wbsInputSx, 
-                          '& .MuiInputBase-input': { 
-                            ...wbsInputSx['& .MuiInputBase-input'], 
-                            fontWeight: isParent ? 700 : 'normal',
-                            fontFamily: isParent ? '"Arial Narrow", Arial, sans-serif' : undefined,
-                          } 
-                        }} 
-                        inputProps={{ maxLength: 20 }} 
+                    onChange={(_, newVal) => {
+                      if (newVal && typeof newVal !== 'string') {
+                        // Contact selected from list — auto-fill all three fields
+                        const updated = [...approvers];
+                        updated[index] = { name: newVal.name, designation: newVal.designation, company: newVal.company };
+                        setApprovers(updated);
+                      }
+                    }}
+                    renderOption={(props, opt) => (
+                      <li {...props} key={opt.name + opt.designation}>
+                        <Box>
+                          <Typography variant="body2" sx={{ fontWeight: 500 }}>{opt.name}</Typography>
+                          {(opt.designation || opt.company) && (
+                            <Typography variant="caption" color="text.secondary">
+                              {[opt.designation, opt.company].filter(Boolean).join(' · ')}
+                            </Typography>
+                          )}
+                        </Box>
+                      </li>
+                    )}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label={`Approver ${index + 1} - Name`}
+                        size="small"
+                        sx={{ width: 220 }}
+                        placeholder={clientContacts.length > 0 ? 'Search client contacts…' : 'Name'}
                       />
-                    </TableCell>
-                    <TableCell sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
-                      <Box sx={{ pl: `${indentPx}px` }}>
-                        <TextField 
-                          size="small" 
-                          fullWidth 
-                          value={item.name} 
-                          onChange={(e) => handleUpdateWBSItem(item.id, 'name', e.target.value)} 
-                          placeholder="Work package name" 
-                          variant="outlined" 
-                          sx={{ 
-                            ...wbsInputSx, 
-                            '& .MuiInputBase-input': { 
-                              ...wbsInputSx['& .MuiInputBase-input'], 
-                              fontWeight: isParent ? 700 : 'normal',
-                              fontFamily: isParent ? '"Arial Narrow", Arial, sans-serif' : undefined,
-                            } 
-                          }} 
-                        />
-                      </Box>
-                    </TableCell>
-                    <TableCell align="right" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
-                      {isParent ? (
-                        <Typography sx={{ fontWeight: 700, fontSize: '0.9375rem', color: '#1e293b', fontFamily: '"Arial Narrow", Arial, sans-serif' }}>
-                          {parentTotals ? parentTotals.weight.toFixed(2) : '0.00'}
-                        </Typography>
-                      ) : (
-                        <TextField 
-                          size="small" 
-                          type="number" 
-                          fullWidth 
-                          value={wbsDraft[item.id]?.weight ?? parseWBSNum(item.weight).toFixed(2)} 
-                          onChange={(e) => setWbsDraft((prev) => ({ ...prev, [item.id]: { ...prev[item.id], weight: e.target.value } }))} 
-                          onBlur={() => { const raw = wbsDraft[item.id]?.weight; if (raw !== undefined) { handleUpdateWBSItem(item.id, 'weight', parseWBSNum(raw)); setWbsDraft((prev) => { const next = { ...prev }; if (next[item.id]) { delete next[item.id].weight; if (Object.keys(next[item.id]).length === 0) delete next[item.id]; } return next; }); } }} 
-                          inputProps={{ min: 0, max: 100, step: 0.01 }} 
-                          variant="outlined" 
-                          sx={wbsNumInputSx} 
-                        />
-                      )}
-                    </TableCell>
-                    <TableCell align="right" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
-                      {isParent ? (
-                        <Typography sx={{ fontWeight: 700, fontSize: '0.9375rem', color: '#1e293b', fontFamily: '"Arial Narrow", Arial, sans-serif' }}>
-                          {parentTotals ? parentTotals.progress.toFixed(2) : '0.00'}
-                        </Typography>
-                      ) : (
-                        <TextField 
-                          size="small" 
-                          type="number" 
-                          fullWidth 
-                          value={wbsDraft[item.id]?.progress ?? parseWBSNum(item.progress).toFixed(2)} 
-                          onChange={(e) => setWbsDraft((prev) => ({ ...prev, [item.id]: { ...prev[item.id], progress: e.target.value } }))} 
-                          onBlur={() => { const raw = wbsDraft[item.id]?.progress; if (raw !== undefined) { handleUpdateWBSItem(item.id, 'progress', parseWBSNum(raw)); setWbsDraft((prev) => { const next = { ...prev }; if (next[item.id]) { delete next[item.id].progress; if (Object.keys(next[item.id]).length === 0) delete next[item.id]; } return next; }); } }} 
-                          inputProps={{ min: 0, max: 100, step: 0.01 }} 
-                          variant="outlined" 
-                          sx={wbsNumInputSx} 
-                        />
-                      )}
-                    </TableCell>
-                    <TableCell align="center" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
-                      <IconButton size="small" onClick={() => handleDeleteWBSItem(item.id)} title="Delete" color="error"><DeleteIcon fontSize="small" /></IconButton>
-                    </TableCell>
-                  </TableRow>
-                );
-              })
+                    )}
+                    sx={{ width: 220 }}
+                    noOptionsText="No client contacts found"
+                  />
+                  <TextField
+                    size="small"
+                    label="Designation"
+                    value={approver.designation}
+                    onChange={(e) => {
+                      const updated = [...approvers];
+                      updated[index] = { ...updated[index], designation: e.target.value };
+                      setApprovers(updated);
+                    }}
+                    sx={{ width: 140 }}
+                  />
+                  <TextField
+                    size="small"
+                    label="Company"
+                    value={approver.company}
+                    onChange={(e) => {
+                      const updated = [...approvers];
+                      updated[index] = { ...updated[index], company: e.target.value };
+                      setApprovers(updated);
+                    }}
+                    sx={{ width: 180 }}
+                  />
+                  <IconButton
+                    size="small"
+                    onClick={() => setApprovers((prev) => prev.filter((_, i) => i !== index))}
+                    color="error"
+                    title="Remove approver"
+                  >
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+              ))}
+              {approvers.length === 0 && (
+                <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', ml: 1 }}>
+                  No approvers added. Click "Add Approver" to add one.
+                </Typography>
+              )}
+            </Box>
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Accordion 4: Saved Reports */}
+        <Accordion
+          expanded={expandedSections.savedReports}
+          onChange={() => toggleSection('savedReports')}
+          disableGutters
+          elevation={0}
+          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+              Saved Reports
+            </Typography>
+            {progressSnapshots.length > 0 && (
+              <Chip label={String(progressSnapshots.length)} size="small" variant="outlined" sx={{ mr: 1 }} />
             )}
-          </TableBody>
-          {wbsItems.length > 0 && (() => {
-            // Calculate total weight from top-level items only
-            const topLevelItems = wbsItems.filter((item) => {
-              const code = (item.code || '').trim();
-              if (!code) return false;
-              // Check if this is a top-level item (no parent exists)
-              return !wbsItems.some((other) => {
-                const otherCode = (other.code || '').trim();
-                if (!otherCode || otherCode === code) return false;
-                return code.startsWith(otherCode + '.');
-              });
-            });
-            
-            const totalWeight = topLevelItems.reduce((sum, item) => {
-              const code = (item.code || '').trim();
-              if (isParentItem(code, wbsItems)) {
-                return sum + calculateParentTotals(code, wbsItems).weight;
-              }
-              return sum + parseWBSNum(item.weight);
-            }, 0);
-            
-            return (
-              <TableFooter>
-                <TableRow sx={{ bgcolor: '#f8fafc' }}>
-                  <TableCell colSpan={2} sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>Total progress</TableCell>
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>{totalWeight.toFixed(2)}%</TableCell>
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>{wbsOverallProgress.toFixed(2)}%</TableCell>
-                  <TableCell sx={{ borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }} />
-                </TableRow>
-              </TableFooter>
-            );
-          })()}
-        </Table>
-      </TableContainer>
-      <Box sx={{ flexShrink: 0, pt: 1.5 }}>
-        <Button startIcon={<AddIcon />} onClick={handleAddWBSItem} sx={{ textTransform: 'none', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Add WBS item</Button>
+          </AccordionSummary>
+          <AccordionDetails>
+            {progressSnapshots.length > 0 ? (
+              <TableContainer sx={{ mb: 1.5, border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 240 }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Saved progress reports</TableCell>
+                      <TableCell sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Date</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Overall</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Actions</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {progressSnapshots.map((s, idx) => (
+                      <TableRow key={`${s.date}-${s.pbNumber}-${idx}`} hover selected={editingSnapshotIndex === idx}>
+                        <TableCell>PB{s.pbNumber}</TableCell>
+                        <TableCell>{new Date(s.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
+                        <TableCell align="right">{Math.round(s.overallProgress * 100) / 100}%</TableCell>
+                        <TableCell align="right">
+                          <Button size="small" onClick={() => handleLoadSnapshot(s, idx)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
+                          <IconButton size="small" color="error" onClick={() => handleDeleteSnapshot(idx)} title="Delete snapshot" aria-label="Delete snapshot">
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            ) : (
+              <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                No saved reports yet. Use the Save button to snapshot the current progress.
+              </Typography>
+            )}
+            {editingSnapshotIndex !== null && progressSnapshots[editingSnapshotIndex] != null && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                <Typography variant="body2" sx={{ color: 'info.main', fontSize: '0.8125rem' }}>
+                  Editing: {new Date(progressSnapshots[editingSnapshotIndex].date).toLocaleDateString('en-US', { dateStyle: 'medium' })} · PB{progressSnapshots[editingSnapshotIndex].pbNumber}. Click &quot;Update snapshot&quot; to save.
+                </Typography>
+                <Button size="small" variant="outlined" onClick={() => setEditingSnapshotIndex(null)}>Cancel edit</Button>
+                <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={handleDeleteLoadedSnapshot}>Delete snapshot</Button>
+              </Box>
+            )}
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Action buttons — will be moved to sticky bar in Task 3 */}
+        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mt: 1 }}>
+          <Button variant="contained" size="small" onClick={handleSaveProgress} disabled={wbsItems.length === 0} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{saveFeedback ? 'Saved' : editingSnapshotIndex !== null ? 'Update snapshot' : 'Save'}</Button>
+          <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} disabled={wbsItems.length === 0} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
+          <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={wbsItems.length === 0 || exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Uploading…' : 'Export to PDF'}</Button>
+          {progressSnapshots.length > 0 && (
+            <FormControl size="small" sx={{ minWidth: 200 }}>
+              <InputLabel id="load-snapshot-label">Load previous progress</InputLabel>
+              <Select labelId="load-snapshot-label" value="" label="Load previous progress" onChange={(e) => {
+                const idx = Number(e.target.value);
+                if (!Number.isNaN(idx) && progressSnapshots[idx] != null) handleLoadSnapshot(progressSnapshots[idx], idx);
+                (e.target as HTMLSelectElement).value = '';
+              }}>
+                <MenuItem value=""><em>— Select to load —</em></MenuItem>
+                {progressSnapshots.map((s, idx) => (
+                  <MenuItem key={s.date + s.pbNumber} value={idx}>{new Date(s.date).toLocaleDateString('en-US', { dateStyle: 'medium' })} · PB{s.pbNumber}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
+        </Box>
+
       </Box>
-    </Paper>
+      {/* Sticky bottom bar — Task 3 */}
+    </Box>
   );
 };
 
