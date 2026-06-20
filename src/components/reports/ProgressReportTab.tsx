@@ -401,11 +401,6 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     setEditingSnapshotIndex(index);
   };
 
-  const handleDeleteLoadedSnapshot = () => {
-    if (editingSnapshotIndex === null || progressSnapshots[editingSnapshotIndex] == null) return;
-    handleDeleteSnapshot(editingSnapshotIndex);
-  };
-
   const handleDeleteSnapshot = (index: number) => {
     const snapshot = progressSnapshots[index];
     if (!snapshot) return;
@@ -1413,10 +1408,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                 <Table size="small" stickyHeader>
                   <TableHead>
                     <TableRow>
-                      <TableCell sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Saved progress reports</TableCell>
-                      <TableCell sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Date</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Overall</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600, bgcolor: '#f8fafc' }}>Actions</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>PB#</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Date</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Progress</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Actions</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -1440,15 +1435,6 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
               <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
                 No saved reports yet. Use the Save button to snapshot the current progress.
               </Typography>
-            )}
-            {editingSnapshotIndex !== null && progressSnapshots[editingSnapshotIndex] != null && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                <Typography variant="body2" sx={{ color: 'info.main', fontSize: '0.8125rem' }}>
-                  Editing: {new Date(progressSnapshots[editingSnapshotIndex].date).toLocaleDateString('en-US', { dateStyle: 'medium' })} · PB{progressSnapshots[editingSnapshotIndex].pbNumber}. Click &quot;Update snapshot&quot; to save.
-                </Typography>
-                <Button size="small" variant="outlined" onClick={() => setEditingSnapshotIndex(null)}>Cancel edit</Button>
-                <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={handleDeleteLoadedSnapshot}>Delete snapshot</Button>
-              </Box>
             )}
           </AccordionDetails>
         </Accordion>
