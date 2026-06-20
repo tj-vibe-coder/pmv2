@@ -8,6 +8,7 @@ import {
   Autocomplete,
   Box,
   Chip,
+  Paper,
   Typography,
   Button,
   TextField,
@@ -19,10 +20,6 @@ import {
   TableRow,
   TableFooter,
   LinearProgress,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   IconButton,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
@@ -257,6 +254,35 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       return s + parseWBSNum(i.progress);
     }, 0) / topLevelItems.length;
   }, [calculateParentTotals, isParentItem, wbsItems]);
+
+  const validationWarnings = useMemo(() => {
+    const warnings: string[] = [];
+    if (wbsItems.length === 0) warnings.push('No WBS items added');
+    if (!pbInput.trim()) warnings.push('PB# not set');
+    // Calculate total weight from top-level items
+    const topLevelItems = wbsItems.filter((item) => {
+      const code = (item.code || '').trim();
+      if (!code) return false;
+      return !wbsItems.some((other) => {
+        const otherCode = (other.code || '').trim();
+        if (!otherCode || otherCode === code) return false;
+        return code.startsWith(otherCode + '.');
+      });
+    });
+    const totalWeight = topLevelItems.reduce((sum, item) => {
+      const code = (item.code || '').trim();
+      if (isParentItem(code, wbsItems)) {
+        return sum + calculateParentTotals(code, wbsItems).weight;
+      }
+      return sum + parseWBSNum(item.weight);
+    }, 0);
+    if (wbsItems.length > 0 && Math.abs(totalWeight - 100) > 0.01) {
+      warnings.push(`Weight total is ${totalWeight.toFixed(1)}% — should be 100%`);
+    }
+    return warnings;
+  }, [wbsItems, pbInput, isParentItem, calculateParentTotals]);
+
+  const hasBlockingWarnings = wbsItems.length === 0;
 
   const syncProjectStatusFromWBS = (items: WBSItem[]) => {
     if (items.length === 0) return;
@@ -952,12 +978,6 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           </AccordionSummary>
           <AccordionDetails>
             <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5 }}>
-              {wbsItems.length > 0 && (
-                <Box sx={{ flex: 1, minWidth: 200 }}>
-                  <Typography variant="subtitle2" color="text.secondary">Total progress: {wbsOverallProgress.toFixed(2)}%</Typography>
-                  <LinearProgress variant="determinate" value={Math.min(100, wbsOverallProgress)} sx={{ height: 12, borderRadius: 6, bgcolor: 'grey.200', '& .MuiLinearProgress-bar': { borderRadius: 6, bgcolor: NET_PACIFIC_COLORS.primary } }} />
-                </Box>
-              )}
               <TextField size="small" label="PB #" placeholder="e.g. 1" value={pbInput} onChange={(e) => setPbInput(e.target.value)} sx={{ width: 80 }} />
               <TextField size="small" label="Date" type="date" value={preparedBy.date} onChange={(e) => setPreparedBy((p) => ({ ...p, date: e.target.value }))} sx={{ width: 160 }} InputLabelProps={{ shrink: true }} />
             </Box>
@@ -1333,30 +1353,95 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           </AccordionDetails>
         </Accordion>
 
-        {/* Action buttons — will be moved to sticky bar in Task 3 */}
-        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mt: 1 }}>
-          <Button variant="contained" size="small" onClick={handleSaveProgress} disabled={wbsItems.length === 0} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{saveFeedback ? 'Saved' : editingSnapshotIndex !== null ? 'Update snapshot' : 'Save'}</Button>
-          <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} disabled={wbsItems.length === 0} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
-          <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={wbsItems.length === 0 || exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Uploading…' : 'Export to PDF'}</Button>
-          {progressSnapshots.length > 0 && (
-            <FormControl size="small" sx={{ minWidth: 200 }}>
-              <InputLabel id="load-snapshot-label">Load previous progress</InputLabel>
-              <Select labelId="load-snapshot-label" value="" label="Load previous progress" onChange={(e) => {
-                const idx = Number(e.target.value);
-                if (!Number.isNaN(idx) && progressSnapshots[idx] != null) handleLoadSnapshot(progressSnapshots[idx], idx);
-                (e.target as HTMLSelectElement).value = '';
-              }}>
-                <MenuItem value=""><em>— Select to load —</em></MenuItem>
-                {progressSnapshots.map((s, idx) => (
-                  <MenuItem key={s.date + s.pbNumber} value={idx}>{new Date(s.date).toLocaleDateString('en-US', { dateStyle: 'medium' })} · PB{s.pbNumber}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          )}
-        </Box>
 
       </Box>
-      {/* Sticky bottom bar — Task 3 */}
+
+      {/* Sticky bottom bar */}
+      <Paper
+        elevation={3}
+        sx={{
+          position: 'sticky',
+          bottom: 0,
+          zIndex: 10,
+          borderTop: `2px solid ${NET_PACIFIC_COLORS.primary}`,
+          px: 2,
+          py: 1.5,
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+          {/* Left: progress bar */}
+          <Box sx={{ flex: 1, minWidth: 200 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+              <Typography variant="body2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+                Overall: {wbsOverallProgress.toFixed(1)}%
+              </Typography>
+              {editingSnapshotIndex !== null && progressSnapshots[editingSnapshotIndex] && (
+                <Chip
+                  label={`Editing PB${progressSnapshots[editingSnapshotIndex].pbNumber}`}
+                  size="small"
+                  color="info"
+                  variant="outlined"
+                />
+              )}
+            </Box>
+            <LinearProgress
+              variant="determinate"
+              value={Math.min(100, wbsOverallProgress)}
+              sx={{
+                height: 8,
+                borderRadius: 4,
+                bgcolor: 'grey.200',
+                '& .MuiLinearProgress-bar': {
+                  borderRadius: 4,
+                  bgcolor: wbsOverallProgress >= 100 ? 'success.main' : NET_PACIFIC_COLORS.primary,
+                },
+              }}
+            />
+          </Box>
+          {/* Right: action buttons */}
+          <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={handleSaveProgress}
+              disabled={wbsItems.length === 0}
+              sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+            >
+              {saveFeedback ? 'Saved' : 'Save'}
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<VisibilityIcon />}
+              onClick={handlePreview}
+              disabled={hasBlockingWarnings}
+              sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+            >
+              Preview
+            </Button>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<PictureAsPdfIcon />}
+              onClick={handleExport}
+              disabled={hasBlockingWarnings || exporting}
+              sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}
+            >
+              {exporting ? 'Uploading...' : 'Export PDF'}
+            </Button>
+          </Box>
+        </Box>
+        {/* Validation warnings */}
+        {validationWarnings.length > 0 && (
+          <Box sx={{ mt: 1 }}>
+            {validationWarnings.map((w) => (
+              <Alert key={w} severity="warning" sx={{ py: 0, px: 1, mb: 0.5, '& .MuiAlert-message': { fontSize: '0.75rem' } }}>
+                {w}
+              </Alert>
+            ))}
+          </Box>
+        )}
+      </Paper>
     </Box>
   );
 };
