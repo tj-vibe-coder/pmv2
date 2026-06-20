@@ -191,6 +191,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
   };
 
+  const [editingPreparedBy, setEditingPreparedBy] = useState(false);
+  const [editingApproverIndex, setEditingApproverIndex] = useState<number | null>(null);
+  const [addApproverInput, setAddApproverInput] = useState('');
+
   useEffect(() => {
     setWbsItems(loadWBS(project.id));
   }, [project.id]);
@@ -1276,116 +1280,114 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
             )}
           </AccordionSummary>
           <AccordionDetails>
-            {/* Prepared by fields (Name, Designation, Company) */}
-            <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 1.5 }}>
-              <Typography variant="body2" color="text.secondary" sx={{ alignSelf: 'center' }}>Prepared by (PDF):</Typography>
-              <TextField size="small" label="Name" value={preparedBy.name} onChange={(e) => setPreparedBy((p) => ({ ...p, name: e.target.value }))} sx={{ width: 140 }} placeholder={currentUser?.full_name || currentUser?.username || currentUser?.email || 'Name'} />
-              <TextField size="small" label="Designation" value={preparedBy.designation} onChange={(e) => setPreparedBy((p) => ({ ...p, designation: e.target.value }))} sx={{ width: 120 }} />
-              <TextField size="small" label="Company" value={preparedBy.company} onChange={(e) => setPreparedBy((p) => ({ ...p, company: e.target.value }))} sx={{ width: 120 }} />
-            </Box>
-
-            {/* Approvers section */}
-            <Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>Approved by (PDF) - Maximum 3 approvers:</Typography>
-                {approvers.length < 3 && (
-                  <Button
-                    size="small"
-                    startIcon={<AddIcon />}
-                    onClick={() => setApprovers((prev) => [...prev, { name: '', designation: '', company: '' }])}
-                    sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}
-                  >
-                    Add Approver
-                  </Button>
-                )}
-              </Box>
-              {approvers.map((approver, index) => (
-                <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-                  <Autocomplete
-                    freeSolo
-                    size="small"
-                    options={clientContacts}
-                    getOptionLabel={(opt) => (typeof opt === 'string' ? opt : opt.name)}
-                    isOptionEqualToValue={(opt, val) => opt.name === (typeof val === 'string' ? val : val.name)}
-                    inputValue={approver.name}
-                    onInputChange={(_, newVal, reason) => {
-                      // Only track typed text; selection is handled in onChange
-                      if (reason === 'input' || reason === 'clear') {
-                        const updated = [...approvers];
-                        updated[index] = { ...updated[index], name: newVal };
-                        setApprovers(updated);
-                      }
-                    }}
-                    onChange={(_, newVal) => {
-                      if (newVal && typeof newVal !== 'string') {
-                        // Contact selected from list — auto-fill all three fields
-                        const updated = [...approvers];
-                        updated[index] = { name: newVal.name, designation: newVal.designation, company: newVal.company };
-                        setApprovers(updated);
-                      }
-                    }}
-                    renderOption={(props, opt) => (
-                      <li {...props} key={opt.name + opt.designation}>
-                        <Box>
-                          <Typography variant="body2" sx={{ fontWeight: 500 }}>{opt.name}</Typography>
-                          {(opt.designation || opt.company) && (
-                            <Typography variant="caption" color="text.secondary">
-                              {[opt.designation, opt.company].filter(Boolean).join(' · ')}
-                            </Typography>
-                          )}
-                        </Box>
-                      </li>
-                    )}
-                    renderInput={(params) => (
-                      <TextField
-                        {...params}
-                        label={`Approver ${index + 1} - Name`}
-                        size="small"
-                        sx={{ width: 220 }}
-                        placeholder={clientContacts.length > 0 ? 'Search client contacts…' : 'Name'}
-                      />
-                    )}
-                    sx={{ width: 220 }}
-                    noOptionsText="No client contacts found"
-                  />
-                  <TextField
-                    size="small"
-                    label="Designation"
-                    value={approver.designation}
-                    onChange={(e) => {
-                      const updated = [...approvers];
-                      updated[index] = { ...updated[index], designation: e.target.value };
-                      setApprovers(updated);
-                    }}
-                    sx={{ width: 140 }}
-                  />
-                  <TextField
-                    size="small"
-                    label="Company"
-                    value={approver.company}
-                    onChange={(e) => {
-                      const updated = [...approvers];
-                      updated[index] = { ...updated[index], company: e.target.value };
-                      setApprovers(updated);
-                    }}
-                    sx={{ width: 180 }}
-                  />
-                  <IconButton
-                    size="small"
-                    onClick={() => setApprovers((prev) => prev.filter((_, i) => i !== index))}
-                    color="error"
-                    title="Remove approver"
-                  >
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
+            {/* Prepared by card */}
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.75rem', letterSpacing: '0.05em' }}>
+              Prepared by
+            </Typography>
+            {!editingPreparedBy ? (
+              <Paper variant="outlined" sx={{ p: 1.5, mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{preparedBy.name || '(not set)'}</Typography>
+                  {(preparedBy.designation || preparedBy.company) && (
+                    <Typography variant="caption" color="text.secondary">
+                      {[preparedBy.designation, preparedBy.company].filter(Boolean).join(' · ')}
+                    </Typography>
+                  )}
                 </Box>
-              ))}
-              {approvers.length === 0 && (
-                <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', ml: 1 }}>
-                  No approvers added. Click "Add Approver" to add one.
-                </Typography>
-              )}
-            </Box>
+                <Button size="small" onClick={() => setEditingPreparedBy(true)} sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}>
+                  Edit
+                </Button>
+              </Paper>
+            ) : (
+              <Paper variant="outlined" sx={{ p: 1.5, mb: 2 }}>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+                  <TextField size="small" label="Name" value={preparedBy.name} onChange={(e) => setPreparedBy(p => ({ ...p, name: e.target.value }))} sx={{ flex: 1, minWidth: 150 }} />
+                  <TextField size="small" label="Designation" value={preparedBy.designation} onChange={(e) => setPreparedBy(p => ({ ...p, designation: e.target.value }))} sx={{ flex: 1, minWidth: 120 }} />
+                  <TextField size="small" label="Company" value={preparedBy.company} onChange={(e) => setPreparedBy(p => ({ ...p, company: e.target.value }))} sx={{ flex: 1, minWidth: 120 }} />
+                </Box>
+                <Button size="small" onClick={() => setEditingPreparedBy(false)} sx={{ textTransform: 'none' }}>Done</Button>
+              </Paper>
+            )}
+
+            {/* Approved by cards */}
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.75rem', letterSpacing: '0.05em' }}>
+              Approved by
+            </Typography>
+            {approvers.map((approver, index) => (
+              <Paper key={index} variant="outlined" sx={{ p: 1.5, mb: 1, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                {editingApproverIndex === index ? (
+                  <Box sx={{ flex: 1 }}>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+                      <TextField size="small" label="Name" value={approver.name} onChange={(e) => { const updated = [...approvers]; updated[index] = { ...updated[index], name: e.target.value }; setApprovers(updated); }} sx={{ flex: 1, minWidth: 150 }} />
+                      <TextField size="small" label="Designation" value={approver.designation} onChange={(e) => { const updated = [...approvers]; updated[index] = { ...updated[index], designation: e.target.value }; setApprovers(updated); }} sx={{ flex: 1, minWidth: 120 }} />
+                      <TextField size="small" label="Company" value={approver.company} onChange={(e) => { const updated = [...approvers]; updated[index] = { ...updated[index], company: e.target.value }; setApprovers(updated); }} sx={{ flex: 1, minWidth: 120 }} />
+                    </Box>
+                    <Button size="small" onClick={() => setEditingApproverIndex(null)} sx={{ textTransform: 'none' }}>Done</Button>
+                  </Box>
+                ) : (
+                  <>
+                    <Box>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{approver.name || '(not set)'}</Typography>
+                      {(approver.designation || approver.company) && (
+                        <Typography variant="caption" color="text.secondary">
+                          {[approver.designation, approver.company].filter(Boolean).join(' · ')}
+                        </Typography>
+                      )}
+                    </Box>
+                    <Box>
+                      <Button size="small" onClick={() => setEditingApproverIndex(index)} sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary, minWidth: 0 }}>
+                        Edit
+                      </Button>
+                      <IconButton size="small" onClick={() => setApprovers(prev => prev.filter((_, i) => i !== index))} color="error" title="Remove">
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  </>
+                )}
+              </Paper>
+            ))}
+            {approvers.length === 0 && (
+              <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', mb: 1 }}>
+                No approvers added yet.
+              </Typography>
+            )}
+            {approvers.length < 3 && (
+              <Autocomplete
+                freeSolo
+                size="small"
+                options={clientContacts}
+                getOptionLabel={(opt) => (typeof opt === 'string' ? opt : opt.name)}
+                isOptionEqualToValue={(opt, val) => opt.name === (typeof val === 'string' ? val : val.name)}
+                inputValue={addApproverInput}
+                onInputChange={(_, newVal) => setAddApproverInput(newVal)}
+                onChange={(_, newVal) => {
+                  if (newVal && typeof newVal !== 'string') {
+                    setApprovers(prev => [...prev, { name: newVal.name, designation: newVal.designation, company: newVal.company }]);
+                    setAddApproverInput('');
+                  } else if (typeof newVal === 'string' && newVal.trim()) {
+                    setApprovers(prev => [...prev, { name: newVal.trim(), designation: '', company: '' }]);
+                    setAddApproverInput('');
+                  }
+                }}
+                renderOption={(props, opt) => (
+                  <li {...props} key={opt.name + opt.designation}>
+                    <Box>
+                      <Typography variant="body2" sx={{ fontWeight: 500 }}>{opt.name}</Typography>
+                      {(opt.designation || opt.company) && (
+                        <Typography variant="caption" color="text.secondary">
+                          {[opt.designation, opt.company].filter(Boolean).join(' · ')}
+                        </Typography>
+                      )}
+                    </Box>
+                  </li>
+                )}
+                renderInput={(params) => (
+                  <TextField {...params} label="Add approver" size="small" placeholder={clientContacts.length > 0 ? 'Search client contacts...' : 'Type a name'} />
+                )}
+                sx={{ maxWidth: 400 }}
+                noOptionsText="No client contacts found"
+              />
+            )}
           </AccordionDetails>
         </Accordion>
 
