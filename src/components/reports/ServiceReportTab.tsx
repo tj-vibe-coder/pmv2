@@ -150,7 +150,7 @@ async function normalizeImageOrientation(source: Blob): Promise<string> {
 }
 
 export interface ServiceReportTabProps {
-  project: Project;
+  project?: Project | null;
   currentUser: { full_name?: string | null; username?: string; email?: string } | null;
   reportCompany: ReportCompanyKey;
   setReportCompany: (v: ReportCompanyKey) => void;
@@ -233,9 +233,17 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     login: oneDriveLogin,
     getAccessToken: getOneDriveToken,
   } = useOneDriveAuth();
+
+  // Convenience accessors — safe when project is null (pre-PO service reports)
+  const projectId = project?.id ?? null;
+  const projectNo = (project?.project_no || String(project?.item_no ?? project?.id ?? '')).trim() || '';
+  const projectName = project?.project_name || '';
+  const projectClient = project?.account_name || '';
+  const projectPo = project?.po_number || '';
+
   // Local copy of execution folder id — updated if we auto-create the folder on first export
-  const [localExecutionFolderId, setLocalExecutionFolderId] = useState(project.executionFolderId);
-  useEffect(() => { setLocalExecutionFolderId(project.executionFolderId); }, [project.id, project.executionFolderId]);
+  const [localExecutionFolderId, setLocalExecutionFolderId] = useState(project?.executionFolderId);
+  useEffect(() => { setLocalExecutionFolderId(project?.executionFolderId); }, [project?.id, project?.executionFolderId]);
 
   // Photo attachment state
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
@@ -278,16 +286,17 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   }, [clientApprover?.name, clientApprover?.designation, clientApprover?.company, preparedByDefaultName, preparedBy.designation]);
 
   const loadServiceReports = useCallback(async () => {
+    if (projectId == null) { setServiceReports([]); return; }
     setSrLoading(true);
     try {
-      const reports = await getServiceReports(project.id);
+      const reports = await getServiceReports(projectId);
       setServiceReports(reports);
     } catch {
       // Keep stale list on transient error — don't wipe what the user can see.
     } finally {
       setSrLoading(false);
     }
-  }, [project.id]);
+  }, [projectId]);
 
   useEffect(() => {
     resetServiceReportForm();
@@ -297,7 +306,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     loadServiceReports();
     migrateServiceReportsFromLocalStorage().catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
+  }, [projectId]);
 
   const triggerPhotoInput = (activityIndex: number | null) => {
     pendingActivityIndexRef.current = activityIndex;
@@ -344,14 +353,14 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       // that the stored executionFolderId may point to.
       let execFolderId = resolvedExecFolderId;
       if (!execFolderId) {
-        const projectCode = project.project_no || String(project.item_no ?? project.id);
-        const execFolder = await ensureExecutionFolder(token, { code: projectCode, name: project.project_name });
+        const projectCode = projectNo || (projectId != null ? String(projectId) : 'no-project');
+        const execFolder = await ensureExecutionFolder(token, { code: projectCode, name: projectName });
         execFolderId = execFolder.id;
         setResolvedExecFolderId(execFolderId);
         // Also persist if nothing was stored yet
-        if (!localExecutionFolderId) {
+        if (!localExecutionFolderId && projectId != null) {
           setLocalExecutionFolderId(execFolderId);
-          dataService.updateProject(project.id, { executionFolderId: execFolder.id, executionFolderUrl: execFolder.webUrl }).catch(() => {});
+          dataService.updateProject(projectId, { executionFolderId: execFolder.id, executionFolderUrl: execFolder.webUrl }).catch(() => {});
         }
       }
 
@@ -364,7 +373,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         if (photosFolder.webUrl) setPhotosFolderUrl(photosFolder.webUrl);
       }
 
-      const reportPrefix = (serviceReportNo || `${project.project_no || project.id}-SR`)
+      const reportPrefix = (serviceReportNo || `${projectNo || (projectId != null ? String(projectId) : 'report')}-SR`)
         .replace(/[<>:"/\\|?*\s]/g, '_');
 
       for (const item of newItems) {
@@ -412,9 +421,13 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   };
 
   const handleSaveServiceReport = async () => {
-    const projectNo = (project.project_no || String(project.item_no ?? project.id) || '').trim() || '—';
+    if (!projectId) {
+      setExportFeedback({ severity: 'warning', message: 'Select a project to save the report.' });
+      return;
+    }
+    const reportProjectNo = projectNo || '—';
     const editingReport = editingServiceReportId ? serviceReports.find(r => r.id === editingServiceReportId) : null;
-    const reportNo = editingReport?.reportNo || `${projectNo} - SR${serviceReports.length + 1}`;
+    const reportNo = editingReport?.reportNo || `${reportProjectNo} - SR${serviceReports.length + 1}`;
     const table = serviceReportActivitiesTable.filter((r) => (r.activity || '').trim() || (r.findingOutcome || '').trim());
     const recs = (serviceReportCustomerComments || '').trim() ? [serviceReportCustomerComments.trim()] : [];
     const savedPhotos: ServiceReportPhoto[] = photos
@@ -447,7 +460,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       if (editingReport) {
         await updateServiceReport(editingReport.id, report);
       } else {
-        await saveServiceReport(project.id, report);
+        await saveServiceReport(projectId, report);
       }
       setServiceReportNo(reportNo);
       setServiceReportSaveFeedback(true);
@@ -532,8 +545,8 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
     const companyName = REPORT_COMPANIES[reportCompany];
     const companyNameUpper = companyName.toUpperCase();
-    const projectNo = (project.project_no || String(project.item_no ?? project.id) || '').trim() || '—';
-    const reportNo = (serviceReportNo || '').trim() || `${projectNo} - SR${serviceReports.length + 1}`;
+    const pdfProjectNo = projectNo || '—';
+    const reportNo = (serviceReportNo || '').trim() || `${pdfProjectNo} - SR${serviceReports.length + 1}`;
     const reportDateStr = serviceReportDate ? new Date(serviceReportDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
     // ------------------------------------------------------------------
@@ -679,16 +692,16 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     y += lineHeight + sectionGap;
     fontBody();
     doc.setFontSize(9);
-    doc.text(`Project Name: ${project.project_name || '—'}`, margin, y);
+    doc.text(`Project Name: ${projectName || '—'}`, margin, y);
     doc.text(`Report No.: ${reportNo}`, pageWidth - margin, y, { align: 'right' });
     y += lineHeight;
-    doc.text(`Project No.: ${projectNo}`, margin, y);
+    doc.text(`Project No.: ${pdfProjectNo}`, margin, y);
     doc.text(`Date: ${reportDateStr}`, pageWidth - margin, y, { align: 'right' });
     y += lineHeight;
-    doc.text(`PO No.: ${project.po_number || '—'}`, margin, y);
+    doc.text(`PO No.: ${projectPo || '—'}`, margin, y);
     doc.text(`Start Time: ${serviceReportStartTime || '—'}`, pageWidth - margin, y, { align: 'right' });
     y += lineHeight;
-    doc.text(`Client: ${project.account_name || '—'}`, margin, y);
+    doc.text(`Client: ${projectClient || '—'}`, margin, y);
     doc.text(`End Time: ${serviceReportEndTime || '—'}`, pageWidth - margin, y, { align: 'right' });
     y += lineHeight + sectionGap;
 
@@ -906,13 +919,13 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       // not inside a PCS proposal subfolder pointed to by a stale executionFolderId.
       let folderId = resolvedExecFolderId;
       if (!folderId) {
-        const projectCode = project.project_no || String(project.item_no ?? project.id);
-        const folder = await ensureExecutionFolder(token, { code: projectCode, name: project.project_name });
+        const projectCode = projectNo || (projectId != null ? String(projectId) : 'no-project');
+        const folder = await ensureExecutionFolder(token, { code: projectCode, name: projectName });
         folderId = folder.id;
         setResolvedExecFolderId(folderId);
-        if (!localExecutionFolderId) {
+        if (!localExecutionFolderId && projectId != null) {
           setLocalExecutionFolderId(folderId);
-          dataService.updateProject(project.id, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
+          dataService.updateProject(projectId, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
         }
       }
       await uploadFileToFolderById(token, driveId, folderId, result.filename, result.blob);
@@ -932,8 +945,8 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     setExportFeedback(null);
     try {
       const companyName = REPORT_COMPANIES[reportCompany];
-      const projectNo = (project.project_no || String(project.item_no ?? project.id) || '').trim() || '—';
-      const reportNo = (serviceReportNo || '').trim() || `${projectNo} - SR${serviceReports.length + 1}`;
+      const xlsxProjectNo = projectNo || '—';
+      const reportNo = (serviceReportNo || '').trim() || `${xlsxProjectNo} - SR${serviceReports.length + 1}`;
       const reportDateStr = serviceReportDate
         ? new Date(serviceReportDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
         : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -967,12 +980,12 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       const data = {
         companyName,
         logo,
-        projectName: project.project_name || '—',
-        projectNo,
+        projectName: projectName || '—',
+        projectNo: xlsxProjectNo,
         reportNo,
         reportDateStr,
-        poNumber: project.po_number || '—',
-        client: project.account_name || '—',
+        poNumber: projectPo || '—',
+        client: projectClient || '—',
         startTime: serviceReportStartTime || '—',
         endTime: serviceReportEndTime || '—',
         activities: serviceReportActivitiesTable,
@@ -1013,13 +1026,13 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       const driveId = await resolveCorporateDriveId(token);
       let folderId = resolvedExecFolderId;
       if (!folderId) {
-        const projectCode = project.project_no || String(project.item_no ?? project.id);
-        const folder = await ensureExecutionFolder(token, { code: projectCode, name: project.project_name });
+        const projectCode = projectNo || (projectId != null ? String(projectId) : 'no-project');
+        const folder = await ensureExecutionFolder(token, { code: projectCode, name: projectName });
         folderId = folder.id;
         setResolvedExecFolderId(folderId);
-        if (!localExecutionFolderId) {
+        if (!localExecutionFolderId && projectId != null) {
           setLocalExecutionFolderId(folderId);
-          dataService.updateProject(project.id, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
+          dataService.updateProject(projectId, { executionFolderId: folder.id, executionFolderUrl: folder.webUrl }).catch(() => {});
         }
       }
       await uploadFileToFolderById(token, driveId, folderId, filename, blob);
@@ -1067,7 +1080,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
               <Grid size={{ xs: 12, sm: 6 }}>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Report No.</Typography>
                 <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                  {serviceReportNo || `${(project.project_no || String(project.item_no ?? project.id) || '—').trim()} - SR${serviceReports.length + 1}`}
+                  {serviceReportNo || (projectNo ? `${projectNo} - SR${serviceReports.length + 1}` : `SR${serviceReports.length + 1}`)}
                 </Typography>
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>

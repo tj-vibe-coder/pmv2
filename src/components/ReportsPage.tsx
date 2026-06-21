@@ -211,69 +211,70 @@ const ReportsPage: React.FC = () => {
         </Paper>
       </Box>
 
-      {selectedProject ? (
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <Box sx={{ flexShrink: 0, px: 2, borderBottom: 1, borderColor: 'divider' }}>
-            <Tabs value={tab} onChange={handleTabChange}>
-              <Tab label="Progress Report" value="progress" />
-              <Tab label="Service Report" value="service" />
-              <Tab label="Certificate of Completion" value="completion" />
-              <Tab label="Attachments" value="attachments" />
-            </Tabs>
-          </Box>
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Box sx={{ flexShrink: 0, px: 2, borderBottom: 1, borderColor: 'divider' }}>
+          <Tabs value={tab} onChange={handleTabChange}>
+            <Tab label="Progress Report" value="progress" />
+            <Tab label="Service Report" value="service" />
+            <Tab label="Certificate of Completion" value="completion" />
+            <Tab label="Attachments" value="attachments" />
+          </Tabs>
+        </Box>
 
-          <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
-            {tab === 'progress' && (
-              <ProgressReportTab
-                project={selectedProject}
-                currentUser={currentUser}
-                reportCompany={reportCompany}
-                setReportCompany={setReportCompany}
-                preparedBy={preparedBy}
-                setPreparedBy={setPreparedBy}
-                onPreview={handlePreview}
-                initialPb={searchParams.get('pb') ?? undefined}
-                clientApprover={clientApprover ?? undefined}
-                clientContacts={clientContacts}
-              />
-            )}
-            {tab === 'service' && (
-              <ServiceReportTab
-                project={selectedProject}
-                currentUser={currentUser}
-                reportCompany={reportCompany}
-                setReportCompany={setReportCompany}
-                preparedBy={preparedBy}
-                setPreparedBy={setPreparedBy}
-                onPreview={handlePreview}
-                clientApprover={clientApprover ?? undefined}
-              />
-            )}
-            {tab === 'completion' && (
-              <CompletionCertificateTab
-                project={selectedProject}
-                currentUser={currentUser}
-                reportCompany={reportCompany}
-                setReportCompany={setReportCompany}
-                preparedBy={preparedBy}
-                onPreview={handlePreview}
-                clientApprover={clientApprover ?? undefined}
-              />
-            )}
-            {tab === 'attachments' && (
-              <AttachmentsTab project={selectedProject} currentUser={currentUser} />
-            )}
-          </Box>
+        <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
+          {tab === 'service' ? (
+            <ServiceReportTab
+              project={selectedProject}
+              currentUser={currentUser}
+              reportCompany={reportCompany}
+              setReportCompany={setReportCompany}
+              preparedBy={preparedBy}
+              setPreparedBy={setPreparedBy}
+              onPreview={handlePreview}
+              clientApprover={clientApprover ?? undefined}
+            />
+          ) : !selectedProject ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', p: 4, height: '100%' }}>
+              <Paper sx={{ p: 4, textAlign: 'center' }}>
+                <Typography variant="h6" color="text.secondary">
+                  Please select a project to generate reports
+                </Typography>
+              </Paper>
+            </Box>
+          ) : (
+            <>
+              {tab === 'progress' && (
+                <ProgressReportTab
+                  project={selectedProject}
+                  currentUser={currentUser}
+                  reportCompany={reportCompany}
+                  setReportCompany={setReportCompany}
+                  preparedBy={preparedBy}
+                  setPreparedBy={setPreparedBy}
+                  onPreview={handlePreview}
+                  initialPb={searchParams.get('pb') ?? undefined}
+                  clientApprover={clientApprover ?? undefined}
+                  clientContacts={clientContacts}
+                />
+              )}
+              {tab === 'completion' && (
+                <CompletionCertificateTab
+                  project={selectedProject}
+                  currentUser={currentUser}
+                  reportCompany={reportCompany}
+                  setReportCompany={setReportCompany}
+                  preparedBy={preparedBy}
+                  onPreview={handlePreview}
+                  clientApprover={clientApprover ?? undefined}
+                />
+              )}
+              {tab === 'attachments' && (
+                <AttachmentsTab project={selectedProject} currentUser={currentUser} />
+              )}
+            </>
+          )}
         </Box>
-      ) : (
-        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 4 }}>
-          <Paper sx={{ p: 4, textAlign: 'center' }}>
-            <Typography variant="h6" color="text.secondary">
-              Please select a project to generate reports
-            </Typography>
-          </Paper>
-        </Box>
-      )}
+      </Box>
 
       <PdfPreviewDialog open={pdfPreviewOpen} onClose={handleClosePreview} pdfBlob={pdfPreviewBlob} title={pdfPreviewTitle} />
     </Box>
