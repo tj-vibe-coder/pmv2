@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
   Box,
   Paper,
   Typography,
@@ -12,10 +15,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   IconButton,
   Alert,
   Chip,
@@ -27,6 +26,7 @@ import {
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
+  ExpandMore as ExpandMoreIcon,
   PictureAsPdf as PictureAsPdfIcon,
   GridOn as GridOnIcon,
   Visibility as VisibilityIcon,
@@ -45,7 +45,6 @@ import {
   saveServiceReport,
   updateServiceReport,
   deleteServiceReport,
-  clearServiceReports,
   migrateServiceReportsFromLocalStorage,
 } from '../ProjectDetails';
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
@@ -184,6 +183,18 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   const [srLoading, setSrLoading] = useState(false);
   const [serviceReportSaveFeedback, setServiceReportSaveFeedback] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
+
+  // Accordion expanded state
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    setup: true,
+    activities: true,
+    signatories: false,
+    photos: false,
+    savedReports: false,
+  });
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
 
   // Editable approver — seeded from clientApprover prop, overridable by the user
   const [approverName, setApproverName] = useState(clientApprover?.name || '');
@@ -488,20 +499,8 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       uploadStatus: 'done' as const,
     }));
     setPhotos(loadedPhotos);
-  };
-
-  const handleDeleteLoadedServiceReport = async () => {
-    if (!editingServiceReportId) return;
-    const report = serviceReports.find(r => r.id === editingServiceReportId);
-    if (!report) return;
-    if (!window.confirm(`Delete saved service report "${report.reportNo}"? This cannot be undone.`)) return;
-    try {
-      await deleteServiceReport(report.id);
-      resetServiceReportForm();
-      await loadServiceReports();
-    } catch (err) {
-      setExportFeedback({ severity: 'error', message: 'Failed to delete report.' });
-    }
+    // Expand the setup and activities sections when loading a report
+    setExpandedSections(prev => ({ ...prev, setup: true, activities: true }));
   };
 
   const handleDeleteServiceReport = async (report: ServiceReport) => {
@@ -512,18 +511,6 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       await loadServiceReports();
     } catch (err) {
       setExportFeedback({ severity: 'error', message: 'Failed to delete report.' });
-    }
-  };
-
-  const handleClearServiceReports = async () => {
-    if (window.confirm('Remove all saved service reports for this project? This cannot be undone.')) {
-      try {
-        await clearServiceReports(project.id);
-        resetServiceReportForm();
-        setServiceReports([]);
-      } catch (err) {
-        setExportFeedback({ severity: 'error', message: 'Failed to clear reports.' });
-      }
     }
   };
 
@@ -1045,345 +1032,434 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   };
 
   return (
-    <Paper elevation={0} sx={{ p: 3, borderRadius: 2, border: '1px solid #e2e8f0', bgcolor: '#fff' }}>
-      <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
-        Service Report
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Create service reports. Save to store a snapshot; load a previous report; Preview or Export to PDF.
-      </Typography>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-        <Button
-          variant="outlined"
-          size="small"
-          startIcon={<AddIcon />}
-          onClick={resetServiceReportForm}
-          sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary, textTransform: 'none' }}
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Scrollable accordion area */}
+      <Box sx={{ flex: 1, overflow: 'auto', pb: 10 }}>
+
+        {/* Page-level feedback */}
+        {exportFeedback && (
+          <Alert severity={exportFeedback.severity} onClose={() => setExportFeedback(null)} sx={{ mb: 1 }}>
+            {exportFeedback.message}
+          </Alert>
+        )}
+
+        {/* Accordion 1: Report Setup */}
+        <Accordion
+          expanded={expandedSections.setup}
+          onChange={() => toggleSection('setup')}
+          disableGutters
+          elevation={0}
+          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
         >
-          New report
-        </Button>
-      </Box>
-      <Grid container spacing={2}>
-        <Grid size={{ xs: 12, sm: 6 }}>
-          <TextField size="small" fullWidth label="Report Date" type="date" value={serviceReportDate} onChange={(e) => setServiceReportDate(e.target.value)} InputLabelProps={{ shrink: true }} />
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6 }}>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Report No.</Typography>
-          <Typography variant="body1" sx={{ fontWeight: 500 }}>
-            {serviceReportNo || `${(project.project_no || String(project.item_no ?? project.id) || '—').trim()} - SR${serviceReports.length + 1}`}
-          </Typography>
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6 }}>
-          <TextField size="small" fullWidth label="Start Time" type="time" value={serviceReportStartTime} onChange={(e) => setServiceReportStartTime(e.target.value)} InputLabelProps={{ shrink: true }} />
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6 }}>
-          <TextField size="small" fullWidth label="End Time" type="time" value={serviceReportEndTime} onChange={(e) => setServiceReportEndTime(e.target.value)} InputLabelProps={{ shrink: true }} />
-        </Grid>
-        <Grid size={{ xs: 12 }}>
-          <TextField size="small" fullWidth label="Title" placeholder="e.g. Monthly Service Visit" value={serviceReportTitle} onChange={(e) => setServiceReportTitle(e.target.value)} />
-        </Grid>
-        <Grid size={{ xs: 12 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>Activities</Typography>
-          <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1 }}>
-            <Table size="small" sx={{ minWidth: 560, '& td, & th': { border: '1px solid #e2e8f0' } }}>
-              <TableHead>
-                <TableRow sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', width: 48, color: '#fff' }}>No.</TableCell>
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', color: '#fff' }}>Activity</TableCell>
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', color: '#fff' }}>Finding / Outcome</TableCell>
-                  <TableCell sx={{ width: 80, color: '#fff', fontWeight: 600, fontSize: '0.8125rem' }}>Photos</TableCell>
-                  <TableCell sx={{ width: 48 }} />
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {serviceReportActivitiesTable.map((row, index) => {
-                  const rowPhotos = photos.filter(p => p.activityIndex === index);
-                  return (
-                    <TableRow key={index}>
-                      <TableCell sx={{ verticalAlign: 'top', pt: 1.5 }}>{index + 1}</TableCell>
-                      <TableCell sx={{ py: 0.5, px: 1 }}>
-                        <TextField size="small" fullWidth multiline minRows={1} placeholder="Activity" value={row.activity} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, activity: e.target.value } : r)))} />
-                      </TableCell>
-                      <TableCell sx={{ py: 0.5, px: 1 }}>
-                        <TextField size="small" fullWidth multiline minRows={1} placeholder="Finding / Outcome" value={row.findingOutcome} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, findingOutcome: e.target.value } : r)))} />
-                      </TableCell>
-                      <TableCell sx={{ verticalAlign: 'top', pt: 0.5, px: 0.5 }}>
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
-                          {rowPhotos.map(p => (
-                            <Tooltip key={p.localId} title={p.uploadStatus === 'error' ? (p.errorMessage || 'Upload failed') : (p.filename || p.file?.name || '')}>
-                              <Box sx={{ position: 'relative', width: 36, height: 36, borderRadius: 0.5, overflow: 'hidden', border: '1px solid #e2e8f0', flexShrink: 0, bgcolor: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                {(p.previewUrl || p.thumbnailDataUrl) ? (
-                                  <img src={p.previewUrl ?? p.thumbnailDataUrl} alt={p.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                ) : null}
-                                {p.uploadStatus === 'uploading' && (
-                                  <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                    <CircularProgress size={14} />
-                                  </Box>
-                                )}
-                                {p.uploadStatus === 'error' && (
-                                  <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,0,0,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                    <Typography variant="caption" sx={{ color: 'error.main', fontSize: '0.6rem', fontWeight: 700 }}>!</Typography>
-                                  </Box>
-                                )}
-                                <IconButton size="small" onClick={() => handleRemovePhoto(p.localId)} sx={{ position: 'absolute', top: -2, right: -2, bgcolor: 'rgba(0,0,0,0.5)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(200,0,0,0.8)' } }}>
-                                  <DeleteIcon sx={{ fontSize: 10 }} />
-                                </IconButton>
-                              </Box>
-                            </Tooltip>
-                          ))}
-                          <Tooltip title={oneDriveSignedIn ? 'Attach photo to this activity' : 'Sign in to OneDrive (see Site Photos section below)'}>
-                            <IconButton
-                              size="small"
-                              onClick={() => oneDriveSignedIn ? triggerPhotoInput(index) : oneDriveLogin()}
-                              sx={{ color: oneDriveSignedIn ? NET_PACIFIC_COLORS.primary : 'text.disabled', border: '1px dashed', borderColor: 'divider', borderRadius: 0.5, p: 0.5 }}
-                            >
-                              <CameraAltIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                      </TableCell>
-                      <TableCell sx={{ verticalAlign: 'top', pt: 1 }}>
-                        <IconButton size="small" onClick={() => setServiceReportActivitiesTable((prev) => prev.filter((_, i) => i !== index))} color="error" title="Remove row"><DeleteIcon fontSize="small" /></IconButton>
-                      </TableCell>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+              Report Setup
+            </Typography>
+            {serviceReportDate && serviceReportTitle && (
+              <Chip label="Ready" size="small" color="success" variant="outlined" sx={{ mr: 1 }} />
+            )}
+          </AccordionSummary>
+          <AccordionDetails>
+            <Grid container spacing={2}>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField size="small" fullWidth label="Report Date" type="date" value={serviceReportDate} onChange={(e) => setServiceReportDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Report No.</Typography>
+                <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                  {serviceReportNo || `${(project.project_no || String(project.item_no ?? project.id) || '—').trim()} - SR${serviceReports.length + 1}`}
+                </Typography>
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField size="small" fullWidth label="Start Time" type="time" value={serviceReportStartTime} onChange={(e) => setServiceReportStartTime(e.target.value)} InputLabelProps={{ shrink: true }} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField size="small" fullWidth label="End Time" type="time" value={serviceReportEndTime} onChange={(e) => setServiceReportEndTime(e.target.value)} InputLabelProps={{ shrink: true }} />
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <TextField size="small" fullWidth label="Title" placeholder="e.g. Monthly Service Visit" value={serviceReportTitle} onChange={(e) => setServiceReportTitle(e.target.value)} />
+              </Grid>
+            </Grid>
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Accordion 2: Activities */}
+        <Accordion
+          expanded={expandedSections.activities}
+          onChange={() => toggleSection('activities')}
+          disableGutters
+          elevation={0}
+          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+              Activities
+            </Typography>
+            <Chip
+              label={`${serviceReportActivitiesTable.filter(r => r.activity.trim() || r.findingOutcome.trim()).length || serviceReportActivitiesTable.length} rows`}
+              size="small"
+              variant="outlined"
+              sx={{ mr: 1 }}
+            />
+          </AccordionSummary>
+          <AccordionDetails sx={{ p: 0 }}>
+            <Box sx={{ px: 2, pt: 1.5 }}>
+              <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1 }}>
+                <Table size="small" sx={{ minWidth: 560, '& td, & th': { border: '1px solid #e2e8f0' } }}>
+                  <TableHead>
+                    <TableRow sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', width: 48, color: '#fff' }}>No.</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', color: '#fff' }}>Activity</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', color: '#fff' }}>Finding / Outcome</TableCell>
+                      <TableCell sx={{ width: 80, color: '#fff', fontWeight: 600, fontSize: '0.8125rem' }}>Photos</TableCell>
+                      <TableCell sx={{ width: 48 }} />
                     </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </TableContainer>
-          <Button size="small" startIcon={<AddIcon />} onClick={() => setServiceReportActivitiesTable((prev) => [...prev, { activity: '', findingOutcome: '' }])} sx={{ mt: 1, textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}>Add row</Button>
-        </Grid>
-        <Grid size={{ xs: 12 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-            <Typography variant="subtitle2">Recommendations and Remarks</Typography>
-            <Tooltip title={oneDriveSignedIn ? 'Attach photo to recommendations' : 'Sign in to OneDrive to attach photos'}>
-              <IconButton
-                size="small"
-                onClick={() => oneDriveSignedIn ? triggerPhotoInput(-1) : oneDriveLogin()}
-                sx={{ color: oneDriveSignedIn ? NET_PACIFIC_COLORS.primary : 'text.disabled', border: '1px dashed', borderColor: 'divider', borderRadius: 0.5, p: 0.5 }}
-              >
-                <CameraAltIcon sx={{ fontSize: 16 }} />
-              </IconButton>
-            </Tooltip>
-          </Box>
-          <TextField size="small" fullWidth multiline minRows={4} placeholder="Enter recommendations and remarks..." value={serviceReportCustomerComments} onChange={(e) => setServiceReportCustomerComments(e.target.value)} sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#fff' } }} />
-          {/* Inline photos for recommendations */}
-          {photos.filter(p => p.activityIndex === -1).length > 0 && (
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
-              {photos.filter(p => p.activityIndex === -1).map(p => (
-                <Tooltip key={p.localId} title={p.uploadStatus === 'error' ? (p.errorMessage || 'Upload failed') : (p.filename || p.file?.name || '')}>
-                  <Box sx={{ position: 'relative', width: 72, height: 72, borderRadius: 1, overflow: 'hidden', border: '1px solid #e2e8f0', bgcolor: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    {(p.previewUrl || p.thumbnailDataUrl) && (
-                      <img src={p.previewUrl ?? p.thumbnailDataUrl} alt={p.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    )}
-                    {p.uploadStatus === 'uploading' && (
-                      <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <CircularProgress size={18} />
-                      </Box>
-                    )}
-                    {p.uploadStatus === 'error' && (
-                      <Chip label="Error" size="small" color="error" sx={{ position: 'absolute', bottom: 2, left: 2, fontSize: '0.6rem', height: 16 }} />
-                    )}
-                    <IconButton size="small" onClick={() => handleRemovePhoto(p.localId)}
-                      sx={{ position: 'absolute', top: 2, right: 2, bgcolor: 'rgba(0,0,0,0.5)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(200,0,0,0.8)' } }}>
-                      <DeleteIcon sx={{ fontSize: 12 }} />
-                    </IconButton>
-                  </Box>
-                </Tooltip>
-              ))}
+                  </TableHead>
+                  <TableBody>
+                    {serviceReportActivitiesTable.map((row, index) => {
+                      const rowPhotos = photos.filter(p => p.activityIndex === index);
+                      return (
+                        <TableRow key={index}>
+                          <TableCell sx={{ verticalAlign: 'top', pt: 1.5 }}>{index + 1}</TableCell>
+                          <TableCell sx={{ py: 0.5, px: 1 }}>
+                            <TextField size="small" fullWidth multiline minRows={1} placeholder="Activity" value={row.activity} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, activity: e.target.value } : r)))} />
+                          </TableCell>
+                          <TableCell sx={{ py: 0.5, px: 1 }}>
+                            <TextField size="small" fullWidth multiline minRows={1} placeholder="Finding / Outcome" value={row.findingOutcome} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, findingOutcome: e.target.value } : r)))} />
+                          </TableCell>
+                          <TableCell sx={{ verticalAlign: 'top', pt: 0.5, px: 0.5 }}>
+                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
+                              {rowPhotos.map(p => (
+                                <Tooltip key={p.localId} title={p.uploadStatus === 'error' ? (p.errorMessage || 'Upload failed') : (p.filename || p.file?.name || '')}>
+                                  <Box sx={{ position: 'relative', width: 36, height: 36, borderRadius: 0.5, overflow: 'hidden', border: '1px solid #e2e8f0', flexShrink: 0, bgcolor: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    {(p.previewUrl || p.thumbnailDataUrl) ? (
+                                      <img src={p.previewUrl ?? p.thumbnailDataUrl} alt={p.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    ) : null}
+                                    {p.uploadStatus === 'uploading' && (
+                                      <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <CircularProgress size={14} />
+                                      </Box>
+                                    )}
+                                    {p.uploadStatus === 'error' && (
+                                      <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,0,0,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <Typography variant="caption" sx={{ color: 'error.main', fontSize: '0.6rem', fontWeight: 700 }}>!</Typography>
+                                      </Box>
+                                    )}
+                                    <IconButton size="small" onClick={() => handleRemovePhoto(p.localId)} sx={{ position: 'absolute', top: -2, right: -2, bgcolor: 'rgba(0,0,0,0.5)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(200,0,0,0.8)' } }}>
+                                      <DeleteIcon sx={{ fontSize: 10 }} />
+                                    </IconButton>
+                                  </Box>
+                                </Tooltip>
+                              ))}
+                              <Tooltip title={oneDriveSignedIn ? 'Attach photo to this activity' : 'Sign in to OneDrive (see Photos section below)'}>
+                                <IconButton
+                                  size="small"
+                                  onClick={() => oneDriveSignedIn ? triggerPhotoInput(index) : oneDriveLogin()}
+                                  sx={{ color: oneDriveSignedIn ? NET_PACIFIC_COLORS.primary : 'text.disabled', border: '1px dashed', borderColor: 'divider', borderRadius: 0.5, p: 0.5 }}
+                                >
+                                  <CameraAltIcon sx={{ fontSize: 16 }} />
+                                </IconButton>
+                              </Tooltip>
+                            </Box>
+                          </TableCell>
+                          <TableCell sx={{ verticalAlign: 'top', pt: 1 }}>
+                            <IconButton size="small" onClick={() => setServiceReportActivitiesTable((prev) => prev.filter((_, i) => i !== index))} color="error" title="Remove row"><DeleteIcon fontSize="small" /></IconButton>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              <Button size="small" startIcon={<AddIcon />} onClick={() => setServiceReportActivitiesTable((prev) => [...prev, { activity: '', findingOutcome: '' }])} sx={{ mt: 1, textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}>Add row</Button>
             </Box>
-          )}
-        </Grid>
 
-        {/* Prepared by — editable; defaults to the logged-in user but overridable
-            for reports created on behalf of another / third-party engineer */}
-        <Grid size={{ xs: 12 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>Prepared by (PDF)</Typography>
-          <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-            <TextField size="small" label="Name" value={preparedByName} onChange={(e) => setPreparedByName(e.target.value)} sx={{ width: 220 }} placeholder="Engineer name" />
-            <TextField size="small" label="Designation" value={preparedByDesignation} onChange={(e) => setPreparedByDesignation(e.target.value)} sx={{ width: 180 }} placeholder="Position" />
-            <TextField size="small" label="Company" value={preparedByCompany} onChange={(e) => setPreparedByCompany(e.target.value)} sx={{ width: 220 }} placeholder={REPORT_COMPANIES[reportCompany]} />
-          </Box>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            Leave Company blank to use the report company ({REPORT_COMPANIES[reportCompany]}).
-          </Typography>
-        </Grid>
-
-        {/* Approved by — editable, pre-filled from client record */}
-        <Grid size={{ xs: 12 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>Approved by (PDF)</Typography>
-          <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-            <TextField size="small" label="Name" value={approverName} onChange={(e) => setApproverName(e.target.value)} sx={{ width: 220 }} placeholder={clientApprover?.name || 'Client approver name'} />
-            <TextField size="small" label="Designation" value={approverDesignation} onChange={(e) => setApproverDesignation(e.target.value)} sx={{ width: 180 }} placeholder={clientApprover?.designation || 'Position'} />
-            <TextField size="small" label="Company" value={approverCompany} onChange={(e) => setApproverCompany(e.target.value)} sx={{ width: 220 }} placeholder={clientApprover?.company || 'Company'} />
-          </Box>
-        </Grid>
-
-        {/* General photos (not tied to a specific activity) */}
-        <Grid size={{ xs: 12 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-            <Typography variant="subtitle2">Site Photos</Typography>
-            {!oneDriveConfigured ? (
-              <Typography variant="caption" color="text.secondary">OneDrive is not configured for this environment.</Typography>
-            ) : !oneDriveSignedIn ? (
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={oneDriveAuthLoading ? <CircularProgress size={14} /> : <CameraAltIcon />}
-                disabled={oneDriveAuthLoading}
-                onClick={() => oneDriveLogin()}
-                sx={{ textTransform: 'none', borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
-              >
-                Sign in to OneDrive to attach photos
-              </Button>
-            ) : (
-              <Button
-                size="small"
-                startIcon={<CameraAltIcon />}
-                onClick={() => triggerPhotoInput(null)}
-                sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary, borderColor: NET_PACIFIC_COLORS.primary }}
-                variant="outlined"
-              >
-                Add photos
-              </Button>
-            )}
-            {photosFolderUrl && (
-              <Button
-                size="small"
-                variant="text"
-                endIcon={<OpenInNewIcon sx={{ fontSize: 14 }} />}
-                component="a"
-                href={photosFolderUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                sx={{ textTransform: 'none', color: 'text.secondary', fontSize: '0.75rem' }}
-              >
-                Open Photos folder
-              </Button>
-            )}
-          </Box>
-          {photos.filter(p => p.activityIndex === undefined).length > 0 && (
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              {photos.filter(p => p.activityIndex === undefined).map(p => (
-                <Tooltip key={p.localId} title={p.uploadStatus === 'error' ? (p.errorMessage || 'Upload failed') : (p.filename || p.file?.name || '')}>
-                  <Box sx={{ position: 'relative', width: 80, height: 80, borderRadius: 1, overflow: 'hidden', border: '1px solid #e2e8f0', bgcolor: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    {(p.previewUrl || p.thumbnailDataUrl) && (
-                      <img src={p.previewUrl ?? p.thumbnailDataUrl} alt={p.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    )}
-                    {p.uploadStatus === 'uploading' && (
-                      <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <CircularProgress size={20} />
+            {/* Recommendations and Remarks */}
+            <Box sx={{ px: 2, pt: 2, pb: 1.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                <Typography variant="subtitle2">Recommendations and Remarks</Typography>
+                <Tooltip title={oneDriveSignedIn ? 'Attach photo to recommendations' : 'Sign in to OneDrive to attach photos'}>
+                  <IconButton
+                    size="small"
+                    onClick={() => oneDriveSignedIn ? triggerPhotoInput(-1) : oneDriveLogin()}
+                    sx={{ color: oneDriveSignedIn ? NET_PACIFIC_COLORS.primary : 'text.disabled', border: '1px dashed', borderColor: 'divider', borderRadius: 0.5, p: 0.5 }}
+                  >
+                    <CameraAltIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+              <TextField size="small" fullWidth multiline minRows={4} placeholder="Enter recommendations and remarks..." value={serviceReportCustomerComments} onChange={(e) => setServiceReportCustomerComments(e.target.value)} sx={{ '& .MuiOutlinedInput-root': { bgcolor: '#fff' } }} />
+              {/* Inline photos for recommendations */}
+              {photos.filter(p => p.activityIndex === -1).length > 0 && (
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
+                  {photos.filter(p => p.activityIndex === -1).map(p => (
+                    <Tooltip key={p.localId} title={p.uploadStatus === 'error' ? (p.errorMessage || 'Upload failed') : (p.filename || p.file?.name || '')}>
+                      <Box sx={{ position: 'relative', width: 72, height: 72, borderRadius: 1, overflow: 'hidden', border: '1px solid #e2e8f0', bgcolor: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        {(p.previewUrl || p.thumbnailDataUrl) && (
+                          <img src={p.previewUrl ?? p.thumbnailDataUrl} alt={p.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        )}
+                        {p.uploadStatus === 'uploading' && (
+                          <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <CircularProgress size={18} />
+                          </Box>
+                        )}
+                        {p.uploadStatus === 'error' && (
+                          <Chip label="Error" size="small" color="error" sx={{ position: 'absolute', bottom: 2, left: 2, fontSize: '0.6rem', height: 16 }} />
+                        )}
+                        <IconButton size="small" onClick={() => handleRemovePhoto(p.localId)}
+                          sx={{ position: 'absolute', top: 2, right: 2, bgcolor: 'rgba(0,0,0,0.5)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(200,0,0,0.8)' } }}>
+                          <DeleteIcon sx={{ fontSize: 12 }} />
+                        </IconButton>
                       </Box>
-                    )}
-                    {p.uploadStatus === 'done' && p.webUrl && (
-                      <IconButton size="small" component="a" href={p.webUrl} target="_blank" rel="noopener noreferrer"
-                        sx={{ position: 'absolute', bottom: 2, right: 20, bgcolor: 'rgba(0,0,0,0.45)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(0,0,0,0.7)' } }}>
-                        <OpenInNewIcon sx={{ fontSize: 11 }} />
+                    </Tooltip>
+                  ))}
+                </Box>
+              )}
+            </Box>
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Accordion 3: Signatories */}
+        <Accordion
+          expanded={expandedSections.signatories}
+          onChange={() => toggleSection('signatories')}
+          disableGutters
+          elevation={0}
+          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+              Signatories
+            </Typography>
+            {preparedByName && (
+              <Chip label="Set" size="small" color="success" variant="outlined" sx={{ mr: 1 }} />
+            )}
+          </AccordionSummary>
+          <AccordionDetails>
+            {/* Prepared by */}
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.75rem', letterSpacing: '0.05em' }}>
+              Prepared by
+            </Typography>
+            <Paper variant="outlined" sx={{ p: 1.5, mb: 2 }}>
+              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                <TextField size="small" label="Name" value={preparedByName} onChange={(e) => setPreparedByName(e.target.value)} sx={{ flex: 1, minWidth: 150 }} placeholder="Engineer name" />
+                <TextField size="small" label="Designation" value={preparedByDesignation} onChange={(e) => setPreparedByDesignation(e.target.value)} sx={{ flex: 1, minWidth: 120 }} placeholder="Position" />
+                <TextField size="small" label="Company" value={preparedByCompany} onChange={(e) => setPreparedByCompany(e.target.value)} sx={{ flex: 1, minWidth: 150 }} placeholder={REPORT_COMPANIES[reportCompany]} />
+              </Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                Leave Company blank to use the report company ({REPORT_COMPANIES[reportCompany]}).
+              </Typography>
+            </Paper>
+
+            {/* Approved by */}
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.75rem', letterSpacing: '0.05em' }}>
+              Approved by
+            </Typography>
+            <Paper variant="outlined" sx={{ p: 1.5 }}>
+              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                <TextField size="small" label="Name" value={approverName} onChange={(e) => setApproverName(e.target.value)} sx={{ flex: 1, minWidth: 150 }} placeholder={clientApprover?.name || 'Client approver name'} />
+                <TextField size="small" label="Designation" value={approverDesignation} onChange={(e) => setApproverDesignation(e.target.value)} sx={{ flex: 1, minWidth: 120 }} placeholder={clientApprover?.designation || 'Position'} />
+                <TextField size="small" label="Company" value={approverCompany} onChange={(e) => setApproverCompany(e.target.value)} sx={{ flex: 1, minWidth: 150 }} placeholder={clientApprover?.company || 'Company'} />
+              </Box>
+            </Paper>
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Accordion 4: Photos */}
+        <Accordion
+          expanded={expandedSections.photos}
+          onChange={() => toggleSection('photos')}
+          disableGutters
+          elevation={0}
+          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+              Site Photos
+            </Typography>
+            {photos.filter(p => p.activityIndex === undefined).length > 0 && (
+              <Chip
+                label={`${photos.filter(p => p.activityIndex === undefined).length} photo${photos.filter(p => p.activityIndex === undefined).length !== 1 ? 's' : ''}`}
+                size="small"
+                variant="outlined"
+                sx={{ mr: 1 }}
+              />
+            )}
+          </AccordionSummary>
+          <AccordionDetails>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+              {!oneDriveConfigured ? (
+                <Typography variant="caption" color="text.secondary">OneDrive is not configured for this environment.</Typography>
+              ) : !oneDriveSignedIn ? (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={oneDriveAuthLoading ? <CircularProgress size={14} /> : <CameraAltIcon />}
+                  disabled={oneDriveAuthLoading}
+                  onClick={() => oneDriveLogin()}
+                  sx={{ textTransform: 'none', borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+                >
+                  Sign in to OneDrive to attach photos
+                </Button>
+              ) : (
+                <Button
+                  size="small"
+                  startIcon={<CameraAltIcon />}
+                  onClick={() => triggerPhotoInput(null)}
+                  sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary, borderColor: NET_PACIFIC_COLORS.primary }}
+                  variant="outlined"
+                >
+                  Add photos
+                </Button>
+              )}
+              {photosFolderUrl && (
+                <Button
+                  size="small"
+                  variant="text"
+                  endIcon={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+                  component="a"
+                  href={photosFolderUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ textTransform: 'none', color: 'text.secondary', fontSize: '0.75rem' }}
+                >
+                  Open Photos folder
+                </Button>
+              )}
+            </Box>
+            {photos.some(p => p.file || p.uploadStatus === 'done') && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>Photos in PDF:</Typography>
+                <ToggleButtonGroup size="small" exclusive value={photoPlacement} onChange={(_, v) => { if (v) setPhotoPlacement(v); }}>
+                  <ToggleButton value="inline" sx={{ textTransform: 'none', fontSize: '0.75rem', py: 0.5, px: 1.25 }}>Inline per activity</ToggleButton>
+                  <ToggleButton value="end" sx={{ textTransform: 'none', fontSize: '0.75rem', py: 0.5, px: 1.25 }}>End of report</ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+            )}
+            {photos.filter(p => p.activityIndex === undefined).length > 0 && (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                {photos.filter(p => p.activityIndex === undefined).map(p => (
+                  <Tooltip key={p.localId} title={p.uploadStatus === 'error' ? (p.errorMessage || 'Upload failed') : (p.filename || p.file?.name || '')}>
+                    <Box sx={{ position: 'relative', width: 80, height: 80, borderRadius: 1, overflow: 'hidden', border: '1px solid #e2e8f0', bgcolor: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      {(p.previewUrl || p.thumbnailDataUrl) && (
+                        <img src={p.previewUrl ?? p.thumbnailDataUrl} alt={p.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      )}
+                      {p.uploadStatus === 'uploading' && (
+                        <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <CircularProgress size={20} />
+                        </Box>
+                      )}
+                      {p.uploadStatus === 'done' && p.webUrl && (
+                        <IconButton size="small" component="a" href={p.webUrl} target="_blank" rel="noopener noreferrer"
+                          sx={{ position: 'absolute', bottom: 2, right: 20, bgcolor: 'rgba(0,0,0,0.45)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(0,0,0,0.7)' } }}>
+                          <OpenInNewIcon sx={{ fontSize: 11 }} />
+                        </IconButton>
+                      )}
+                      {p.uploadStatus === 'error' && (
+                        <Chip label="Error" size="small" color="error" sx={{ position: 'absolute', bottom: 2, left: 2, fontSize: '0.6rem', height: 16 }} />
+                      )}
+                      <IconButton size="small" onClick={() => handleRemovePhoto(p.localId)}
+                        sx={{ position: 'absolute', top: 2, right: 2, bgcolor: 'rgba(0,0,0,0.5)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(200,0,0,0.8)' } }}>
+                        <DeleteIcon sx={{ fontSize: 12 }} />
                       </IconButton>
-                    )}
-                    {p.uploadStatus === 'error' && (
-                      <Chip label="Error" size="small" color="error" sx={{ position: 'absolute', bottom: 2, left: 2, fontSize: '0.6rem', height: 16 }} />
-                    )}
-                    <IconButton size="small" onClick={() => handleRemovePhoto(p.localId)}
-                      sx={{ position: 'absolute', top: 2, right: 2, bgcolor: 'rgba(0,0,0,0.5)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(200,0,0,0.8)' } }}>
-                      <DeleteIcon sx={{ fontSize: 12 }} />
-                    </IconButton>
-                  </Box>
-                </Tooltip>
-              ))}
-            </Box>
-          )}
-        </Grid>
-      </Grid>
+                    </Box>
+                  </Tooltip>
+                ))}
+              </Box>
+            )}
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Accordion 5: Saved Reports */}
+        <Accordion
+          expanded={expandedSections.savedReports}
+          onChange={() => toggleSection('savedReports')}
+          disableGutters
+          elevation={0}
+          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+              Saved Reports
+            </Typography>
+            {serviceReports.length > 0 && (
+              <Chip label={String(serviceReports.length)} size="small" variant="outlined" sx={{ mr: 1 }} />
+            )}
+            {srLoading && <CircularProgress size={16} sx={{ color: NET_PACIFIC_COLORS.primary, mr: 1 }} />}
+          </AccordionSummary>
+          <AccordionDetails>
+            {serviceReports.length > 0 ? (
+              <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 280 }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Report No.</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Date</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Title</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Actions</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {serviceReports.map((r) => (
+                      <TableRow key={r.id} hover selected={editingServiceReportId === r.id}>
+                        <TableCell>{r.reportNo}</TableCell>
+                        <TableCell>{new Date(r.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
+                        <TableCell>{r.title || 'Service Report'}</TableCell>
+                        <TableCell align="right">
+                          <Button size="small" onClick={() => handleLoadServiceReport(r)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
+                          <IconButton size="small" color="error" onClick={() => handleDeleteServiceReport(r)} title="Delete report" aria-label="Delete report">
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            ) : (
+              <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                No saved reports yet. Use the Save button to store a snapshot.
+              </Typography>
+            )}
+          </AccordionDetails>
+        </Accordion>
+
+      </Box>
 
       {/* Hidden file input shared by both per-activity and general photo pickers */}
       <input ref={photoInputRef} type="file" accept="image/*,.heic,.heif" multiple style={{ display: 'none' }} onChange={handlePhotoSelect} />
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mt: 2 }}>
-        <FormControl size="small" sx={{ minWidth: 280 }}>
-          <InputLabel id="sr-report-company-label">Report as company</InputLabel>
-          <Select labelId="sr-report-company-label" value={reportCompany} label="Report as company" onChange={(e) => setReportCompany(e.target.value as ReportCompanyKey)}>
-            <MenuItem value="IOCT">{REPORT_COMPANIES.IOCT}</MenuItem>
-            <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
-          </Select>
-        </FormControl>
-        {photos.some(p => p.file || p.uploadStatus === 'done') && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>Photos in PDF:</Typography>
-            <ToggleButtonGroup size="small" exclusive value={photoPlacement} onChange={(_, v) => { if (v) setPhotoPlacement(v); }}>
-              <ToggleButton value="inline" sx={{ textTransform: 'none', fontSize: '0.75rem', py: 0.5, px: 1.25 }}>Inline per activity</ToggleButton>
-              <ToggleButton value="end" sx={{ textTransform: 'none', fontSize: '0.75rem', py: 0.5, px: 1.25 }}>End of report</ToggleButton>
-            </ToggleButtonGroup>
+
+      {/* Sticky bottom bar */}
+      <Paper
+        elevation={3}
+        sx={{
+          position: 'sticky',
+          bottom: 0,
+          zIndex: 10,
+          borderTop: `2px solid ${NET_PACIFIC_COLORS.primary}`,
+          px: 2,
+          py: 1.5,
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+          <Box sx={{ flex: 1, minWidth: 200 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+              {serviceReportNo || 'New Report'}
+            </Typography>
+            {editingServiceReportId !== null && (
+              <Chip label={`Editing ${serviceReports.find(r => r.id === editingServiceReportId)?.reportNo || ''}`} size="small" color="info" variant="outlined" />
+            )}
           </Box>
-        )}
-        <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={resetServiceReportForm} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>New report</Button>
-        <Button variant="contained" size="small" onClick={handleSaveServiceReport} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{serviceReportSaveFeedback ? 'Saved' : editingServiceReportId !== null ? 'Update report' : 'Save report'}</Button>
-        <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
-        <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Exporting...' : 'Export to PDF'}</Button>
-        <Button variant="outlined" size="small" startIcon={<GridOnIcon />} onClick={handleExportXlsx} disabled={exportingXlsx} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exportingXlsx ? 'Exporting...' : 'Export to Excel'}</Button>
-        {srLoading && <CircularProgress size={18} sx={{ color: NET_PACIFIC_COLORS.primary }} />}
-        {serviceReports.length > 0 && (
-          <>
-            <FormControl size="small" sx={{ minWidth: 240 }}>
-              <InputLabel id="load-service-report-label">Load previous report</InputLabel>
-              <Select labelId="load-service-report-label" value="" label="Load previous report" onChange={(e) => {
-                const report = serviceReports.find(r => r.id === e.target.value);
-                if (report) handleLoadServiceReport(report);
-                (e.target as HTMLSelectElement).value = '';
-              }}>
-                <MenuItem value=""><em>— Select to load —</em></MenuItem>
-                {serviceReports.map((r) => (
-                  <MenuItem key={r.id} value={r.id}>{new Date(r.date).toLocaleDateString('en-US', { dateStyle: 'medium' })} · {r.reportNo}{r.title ? ` · ${r.title.slice(0, 30)}${r.title.length > 30 ? '…' : ''}` : ''}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Button variant="outlined" size="small" color="error" onClick={handleClearServiceReports}>Clear all saved reports</Button>
-          </>
-        )}
-      </Box>
-      {serviceReports.length > 0 && (
-        <TableContainer sx={{ mt: 2, border: '1px solid #e2e8f0', borderRadius: 1 }}>
-          <Table size="small">
-            <TableHead>
-              <TableRow sx={{ bgcolor: '#f8fafc' }}>
-                <TableCell sx={{ fontWeight: 600 }}>Saved service reports</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Date</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Title</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600 }}>Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {serviceReports.map((r) => (
-                <TableRow key={r.id} hover selected={editingServiceReportId === r.id}>
-                  <TableCell>{r.reportNo}</TableCell>
-                  <TableCell>{new Date(r.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
-                  <TableCell>{r.title || 'Service Report'}</TableCell>
-                  <TableCell align="right">
-                    <Button size="small" onClick={() => handleLoadServiceReport(r)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
-                    <IconButton size="small" color="error" onClick={() => handleDeleteServiceReport(r)} title="Delete report" aria-label="Delete report">
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-      {editingServiceReportId !== null && serviceReports.find(r => r.id === editingServiceReportId) != null && (
-        <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-          <Typography variant="body2" sx={{ color: 'info.main', fontSize: '0.8125rem' }}>
-            Editing: {serviceReports.find(r => r.id === editingServiceReportId)!.reportNo}. Click &quot;Update report&quot; to save changes.
-          </Typography>
-          <Button size="small" variant="outlined" onClick={resetServiceReportForm}>Cancel edit</Button>
-          <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={handleDeleteLoadedServiceReport}>Delete report</Button>
+          <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+            <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={resetServiceReportForm} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>New</Button>
+            <Button variant="outlined" size="small" onClick={handleSaveServiceReport} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{serviceReportSaveFeedback ? 'Saved' : 'Save'}</Button>
+            <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview</Button>
+            <Button variant="contained" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Exporting...' : 'Export PDF'}</Button>
+            <Button variant="outlined" size="small" startIcon={<GridOnIcon />} onClick={handleExportXlsx} disabled={exportingXlsx} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exportingXlsx ? 'Excel...' : 'Excel'}</Button>
+          </Box>
         </Box>
-      )}
-      {exportFeedback && (
-        <Alert severity={exportFeedback.severity} sx={{ mt: 2 }} onClose={() => setExportFeedback(null)}>
-          {exportFeedback.message}
-        </Alert>
-      )}
-    </Paper>
+      </Paper>
+    </Box>
   );
 };
 
