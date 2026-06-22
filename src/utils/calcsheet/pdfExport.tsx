@@ -491,14 +491,6 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                       });
                       return rendered;
                     })()}
-                    <View style={styles.trSub}>
-                      <View style={styles.cItem} />
-                      <View style={styles.cDesc} />
-                      <View style={styles.cQty} />
-                      <View style={styles.cUom} />
-                      <View style={[styles.cUnit, { alignItems: 'flex-end' }]}><Text>sub total (vat-ex)</Text></View>
-                      <View style={styles.cTotal}><Text>{PHP(totals.servicesSubtotal)}</Text></View>
-                    </View>
                   </>
                 );
               })()
