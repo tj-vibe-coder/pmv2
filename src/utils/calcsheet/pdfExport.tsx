@@ -137,25 +137,25 @@ const styles = StyleSheet.create({
   th: {
     flexDirection: 'row', backgroundColor: SECTION_BG,
     borderBottom: `0.5px solid ${BORDER}`,
-    padding: '2 0', fontWeight: 700, fontSize: 8.5,
+    fontWeight: 700, fontSize: 8.5,
   },
   tr: {
     flexDirection: 'row',
-    padding: '2 0', fontSize: 8.5,
-    alignItems: 'center',
+    fontSize: 8.5,
   },
+  // Subtotal row — outside the bordered table, right-aligned
   trSub: {
     flexDirection: 'row',
-    padding: '1 0', fontSize: 8.5,
-    borderTop: `0.5px solid ${BORDER}`,
+    justifyContent: 'flex-end',
+    padding: '2 0', fontSize: 8.5,
   },
 
-  cItem: { width: '10%', paddingLeft: 4, alignSelf: 'stretch', justifyContent: 'center' },
-  cDesc: { width: '48%', borderLeft: `0.5px solid ${BORDER}`, paddingLeft: 4, paddingRight: 2, alignSelf: 'stretch', justifyContent: 'center' },
-  cQty: { width: '8%', borderLeft: `0.5px solid ${BORDER}`, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
-  cUom: { width: '8%', borderLeft: `0.5px solid ${BORDER}`, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
-  cUnit: { width: '13%', borderLeft: `0.5px solid ${BORDER}`, paddingRight: 4, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'flex-end' },
-  cTotal: { width: '13%', borderLeft: `0.5px solid ${BORDER}`, paddingRight: 4, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'flex-end' },
+  cItem: { width: '10%', paddingLeft: 4, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center' },
+  cDesc: { width: '48%', borderLeft: `0.5px solid ${BORDER}`, paddingLeft: 4, paddingRight: 2, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center' },
+  cQty: { width: '8%', borderLeft: `0.5px solid ${BORDER}`, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
+  cUom: { width: '8%', borderLeft: `0.5px solid ${BORDER}`, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
+  cUnit: { width: '13%', borderLeft: `0.5px solid ${BORDER}`, paddingRight: 4, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'flex-end' },
+  cTotal: { width: '13%', borderLeft: `0.5px solid ${BORDER}`, paddingRight: 4, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'flex-end' },
 
   // Summary — same vertical-line style
   summaryBlock: { marginTop: 4 },
@@ -167,16 +167,16 @@ const styles = StyleSheet.create({
   sumTh: {
     flexDirection: 'row', backgroundColor: SECTION_BG, color: TEXT,
     borderBottom: `0.5px solid ${BORDER}`,
-    padding: '2 0', fontWeight: 700, fontSize: 9,
+    fontWeight: 700, fontSize: 9,
   },
   sumRow: {
     flexDirection: 'row',
-    padding: '2 0', fontSize: 9,
+    fontSize: 9,
   },
-  sumItem: { flex: 1, paddingLeft: 6, alignSelf: 'stretch', justifyContent: 'center' },
-  sumQty: { width: '10%', borderLeft: `0.5px solid ${BORDER}`, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
-  sumUom: { width: '10%', borderLeft: `0.5px solid ${BORDER}`, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
-  sumPrice: { width: '20%', borderLeft: `0.5px solid ${BORDER}`, paddingRight: 6, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'flex-end' },
+  sumItem: { flex: 1, paddingLeft: 6, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center' },
+  sumQty: { width: '10%', borderLeft: `0.5px solid ${BORDER}`, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
+  sumUom: { width: '10%', borderLeft: `0.5px solid ${BORDER}`, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
+  sumPrice: { width: '20%', borderLeft: `0.5px solid ${BORDER}`, paddingRight: 6, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'flex-end' },
   sumFooterRow: {
     flexDirection: 'row', justifyContent: 'flex-end', padding: '2 6', fontSize: 9.5,
   },
@@ -356,14 +356,10 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 </View>
               ))
             )}
-            <View style={styles.trSub}>
-              <View style={styles.cItem} />
-              <View style={styles.cDesc} />
-              <View style={styles.cQty} />
-              <View style={styles.cUom} />
-              <View style={[styles.cUnit, { alignItems: 'flex-end' }]}><Text>sub total (vat-ex)</Text></View>
-              <View style={styles.cTotal}><Text>{PHP(totals.generalReqtsSubtotal)}</Text></View>
             </View>
+            <View style={styles.trSub}>
+              <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
+              <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.generalReqtsSubtotal)}</Text>
             </View>
           </>
         )}
@@ -421,14 +417,10 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     </View>
                   );
                 })}
-                <View style={styles.trSub}>
-                  <View style={styles.cItem} />
-                  <View style={styles.cDesc} />
-                  <View style={styles.cQty} />
-                  <View style={styles.cUom} />
-                  <View style={[styles.cUnit, { alignItems: 'flex-end' }]}><Text>sub total (vat-ex)</Text></View>
-                  <View style={styles.cTotal}><Text>{PHP(totals.componentsSubtotal)}</Text></View>
                 </View>
+                <View style={styles.trSub}>
+                  <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
+                  <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.componentsSubtotal)}</Text>
                 </View>
               </>
             );
@@ -546,16 +538,12 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     </View>
                   ))
                 )}
-                <View style={styles.trSub}>
-                  <View style={styles.cItem} />
-                  <View style={styles.cDesc} />
-                  <View style={styles.cQty} />
-                  <View style={styles.cUom} />
-                  <View style={[styles.cUnit, { alignItems: 'flex-end' }]}><Text>sub total (vat-ex)</Text></View>
-                  <View style={styles.cTotal}><Text>{PHP(totals.servicesSubtotal)}</Text></View>
-                </View>
               </>
             )}
+            </View>
+            <View style={styles.trSub}>
+              <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
+              <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.servicesSubtotal)}</Text>
             </View>
           </>
         )}
@@ -594,6 +582,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               <View style={styles.sumPrice}><Text>{PHP(totals.servicesSubtotal)}</Text></View>
             </View>
           )}
+          </View>
           <View style={[styles.sumFooterRow, styles.sumTotalRow]}>
             <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP (VAT-EX)</Text>
             <Text style={styles.sumFooterValue}>{PHP(totals.subtotal)}</Text>
@@ -622,7 +611,6 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               </View>
             </>
           )}
-          </View>
         </View>
 
         {/* ─── TERMS AND CONDITIONS ─── */}
