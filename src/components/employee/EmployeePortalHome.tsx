@@ -5,6 +5,7 @@ import {
   CalendarMonth as CalendarIcon,
   Receipt as ReceiptIcon,
   DescriptionOutlined as PayslipIcon,
+  Assignment as ReportIcon,
 } from '@mui/icons-material';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0', accent1: '#4f7bc8' };
@@ -24,6 +25,12 @@ const EmployeePortalHome: React.FC = () => {
       description: 'View your pay history, earnings, and deductions.',
       icon: <PayslipIcon sx={{ color: NET_PACIFIC_COLORS.primary, fontSize: 28 }} />,
       path: '/employee/payslips',
+    },
+    {
+      title: 'Service Report',
+      description: 'Create and submit daily service reports.',
+      icon: <ReportIcon sx={{ color: NET_PACIFIC_COLORS.primary, fontSize: 28 }} />,
+      path: '/employee/service-report',
     },
     {
       title: 'Expense Liquidation',

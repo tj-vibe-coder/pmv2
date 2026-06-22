@@ -14,6 +14,7 @@ import {
   Receipt as ReceiptIcon,
   QrCode2 as QrCodeIcon,
   DescriptionOutlined as PayslipIcon,
+  Assignment as ReportIcon,
 } from '@mui/icons-material';
 
 interface EmployeeNavListProps {
@@ -31,6 +32,7 @@ const EmployeeNavList: React.FC<EmployeeNavListProps> = ({ isExpanded, navBtnSx,
     { label: 'Clock In/Out', icon: <QrCodeIcon />, path: '/employee/clock' },
     { label: 'Daily Time Record', icon: <CalendarIcon />, path: '/employee/dtr' },
     { label: 'Payslips', icon: <PayslipIcon />, path: '/employee/payslips' },
+    { label: 'Service Report', icon: <ReportIcon />, path: '/employee/service-report' },
     { label: 'Liquidation', icon: <ReceiptIcon />, path: '/employee/liquidation-form' },
   ];
 

@@ -37,6 +37,7 @@ import EmployeePortalHome from './components/employee/EmployeePortalHome';
 import DTRPage from './components/employee/DTRPage';
 import ClockPage from './components/employee/ClockPage';
 import EmployeePayslipPage from './components/employee/EmployeePayslipPage';
+import EmployeeServiceReportPage from './components/employee/EmployeeServiceReportPage';
 import CalcsheetProjects from './components/calcsheet/CalcsheetProjects';
 import CalcsheetLegacyImport from './components/calcsheet/CalcsheetLegacyImport';
 import CalcsheetProjectDetail from './components/calcsheet/CalcsheetProjectDetail';
@@ -657,6 +658,16 @@ function App() {
                 <ProtectedRoute>
                   <AppLayout>
                     <LiquidationFormPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/employee/service-report"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <EmployeeServiceReportPage />
                   </AppLayout>
                 </ProtectedRoute>
               }
