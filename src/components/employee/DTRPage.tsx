@@ -1,15 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
   Typography,
   TextField,
   Button,
   Paper,
   Chip,
-  Grid,
   Table,
   TableBody,
   TableCell,
@@ -18,16 +14,14 @@ import {
   TableRow,
   IconButton,
   FormControl,
-  InputLabel,
   Select,
   MenuItem,
   Checkbox,
-  FormControlLabel,
   Alert,
 } from '@mui/material';
 import {
-  ExpandMore as ExpandMoreIcon,
-  Delete as DeleteIcon,
+  ChevronLeft as ChevronLeftIcon,
+  ChevronRight as ChevronRightIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import type { DTREntry, DayType } from '../../types/Payroll';
@@ -37,68 +31,77 @@ const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 const DAY_TYPES: { value: DayType; label: string }[] = [
   { value: 'REGULAR', label: 'Regular' },
   { value: 'REST_DAY', label: 'Rest Day' },
-  { value: 'SPECIAL_HOLIDAY', label: 'Special Holiday' },
-  { value: 'REGULAR_HOLIDAY', label: 'Regular Holiday' },
-  { value: 'DOUBLE_HOLIDAY', label: 'Double Holiday' },
+  { value: 'SPECIAL_HOLIDAY', label: 'Special Hol.' },
+  { value: 'REGULAR_HOLIDAY', label: 'Regular Hol.' },
+  { value: 'DOUBLE_HOLIDAY', label: 'Double Hol.' },
 ];
+
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const API_BASE = '';
 
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
+/** Get Monday of the week containing `date`. */
+function getWeekStart(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay(); // 0=Sun, 1=Mon, ...
+  const diff = day === 0 ? -6 : 1 - day; // shift to Monday
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/** Get 7 dates starting from Monday. */
+function getWeekDates(weekStart: Date): Date[] {
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+}
+
+function toDateStr(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function computeHours(timeIn: string, timeOut: string): number {
+  if (!timeIn || !timeOut) return 0;
+  const [inH, inM] = timeIn.split(':').map(Number);
+  const [outH, outM] = timeOut.split(':').map(Number);
+  let diff = (outH * 60 + outM) - (inH * 60 + inM);
+  if (diff < 0) diff += 24 * 60;
+  return Math.round(diff / 30) * 0.5;
+}
+
+interface WeekRow {
+  date: Date;
+  dateStr: string;
+  dayName: string;
+  isWeekend: boolean;
+  // editable fields
+  timeIn: string;
+  timeOut: string;
+  dayType: DayType;
+  regularHours: number;
+  overtimeHours: number;
+  isAbsent: boolean;
+  remarks: string;
+  // tracking
+  existingId: string | null; // Firestore doc id if already saved
+  dirty: boolean; // changed since load
+}
 
 const DTRPage: React.FC = () => {
   const { user } = useAuth();
   const employeeId = user?.id != null ? String(user.id) : '';
 
-  // Form state
-  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [timeIn, setTimeIn] = useState('');
-  const [timeOut, setTimeOut] = useState('');
-  const [dayType, setDayType] = useState<DayType>('REGULAR');
-  const [regularHours, setRegularHours] = useState(8);
-  const [overtimeHours, setOvertimeHours] = useState(0);
-  const [nightDiffHours, setNightDiffHours] = useState(0);
-  const [tardinessMinutes, setTardinessMinutes] = useState(0);
-  const [isAbsent, setIsAbsent] = useState(false);
-  const [remarks, setRemarks] = useState('');
-  const [editingId, setEditingId] = useState<string | null>(null);
-
-  // Auto-compute regular hours from time in/out
-  useEffect(() => {
-    if (!timeIn || !timeOut || isAbsent) return;
-    const [inH, inM] = timeIn.split(':').map(Number);
-    const [outH, outM] = timeOut.split(':').map(Number);
-    let diffMinutes = (outH * 60 + outM) - (inH * 60 + inM);
-    if (diffMinutes < 0) diffMinutes += 24 * 60; // overnight shift
-    const hours = Math.round(diffMinutes / 30) * 0.5; // round to nearest 0.5
-    setRegularHours(Math.max(0, hours));
-  }, [timeIn, timeOut, isAbsent]);
-
-  // Data state
+  const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()));
+  const [rows, setRows] = useState<WeekRow[]>([]);
   const [entries, setEntries] = useState<DTREntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [feedback, setFeedback] = useState<{
-    severity: 'success' | 'warning' | 'error';
-    message: string;
-  } | null>(null);
-  const [saveFeedback, setSaveFeedback] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
 
-  // Filter state
-  const [filterMonth, setFilterMonth] = useState(() => new Date().getMonth());
-  const [filterYear, setFilterYear] = useState(() => new Date().getFullYear());
-
-  // Accordion state
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    entry: true,
-    history: true,
-  });
-  const toggleSection = (section: string) => {
-    setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
-  };
-
+  // Fetch all entries for this employee
   const fetchEntries = useCallback(async () => {
     if (!employeeId) return;
     setLoading(true);
@@ -109,8 +112,7 @@ const DTRPage: React.FC = () => {
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (!res.ok) throw new Error('Failed to fetch');
-      const data = await res.json();
-      setEntries(data);
+      setEntries(await res.json());
     } catch {
       setFeedback({ severity: 'error', message: 'Failed to load DTR entries.' });
     } finally {
@@ -120,397 +122,306 @@ const DTRPage: React.FC = () => {
 
   useEffect(() => { fetchEntries(); }, [fetchEntries]);
 
-  const filteredEntries = useMemo(() => {
-    return entries
-      .filter(e => {
-        const d = new Date(e.entryDate);
-        return d.getMonth() === filterMonth && d.getFullYear() === filterYear;
-      })
-      .sort((a, b) => b.entryDate.localeCompare(a.entryDate));
-  }, [entries, filterMonth, filterYear]);
+  // Build week rows whenever weekStart or entries change
+  useEffect(() => {
+    const dates = getWeekDates(weekStart);
+    const entryMap = new Map<string, DTREntry>();
+    entries.forEach(e => entryMap.set(e.entryDate, e));
 
-  const resetForm = () => {
-    setEntryDate(new Date().toISOString().slice(0, 10));
-    setTimeIn('');
-    setTimeOut('');
-    setDayType('REGULAR');
-    setRegularHours(8);
-    setOvertimeHours(0);
-    setNightDiffHours(0);
-    setTardinessMinutes(0);
-    setIsAbsent(false);
-    setRemarks('');
-    setEditingId(null);
+    setRows(dates.map((d, i) => {
+      const dateStr = toDateStr(d);
+      const existing = entryMap.get(dateStr);
+      const isWeekend = i >= 5; // Sat=5, Sun=6
+      return {
+        date: d,
+        dateStr,
+        dayName: DAY_NAMES[i],
+        isWeekend,
+        timeIn: existing?.timeIn || '',
+        timeOut: existing?.timeOut || '',
+        dayType: existing?.dayType || (isWeekend ? 'REST_DAY' : 'REGULAR'),
+        regularHours: existing?.regularHours ?? (isWeekend ? 0 : 8),
+        overtimeHours: existing?.overtimeHours ?? 0,
+        isAbsent: existing?.isAbsent ?? false,
+        remarks: existing?.remarks || '',
+        existingId: existing?.id || null,
+        dirty: false,
+      };
+    }));
+  }, [weekStart, entries]);
+
+  const updateRow = (index: number, field: keyof WeekRow, value: string | number | boolean) => {
+    setRows(prev => prev.map((r, i) => {
+      if (i !== index) return r;
+      const updated = { ...r, [field]: value, dirty: true };
+      // Auto-compute hours when time changes
+      if (field === 'timeIn' || field === 'timeOut') {
+        const tIn = field === 'timeIn' ? (value as string) : r.timeIn;
+        const tOut = field === 'timeOut' ? (value as string) : r.timeOut;
+        if (tIn && tOut) {
+          updated.regularHours = computeHours(tIn, tOut);
+        }
+      }
+      // Absent clears times and hours
+      if (field === 'isAbsent' && value === true) {
+        updated.timeIn = '';
+        updated.timeOut = '';
+        updated.regularHours = 0;
+        updated.overtimeHours = 0;
+      }
+      return updated;
+    }));
   };
 
-  const handleSave = async () => {
+  const dirtyRows = useMemo(() => rows.filter(r => r.dirty), [rows]);
+  const weekTotal = useMemo(() => rows.reduce((s, r) => s + r.regularHours + r.overtimeHours, 0), [rows]);
+
+  const handleSaveWeek = async () => {
     if (!employeeId) {
       setFeedback({ severity: 'error', message: 'User ID not available. Please log out and log back in.' });
       return;
     }
-    if (!entryDate) {
-      setFeedback({ severity: 'warning', message: 'Please select a date.' });
+    if (dirtyRows.length === 0) {
+      setFeedback({ severity: 'warning', message: 'No changes to save.' });
       return;
     }
+    setSaving(true);
+    setFeedback(null);
     const token = localStorage.getItem('netpacific_token');
-    const body = {
-      employeeId,
-      entryDate,
-      timeIn: isAbsent ? '' : timeIn,
-      timeOut: isAbsent ? '' : timeOut,
-      dayType,
-      regularHours: isAbsent ? 0 : regularHours,
-      overtimeHours: isAbsent ? 0 : overtimeHours,
-      nightDiffHours: isAbsent ? 0 : nightDiffHours,
-      isAbsent,
-      tardinessMinutes: isAbsent ? 0 : tardinessMinutes,
-      remarks,
-    };
-    try {
-      const url = editingId ? `${API_BASE}/api/dtr/${editingId}` : `${API_BASE}/api/dtr`;
-      const method = editingId ? 'PUT' : 'POST';
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(err.error || 'Save failed');
+    let saved = 0;
+    let errors = 0;
+    for (const row of dirtyRows) {
+      const body = {
+        employeeId,
+        entryDate: row.dateStr,
+        timeIn: row.isAbsent ? '' : row.timeIn,
+        timeOut: row.isAbsent ? '' : row.timeOut,
+        dayType: row.dayType,
+        regularHours: row.isAbsent ? 0 : row.regularHours,
+        overtimeHours: row.isAbsent ? 0 : row.overtimeHours,
+        nightDiffHours: 0,
+        isAbsent: row.isAbsent,
+        tardinessMinutes: 0,
+        remarks: row.remarks,
+      };
+      try {
+        const url = row.existingId ? `${API_BASE}/api/dtr/${row.existingId}` : `${API_BASE}/api/dtr`;
+        const method = row.existingId ? 'PUT' : 'POST';
+        const res = await fetch(url, {
+          method,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({})) as { error?: string };
+          throw new Error(err.error || 'Save failed');
+        }
+        saved++;
+      } catch {
+        errors++;
       }
-      setSaveFeedback(true);
-      setTimeout(() => setSaveFeedback(false), 2000);
-      resetForm();
-      await fetchEntries();
-    } catch (e) {
-      setFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'Failed to save.' });
     }
-  };
-
-  const handleLoad = (entry: DTREntry) => {
-    setEntryDate(entry.entryDate);
-    setTimeIn(entry.timeIn || '');
-    setTimeOut(entry.timeOut || '');
-    setDayType(entry.dayType);
-    setRegularHours(entry.regularHours);
-    setOvertimeHours(entry.overtimeHours);
-    setNightDiffHours(entry.nightDiffHours);
-    setTardinessMinutes(entry.tardinessMinutes);
-    setIsAbsent(entry.isAbsent);
-    setRemarks(entry.remarks || '');
-    setEditingId(entry.id || null);
-    setExpandedSections(prev => ({ ...prev, entry: true }));
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Delete this DTR entry? This cannot be undone.')) return;
-    const token = localStorage.getItem('netpacific_token');
-    try {
-      const res = await fetch(`${API_BASE}/api/dtr/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error('Delete failed');
-      if (editingId === id) resetForm();
-      await fetchEntries();
-    } catch {
-      setFeedback({ severity: 'error', message: 'Failed to delete entry.' });
+    setSaving(false);
+    if (errors > 0) {
+      setFeedback({ severity: 'warning', message: `Saved ${saved} entries, ${errors} failed. Check for duplicate dates.` });
+    } else {
+      setFeedback({ severity: 'success', message: `Saved ${saved} entries.` });
     }
+    await fetchEntries();
   };
 
-  const years = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i);
+  const prevWeek = () => {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() - 7);
+    setWeekStart(d);
+  };
+
+  const nextWeek = () => {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + 7);
+    setWeekStart(d);
+  };
+
+  const goToCurrentWeek = () => setWeekStart(getWeekStart(new Date()));
+
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+
+  const formatDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const formatYear = (d: Date) => d.getFullYear();
+  const weekLabel = `${formatDate(weekStart)} – ${formatDate(weekEnd)}, ${formatYear(weekEnd)}`;
+
+  const isCurrentWeek = toDateStr(getWeekStart(new Date())) === toDateStr(weekStart);
+
+  const cellSx = { py: 0.5, px: 0.5, fontSize: '0.8125rem' };
+  const headerSx = { fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', py: 1, px: 0.5, whiteSpace: 'nowrap' as const };
 
   return (
-    <Box sx={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ pb: 2 }}>
-        {feedback && (
-          <Alert severity={feedback.severity} onClose={() => setFeedback(null)} sx={{ mb: 1 }}>
-            {feedback.message}
-          </Alert>
+    <Box>
+      {feedback && (
+        <Alert severity={feedback.severity} onClose={() => setFeedback(null)} sx={{ mb: 1.5 }}>
+          {feedback.message}
+        </Alert>
+      )}
+
+      {/* Week navigation */}
+      <Paper sx={{ p: 1.5, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+        <IconButton size="small" onClick={prevWeek} title="Previous week">
+          <ChevronLeftIcon />
+        </IconButton>
+        <Typography variant="h6" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, minWidth: 220, textAlign: 'center' }}>
+          {weekLabel}
+        </Typography>
+        <IconButton size="small" onClick={nextWeek} title="Next week">
+          <ChevronRightIcon />
+        </IconButton>
+        {!isCurrentWeek && (
+          <Button size="small" onClick={goToCurrentWeek} sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary, ml: 1 }}>
+            Today
+          </Button>
         )}
+        <Box sx={{ flex: 1 }} />
+        {loading && <Chip label="Loading..." size="small" variant="outlined" />}
+        <Chip label={`${weekTotal} hrs`} size="small" color="primary" variant="outlined" />
+        {dirtyRows.length > 0 && (
+          <Chip label={`${dirtyRows.length} unsaved`} size="small" color="warning" variant="outlined" />
+        )}
+      </Paper>
 
-        {/* Accordion 1: New / Edit Entry */}
-        <Accordion
-          expanded={expandedSections.entry}
-          onChange={() => toggleSection('entry')}
-          disableGutters
-          elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
-        >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
-              {editingId ? 'Edit Entry' : 'New Entry'}
-            </Typography>
-            {entryDate && (
-              <Chip label="Ready" size="small" color="success" variant="outlined" sx={{ mr: 1 }} />
-            )}
-          </AccordionSummary>
-          <AccordionDetails>
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: 4 }}>
-                <TextField
-                  size="small"
-                  fullWidth
-                  label="Date"
-                  type="date"
-                  value={entryDate}
-                  onChange={(e) => setEntryDate(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                />
-              </Grid>
-              <Grid size={{ xs: 12, sm: 4 }}>
-                <FormControl size="small" fullWidth>
-                  <InputLabel>Day Type</InputLabel>
-                  <Select
-                    value={dayType}
-                    label="Day Type"
-                    onChange={(e) => setDayType(e.target.value as DayType)}
-                  >
-                    {DAY_TYPES.map(dt => (
-                      <MenuItem key={dt.value} value={dt.value}>{dt.label}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
-              <Grid size={{ xs: 6, sm: 3 }}>
-                <TextField
-                  size="small"
-                  fullWidth
-                  label="Time In"
-                  type="time"
-                  value={timeIn}
-                  onChange={(e) => setTimeIn(e.target.value)}
-                  disabled={isAbsent}
-                  InputLabelProps={{ shrink: true }}
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 3 }}>
-                <TextField
-                  size="small"
-                  fullWidth
-                  label="Time Out"
-                  type="time"
-                  value={timeOut}
-                  onChange={(e) => setTimeOut(e.target.value)}
-                  disabled={isAbsent}
-                  InputLabelProps={{ shrink: true }}
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 2 }}>
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={isAbsent}
-                      onChange={(e) => {
-                        setIsAbsent(e.target.checked);
-                        if (e.target.checked) {
-                          setTimeIn('');
-                          setTimeOut('');
-                          setRegularHours(0);
-                          setOvertimeHours(0);
-                          setNightDiffHours(0);
-                          setTardinessMinutes(0);
-                        } else {
-                          setRegularHours(8);
-                        }
-                      }}
+      {/* Weekly timesheet grid */}
+      <TableContainer component={Paper} sx={{ mb: 1.5 }}>
+        <Table size="small" sx={{ '& td, & th': { border: '1px solid #e2e8f0' } }}>
+          <TableHead>
+            <TableRow>
+              <TableCell sx={headerSx}>Day</TableCell>
+              <TableCell sx={headerSx}>Date</TableCell>
+              <TableCell sx={headerSx}>Time In</TableCell>
+              <TableCell sx={headerSx}>Time Out</TableCell>
+              <TableCell sx={headerSx}>Hours</TableCell>
+              <TableCell sx={headerSx}>OT</TableCell>
+              <TableCell sx={headerSx}>Day Type</TableCell>
+              <TableCell sx={{ ...headerSx, textAlign: 'center' }}>Absent</TableCell>
+              <TableCell sx={headerSx}>Remarks</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {rows.map((row, index) => {
+              const isToday = row.dateStr === toDateStr(new Date());
+              const rowBg = row.dirty
+                ? '#fffde7'
+                : row.isAbsent
+                ? '#fce4ec'
+                : row.isWeekend
+                ? '#f5f5f5'
+                : isToday
+                ? '#e8f0fe'
+                : '#fff';
+              return (
+                <TableRow key={row.dateStr} sx={{ bgcolor: rowBg }}>
+                  <TableCell sx={{ ...cellSx, fontWeight: 600, width: 40 }}>
+                    {row.dayName}
+                  </TableCell>
+                  <TableCell sx={{ ...cellSx, whiteSpace: 'nowrap', width: 90 }}>
+                    {row.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    {isToday && <Chip label="Today" size="small" sx={{ ml: 0.5, height: 18, fontSize: '0.65rem' }} color="info" />}
+                  </TableCell>
+                  <TableCell sx={{ ...cellSx, width: 100 }}>
+                    <TextField
+                      size="small"
+                      type="time"
+                      value={row.timeIn}
+                      onChange={(e) => updateRow(index, 'timeIn', e.target.value)}
+                      disabled={row.isAbsent}
+                      variant="standard"
+                      InputProps={{ disableUnderline: true }}
+                      inputProps={{ style: { fontSize: '0.8125rem', padding: '2px 0' } }}
+                      fullWidth
                     />
-                  }
-                  label="Absent"
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 3 }}>
-                <TextField
-                  size="small"
-                  fullWidth
-                  label="Regular Hours"
-                  type="number"
-                  value={regularHours}
-                  onChange={(e) => setRegularHours(Number(e.target.value))}
-                  disabled={isAbsent}
-                  inputProps={{ min: 0, max: 24, step: 0.5 }}
-                  helperText={timeIn && timeOut && !isAbsent ? 'Auto-computed from time in/out' : ''}
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 3 }}>
-                <TextField
-                  size="small"
-                  fullWidth
-                  label="Overtime Hours"
-                  type="number"
-                  value={overtimeHours}
-                  onChange={(e) => setOvertimeHours(Number(e.target.value))}
-                  disabled={isAbsent}
-                  inputProps={{ min: 0, max: 16, step: 0.5 }}
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 3 }}>
-                <TextField
-                  size="small"
-                  fullWidth
-                  label="Night Diff Hours"
-                  type="number"
-                  value={nightDiffHours}
-                  onChange={(e) => setNightDiffHours(Number(e.target.value))}
-                  disabled={isAbsent}
-                  inputProps={{ min: 0, max: 16, step: 0.5 }}
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 3 }}>
-                <TextField
-                  size="small"
-                  fullWidth
-                  label="Tardiness (min)"
-                  type="number"
-                  value={tardinessMinutes}
-                  onChange={(e) => setTardinessMinutes(Number(e.target.value))}
-                  disabled={isAbsent}
-                  inputProps={{ min: 0, step: 1 }}
-                />
-              </Grid>
-              <Grid size={{ xs: 12 }}>
-                <TextField
-                  size="small"
-                  fullWidth
-                  label="Remarks"
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
-                  placeholder="e.g. site work at LBI plant"
-                />
-              </Grid>
-            </Grid>
-          </AccordionDetails>
-        </Accordion>
-
-        {/* Accordion 2: DTR History */}
-        <Accordion
-          expanded={expandedSections.history}
-          onChange={() => toggleSection('history')}
-          disableGutters
-          elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
-        >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
-              My DTR History
-            </Typography>
-            <Chip
-              label={loading ? 'Loading…' : `${filteredEntries.length} entries`}
-              size="small"
-              variant="outlined"
-              sx={{ mr: 1 }}
-            />
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: 0 }}>
-            {/* Month / Year filters */}
-            <Box sx={{ display: 'flex', gap: 1.5, px: 2, py: 1, flexWrap: 'wrap' }}>
-              <FormControl size="small" sx={{ minWidth: 140 }}>
-                <InputLabel>Month</InputLabel>
-                <Select
-                  value={filterMonth}
-                  label="Month"
-                  onChange={(e) => setFilterMonth(Number(e.target.value))}
-                >
-                  {MONTHS.map((m, i) => (
-                    <MenuItem key={i} value={i}>{m}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <FormControl size="small" sx={{ minWidth: 100 }}>
-                <InputLabel>Year</InputLabel>
-                <Select
-                  value={filterYear}
-                  label="Year"
-                  onChange={(e) => setFilterYear(Number(e.target.value))}
-                >
-                  {years.map(y => (
-                    <MenuItem key={y} value={y}>{y}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Box>
-
-            <TableContainer>
-              <Table size="small" stickyHeader>
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Date</TableCell>
-                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Time In</TableCell>
-                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Time Out</TableCell>
-                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Day Type</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Hrs</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>OT</TableCell>
-                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Remarks</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {filteredEntries.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={8} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                        No entries for {MONTHS[filterMonth]} {filterYear}.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    filteredEntries.map((entry) => (
-                      <TableRow
-                        key={entry.id}
-                        hover
-                        selected={editingId === entry.id}
-                        sx={editingId === entry.id ? { bgcolor: '#e8f0fe' } : undefined}
+                  </TableCell>
+                  <TableCell sx={{ ...cellSx, width: 100 }}>
+                    <TextField
+                      size="small"
+                      type="time"
+                      value={row.timeOut}
+                      onChange={(e) => updateRow(index, 'timeOut', e.target.value)}
+                      disabled={row.isAbsent}
+                      variant="standard"
+                      InputProps={{ disableUnderline: true }}
+                      inputProps={{ style: { fontSize: '0.8125rem', padding: '2px 0' } }}
+                      fullWidth
+                    />
+                  </TableCell>
+                  <TableCell sx={{ ...cellSx, width: 60, textAlign: 'right', fontWeight: 600 }}>
+                    {row.regularHours}
+                  </TableCell>
+                  <TableCell sx={{ ...cellSx, width: 55 }}>
+                    <TextField
+                      size="small"
+                      type="number"
+                      value={row.overtimeHours}
+                      onChange={(e) => updateRow(index, 'overtimeHours', Number(e.target.value))}
+                      disabled={row.isAbsent}
+                      variant="standard"
+                      InputProps={{ disableUnderline: true }}
+                      inputProps={{ min: 0, max: 16, step: 0.5, style: { fontSize: '0.8125rem', padding: '2px 0', textAlign: 'right' } }}
+                      fullWidth
+                    />
+                  </TableCell>
+                  <TableCell sx={{ ...cellSx, width: 110 }}>
+                    <FormControl size="small" variant="standard" fullWidth>
+                      <Select
+                        value={row.dayType}
+                        onChange={(e) => updateRow(index, 'dayType', e.target.value)}
+                        disableUnderline
+                        sx={{ fontSize: '0.75rem' }}
                       >
-                        <TableCell>
-                          {new Date(entry.entryDate + 'T00:00:00').toLocaleDateString('en-US', { dateStyle: 'medium' })}
-                        </TableCell>
-                        <TableCell>{entry.timeIn || '—'}</TableCell>
-                        <TableCell>{entry.timeOut || '—'}</TableCell>
-                        <TableCell>
-                          {entry.isAbsent ? (
-                            <Chip label="Absent" size="small" color="error" variant="outlined" />
-                          ) : (
-                            DAY_TYPES.find(dt => dt.value === entry.dayType)?.label ?? entry.dayType
-                          )}
-                        </TableCell>
-                        <TableCell align="right">{entry.regularHours}</TableCell>
-                        <TableCell align="right">{entry.overtimeHours || '—'}</TableCell>
-                        <TableCell
-                          sx={{
-                            maxWidth: 200,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {entry.remarks || '—'}
-                        </TableCell>
-                        <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
-                          <Button
-                            size="small"
-                            onClick={() => handleLoad(entry)}
-                            sx={{ color: NET_PACIFIC_COLORS.primary, textTransform: 'none', minWidth: 0 }}
-                          >
-                            Edit
-                          </Button>
-                          <IconButton
-                            size="small"
-                            color="error"
-                            onClick={() => handleDelete(entry.id!)}
-                            title="Delete entry"
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </AccordionDetails>
-        </Accordion>
-      </Box>
+                        {DAY_TYPES.map(dt => (
+                          <MenuItem key={dt.value} value={dt.value} sx={{ fontSize: '0.8125rem' }}>{dt.label}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </TableCell>
+                  <TableCell sx={{ ...cellSx, width: 50, textAlign: 'center' }}>
+                    <Checkbox
+                      size="small"
+                      checked={row.isAbsent}
+                      onChange={(e) => updateRow(index, 'isAbsent', e.target.checked)}
+                      sx={{ p: 0 }}
+                    />
+                  </TableCell>
+                  <TableCell sx={cellSx}>
+                    <TextField
+                      size="small"
+                      value={row.remarks}
+                      onChange={(e) => updateRow(index, 'remarks', e.target.value)}
+                      placeholder="—"
+                      variant="standard"
+                      InputProps={{ disableUnderline: true }}
+                      inputProps={{ style: { fontSize: '0.8125rem', padding: '2px 0' } }}
+                      fullWidth
+                    />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+            {/* Totals row */}
+            <TableRow sx={{ bgcolor: '#f8fafc' }}>
+              <TableCell colSpan={4} sx={{ ...cellSx, fontWeight: 600, textAlign: 'right' }}>
+                Week Total
+              </TableCell>
+              <TableCell sx={{ ...cellSx, fontWeight: 700, textAlign: 'right' }}>
+                {rows.reduce((s, r) => s + r.regularHours, 0)}
+              </TableCell>
+              <TableCell sx={{ ...cellSx, fontWeight: 700, textAlign: 'right' }}>
+                {rows.reduce((s, r) => s + r.overtimeHours, 0) || '—'}
+              </TableCell>
+              <TableCell colSpan={3} />
+            </TableRow>
+          </TableBody>
+        </Table>
+      </TableContainer>
 
-      {/* Sticky bottom bar */}
+      {/* Save bar */}
       <Paper
         elevation={3}
         sx={{
@@ -520,45 +431,22 @@ const DTRPage: React.FC = () => {
           borderTop: `2px solid ${NET_PACIFIC_COLORS.primary}`,
           px: 2,
           py: 1.5,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 2,
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-          <Box sx={{ flex: 1, minWidth: 200 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
-              {MONTHS[filterMonth]} {filterYear} — {filteredEntries.length} entries
-            </Typography>
-            {editingId && (
-              <Chip
-                label={`Editing ${new Date(entryDate + 'T00:00:00').toLocaleDateString('en-US', { dateStyle: 'medium' })}`}
-                size="small"
-                color="info"
-                variant="outlined"
-                sx={{ mt: 0.5 }}
-              />
-            )}
-          </Box>
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            {editingId && (
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={resetForm}
-                sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
-              >
-                Cancel
-              </Button>
-            )}
-            <Button
-              variant="contained"
-              size="small"
-              onClick={handleSave}
-              disabled={!entryDate}
-              sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}
-            >
-              {saveFeedback ? 'Saved!' : editingId ? 'Update' : 'Save Entry'}
-            </Button>
-          </Box>
-        </Box>
+        <Typography variant="body2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          {weekLabel} — {weekTotal} total hours
+        </Typography>
+        <Button
+          variant="contained"
+          onClick={handleSaveWeek}
+          disabled={saving || dirtyRows.length === 0}
+          sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}
+        >
+          {saving ? 'Saving...' : dirtyRows.length > 0 ? `Save Week (${dirtyRows.length} days)` : 'Saved'}
+        </Button>
       </Paper>
     </Box>
   );
