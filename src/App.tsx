@@ -2,7 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import { Box, Typography } from '@mui/material';
+import { Box } from '@mui/material';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
 import Header from './components/Header';
@@ -34,6 +34,7 @@ import PayrollGuard from './components/payroll/PayrollGuard';
 import FinanceHomePage from './components/finance/FinanceHomePage';
 import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
+import DTRPage from './components/employee/DTRPage';
 import CalcsheetProjects from './components/calcsheet/CalcsheetProjects';
 import CalcsheetLegacyImport from './components/calcsheet/CalcsheetLegacyImport';
 import CalcsheetProjectDetail from './components/calcsheet/CalcsheetProjectDetail';
@@ -150,13 +151,6 @@ const EmployeeGuard: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   }
   return <>{children}</>;
 };
-
-// DTR page placeholder — Task 3 will replace this with the real DTRPage component
-const DTRPagePlaceholder = () => (
-  <Box sx={{ p: 3 }}>
-    <Typography>DTR Page — coming in Task 3</Typography>
-  </Box>
-);
 
 // Redirect legacy /ehs and /ehs/:tab to /utilities/ehs and /utilities/ehs/:tab
 const RedirectEhsToUtilities: React.FC = () => {
@@ -650,7 +644,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <AppLayout>
-                    <DTRPagePlaceholder />
+                    <DTRPage />
                   </AppLayout>
                 </ProtectedRoute>
               }
