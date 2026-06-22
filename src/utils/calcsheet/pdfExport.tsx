@@ -14,7 +14,6 @@ const TEXT = '#222';
 const TEXT_LIGHT = '#666';
 const SECTION_BG = '#EAF0F8';
 const BORDER = '#999';
-const BORDER_LIGHT = '#DDD';
 
 const ISSUER_INFO = {
   IOCT: {
@@ -129,45 +128,55 @@ const styles = StyleSheet.create({
     fontSize: 9.5, padding: '2 8',
   },
 
-  // Table
+  // Table — vertical column lines only, no horizontal row borders
+  tableWrap: {
+    borderLeft: `0.5px solid ${BORDER}`,
+    borderRight: `0.5px solid ${BORDER}`,
+    borderBottom: `0.5px solid ${BORDER}`,
+  },
   th: {
     flexDirection: 'row', backgroundColor: SECTION_BG,
     borderBottom: `0.5px solid ${BORDER}`,
-    padding: '2 4', fontWeight: 700, fontSize: 8.5,
+    padding: '2 0', fontWeight: 700, fontSize: 8.5,
   },
   tr: {
-    flexDirection: 'row', borderBottom: `0.25px solid ${BORDER_LIGHT}`,
-    padding: '2 4', fontSize: 8.5,
+    flexDirection: 'row',
+    padding: '2 0', fontSize: 8.5,
     alignItems: 'center',
   },
   trSub: {
     flexDirection: 'row',
-    padding: '1 4', fontSize: 8.5,
+    padding: '1 0', fontSize: 8.5,
     borderTop: `0.5px solid ${BORDER}`,
   },
 
-  cItem: { width: '10%' },
-  cDesc: { width: '48%' },
-  cQty: { width: '8%', textAlign: 'center', lineHeight: 1.05 },
-  cUom: { width: '8%', textAlign: 'center', lineHeight: 1.05 },
-  cUnit: { width: '13%', textAlign: 'right', lineHeight: 1.05 },
-  cTotal: { width: '13%', textAlign: 'right', lineHeight: 1.05 },
+  cItem: { width: '10%', paddingLeft: 4 },
+  cDesc: { width: '48%', borderLeft: `0.5px solid ${BORDER}`, paddingLeft: 4, paddingRight: 2 },
+  cQty: { width: '8%', textAlign: 'center', lineHeight: 1.05, borderLeft: `0.5px solid ${BORDER}` },
+  cUom: { width: '8%', textAlign: 'center', lineHeight: 1.05, borderLeft: `0.5px solid ${BORDER}` },
+  cUnit: { width: '13%', textAlign: 'right', lineHeight: 1.05, borderLeft: `0.5px solid ${BORDER}`, paddingRight: 4 },
+  cTotal: { width: '13%', textAlign: 'right', lineHeight: 1.05, borderLeft: `0.5px solid ${BORDER}`, paddingRight: 4 },
 
-  // Summary
+  // Summary — same vertical-line style
   summaryBlock: { marginTop: 4 },
+  sumWrap: {
+    borderLeft: `0.5px solid ${BORDER}`,
+    borderRight: `0.5px solid ${BORDER}`,
+    borderBottom: `0.5px solid ${BORDER}`,
+  },
   sumTh: {
     flexDirection: 'row', backgroundColor: SECTION_BG, color: TEXT,
     borderBottom: `0.5px solid ${BORDER}`,
-    padding: '2 6', fontWeight: 700, fontSize: 9,
+    padding: '2 0', fontWeight: 700, fontSize: 9,
   },
   sumRow: {
-    flexDirection: 'row', borderBottom: `0.25px solid ${BORDER_LIGHT}`,
-    padding: '2 6', fontSize: 9,
+    flexDirection: 'row',
+    padding: '2 0', fontSize: 9,
   },
-  sumItem: { flex: 1 },
-  sumQty: { width: '10%', textAlign: 'center' },
-  sumUom: { width: '10%', textAlign: 'center' },
-  sumPrice: { width: '20%', textAlign: 'right' },
+  sumItem: { flex: 1, paddingLeft: 6 },
+  sumQty: { width: '10%', textAlign: 'center', borderLeft: `0.5px solid ${BORDER}` },
+  sumUom: { width: '10%', textAlign: 'center', borderLeft: `0.5px solid ${BORDER}` },
+  sumPrice: { width: '20%', textAlign: 'right', borderLeft: `0.5px solid ${BORDER}`, paddingRight: 6 },
   sumFooterRow: {
     flexDirection: 'row', justifyContent: 'flex-end', padding: '2 6', fontSize: 9.5,
   },
@@ -312,6 +321,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
         {hasA && (
           <>
             <Text style={styles.sectionBar}>General Requirements</Text>
+            <View style={styles.tableWrap}>
             <View style={styles.th}>
               <Text style={styles.cItem}>Item No.</Text>
               <Text style={styles.cDesc}>Description</Text>
@@ -354,6 +364,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               <Text style={[styles.cUnit, { textAlign: 'right' }]}>sub total (vat-ex)</Text>
               <Text style={styles.cTotal}>{PHP(totals.generalReqtsSubtotal)}</Text>
             </View>
+            </View>
           </>
         )}
 
@@ -371,6 +382,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             return (
               <>
                 <Text style={styles.sectionBar}>Supply of Components</Text>
+                <View style={styles.tableWrap}>
                 <View style={styles.th}>
                   <Text style={styles.cItem}>Item No.</Text>
                   <Text style={styles.cDesc}>Description</Text>
@@ -425,6 +437,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   <Text style={[styles.cUnit, { textAlign: 'right' }]}>sub total (vat-ex)</Text>
                   <Text style={styles.cTotal}>{PHP(totals.componentsSubtotal)}</Text>
                 </View>
+                </View>
               </>
             );
           })()
@@ -434,6 +447,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
         {hasC && (
           <>
             <Text style={styles.sectionBar}>Engineering Services</Text>
+            <View style={styles.tableWrap}>
             {quotation.servicesPerLinePricing ? (
               (() => {
                 // Collect unique groups and track which items are grouped
@@ -550,12 +564,14 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 </View>
               </>
             )}
+            </View>
           </>
         )}
 
         {/* ─── SUMMARY TABLE ─── */}
         <View style={styles.summaryBlock} wrap={false}>
           <Text style={styles.summaryBar}>Summary</Text>
+          <View style={styles.sumWrap}>
           <View style={styles.sumTh}>
             <Text style={styles.sumItem}>Item</Text>
             <Text style={styles.sumQty}>QTY</Text>
@@ -614,6 +630,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               </View>
             </>
           )}
+          </View>
         </View>
 
         {/* ─── TERMS AND CONDITIONS ─── */}
