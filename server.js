@@ -2532,6 +2532,101 @@ app.delete('/api/service-reports/:id', async (req, res) => {
   }
 });
 
+// ─── DTR Entries ────────────────────────────────────────────────────────────
+app.get('/api/dtr', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
+  const { employeeId } = req.query;
+  if (!employeeId) return res.status(400).json({ error: 'employeeId query parameter required' });
+  // Non-admin users can only query their own entries
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  if (!isAdmin && employeeId !== user.id) return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const snap = await db.collection('dtr_entries').where('employeeId', '==', employeeId).get();
+    const entries = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+    res.json(entries);
+  } catch (e) {
+    console.error('GET /api/dtr error:', e);
+    res.status(500).json({ error: 'Failed to fetch DTR entries' });
+  }
+});
+
+app.post('/api/dtr', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
+  const { employeeId, entryDate, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks } = req.body;
+  if (!employeeId || !entryDate || !dayType) return res.status(400).json({ error: 'employeeId, entryDate, and dayType are required' });
+  // Non-admin users can only create entries for themselves
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  if (!isAdmin && employeeId !== user.id) return res.status(403).json({ error: 'Forbidden' });
+  // Duplicate check
+  const existing = await db.collection('dtr_entries')
+    .where('employeeId', '==', employeeId)
+    .where('entryDate', '==', entryDate)
+    .get();
+  if (!existing.empty) return res.status(409).json({ error: `DTR entry already exists for ${entryDate}. Load and edit it instead.` });
+  try {
+    const entry = {
+      employeeId,
+      entryDate,
+      dayType,
+      regularHours: Number(regularHours) || 0,
+      overtimeHours: Number(overtimeHours) || 0,
+      nightDiffHours: Number(nightDiffHours) || 0,
+      isAbsent: !!isAbsent,
+      tardinessMinutes: Number(tardinessMinutes) || 0,
+      remarks: remarks || '',
+      submittedAt: new Date().toISOString(),
+    };
+    const ref = await db.collection('dtr_entries').add(entry);
+    res.status(201).json({ ...entry, id: ref.id });
+  } catch (e) {
+    console.error('POST /api/dtr error:', e);
+    res.status(500).json({ error: 'Failed to create DTR entry' });
+  }
+});
+
+app.put('/api/dtr/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  try {
+    const docRef = db.collection('dtr_entries').doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return res.status(404).json({ error: 'DTR entry not found' });
+    const data = doc.data();
+    const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+    if (!isAdmin && data.employeeId !== user.id) return res.status(403).json({ error: 'Forbidden' });
+    const { employeeId, id: _id, ...updates } = req.body;
+    updates.submittedAt = new Date().toISOString();
+    await docRef.update(updates);
+    const updated = await docRef.get();
+    res.json({ ...updated.data(), id: updated.id });
+  } catch (e) {
+    console.error('PUT /api/dtr/:id error:', e);
+    res.status(500).json({ error: 'Failed to update DTR entry' });
+  }
+});
+
+app.delete('/api/dtr/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  try {
+    const docRef = db.collection('dtr_entries').doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return res.status(404).json({ error: 'DTR entry not found' });
+    const data = doc.data();
+    const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+    if (!isAdmin && data.employeeId !== user.id) return res.status(403).json({ error: 'Forbidden' });
+    await docRef.delete();
+    res.json({ success: true });
+  } catch (e) {
+    console.error('DELETE /api/dtr/:id error:', e);
+    res.status(500).json({ error: 'Failed to delete DTR entry' });
+  }
+});
+
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {
   app.use(express.static(path.join(__dirname, 'build')));

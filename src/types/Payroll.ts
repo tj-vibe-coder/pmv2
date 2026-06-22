@@ -31,13 +31,15 @@ export type DayType =
 export interface DTREntry {
   id?: string;
   employeeId: string;
-  entryDate: string; // ISO string
+  entryDate: string; // YYYY-MM-DD
   dayType: DayType;
   regularHours: number;
   overtimeHours: number;
   nightDiffHours: number;
   isAbsent: boolean;
   tardinessMinutes: number;
+  remarks?: string;
+  submittedAt?: string;
 }
 
 export interface PayrollRun {
