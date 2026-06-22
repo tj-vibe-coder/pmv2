@@ -42,6 +42,8 @@ export interface DTREntry {
   tardinessMinutes: number;
   remarks?: string;
   submittedAt?: string;
+  clockInLocation?: { lat: number; lng: number; accuracy: number };
+  clockOutLocation?: { lat: number; lng: number; accuracy: number };
 }
 
 export interface PayrollRun {

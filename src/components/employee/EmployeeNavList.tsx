@@ -12,6 +12,7 @@ import {
   Home as HomeIcon,
   CalendarMonth as CalendarIcon,
   Receipt as ReceiptIcon,
+  QrCode2 as QrCodeIcon,
 } from '@mui/icons-material';
 
 interface EmployeeNavListProps {
@@ -26,6 +27,7 @@ const EmployeeNavList: React.FC<EmployeeNavListProps> = ({ isExpanded, navBtnSx,
 
   const items = [
     { label: 'Home', icon: <HomeIcon />, path: '/employee', exact: true },
+    { label: 'Clock In/Out', icon: <QrCodeIcon />, path: '/employee/clock' },
     { label: 'Daily Time Record', icon: <CalendarIcon />, path: '/employee/dtr' },
     { label: 'Liquidation', icon: <ReceiptIcon />, path: '/employee/liquidation-form' },
   ];
