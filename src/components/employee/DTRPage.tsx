@@ -202,8 +202,8 @@ const DTRPage: React.FC = () => {
   const years = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i);
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Box sx={{ flex: 1, overflow: 'auto', pb: 10 }}>
+    <Box sx={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ pb: 2 }}>
         {feedback && (
           <Alert severity={feedback.severity} onClose={() => setFeedback(null)} sx={{ mb: 1 }}>
             {feedback.message}
