@@ -40,6 +40,7 @@ import {
 } from '@mui/icons-material';
 import FinanceNavList from './finance/FinanceNavList';
 import SalesNavList from './sales/SalesNavList';
+import EmployeeNavList from './employee/EmployeeNavList';
 
 const SIDEBAR_WIDTH = 280;
 const SIDEBAR_COLLAPSED_WIDTH = 68;
@@ -54,6 +55,7 @@ const Sidebar: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const isEmployeeWorkspace = location.pathname === '/employee' || location.pathname.startsWith('/employee/');
   const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
   const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
   const [isExpanded, setIsExpanded] = useState(false);
@@ -150,10 +152,10 @@ const Sidebar: React.FC = () => {
         {isExpanded && (
           <Box>
             <Typography variant="subtitle1" sx={{ fontWeight: 600, color: 'white' }}>
-              {isFinanceWorkspace ? 'Finance' : isSalesWorkspace ? 'Sales' : 'Project Monitoring'}
+              {isEmployeeWorkspace ? 'Employee' : isFinanceWorkspace ? 'Finance' : isSalesWorkspace ? 'Sales' : 'Project Monitoring'}
             </Typography>
             <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)' }}>
-              {isFinanceWorkspace || isSalesWorkspace ? 'Workspace' : 'Dashboard'}
+              {isEmployeeWorkspace || isFinanceWorkspace || isSalesWorkspace ? 'Workspace' : 'Dashboard'}
             </Typography>
           </Box>
         )}
@@ -162,7 +164,9 @@ const Sidebar: React.FC = () => {
       <Divider sx={{ borderColor: 'rgba(255,255,255,0.2)', mx: isExpanded ? 2 : 1 }} />
 
       <Box sx={{ flexGrow: 1, mt: 1, overflowY: 'auto', overflowX: 'hidden' }}>
-        {isFinanceWorkspace ? (
+        {isEmployeeWorkspace ? (
+          <EmployeeNavList isExpanded={isExpanded} navBtnSx={navBtnSx} iconSx={iconSx} />
+        ) : isFinanceWorkspace ? (
           <FinanceNavList isExpanded={isExpanded} navBtnSx={navBtnSx} iconSx={iconSx} />
         ) : isSalesWorkspace ? (
           <SalesNavList isExpanded={isExpanded} navBtnSx={navBtnSx} iconSx={iconSx} />

@@ -29,7 +29,7 @@ interface RegistrationData extends LoginCredentials {
 const darkBlue = '#1e4a72';
 
 const LoginPage: React.FC = () => {
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -63,8 +63,11 @@ const LoginPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (isAuthenticated) navigate('/dashboard', { replace: true });
-  }, [isAuthenticated, navigate]);
+    if (isAuthenticated && user) {
+      const target = (user.role === 'user' || user.role === 'viewer') ? '/employee' : '/dashboard';
+      navigate(target, { replace: true });
+    }
+  }, [isAuthenticated, user, navigate]);
 
   const validateRegistration = (): string | null => {
     if (!registrationData.username.trim()) return 'Username is required';
@@ -87,8 +90,11 @@ const LoginPage: React.FC = () => {
     setError(null);
     try {
       const result = await login(loginData);
-      if (result.success) navigate('/dashboard', { replace: true });
-      else setError(result.error || 'Login failed');
+      if (result.success) {
+        const cachedUser = JSON.parse(localStorage.getItem('netpacific_user') || '{}');
+        const target = (cachedUser.role === 'user' || cachedUser.role === 'viewer') ? '/employee' : '/dashboard';
+        navigate(target, { replace: true });
+      } else setError(result.error || 'Login failed');
     } catch (err) {
       setError('An error occurred during login');
     } finally {

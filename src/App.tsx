@@ -2,7 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import { Box } from '@mui/material';
+import { Box, Typography } from '@mui/material';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
 import Header from './components/Header';
@@ -33,6 +33,7 @@ import PayrollDashboard from './components/payroll/PayrollDashboard';
 import PayrollGuard from './components/payroll/PayrollGuard';
 import FinanceHomePage from './components/finance/FinanceHomePage';
 import SalesHomePage from './components/sales/SalesHomePage';
+import EmployeePortalHome from './components/employee/EmployeePortalHome';
 import CalcsheetProjects from './components/calcsheet/CalcsheetProjects';
 import CalcsheetLegacyImport from './components/calcsheet/CalcsheetLegacyImport';
 import CalcsheetProjectDetail from './components/calcsheet/CalcsheetProjectDetail';
@@ -141,6 +142,22 @@ const SuperadminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) 
   return <>{children}</>;
 };
 
+// Employee guard: redirect user/viewer roles to the employee portal
+const EmployeeGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
+  if (user && (user.role === 'user' || user.role === 'viewer')) {
+    return <Navigate to="/employee" replace />;
+  }
+  return <>{children}</>;
+};
+
+// DTR page placeholder — Task 3 will replace this with the real DTRPage component
+const DTRPagePlaceholder = () => (
+  <Box sx={{ p: 3 }}>
+    <Typography>DTR Page — coming in Task 3</Typography>
+  </Box>
+);
+
 // Redirect legacy /ehs and /ehs/:tab to /utilities/ehs and /utilities/ehs/:tab
 const RedirectEhsToUtilities: React.FC = () => {
   const { tab } = useParams<{ tab?: string }>();
@@ -192,15 +209,17 @@ function App() {
         <Router>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route 
-              path="/dashboard" 
+            <Route
+              path="/dashboard"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ProjectMonitoringApp />
-                  </AppLayout>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <ProjectMonitoringApp />
+                    </AppLayout>
+                  </EmployeeGuard>
                 </ProtectedRoute>
-              } 
+              }
             />
             <Route 
               path="/location-analysis" 
@@ -296,15 +315,17 @@ function App() {
                 </ProtectedRoute>
               } 
             />
-            <Route 
-              path="/reports/:tab?" 
+            <Route
+              path="/reports/:tab?"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ReportsPage />
-                  </AppLayout>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <ReportsPage />
+                    </AppLayout>
+                  </EmployeeGuard>
                 </ProtectedRoute>
-              } 
+              }
             />
             <Route path="/ehs" element={<Navigate to="/utilities/ehs" replace />} />
             <Route path="/ehs/:tab" element={<RedirectEhsToUtilities />} />
@@ -365,9 +386,11 @@ function App() {
               path="/finance"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <FinanceHomePage />
-                  </AppLayout>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <FinanceHomePage />
+                    </AppLayout>
+                  </EmployeeGuard>
                 </ProtectedRoute>
               }
             />
@@ -375,9 +398,11 @@ function App() {
               path="/finance/collections"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <CollectionsDashboard />
-                  </AppLayout>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <CollectionsDashboard />
+                    </AppLayout>
+                  </EmployeeGuard>
                 </ProtectedRoute>
               }
             />
@@ -385,9 +410,11 @@ function App() {
               path="/finance/investment-tracker"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <InvestmentTrackerPage />
-                  </AppLayout>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <InvestmentTrackerPage />
+                    </AppLayout>
+                  </EmployeeGuard>
                 </ProtectedRoute>
               }
             />
@@ -395,11 +422,13 @@ function App() {
               path="/finance/payroll"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <PayrollGuard>
-                      <PayrollDashboard />
-                    </PayrollGuard>
-                  </AppLayout>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <PayrollGuard>
+                        <PayrollDashboard />
+                      </PayrollGuard>
+                    </AppLayout>
+                  </EmployeeGuard>
                 </ProtectedRoute>
               }
             />
@@ -408,9 +437,11 @@ function App() {
               path="/finance/expense-monitoring"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ExpenseMonitoring />
-                  </AppLayout>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <ExpenseMonitoring />
+                    </AppLayout>
+                  </EmployeeGuard>
                 </ProtectedRoute>
               }
             >
@@ -435,11 +466,13 @@ function App() {
               path="/sales"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <CalcsheetInit>
-                      <SalesHomePage />
-                    </CalcsheetInit>
-                  </AppLayout>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <CalcsheetInit>
+                        <SalesHomePage />
+                      </CalcsheetInit>
+                    </AppLayout>
+                  </EmployeeGuard>
                 </ProtectedRoute>
               }
             />
@@ -596,6 +629,38 @@ function App() {
                 <ProtectedRoute>
                   <AppLayout>
                     <EstimatesPage />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+
+            {/* ===== EMPLOYEE PORTAL ===== */}
+            <Route
+              path="/employee"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <EmployeePortalHome />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/employee/dtr"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <DTRPagePlaceholder />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/employee/liquidation-form"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <LiquidationFormPage />
                   </AppLayout>
                 </ProtectedRoute>
               }

@@ -27,6 +27,7 @@ const Header: React.FC = () => {
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const isEmployeeWorkspace = location.pathname === '/employee' || location.pathname.startsWith('/employee/');
   const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
   const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
   const workspace = isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects';
@@ -80,13 +81,14 @@ const Header: React.FC = () => {
             component="div"
             sx={{ fontWeight: 600, color: '#2c5aa0', letterSpacing: '0.5px' }}
           >
-            {isFinanceWorkspace ? 'Finance' : isSalesWorkspace ? 'Sales' : 'Project Monitoring System'}
+            {isEmployeeWorkspace ? 'Employee Portal' : isFinanceWorkspace ? 'Finance' : isSalesWorkspace ? 'Sales' : 'Project Monitoring System'}
           </Typography>
         </Box>
         
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           {isAuthenticated ? (
             <>
+              {!isEmployeeWorkspace && (
               <ToggleButtonGroup
                 value={workspace}
                 exclusive
@@ -118,6 +120,7 @@ const Header: React.FC = () => {
                 <ToggleButton value="sales">Sales</ToggleButton>
                 <ToggleButton value="finance">Finance</ToggleButton>
               </ToggleButtonGroup>
+              )}
 
               <Chip
                 label={user?.role.toUpperCase()}
