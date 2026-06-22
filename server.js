@@ -1519,6 +1519,35 @@ app.post('/api/payroll/runs/:runId/payslips', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to save payslips' }); }
 });
 
+// ── Employee Payslip (self-service) ────────────────────────────────────────
+app.get('/api/payroll/my-payslips', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const runsSnap = await db.collection('payroll_runs').orderBy('payDate', 'desc').get();
+    const payslips = [];
+    for (const runDoc of runsSnap.docs) {
+      // Payslip doc ID = employeeId
+      const slipDoc = await runDoc.ref.collection('payslips').doc(user.id).get();
+      if (slipDoc.exists) {
+        payslips.push({
+          ...slipDoc.data(),
+          id: slipDoc.id,
+          payrollRunId: runDoc.id,
+          payDate: runDoc.data().payDate,
+          periodStart: runDoc.data().periodStart,
+          periodEnd: runDoc.data().periodEnd,
+          runStatus: runDoc.data().status,
+        });
+      }
+    }
+    res.json(payslips);
+  } catch (err) {
+    console.error('GET /api/payroll/my-payslips error:', err);
+    res.status(500).json({ error: 'Failed to fetch payslips' });
+  }
+});
+
 // ── Contribution Settings ──────────────────────────────────────────────────
 app.get('/api/payroll/settings', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;

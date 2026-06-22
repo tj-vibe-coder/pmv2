@@ -4,6 +4,7 @@ import { Box, Typography, Grid, Paper, Button } from '@mui/material';
 import {
   CalendarMonth as CalendarIcon,
   Receipt as ReceiptIcon,
+  DescriptionOutlined as PayslipIcon,
 } from '@mui/icons-material';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0', accent1: '#4f7bc8' };
@@ -17,6 +18,12 @@ const EmployeePortalHome: React.FC = () => {
       description: 'Log your daily hours, overtime, and attendance.',
       icon: <CalendarIcon sx={{ color: NET_PACIFIC_COLORS.primary, fontSize: 28 }} />,
       path: '/employee/dtr',
+    },
+    {
+      title: 'Payslips',
+      description: 'View your pay history, earnings, and deductions.',
+      icon: <PayslipIcon sx={{ color: NET_PACIFIC_COLORS.primary, fontSize: 28 }} />,
+      path: '/employee/payslips',
     },
     {
       title: 'Expense Liquidation',
