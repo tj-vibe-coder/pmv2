@@ -36,27 +36,20 @@ const DAY_TYPES: { value: DayType; label: string }[] = [
   { value: 'DOUBLE_HOLIDAY', label: 'Double Hol.' },
 ];
 
-const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 const API_BASE = '';
 
-/** Get Monday of the week containing `date`. */
-function getWeekStart(date: Date): Date {
-  const d = new Date(date);
-  const day = d.getDay(); // 0=Sun, 1=Mon, ...
-  const diff = day === 0 ? -6 : 1 - day; // shift to Monday
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-/** Get 7 dates starting from Monday. */
-function getWeekDates(weekStart: Date): Date[] {
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + i);
-    return d;
-  });
+/** Get all dates in a given month. */
+function getMonthDates(year: number, month: number): Date[] {
+  const days: Date[] = [];
+  const d = new Date(year, month, 1);
+  while (d.getMonth() === month) {
+    days.push(new Date(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return days;
 }
 
 function toDateStr(d: Date): string {
@@ -75,7 +68,7 @@ function computeHours(timeIn: string, timeOut: string): number {
   return Math.round(diff / 30) * 0.5;
 }
 
-interface WeekRow {
+interface DayRow {
   date: Date;
   dateStr: string;
   dayName: string;
@@ -97,8 +90,9 @@ const DTRPage: React.FC = () => {
   const { user } = useAuth();
   const employeeId = user?.id != null ? String(user.id) : '';
 
-  const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()));
-  const [rows, setRows] = useState<WeekRow[]>([]);
+  const [viewMonth, setViewMonth] = useState(() => new Date().getMonth());
+  const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
+  const [rows, setRows] = useState<DayRow[]>([]);
   const [entries, setEntries] = useState<DTREntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -125,20 +119,21 @@ const DTRPage: React.FC = () => {
 
   useEffect(() => { fetchEntries(); }, [fetchEntries]);
 
-  // Build week rows whenever weekStart or entries change
+  // Build month rows whenever viewMonth/viewYear or entries change
   useEffect(() => {
-    const dates = getWeekDates(weekStart);
+    const dates = getMonthDates(viewYear, viewMonth);
     const entryMap = new Map<string, DTREntry>();
     entries.forEach(e => entryMap.set(e.entryDate, e));
 
-    setRows(dates.map((d, i) => {
+    setRows(dates.map((d) => {
       const dateStr = toDateStr(d);
       const existing = entryMap.get(dateStr);
-      const isWeekend = i >= 5; // Sat=5, Sun=6
+      const dayOfWeek = d.getDay(); // 0=Sun, 6=Sat
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
       return {
         date: d,
         dateStr,
-        dayName: DAY_NAMES[i],
+        dayName: DAY_ABBR[dayOfWeek],
         isWeekend,
         timeIn: existing?.timeIn || '',
         timeOut: existing?.timeOut || '',
@@ -151,9 +146,9 @@ const DTRPage: React.FC = () => {
         dirty: false,
       };
     }));
-  }, [weekStart, entries]);
+  }, [viewMonth, viewYear, entries]);
 
-  const updateRow = (index: number, field: keyof WeekRow, value: string | number | boolean) => {
+  const updateRow = (index: number, field: keyof DayRow, value: string | number | boolean) => {
     setRows(prev => prev.map((r, i) => {
       if (i !== index) return r;
       const updated = { ...r, [field]: value, dirty: true };
@@ -177,7 +172,7 @@ const DTRPage: React.FC = () => {
   };
 
   const dirtyRows = useMemo(() => rows.filter(r => r.dirty), [rows]);
-  const weekTotal = useMemo(() => rows.reduce((s, r) => s + r.regularHours + r.overtimeHours, 0), [rows]);
+  const monthTotal = useMemo(() => rows.reduce((s, r) => s + r.regularHours + r.overtimeHours, 0), [rows]);
 
   const handleSaveWeek = async () => {
     if (!employeeId) {
@@ -233,28 +228,21 @@ const DTRPage: React.FC = () => {
     await fetchEntries();
   };
 
-  const prevWeek = () => {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() - 7);
-    setWeekStart(d);
+  const prevMonth = () => {
+    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); }
+    else setViewMonth(m => m - 1);
   };
 
-  const nextWeek = () => {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + 7);
-    setWeekStart(d);
+  const nextMonth = () => {
+    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); }
+    else setViewMonth(m => m + 1);
   };
 
-  const goToCurrentWeek = () => setWeekStart(getWeekStart(new Date()));
+  const goToCurrentMonth = () => { setViewMonth(new Date().getMonth()); setViewYear(new Date().getFullYear()); };
 
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekEnd.getDate() + 6);
-
-  const formatDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  const formatYear = (d: Date) => d.getFullYear();
-  const weekLabel = `${formatDate(weekStart)} – ${formatDate(weekEnd)}, ${formatYear(weekEnd)}`;
-
-  const isCurrentWeek = toDateStr(getWeekStart(new Date())) === toDateStr(weekStart);
+  const monthLabel = `${MONTH_NAMES[viewMonth]} ${viewYear}`;
+  const now = new Date();
+  const isCurrentMonth = viewMonth === now.getMonth() && viewYear === now.getFullYear();
 
   const cellSx = { py: 0.5, px: 0.5, fontSize: '0.8125rem' };
   const headerSx = { fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', py: 1, px: 0.5, whiteSpace: 'nowrap' as const };
@@ -267,27 +255,27 @@ const DTRPage: React.FC = () => {
         </Alert>
       )}
 
-      {/* Week navigation */}
+      {/* Month navigation */}
       <Paper sx={{ p: { xs: 1, sm: 1.5 }, mb: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, mb: { xs: 1, sm: 0 } }}>
-          <IconButton size="small" onClick={prevWeek} title="Previous week">
+          <IconButton size="small" onClick={prevMonth} title="Previous month">
             <ChevronLeftIcon />
           </IconButton>
-          <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, textAlign: 'center', fontSize: { xs: '0.95rem', sm: '1.25rem' } }}>
-            {weekLabel}
+          <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, textAlign: 'center', fontSize: { xs: '0.95rem', sm: '1.25rem' }, minWidth: 160 }}>
+            {monthLabel}
           </Typography>
-          <IconButton size="small" onClick={nextWeek} title="Next week">
+          <IconButton size="small" onClick={nextMonth} title="Next month">
             <ChevronRightIcon />
           </IconButton>
-          {!isCurrentWeek && (
-            <Button size="small" onClick={goToCurrentWeek} sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary, minWidth: 0, px: 1 }}>
+          {!isCurrentMonth && (
+            <Button size="small" onClick={goToCurrentMonth} sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary, minWidth: 0, px: 1 }}>
               Today
             </Button>
           )}
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, flexWrap: 'wrap' }}>
           {loading && <Chip label="Loading..." size="small" variant="outlined" />}
-          <Chip label={`${weekTotal} hrs`} size="small" color="primary" variant="outlined" />
+          <Chip label={`${monthTotal} hrs`} size="small" color="primary" variant="outlined" />
           {dirtyRows.length > 0 && (
             <Chip label={`${dirtyRows.length} unsaved`} size="small" color="warning" variant="outlined" />
           )}
@@ -413,7 +401,7 @@ const DTRPage: React.FC = () => {
             {/* Totals row */}
             <TableRow sx={{ bgcolor: '#f8fafc' }}>
               <TableCell colSpan={4} sx={{ ...cellSx, fontWeight: 600, textAlign: 'right' }}>
-                Week Total
+                Month Total
               </TableCell>
               <TableCell sx={{ ...cellSx, fontWeight: 700, textAlign: 'right' }}>
                 {rows.reduce((s, r) => s + r.regularHours, 0)}
@@ -444,7 +432,7 @@ const DTRPage: React.FC = () => {
         }}
       >
         <Typography variant="body2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1, minWidth: 120, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
-          {weekTotal} total hours
+          {monthLabel} — {monthTotal} total hours
         </Typography>
         <Button
           variant="contained"
@@ -454,7 +442,7 @@ const DTRPage: React.FC = () => {
           sx={{ bgcolor: NET_PACIFIC_COLORS.primary, whiteSpace: 'nowrap' }}
           fullWidth={false}
         >
-          {saving ? 'Saving...' : dirtyRows.length > 0 ? `Save (${dirtyRows.length} days)` : 'Saved'}
+          {saving ? 'Saving...' : dirtyRows.length > 0 ? `Save ${dirtyRows.length} day${dirtyRows.length > 1 ? 's' : ''}` : 'Saved'}
         </Button>
       </Paper>
     </Box>
