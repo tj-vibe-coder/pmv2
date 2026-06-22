@@ -2540,7 +2540,7 @@ app.get('/api/dtr', async (req, res) => {
   if (!employeeId) return res.status(400).json({ error: 'employeeId query parameter required' });
   // Non-admin users can only query their own entries
   const isAdmin = user.role === 'superadmin' || user.role === 'admin';
-  if (!isAdmin && employeeId !== user.id) return res.status(403).json({ error: 'Forbidden' });
+  if (!isAdmin && String(employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
   try {
     const snap = await db.collection('dtr_entries').where('employeeId', '==', employeeId).get();
     const entries = snap.docs.map(d => ({ ...d.data(), id: d.id }));
@@ -2558,7 +2558,7 @@ app.post('/api/dtr', async (req, res) => {
   if (!employeeId || !entryDate || !dayType) return res.status(400).json({ error: 'employeeId, entryDate, and dayType are required' });
   // Non-admin users can only create entries for themselves
   const isAdmin = user.role === 'superadmin' || user.role === 'admin';
-  if (!isAdmin && employeeId !== user.id) return res.status(403).json({ error: 'Forbidden' });
+  if (!isAdmin && String(employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
   // Duplicate check
   const existing = await db.collection('dtr_entries')
     .where('employeeId', '==', employeeId)
@@ -2596,7 +2596,7 @@ app.put('/api/dtr/:id', async (req, res) => {
     if (!doc.exists) return res.status(404).json({ error: 'DTR entry not found' });
     const data = doc.data();
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
-    if (!isAdmin && data.employeeId !== user.id) return res.status(403).json({ error: 'Forbidden' });
+    if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
     const { employeeId, id: _id, ...updates } = req.body;
     updates.submittedAt = new Date().toISOString();
     await docRef.update(updates);
@@ -2618,7 +2618,7 @@ app.delete('/api/dtr/:id', async (req, res) => {
     if (!doc.exists) return res.status(404).json({ error: 'DTR entry not found' });
     const data = doc.data();
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
-    if (!isAdmin && data.employeeId !== user.id) return res.status(403).json({ error: 'Forbidden' });
+    if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
     await docRef.delete();
     res.json({ success: true });
   } catch (e) {

@@ -51,7 +51,7 @@ const MONTHS = [
 
 const DTRPage: React.FC = () => {
   const { user } = useAuth();
-  const employeeId = user?.id || '';
+  const employeeId = user?.id != null ? String(user.id) : '';
 
   // Form state
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -129,7 +129,14 @@ const DTRPage: React.FC = () => {
   };
 
   const handleSave = async () => {
-    if (!employeeId) return;
+    if (!employeeId) {
+      setFeedback({ severity: 'error', message: 'User ID not available. Please log out and log back in.' });
+      return;
+    }
+    if (!entryDate) {
+      setFeedback({ severity: 'warning', message: 'Please select a date.' });
+      return;
+    }
     const token = localStorage.getItem('netpacific_token');
     const body = {
       employeeId,
