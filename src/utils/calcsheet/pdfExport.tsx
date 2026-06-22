@@ -128,12 +128,8 @@ const styles = StyleSheet.create({
     fontSize: 9.5, padding: '2 8',
   },
 
-  // Table — vertical column lines only, no horizontal row borders
-  tableWrap: {
-    borderLeft: `0.5px solid ${BORDER}`,
-    borderRight: `0.5px solid ${BORDER}`,
-    borderBottom: `0.5px solid ${BORDER}`,
-  },
+  // Table — clean, no cell borders
+  tableWrap: {},
   th: {
     flexDirection: 'row', backgroundColor: SECTION_BG,
     borderBottom: `0.5px solid ${BORDER}`,
@@ -143,27 +139,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     fontSize: 8.5,
   },
-  // Subtotal row — outside the bordered table, right-aligned
   trSub: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    padding: '2 0', fontSize: 8.5,
+    padding: '3 0', fontSize: 8.5,
+    borderTop: `0.5px solid ${BORDER}`,
   },
 
-  cItem: { width: '10%', paddingLeft: 4, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center' },
-  cDesc: { width: '48%', borderLeft: `0.5px solid ${BORDER}`, paddingLeft: 4, paddingRight: 2, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center' },
-  cQty: { width: '8%', borderLeft: `0.5px solid ${BORDER}`, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
-  cUom: { width: '8%', borderLeft: `0.5px solid ${BORDER}`, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
-  cUnit: { width: '13%', borderLeft: `0.5px solid ${BORDER}`, paddingRight: 4, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'flex-end' },
-  cTotal: { width: '13%', borderLeft: `0.5px solid ${BORDER}`, paddingRight: 4, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'flex-end' },
+  cItem: { width: '10%', paddingLeft: 4, paddingVertical: 2 },
+  cDesc: { width: '48%', paddingLeft: 8, paddingRight: 2, paddingVertical: 2 },
+  cQty: { width: '8%', paddingVertical: 2, textAlign: 'center' },
+  cUom: { width: '8%', paddingVertical: 2, textAlign: 'center' },
+  cUnit: { width: '13%', paddingRight: 4, paddingVertical: 2, textAlign: 'right' },
+  cTotal: { width: '13%', paddingRight: 4, paddingVertical: 2, textAlign: 'right' },
 
-  // Summary — same vertical-line style
+  // Summary
   summaryBlock: { marginTop: 4 },
-  sumWrap: {
-    borderLeft: `0.5px solid ${BORDER}`,
-    borderRight: `0.5px solid ${BORDER}`,
-    borderBottom: `0.5px solid ${BORDER}`,
-  },
+  sumWrap: {},
   sumTh: {
     flexDirection: 'row', backgroundColor: SECTION_BG, color: TEXT,
     borderBottom: `0.5px solid ${BORDER}`,
@@ -173,12 +165,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     fontSize: 9,
   },
-  sumItem: { flex: 1, paddingLeft: 6, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center' },
-  sumQty: { width: '10%', borderLeft: `0.5px solid ${BORDER}`, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
-  sumUom: { width: '10%', borderLeft: `0.5px solid ${BORDER}`, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'center' },
-  sumPrice: { width: '20%', borderLeft: `0.5px solid ${BORDER}`, paddingRight: 6, paddingVertical: 2, alignSelf: 'stretch', justifyContent: 'center', alignItems: 'flex-end' },
+  sumItem: { flex: 1, paddingLeft: 6, paddingVertical: 2 },
+  sumQty: { width: '10%', paddingVertical: 2, textAlign: 'center' },
+  sumUom: { width: '10%', paddingVertical: 2, textAlign: 'center' },
+  sumPrice: { width: '20%', paddingRight: 6, paddingVertical: 2, textAlign: 'right' },
   sumFooterRow: {
-    flexDirection: 'row', justifyContent: 'flex-end', padding: '2 6', fontSize: 9.5,
+    flexDirection: 'row', justifyContent: 'flex-end', padding: '3 6', fontSize: 9.5,
   },
   sumTotalRow: {
     borderTop: `0.5px solid ${BORDER}`,
@@ -323,36 +315,36 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             <Text style={styles.sectionBar}>General Requirements</Text>
             <View style={styles.tableWrap}>
             <View style={styles.th}>
-              <View style={styles.cItem}><Text>Item No.</Text></View>
-              <View style={styles.cDesc}><Text>Description</Text></View>
-              <View style={styles.cQty}><Text>QTY</Text></View>
-              <View style={styles.cUom}><Text>UOM</Text></View>
-              <View style={styles.cUnit}><Text>Unit Price</Text></View>
-              <View style={styles.cTotal}><Text>Total , PhP</Text></View>
+              <Text style={styles.cItem}>Item No.</Text>
+              <Text style={styles.cDesc}>Description</Text>
+              <Text style={styles.cQty}>QTY</Text>
+              <Text style={styles.cUom}>UOM</Text>
+              <Text style={styles.cUnit}>Unit Price</Text>
+              <Text style={styles.cTotal}>Total , PhP</Text>
             </View>
             {exportGeneralReqtsAsLot ? (
               quotation.generalReqts.map((l, i) => {
                 const showLotTotal = i === groupedLotDisplayIndex(quotation.generalReqts.length);
                 return (
                   <View style={styles.tr} key={l.id}>
-                    <View style={styles.cItem}><Text>{l.code}</Text></View>
-                    <View style={styles.cDesc}><Text>{l.description}</Text></View>
-                    <View style={styles.cQty}><Text>{showLotTotal ? String(generalReqtsExportQty) : ''}</Text></View>
-                    <View style={styles.cUom}><Text>{showLotTotal ? 'LOT' : ''}</Text></View>
-                    <View style={styles.cUnit}><Text>{showLotTotal ? PHP(generalReqtsExportUnitPrice) : ''}</Text></View>
-                    <View style={styles.cTotal}><Text>{showLotTotal ? PHP(totals.generalReqtsSubtotal) : ''}</Text></View>
+                    <Text style={styles.cItem}>{l.code}</Text>
+                    <Text style={styles.cDesc}>{l.description}</Text>
+                    <Text style={styles.cQty}>{showLotTotal ? String(generalReqtsExportQty) : ''}</Text>
+                    <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
+                    <Text style={styles.cUnit}>{showLotTotal ? PHP(generalReqtsExportUnitPrice) : ''}</Text>
+                    <Text style={styles.cTotal}>{showLotTotal ? PHP(totals.generalReqtsSubtotal) : ''}</Text>
                   </View>
                 );
               })
             ) : (
               quotation.generalReqts.map((l) => (
                 <View style={styles.tr} key={l.id}>
-                  <View style={styles.cItem}><Text>{l.code}</Text></View>
-                  <View style={styles.cDesc}><Text>{l.description}</Text></View>
-                  <View style={styles.cQty}><Text>{l.qty}</Text></View>
-                  <View style={styles.cUom}><Text>{(l.uom ?? '').toUpperCase()}</Text></View>
-                  <View style={styles.cUnit}><Text>{PHP(l.unitPrice)}</Text></View>
-                  <View style={styles.cTotal}><Text>{PHP(lineGeneralTotal(l))}</Text></View>
+                  <Text style={styles.cItem}>{l.code}</Text>
+                  <Text style={styles.cDesc}>{l.description}</Text>
+                  <Text style={styles.cQty}>{l.qty}</Text>
+                  <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
+                  <Text style={styles.cUnit}>{PHP(l.unitPrice)}</Text>
+                  <Text style={styles.cTotal}>{PHP(lineGeneralTotal(l))}</Text>
                 </View>
               ))
             )}
@@ -380,12 +372,12 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 <Text style={styles.sectionBar}>Supply of Components</Text>
                 <View style={styles.tableWrap}>
                 <View style={styles.th}>
-                  <View style={styles.cItem}><Text>Item No.</Text></View>
-                  <View style={styles.cDesc}><Text>Description</Text></View>
-                  <View style={styles.cQty}><Text>QTY</Text></View>
-                  <View style={styles.cUom}><Text>UOM</Text></View>
-                  <View style={styles.cUnit}><Text>Unit Price</Text></View>
-                  <View style={styles.cTotal}><Text>Total , PhP</Text></View>
+                  <Text style={styles.cItem}>Item No.</Text>
+                  <Text style={styles.cDesc}>Description</Text>
+                  <Text style={styles.cQty}>QTY</Text>
+                  <Text style={styles.cUom}>UOM</Text>
+                  <Text style={styles.cUnit}>Unit Price</Text>
+                  <Text style={styles.cTotal}>Total , PhP</Text>
                 </View>
                 {quotation.components.map((l) => {
                   if (l.group) {
@@ -397,23 +389,23 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                       : 0;
                     return (
                       <View style={styles.tr} key={l.id}>
-                        <View style={styles.cItem}><Text>{l.code}</Text></View>
-                        <View style={styles.cDesc}><Text>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text></View>
-                        <View style={styles.cQty}><Text>{isMid ? '1' : ''}</Text></View>
-                        <View style={styles.cUom}><Text>{isMid ? 'LOT' : ''}</Text></View>
-                        <View style={styles.cUnit}><Text>{isMid ? PHP(groupTotal) : ''}</Text></View>
-                        <View style={styles.cTotal}><Text>{isMid ? PHP(groupTotal) : ''}</Text></View>
+                        <Text style={styles.cItem}>{l.code}</Text>
+                        <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
+                        <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
+                        <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
+                        <Text style={styles.cUnit}>{isMid ? PHP(groupTotal) : ''}</Text>
+                        <Text style={styles.cTotal}>{isMid ? PHP(groupTotal) : ''}</Text>
                       </View>
                     );
                   }
                   return (
                     <View style={styles.tr} key={l.id}>
-                      <View style={styles.cItem}><Text>{l.code}</Text></View>
-                      <View style={styles.cDesc}><Text>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text></View>
-                      <View style={styles.cQty}><Text>{l.qty.toFixed(2)}</Text></View>
-                      <View style={styles.cUom}><Text>{(l.uom ?? '').toUpperCase()}</Text></View>
-                      <View style={styles.cUnit}><Text>{PHP(componentSellingUnit(l, quotation.productMarkupPct))}</Text></View>
-                      <View style={styles.cTotal}><Text>{PHP(componentLineTotal(l, quotation.productMarkupPct))}</Text></View>
+                      <Text style={styles.cItem}>{l.code}</Text>
+                      <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
+                      <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
+                      <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
+                      <Text style={styles.cUnit}>{PHP(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
+                      <Text style={styles.cTotal}>{PHP(componentLineTotal(l, quotation.productMarkupPct))}</Text>
                     </View>
                   );
                 })}
@@ -449,12 +441,12 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 return (
                   <>
                     <View style={styles.th}>
-                      <View style={styles.cItem}><Text>Item No.</Text></View>
-                      <View style={styles.cDesc}><Text>Description</Text></View>
-                      <View style={styles.cQty}><Text>QTY</Text></View>
-                      <View style={styles.cUom}><Text>UOM</Text></View>
-                      <View style={styles.cUnit}><Text>Unit Price</Text></View>
-                      <View style={styles.cTotal}><Text>Total , PhP</Text></View>
+                      <Text style={styles.cItem}>Item No.</Text>
+                      <Text style={styles.cDesc}>Description</Text>
+                      <Text style={styles.cQty}>QTY</Text>
+                      <Text style={styles.cUom}>UOM</Text>
+                      <Text style={styles.cUnit}>Unit Price</Text>
+                      <Text style={styles.cTotal}>Total , PhP</Text>
                     </View>
                     {/* Render items; grouped items show pricing on the middle row */}
                     {(() => {
@@ -467,24 +459,24 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                           const groupTotal = isMid ? members.reduce((s, m) => s + (m.amount || 0), 0) : 0;
                           rendered.push(
                             <View style={styles.tr} key={l.id}>
-                              <View style={styles.cItem}><Text>{l.code}</Text></View>
-                              <View style={styles.cDesc}><Text>{l.description}</Text></View>
-                              <View style={styles.cQty}><Text>{isMid ? '1' : ''}</Text></View>
-                              <View style={styles.cUom}><Text>{isMid ? 'LOT' : ''}</Text></View>
-                              <View style={styles.cUnit}><Text>{isMid ? PHP(groupTotal) : ''}</Text></View>
-                              <View style={styles.cTotal}><Text>{isMid ? PHP(groupTotal) : ''}</Text></View>
+                              <Text style={styles.cItem}>{l.code}</Text>
+                              <Text style={styles.cDesc}>{l.description}</Text>
+                              <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
+                              <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
+                              <Text style={styles.cUnit}>{isMid ? PHP(groupTotal) : ''}</Text>
+                              <Text style={styles.cTotal}>{isMid ? PHP(groupTotal) : ''}</Text>
                             </View>,
                           );
                         } else {
                           // Ungrouped: show as individual 1 LOT line
                           rendered.push(
                             <View style={styles.tr} key={l.id}>
-                              <View style={styles.cItem}><Text>{l.code}</Text></View>
-                              <View style={styles.cDesc}><Text>{l.description}</Text></View>
-                              <View style={styles.cQty}><Text>1</Text></View>
-                              <View style={styles.cUom}><Text>LOT</Text></View>
-                              <View style={styles.cUnit}><Text>{PHP(l.amount)}</Text></View>
-                              <View style={styles.cTotal}><Text>{PHP(l.amount)}</Text></View>
+                              <Text style={styles.cItem}>{l.code}</Text>
+                              <Text style={styles.cDesc}>{l.description}</Text>
+                              <Text style={styles.cQty}>1</Text>
+                              <Text style={styles.cUom}>LOT</Text>
+                              <Text style={styles.cUnit}>{PHP(l.amount)}</Text>
+                              <Text style={styles.cTotal}>{PHP(l.amount)}</Text>
                             </View>,
                           );
                         }
@@ -497,36 +489,36 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             ) : (
               <>
                 <View style={styles.th}>
-                  <View style={styles.cItem}><Text>Item No.</Text></View>
-                  <View style={styles.cDesc}><Text>Description</Text></View>
-                  <View style={styles.cQty}><Text>QTY</Text></View>
-                  <View style={styles.cUom}><Text>UOM</Text></View>
-                  <View style={styles.cUnit}><Text>Unit Price</Text></View>
-                  <View style={styles.cTotal}><Text>Total , PhP</Text></View>
+                  <Text style={styles.cItem}>Item No.</Text>
+                  <Text style={styles.cDesc}>Description</Text>
+                  <Text style={styles.cQty}>QTY</Text>
+                  <Text style={styles.cUom}>UOM</Text>
+                  <Text style={styles.cUnit}>Unit Price</Text>
+                  <Text style={styles.cTotal}>Total , PhP</Text>
                 </View>
                 {quotation.servicesFromManpower ? (
                   quotation.services.map((l, i) => {
                     const showLotTotal = i === groupedLotDisplayIndex(quotation.services.length);
                     return (
                       <View style={styles.tr} key={l.id}>
-                        <View style={styles.cItem}><Text>{l.code}</Text></View>
-                        <View style={styles.cDesc}><Text>{l.description}</Text></View>
-                        <View style={styles.cQty}><Text>{showLotTotal ? String(engineeringServicesQty) : ''}</Text></View>
-                        <View style={styles.cUom}><Text>{showLotTotal ? 'LOT' : ''}</Text></View>
-                        <View style={styles.cUnit}><Text>{showLotTotal ? PHP(engineeringServicesUnitPrice) : ''}</Text></View>
-                        <View style={styles.cTotal}><Text>{showLotTotal ? PHP(totals.servicesSubtotal) : ''}</Text></View>
+                        <Text style={styles.cItem}>{l.code}</Text>
+                        <Text style={styles.cDesc}>{l.description}</Text>
+                        <Text style={styles.cQty}>{showLotTotal ? String(engineeringServicesQty) : ''}</Text>
+                        <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
+                        <Text style={styles.cUnit}>{showLotTotal ? PHP(engineeringServicesUnitPrice) : ''}</Text>
+                        <Text style={styles.cTotal}>{showLotTotal ? PHP(totals.servicesSubtotal) : ''}</Text>
                       </View>
                     );
                   })
                 ) : (
                   quotation.services.map((l) => (
                     <View style={styles.tr} key={l.id}>
-                      <View style={styles.cItem}><Text>{l.code}</Text></View>
-                      <View style={styles.cDesc}><Text>{l.description}</Text></View>
-                      <View style={styles.cQty}><Text>1</Text></View>
-                      <View style={styles.cUom}><Text>LOT</Text></View>
-                      <View style={styles.cUnit}><Text>{PHP(l.amount)}</Text></View>
-                      <View style={styles.cTotal}><Text>{PHP(l.amount)}</Text></View>
+                      <Text style={styles.cItem}>{l.code}</Text>
+                      <Text style={styles.cDesc}>{l.description}</Text>
+                      <Text style={styles.cQty}>1</Text>
+                      <Text style={styles.cUom}>LOT</Text>
+                      <Text style={styles.cUnit}>{PHP(l.amount)}</Text>
+                      <Text style={styles.cTotal}>{PHP(l.amount)}</Text>
                     </View>
                   ))
                 )}
@@ -545,33 +537,33 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
           <Text style={styles.summaryBar}>Summary</Text>
           <View style={styles.sumWrap}>
           <View style={styles.sumTh}>
-            <View style={styles.sumItem}><Text>Item</Text></View>
-            <View style={styles.sumQty}><Text>QTY</Text></View>
-            <View style={styles.sumUom}><Text>UOM</Text></View>
-            <View style={styles.sumPrice}><Text>Price, PhP</Text></View>
+            <Text style={styles.sumItem}>Item</Text>
+            <Text style={styles.sumQty}>QTY</Text>
+            <Text style={styles.sumUom}>UOM</Text>
+            <Text style={styles.sumPrice}>Price, PhP</Text>
           </View>
           {hasA && (
             <View style={styles.sumRow}>
-              <View style={styles.sumItem}><Text>General Requirements</Text></View>
-              <View style={styles.sumQty}><Text>1</Text></View>
-              <View style={styles.sumUom}><Text>LOT</Text></View>
-              <View style={styles.sumPrice}><Text>{PHP(totals.generalReqtsSubtotal)}</Text></View>
+              <Text style={styles.sumItem}>General Requirements</Text>
+              <Text style={styles.sumQty}>1</Text>
+              <Text style={styles.sumUom}>LOT</Text>
+              <Text style={styles.sumPrice}>{PHP(totals.generalReqtsSubtotal)}</Text>
             </View>
           )}
           {hasB && (
             <View style={styles.sumRow}>
-              <View style={styles.sumItem}><Text>Supply of Components</Text></View>
-              <View style={styles.sumQty}><Text>1</Text></View>
-              <View style={styles.sumUom}><Text>LOT</Text></View>
-              <View style={styles.sumPrice}><Text>{PHP(totals.componentsSubtotal)}</Text></View>
+              <Text style={styles.sumItem}>Supply of Components</Text>
+              <Text style={styles.sumQty}>1</Text>
+              <Text style={styles.sumUom}>LOT</Text>
+              <Text style={styles.sumPrice}>{PHP(totals.componentsSubtotal)}</Text>
             </View>
           )}
           {hasC && (
             <View style={styles.sumRow}>
-              <View style={styles.sumItem}><Text>Engineering Services</Text></View>
-              <View style={styles.sumQty}><Text>1</Text></View>
-              <View style={styles.sumUom}><Text>LOT</Text></View>
-              <View style={styles.sumPrice}><Text>{PHP(totals.servicesSubtotal)}</Text></View>
+              <Text style={styles.sumItem}>Engineering Services</Text>
+              <Text style={styles.sumQty}>1</Text>
+              <Text style={styles.sumUom}>LOT</Text>
+              <Text style={styles.sumPrice}>{PHP(totals.servicesSubtotal)}</Text>
             </View>
           )}
           </View>
