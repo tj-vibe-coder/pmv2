@@ -589,7 +589,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
                 <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
               </View>
-              <View style={[styles.sumFooterRow, styles.sumTotalRow]}>
+              <View style={styles.sumFooterRow}>
                 <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP (VAT-IN)</Text>
                 <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
               </View>
