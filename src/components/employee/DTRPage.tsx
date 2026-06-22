@@ -265,32 +265,35 @@ const DTRPage: React.FC = () => {
       )}
 
       {/* Week navigation */}
-      <Paper sx={{ p: 1.5, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-        <IconButton size="small" onClick={prevWeek} title="Previous week">
-          <ChevronLeftIcon />
-        </IconButton>
-        <Typography variant="h6" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, minWidth: 220, textAlign: 'center' }}>
-          {weekLabel}
-        </Typography>
-        <IconButton size="small" onClick={nextWeek} title="Next week">
-          <ChevronRightIcon />
-        </IconButton>
-        {!isCurrentWeek && (
-          <Button size="small" onClick={goToCurrentWeek} sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary, ml: 1 }}>
-            Today
-          </Button>
-        )}
-        <Box sx={{ flex: 1 }} />
-        {loading && <Chip label="Loading..." size="small" variant="outlined" />}
-        <Chip label={`${weekTotal} hrs`} size="small" color="primary" variant="outlined" />
-        {dirtyRows.length > 0 && (
-          <Chip label={`${dirtyRows.length} unsaved`} size="small" color="warning" variant="outlined" />
-        )}
+      <Paper sx={{ p: { xs: 1, sm: 1.5 }, mb: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, mb: { xs: 1, sm: 0 } }}>
+          <IconButton size="small" onClick={prevWeek} title="Previous week">
+            <ChevronLeftIcon />
+          </IconButton>
+          <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, textAlign: 'center', fontSize: { xs: '0.95rem', sm: '1.25rem' } }}>
+            {weekLabel}
+          </Typography>
+          <IconButton size="small" onClick={nextWeek} title="Next week">
+            <ChevronRightIcon />
+          </IconButton>
+          {!isCurrentWeek && (
+            <Button size="small" onClick={goToCurrentWeek} sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary, minWidth: 0, px: 1 }}>
+              Today
+            </Button>
+          )}
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, flexWrap: 'wrap' }}>
+          {loading && <Chip label="Loading..." size="small" variant="outlined" />}
+          <Chip label={`${weekTotal} hrs`} size="small" color="primary" variant="outlined" />
+          {dirtyRows.length > 0 && (
+            <Chip label={`${dirtyRows.length} unsaved`} size="small" color="warning" variant="outlined" />
+          )}
+        </Box>
       </Paper>
 
       {/* Weekly timesheet grid */}
-      <TableContainer component={Paper} sx={{ mb: 1.5 }}>
-        <Table size="small" sx={{ '& td, & th': { border: '1px solid #e2e8f0' } }}>
+      <TableContainer component={Paper} sx={{ mb: 1.5, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        <Table size="small" sx={{ minWidth: 700, '& td, & th': { border: '1px solid #e2e8f0' } }}>
           <TableHead>
             <TableRow>
               <TableCell sx={headerSx}>Day</TableCell>
@@ -429,23 +432,26 @@ const DTRPage: React.FC = () => {
           bottom: 0,
           zIndex: 10,
           borderTop: `2px solid ${NET_PACIFIC_COLORS.primary}`,
-          px: 2,
+          px: { xs: 1.5, sm: 2 },
           py: 1.5,
           display: 'flex',
           alignItems: 'center',
-          gap: 2,
+          gap: { xs: 1, sm: 2 },
+          flexWrap: 'wrap',
         }}
       >
-        <Typography variant="body2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
-          {weekLabel} — {weekTotal} total hours
+        <Typography variant="body2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1, minWidth: 120, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
+          {weekTotal} total hours
         </Typography>
         <Button
           variant="contained"
+          size="small"
           onClick={handleSaveWeek}
           disabled={saving || dirtyRows.length === 0}
-          sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}
+          sx={{ bgcolor: NET_PACIFIC_COLORS.primary, whiteSpace: 'nowrap' }}
+          fullWidth={false}
         >
-          {saving ? 'Saving...' : dirtyRows.length > 0 ? `Save Week (${dirtyRows.length} days)` : 'Saved'}
+          {saving ? 'Saving...' : dirtyRows.length > 0 ? `Save (${dirtyRows.length} days)` : 'Saved'}
         </Button>
       </Paper>
     </Box>

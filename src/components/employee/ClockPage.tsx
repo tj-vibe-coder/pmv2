@@ -46,7 +46,7 @@ const ClockPage: React.FC = () => {
   const [location, setLocation] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
 
   const clockUrl = `${window.location.origin}/employee/clock?scan=1`;
-  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(clockUrl)}`;
+  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(clockUrl)}`;
 
   const doClock = useCallback(async () => {
     if (!employeeId) {
@@ -74,7 +74,6 @@ const ClockPage: React.FC = () => {
       const todayEntry = entries.find((e: { entryDate: string }) => e.entryDate === today);
 
       if (!todayEntry) {
-        // Clock In
         const body: Record<string, unknown> = {
           employeeId, entryDate: today, timeIn: currentTime, timeOut: '',
           dayType: 'REGULAR', regularHours: 0, overtimeHours: 0, nightDiffHours: 0,
@@ -93,7 +92,6 @@ const ClockPage: React.FC = () => {
         setStatus('clocked_in');
         setResultTime(formatTime(now));
       } else if (!todayEntry.timeOut) {
-        // Clock Out
         const [inH, inM] = (todayEntry.timeIn || '08:00').split(':').map(Number);
         const [outH, outM] = currentTime.split(':').map(Number);
         let diffMin = (outH * 60 + outM) - (inH * 60 + inM);
@@ -111,7 +109,7 @@ const ClockPage: React.FC = () => {
         setResultTime(formatTime(now));
       } else {
         setStatus('already_done');
-        setResultMessage(`Clocked in at ${todayEntry.timeIn}, out at ${todayEntry.timeOut}`);
+        setResultMessage(`In: ${todayEntry.timeIn}  Out: ${todayEntry.timeOut}`);
       }
     } catch (e) {
       setStatus('error');
@@ -119,19 +117,18 @@ const ClockPage: React.FC = () => {
     }
   }, [employeeId]);
 
-  // Auto-clock when scanned via QR (?scan=1)
   useEffect(() => {
     if (autoScan) doClock();
   }, [autoScan, doClock]);
 
-  // --- Result screen (after clock action) ---
+  // --- Result screen ---
   if (status !== 'idle') {
     const configs: Record<Exclude<ClockStatus, 'idle'>, { icon: React.ReactNode; color: string; bg: string; title: string }> = {
-      loading: { icon: <CircularProgress size={64} />, color: NET_PACIFIC_COLORS.primary, bg: '#e8f0fe', title: 'Processing...' },
-      clocked_in: { icon: <LoginIcon sx={{ fontSize: 80, color: '#00b894' }} />, color: '#00b894', bg: '#e6f9f3', title: 'Clocked In' },
-      clocked_out: { icon: <LogoutIcon sx={{ fontSize: 80, color: NET_PACIFIC_COLORS.primary }} />, color: NET_PACIFIC_COLORS.primary, bg: '#e8f0fe', title: 'Clocked Out' },
-      already_done: { icon: <CheckIcon sx={{ fontSize: 80, color: '#fdcb6e' }} />, color: '#f39c12', bg: '#fef9e7', title: 'Already Recorded' },
-      error: { icon: <ErrorIcon sx={{ fontSize: 80, color: '#e74c3c' }} />, color: '#e74c3c', bg: '#fce4ec', title: 'Error' },
+      loading: { icon: <CircularProgress size={56} />, color: NET_PACIFIC_COLORS.primary, bg: '#e8f0fe', title: 'Processing...' },
+      clocked_in: { icon: <LoginIcon sx={{ fontSize: 64, color: '#00b894' }} />, color: '#00b894', bg: '#e6f9f3', title: 'Clocked In' },
+      clocked_out: { icon: <LogoutIcon sx={{ fontSize: 64, color: NET_PACIFIC_COLORS.primary }} />, color: NET_PACIFIC_COLORS.primary, bg: '#e8f0fe', title: 'Clocked Out' },
+      already_done: { icon: <CheckIcon sx={{ fontSize: 64, color: '#fdcb6e' }} />, color: '#f39c12', bg: '#fef9e7', title: 'Already Recorded' },
+      error: { icon: <ErrorIcon sx={{ fontSize: 64, color: '#e74c3c' }} />, color: '#e74c3c', bg: '#fce4ec', title: 'Error' },
     };
     const cfg = configs[status];
     const subtitle = status === 'clocked_in' ? `Time In: ${resultTime}`
@@ -139,27 +136,27 @@ const ClockPage: React.FC = () => {
       : resultMessage;
 
     return (
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 'calc(100vh - 120px)', p: 2 }}>
-        <Paper sx={{ p: 5, textAlign: 'center', maxWidth: 400, width: '100%', borderRadius: 3, bgcolor: cfg.bg, border: `2px solid ${cfg.color}` }}>
-          <Box sx={{ mb: 3 }}>{cfg.icon}</Box>
-          <Typography variant="h4" sx={{ fontWeight: 700, color: cfg.color, mb: 1 }}>{cfg.title}</Typography>
-          <Typography variant="h6" sx={{ color: 'text.secondary', mb: 1 }}>{subtitle}</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: { xs: 'calc(100vh - 140px)', sm: 'calc(100vh - 120px)' }, p: { xs: 1.5, sm: 2 } }}>
+        <Paper sx={{ p: { xs: 3, sm: 5 }, textAlign: 'center', maxWidth: 400, width: '100%', borderRadius: 3, bgcolor: cfg.bg, border: `2px solid ${cfg.color}` }}>
+          <Box sx={{ mb: 2 }}>{cfg.icon}</Box>
+          <Typography variant="h4" sx={{ fontWeight: 700, color: cfg.color, mb: 0.5, fontSize: { xs: '1.75rem', sm: '2.125rem' } }}>{cfg.title}</Typography>
+          <Typography variant="h6" sx={{ color: 'text.secondary', mb: 0.5, fontSize: { xs: '1rem', sm: '1.25rem' } }}>{subtitle}</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
           </Typography>
           {user && (
-            <Typography variant="body1" sx={{ fontWeight: 500, color: NET_PACIFIC_COLORS.primary }}>
+            <Typography variant="body1" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, fontSize: { xs: '0.95rem', sm: '1rem' } }}>
               {user.full_name || user.username}
             </Typography>
           )}
           {location && status !== 'loading' && (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-              Location: {location.lat.toFixed(5)}, {location.lng.toFixed(5)} ({'\u00B1'}{Math.round(location.accuracy)}m)
+              {location.lat.toFixed(5)}, {location.lng.toFixed(5)} ({'\u00B1'}{Math.round(location.accuracy)}m)
             </Typography>
           )}
           {(status === 'error' || status === 'already_done') && (
             <Button variant="outlined" onClick={() => setStatus('idle')} sx={{ mt: 2, borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>
-              Back to QR
+              Back
             </Button>
           )}
         </Paper>
@@ -167,58 +164,46 @@ const ClockPage: React.FC = () => {
     );
   }
 
-  // --- Default view: QR code display + manual clock button ---
+  // --- QR display + manual clock ---
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 'calc(100vh - 120px)', p: 2 }}>
-      <Paper sx={{ p: 4, textAlign: 'center', maxWidth: 420, width: '100%', borderRadius: 3, border: `1px solid #e2e8f0` }}>
-        <Typography variant="h5" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary, mb: 0.5 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: { xs: 'calc(100vh - 140px)', sm: 'calc(100vh - 120px)' }, p: { xs: 1.5, sm: 2 } }}>
+      <Paper sx={{ p: { xs: 2.5, sm: 4 }, textAlign: 'center', maxWidth: 400, width: '100%', borderRadius: 3, border: `1px solid #e2e8f0` }}>
+        <Typography variant="h5" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary, mb: 0.5, fontSize: { xs: '1.25rem', sm: '1.5rem' } }}>
           Clock In / Out
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          Scan this QR code with your phone to record attendance
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Scan this QR code to record attendance
         </Typography>
 
-        {/* QR Code */}
-        <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
-          <Box
-            sx={{
-              p: 2,
-              bgcolor: '#fff',
-              borderRadius: 2,
-              border: '2px solid #e2e8f0',
-              display: 'inline-block',
-            }}
-          >
+        <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1.5 }}>
+          <Box sx={{ p: 1.5, bgcolor: '#fff', borderRadius: 2, border: '2px solid #e2e8f0', display: 'inline-block' }}>
             <img
               src={qrImageUrl}
               alt="Clock In/Out QR Code"
-              width={280}
-              height={280}
-              style={{ display: 'block' }}
+              style={{ display: 'block', width: '100%', maxWidth: 240, height: 'auto' }}
             />
           </Box>
         </Box>
 
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 3, wordBreak: 'break-all' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2, wordBreak: 'break-all', fontSize: '0.65rem' }}>
           {clockUrl}
         </Typography>
 
-        <Divider sx={{ my: 2 }}>or</Divider>
+        <Divider sx={{ my: 2 }}>or clock manually</Divider>
 
-        {/* Manual clock button */}
         <Button
           variant="contained"
           size="large"
           startIcon={<ClockIcon />}
           onClick={doClock}
-          sx={{ bgcolor: NET_PACIFIC_COLORS.primary, px: 4, py: 1.5, fontSize: '1rem' }}
+          sx={{ bgcolor: NET_PACIFIC_COLORS.primary, py: 1.5, fontSize: { xs: '0.9rem', sm: '1rem' } }}
           fullWidth
         >
           Clock In / Out Now
         </Button>
 
         {user && (
-          <Typography variant="body2" sx={{ mt: 2, color: 'text.secondary' }}>
+          <Typography variant="body2" sx={{ mt: 1.5, color: 'text.secondary', fontSize: '0.8125rem' }}>
             Logged in as <strong>{user.full_name || user.username}</strong>
           </Typography>
         )}
