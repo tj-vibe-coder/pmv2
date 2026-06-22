@@ -55,6 +55,8 @@ const DTRPage: React.FC = () => {
 
   // Form state
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [timeIn, setTimeIn] = useState('');
+  const [timeOut, setTimeOut] = useState('');
   const [dayType, setDayType] = useState<DayType>('REGULAR');
   const [regularHours, setRegularHours] = useState(8);
   const [overtimeHours, setOvertimeHours] = useState(0);
@@ -63,6 +65,17 @@ const DTRPage: React.FC = () => {
   const [isAbsent, setIsAbsent] = useState(false);
   const [remarks, setRemarks] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Auto-compute regular hours from time in/out
+  useEffect(() => {
+    if (!timeIn || !timeOut || isAbsent) return;
+    const [inH, inM] = timeIn.split(':').map(Number);
+    const [outH, outM] = timeOut.split(':').map(Number);
+    let diffMinutes = (outH * 60 + outM) - (inH * 60 + inM);
+    if (diffMinutes < 0) diffMinutes += 24 * 60; // overnight shift
+    const hours = Math.round(diffMinutes / 30) * 0.5; // round to nearest 0.5
+    setRegularHours(Math.max(0, hours));
+  }, [timeIn, timeOut, isAbsent]);
 
   // Data state
   const [entries, setEntries] = useState<DTREntry[]>([]);
@@ -118,6 +131,8 @@ const DTRPage: React.FC = () => {
 
   const resetForm = () => {
     setEntryDate(new Date().toISOString().slice(0, 10));
+    setTimeIn('');
+    setTimeOut('');
     setDayType('REGULAR');
     setRegularHours(8);
     setOvertimeHours(0);
@@ -141,6 +156,8 @@ const DTRPage: React.FC = () => {
     const body = {
       employeeId,
       entryDate,
+      timeIn: isAbsent ? '' : timeIn,
+      timeOut: isAbsent ? '' : timeOut,
       dayType,
       regularHours: isAbsent ? 0 : regularHours,
       overtimeHours: isAbsent ? 0 : overtimeHours,
@@ -172,6 +189,8 @@ const DTRPage: React.FC = () => {
 
   const handleLoad = (entry: DTREntry) => {
     setEntryDate(entry.entryDate);
+    setTimeIn(entry.timeIn || '');
+    setTimeOut(entry.timeOut || '');
     setDayType(entry.dayType);
     setRegularHours(entry.regularHours);
     setOvertimeHours(entry.overtimeHours);
@@ -253,7 +272,31 @@ const DTRPage: React.FC = () => {
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid size={{ xs: 12, sm: 4 }}>
+              <Grid size={{ xs: 6, sm: 3 }}>
+                <TextField
+                  size="small"
+                  fullWidth
+                  label="Time In"
+                  type="time"
+                  value={timeIn}
+                  onChange={(e) => setTimeIn(e.target.value)}
+                  disabled={isAbsent}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 3 }}>
+                <TextField
+                  size="small"
+                  fullWidth
+                  label="Time Out"
+                  type="time"
+                  value={timeOut}
+                  onChange={(e) => setTimeOut(e.target.value)}
+                  disabled={isAbsent}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 2 }}>
                 <FormControlLabel
                   control={
                     <Checkbox
@@ -261,6 +304,8 @@ const DTRPage: React.FC = () => {
                       onChange={(e) => {
                         setIsAbsent(e.target.checked);
                         if (e.target.checked) {
+                          setTimeIn('');
+                          setTimeOut('');
                           setRegularHours(0);
                           setOvertimeHours(0);
                           setNightDiffHours(0);
@@ -284,6 +329,7 @@ const DTRPage: React.FC = () => {
                   onChange={(e) => setRegularHours(Number(e.target.value))}
                   disabled={isAbsent}
                   inputProps={{ min: 0, max: 24, step: 0.5 }}
+                  helperText={timeIn && timeOut && !isAbsent ? 'Auto-computed from time in/out' : ''}
                 />
               </Grid>
               <Grid size={{ xs: 6, sm: 3 }}>
@@ -389,11 +435,11 @@ const DTRPage: React.FC = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Date</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Time In</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Time Out</TableCell>
                     <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Day Type</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Reg Hrs</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>OT Hrs</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Night Diff</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Tardy</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Hrs</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>OT</TableCell>
                     <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Remarks</TableCell>
                     <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Actions</TableCell>
                   </TableRow>
@@ -416,6 +462,8 @@ const DTRPage: React.FC = () => {
                         <TableCell>
                           {new Date(entry.entryDate + 'T00:00:00').toLocaleDateString('en-US', { dateStyle: 'medium' })}
                         </TableCell>
+                        <TableCell>{entry.timeIn || '—'}</TableCell>
+                        <TableCell>{entry.timeOut || '—'}</TableCell>
                         <TableCell>
                           {entry.isAbsent ? (
                             <Chip label="Absent" size="small" color="error" variant="outlined" />
@@ -425,10 +473,6 @@ const DTRPage: React.FC = () => {
                         </TableCell>
                         <TableCell align="right">{entry.regularHours}</TableCell>
                         <TableCell align="right">{entry.overtimeHours || '—'}</TableCell>
-                        <TableCell align="right">{entry.nightDiffHours || '—'}</TableCell>
-                        <TableCell align="right">
-                          {entry.tardinessMinutes ? `${entry.tardinessMinutes}m` : '—'}
-                        </TableCell>
                         <TableCell
                           sx={{
                             maxWidth: 200,

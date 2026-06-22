@@ -2554,7 +2554,7 @@ app.get('/api/dtr', async (req, res) => {
 app.post('/api/dtr', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
-  const { employeeId, entryDate, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks } = req.body;
+  const { employeeId, entryDate, timeIn, timeOut, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks } = req.body;
   if (!employeeId || !entryDate || !dayType) return res.status(400).json({ error: 'employeeId, entryDate, and dayType are required' });
   // Non-admin users can only create entries for themselves
   const isAdmin = user.role === 'superadmin' || user.role === 'admin';
@@ -2569,6 +2569,8 @@ app.post('/api/dtr', async (req, res) => {
     const entry = {
       employeeId,
       entryDate,
+      timeIn: timeIn || '',
+      timeOut: timeOut || '',
       dayType,
       regularHours: Number(regularHours) || 0,
       overtimeHours: Number(overtimeHours) || 0,

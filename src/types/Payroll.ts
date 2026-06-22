@@ -32,6 +32,8 @@ export interface DTREntry {
   id?: string;
   employeeId: string;
   entryDate: string; // YYYY-MM-DD
+  timeIn?: string;   // HH:MM (24h)
+  timeOut?: string;   // HH:MM (24h)
   dayType: DayType;
   regularHours: number;
   overtimeHours: number;
