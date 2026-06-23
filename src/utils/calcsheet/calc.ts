@@ -13,7 +13,8 @@ export function lineGeneralTotal(l: GeneralReqLine): number {
 
 export function componentSellingUnit(l: ComponentLine, productMarkupPct: number): number {
   const adjusted = componentCostUnit(l) * (1 + (l.contingencyPct || 0) / 100);
-  return adjusted * (1 + (productMarkupPct || 0) / 100);
+  const markup = l.markupPct != null ? l.markupPct : productMarkupPct;
+  return adjusted * (1 + (markup || 0) / 100);
 }
 
 export function componentCostUnit(l: ComponentLine): number {
@@ -72,11 +73,18 @@ export function computeTotals(q: Quotation): QuotationTotals {
   const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, q.generalReqtsExportQty || 1) : 1;
   const engineeringServicesQty = q.servicesFromManpower ? Math.max(1, q.engineeringServicesQty || 1) : 1;
 
-  // General Requirements: cost → markup. Global contingency no longer applies.
+  // General Requirements: cost → per-line or global markup.
   const generalReqtsUnitCost = q.generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0);
   const generalReqtsCost = generalReqtsUnitCost * generalReqtsQty;
   const generalReqtsWithContingency = generalReqtsCost;
-  const generalReqtsSubtotal = generalReqtsWithContingency * (1 + (q.generalReqMarkupPct || 0) / 100);
+  const hasPerLineGenMarkup = q.generalReqts.some(l => l.markupPct != null);
+  const generalReqtsSubtotal = hasPerLineGenMarkup
+    ? q.generalReqts.reduce((s, l) => {
+        const base = lineGeneralTotal(l);
+        const markup = l.markupPct != null ? l.markupPct : (q.generalReqMarkupPct || 0);
+        return s + base * (1 + markup / 100);
+      }, 0) * generalReqtsQty
+    : generalReqtsWithContingency * (1 + (q.generalReqMarkupPct || 0) / 100);
 
   // Components: raw cost → per-line contingency → markup.
   const componentsSubtotal = q.components.reduce(

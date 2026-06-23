@@ -74,6 +74,7 @@ export interface GeneralReqLine {
   unitPrice: number;
   qty: number;
   uom: string;
+  markupPct?: number;
 }
 
 export interface ComponentLine {
@@ -91,6 +92,7 @@ export interface ComponentLine {
   discountPct: number;
   leadTimeDays?: number;
   group?: string;
+  markupPct?: number;
 }
 
 export interface ServiceLine {
@@ -100,6 +102,7 @@ export interface ServiceLine {
   amount: number;
   days?: number;
   group?: string;
+  markupPct?: number;
 }
 
 export interface ManpowerEntry {

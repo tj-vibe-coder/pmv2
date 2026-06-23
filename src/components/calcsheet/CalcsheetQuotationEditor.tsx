@@ -372,8 +372,13 @@ export default function QuotationEditor() {
     { key: 'qty', label: 'Qty', width: 70, type: 'number', align: 'right' },
     { key: 'uom', label: 'UOM', width: 70 },
     { key: 'unitPrice', label: 'Unit Price', width: 120, type: 'number', align: 'right', step: 0.01 },
+    { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01 },
     { key: 'total', label: 'Total', width: 130, align: 'right',
-      render: (r) => <Box sx={{ fontFamily: 'monospace' }}>{PHP(lineGeneralTotal(r))}</Box> },
+      render: (r) => {
+        const base = lineGeneralTotal(r);
+        const markup = r.markupPct != null ? r.markupPct : (quotation.generalReqMarkupPct || 0);
+        return <Box sx={{ fontFamily: 'monospace' }}>{PHP(base * (1 + markup / 100))}</Box>;
+      } },
   ];
 
   // Section B — Components
@@ -408,6 +413,7 @@ export default function QuotationEditor() {
     { key: 'unitCost', label: 'Unit Cost', width: 110, type: 'number', align: 'right', step: 0.01 },
     { key: 'forex', label: 'FX', width: 60, type: 'number', align: 'right', step: 0.0001 },
     { key: 'contingencyPct', label: 'Cont %', width: 80, type: 'number', align: 'right', step: 0.01 },
+    { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01 },
     { key: 'leadTimeDays', label: 'Lead Time', width: 90, type: 'number', align: 'right', min: 0 },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
       render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
@@ -477,11 +483,13 @@ export default function QuotationEditor() {
           </Stack>
         ) },
         { key: 'days', label: 'Days', width: 80, type: 'number', align: 'right', min: 0 },
+        { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01 },
         { key: 'amount', label: 'Amount', width: 140, type: 'number', align: 'right', step: 0.01 },
       ]
     : [
         { key: 'code', label: 'Code', width: 90, mono: true },
         { key: 'description', label: 'Description', multiline: true },
+        { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01 },
         { key: 'amount', label: 'Amount', width: 150, type: 'number', align: 'right', step: 0.01 },
       ];
 
