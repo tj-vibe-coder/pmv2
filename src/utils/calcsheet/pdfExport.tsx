@@ -314,7 +314,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
         {/* ─── RECIPIENT BLOCK ─── */}
         <View style={styles.recipient}>
           <Text style={styles.recipientName}>{recipient?.name ?? '—'}</Text>
-          {recipContact?.name && <Text style={styles.recipientLine}>{recipContact.name}{recipContact.position ? `, ${recipContact.position}` : ''}</Text>}
+          {recipContact?.name && <Text style={styles.recipientLine}>{recipContact.name}</Text>}
+          {recipContact?.position && <Text style={styles.recipientLine}>{recipContact.position}</Text>}
           {recipContact?.email && <Text style={styles.recipientLine}>{recipContact.email}</Text>}
           {recipContact?.phone && <Text style={styles.recipientLine}>{recipContact.phone}</Text>}
           {recipient?.address && <Text style={styles.recipientLine}>{recipient.address}</Text>}
