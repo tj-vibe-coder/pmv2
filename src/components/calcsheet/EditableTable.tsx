@@ -114,22 +114,23 @@ function SortableRow<T extends { id: string }>({
       )}
       {columns.map((c) => {
         const value = (row as any)[c.key as string];
+        const cellWidth = c.width ? { minWidth: c.width, width: c.width } : {};
         if (c.render) {
           return (
-            <TableCell key={String(c.key)} align={c.align ?? 'left'}>
+            <TableCell key={String(c.key)} align={c.align ?? 'left'} sx={cellWidth}>
               {c.render(row, idx)}
             </TableCell>
           );
         }
         if (c.editable === false) {
           return (
-            <TableCell key={String(c.key)} align={c.align ?? 'left'} sx={{ fontFamily: c.mono ? 'monospace' : undefined, fontSize: '0.8125rem' }}>
+            <TableCell key={String(c.key)} align={c.align ?? 'left'} sx={{ fontFamily: c.mono ? 'monospace' : undefined, fontSize: '0.8125rem', ...cellWidth }}>
               {value}
             </TableCell>
           );
         }
         return (
-          <TableCell key={String(c.key)} align={c.align ?? 'left'} sx={{ p: '4px 8px' }}>
+          <TableCell key={String(c.key)} align={c.align ?? 'left'} sx={{ p: '4px 8px', ...cellWidth }}>
             {c.type === 'number' ? (
               <NumberCell
                 value={value ?? 0}

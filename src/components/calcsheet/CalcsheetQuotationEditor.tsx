@@ -383,7 +383,7 @@ export default function QuotationEditor() {
       />
     ) },
     { key: 'code', label: 'Code', width: 90, mono: true },
-    { key: 'description', label: 'Description', render: (r, idx) => (
+    { key: 'description', label: 'Description', width: 260, render: (r, idx) => (
       <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
         <TextField value={r.description ?? ''} onChange={(e) => updateRow('components', idx, 'description', e.target.value)}
           variant="standard" fullWidth disabled={isLegacy}
