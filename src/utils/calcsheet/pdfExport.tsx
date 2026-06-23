@@ -5,7 +5,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { Client, Project, Quotation, SalesContact } from '../../types/Quotation';
 import { resolveContact } from '../../types/Client';
 import {
-  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP,
+  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP, NUM,
 } from './calc';
 
 // ─── Branding ────────────────────────────────────────────────────────────────
@@ -331,8 +331,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     <Text style={styles.cDesc}>{l.description}</Text>
                     <Text style={styles.cQty}>{showLotTotal ? String(generalReqtsExportQty) : ''}</Text>
                     <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
-                    <Text style={styles.cUnit}>{showLotTotal ? PHP(generalReqtsExportUnitPrice) : ''}</Text>
-                    <Text style={styles.cTotal}>{showLotTotal ? PHP(totals.generalReqtsSubtotal) : ''}</Text>
+                    <Text style={styles.cUnit}>{showLotTotal ? NUM(generalReqtsExportUnitPrice) : ''}</Text>
+                    <Text style={styles.cTotal}>{showLotTotal ? NUM(totals.generalReqtsSubtotal) : ''}</Text>
                   </View>
                 );
               })
@@ -343,8 +343,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   <Text style={styles.cDesc}>{l.description}</Text>
                   <Text style={styles.cQty}>{l.qty}</Text>
                   <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
-                  <Text style={styles.cUnit}>{PHP(l.unitPrice)}</Text>
-                  <Text style={styles.cTotal}>{PHP(lineGeneralTotal(l))}</Text>
+                  <Text style={styles.cUnit}>{NUM(l.unitPrice)}</Text>
+                  <Text style={styles.cTotal}>{NUM(lineGeneralTotal(l))}</Text>
                 </View>
               ))
             )}
@@ -393,8 +393,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                         <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
                         <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
                         <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
-                        <Text style={styles.cUnit}>{isMid ? PHP(groupTotal) : ''}</Text>
-                        <Text style={styles.cTotal}>{isMid ? PHP(groupTotal) : ''}</Text>
+                        <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
+                        <Text style={styles.cTotal}>{isMid ? NUM(groupTotal) : ''}</Text>
                       </View>
                     );
                   }
@@ -404,8 +404,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                       <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
                       <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
                       <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
-                      <Text style={styles.cUnit}>{PHP(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
-                      <Text style={styles.cTotal}>{PHP(componentLineTotal(l, quotation.productMarkupPct))}</Text>
+                      <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
+                      <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct))}</Text>
                     </View>
                   );
                 })}
@@ -463,8 +463,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                               <Text style={styles.cDesc}>{l.description}</Text>
                               <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
                               <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
-                              <Text style={styles.cUnit}>{isMid ? PHP(groupTotal) : ''}</Text>
-                              <Text style={styles.cTotal}>{isMid ? PHP(groupTotal) : ''}</Text>
+                              <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
+                              <Text style={styles.cTotal}>{isMid ? NUM(groupTotal) : ''}</Text>
                             </View>,
                           );
                         } else {
@@ -475,8 +475,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                               <Text style={styles.cDesc}>{l.description}</Text>
                               <Text style={styles.cQty}>1</Text>
                               <Text style={styles.cUom}>LOT</Text>
-                              <Text style={styles.cUnit}>{PHP(l.amount)}</Text>
-                              <Text style={styles.cTotal}>{PHP(l.amount)}</Text>
+                              <Text style={styles.cUnit}>{NUM(l.amount)}</Text>
+                              <Text style={styles.cTotal}>{NUM(l.amount)}</Text>
                             </View>,
                           );
                         }
@@ -505,8 +505,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                         <Text style={styles.cDesc}>{l.description}</Text>
                         <Text style={styles.cQty}>{showLotTotal ? String(engineeringServicesQty) : ''}</Text>
                         <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
-                        <Text style={styles.cUnit}>{showLotTotal ? PHP(engineeringServicesUnitPrice) : ''}</Text>
-                        <Text style={styles.cTotal}>{showLotTotal ? PHP(totals.servicesSubtotal) : ''}</Text>
+                        <Text style={styles.cUnit}>{showLotTotal ? NUM(engineeringServicesUnitPrice) : ''}</Text>
+                        <Text style={styles.cTotal}>{showLotTotal ? NUM(totals.servicesSubtotal) : ''}</Text>
                       </View>
                     );
                   })
@@ -517,8 +517,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                       <Text style={styles.cDesc}>{l.description}</Text>
                       <Text style={styles.cQty}>1</Text>
                       <Text style={styles.cUom}>LOT</Text>
-                      <Text style={styles.cUnit}>{PHP(l.amount)}</Text>
-                      <Text style={styles.cTotal}>{PHP(l.amount)}</Text>
+                      <Text style={styles.cUnit}>{NUM(l.amount)}</Text>
+                      <Text style={styles.cTotal}>{NUM(l.amount)}</Text>
                     </View>
                   ))
                 )}

@@ -236,4 +236,11 @@ export const PHP = (n: number): string =>
     maximumFractionDigits: 2,
   });
 
+/** Number only — no "PHP" prefix. Used for line-item prices in the PDF. */
+export const NUM = (n: number): string =>
+  (Number.isFinite(n) ? n : 0).toLocaleString('en-PH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
 export const PCT = (n: number): string => `${(n || 0).toFixed(2)}%`;
