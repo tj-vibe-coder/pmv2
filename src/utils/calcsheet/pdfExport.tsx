@@ -225,6 +225,31 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
   const logoUrl = typeof window !== 'undefined' ? `${window.location.origin}${issuer.logo}` : issuer.logo;
   const dateSent = quotationDate(quotation.dateSent);
 
+  // Auto-numbering helper: assigns sequential codes (A-0010, A-0020...).
+  // Grouped items share one code — only the first item in each group gets a new number.
+  function autoNumber(prefix: string, items: { id: string; group?: string }[]): Map<string, string> {
+    const codes = new Map<string, string>();
+    let seq = 0;
+    const groupCodes = new Map<string, string>();
+    items.forEach((item) => {
+      if (item.group) {
+        if (!groupCodes.has(item.group)) {
+          seq += 10;
+          groupCodes.set(item.group, `${prefix}-${String(seq).padStart(4, '0')}`);
+        }
+        codes.set(item.id, groupCodes.get(item.group)!);
+      } else {
+        seq += 10;
+        codes.set(item.id, `${prefix}-${String(seq).padStart(4, '0')}`);
+      }
+    });
+    return codes;
+  }
+
+  const codesA = autoNumber('A', quotation.generalReqts);
+  const codesB = autoNumber('B', quotation.components);
+  const codesC = autoNumber('C', quotation.services);
+
   // Section presence
   const hasA = quotation.generalReqts.length > 0;
   const hasB = quotation.components.length > 0;
@@ -327,7 +352,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 const showLotTotal = i === groupedLotDisplayIndex(quotation.generalReqts.length);
                 return (
                   <View style={styles.tr} key={l.id}>
-                    <Text style={styles.cItem}>{l.code}</Text>
+                    <Text style={styles.cItem}>{codesA.get(l.id)}</Text>
                     <Text style={styles.cDesc}>{l.description}</Text>
                     <Text style={styles.cQty}>{showLotTotal ? String(generalReqtsExportQty) : ''}</Text>
                     <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
@@ -339,7 +364,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             ) : (
               quotation.generalReqts.map((l) => (
                 <View style={styles.tr} key={l.id}>
-                  <Text style={styles.cItem}>{l.code}</Text>
+                  <Text style={styles.cItem}>{codesA.get(l.id)}</Text>
                   <Text style={styles.cDesc}>{l.description}</Text>
                   <Text style={styles.cQty}>{l.qty}</Text>
                   <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
@@ -384,12 +409,13 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     const members = compGroups.get(l.group)!;
                     const midIdx = groupedLotDisplayIndex(members.length);
                     const isMid = members[midIdx].id === l.id;
+                    const isFirst = members[0].id === l.id;
                     const groupTotal = isMid
                       ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
                       : 0;
                     return (
                       <View style={styles.tr} key={l.id}>
-                        <Text style={styles.cItem}>{l.code}</Text>
+                        <Text style={styles.cItem}>{isFirst ? codesB.get(l.id) : ''}</Text>
                         <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
                         <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
                         <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
@@ -400,7 +426,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   }
                   return (
                     <View style={styles.tr} key={l.id}>
-                      <Text style={styles.cItem}>{l.code}</Text>
+                      <Text style={styles.cItem}>{codesB.get(l.id)}</Text>
                       <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
                       <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
                       <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
@@ -456,10 +482,11 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                           const members = groups.get(l.group)!;
                           const midIdx = groupedLotDisplayIndex(members.length);
                           const isMid = members[midIdx].id === l.id;
+                          const isFirst = members[0].id === l.id;
                           const groupTotal = isMid ? members.reduce((s, m) => s + (m.amount || 0), 0) : 0;
                           rendered.push(
                             <View style={styles.tr} key={l.id}>
-                              <Text style={styles.cItem}>{l.code}</Text>
+                              <Text style={styles.cItem}>{isFirst ? codesC.get(l.id) : ''}</Text>
                               <Text style={styles.cDesc}>{l.description}</Text>
                               <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
                               <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
@@ -471,7 +498,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                           // Ungrouped: show as individual 1 LOT line
                           rendered.push(
                             <View style={styles.tr} key={l.id}>
-                              <Text style={styles.cItem}>{l.code}</Text>
+                              <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
                               <Text style={styles.cDesc}>{l.description}</Text>
                               <Text style={styles.cQty}>1</Text>
                               <Text style={styles.cUom}>LOT</Text>
@@ -501,7 +528,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     const showLotTotal = i === groupedLotDisplayIndex(quotation.services.length);
                     return (
                       <View style={styles.tr} key={l.id}>
-                        <Text style={styles.cItem}>{l.code}</Text>
+                        <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
                         <Text style={styles.cDesc}>{l.description}</Text>
                         <Text style={styles.cQty}>{showLotTotal ? String(engineeringServicesQty) : ''}</Text>
                         <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
@@ -513,7 +540,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 ) : (
                   quotation.services.map((l) => (
                     <View style={styles.tr} key={l.id}>
-                      <Text style={styles.cItem}>{l.code}</Text>
+                      <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
                       <Text style={styles.cDesc}>{l.description}</Text>
                       <Text style={styles.cQty}>1</Text>
                       <Text style={styles.cUom}>LOT</Text>

@@ -351,10 +351,19 @@ export default function QuotationEditor() {
   };
 
   // Section A — General Requirements
+  const nextCode = (prefix: string, existing: { code?: string }[]) => {
+    let max = 0;
+    existing.forEach(r => {
+      const m = (r.code || '').match(new RegExp(`^${prefix}-(\\d+)$`));
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    });
+    return `${prefix}-${String(max + 10).padStart(4, '0')}`;
+  };
+
   const addGeneral = () =>
     commit('generalReqts', [
       ...quotation.generalReqts,
-      { id: id(), code: '', description: '', unitPrice: 0, qty: 1, uom: 'lot' },
+      { id: id(), code: nextCode('A', quotation.generalReqts), description: '', unitPrice: 0, qty: 1, uom: 'lot' },
     ] as GeneralReqLine[]);
 
   const generalCols: Column<GeneralReqLine>[] = [
@@ -371,7 +380,7 @@ export default function QuotationEditor() {
   const addComponent = () =>
     commit('components', [
       ...quotation.components,
-      { id: id(), code: '', description: '', brand: '', partNo: '',
+      { id: id(), code: nextCode('B', quotation.components), description: '', brand: '', partNo: '',
         qty: 1, uom: 'pc', unitCost: 0, forex: 1, contingencyPct: quotation.productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0 },
     ] as ComponentLine[]);
 
@@ -413,7 +422,7 @@ export default function QuotationEditor() {
   const addService = () =>
     commit('services', [
       ...quotation.services,
-      { id: id(), code: '', description: '', amount: 0, ...(perLinePricing ? { days: 0 } : {}) },
+      { id: id(), code: nextCode('C', quotation.services), description: '', amount: 0, ...(perLinePricing ? { days: 0 } : {}) },
     ] as ServiceLine[]);
 
   const updateServiceRow = (idx: number, key: keyof ServiceLine, value: any) => {
