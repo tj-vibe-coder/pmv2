@@ -23,6 +23,7 @@ export interface Column<T> {
   step?: number;
   min?: number;
   mono?: boolean;
+  multiline?: boolean;
 }
 
 interface Props<T extends { id: string }> {
@@ -62,15 +63,17 @@ function NumberCell({
 }
 
 function TextCell({
-  value, align, mono, onChange, readOnly,
-}: { value: string; align?: 'left' | 'right' | 'center'; mono?: boolean; onChange: (v: string) => void; readOnly?: boolean }) {
+  value, align, mono, onChange, readOnly, multiline,
+}: { value: string; align?: 'left' | 'right' | 'center'; mono?: boolean; onChange: (v: string) => void; readOnly?: boolean; multiline?: boolean }) {
   return (
     <TextField
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value)}
-      onFocus={(e) => e.target.select()}
+      onFocus={(e) => { if (!multiline) e.target.select(); }}
       variant="standard"
       disabled={readOnly}
+      multiline={multiline}
+      minRows={multiline ? 1 : undefined}
       InputProps={{ disableUnderline: true, readOnly, sx: { fontSize: '0.8125rem', fontFamily: mono ? 'monospace' : undefined } }}
       inputProps={{ style: { textAlign: align ?? 'left', padding: '6px 4px' } }}
       fullWidth
@@ -147,6 +150,7 @@ function SortableRow<T extends { id: string }>({
                 align={c.align}
                 mono={c.mono}
                 readOnly={readOnly}
+                multiline={c.multiline}
                 onChange={(v) => onChange(idx, c.key as keyof T, v)}
               />
             )}

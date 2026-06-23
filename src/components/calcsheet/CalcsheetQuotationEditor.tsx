@@ -368,7 +368,7 @@ export default function QuotationEditor() {
 
   const generalCols: Column<GeneralReqLine>[] = [
     { key: 'code', label: 'Code', width: 90, mono: true },
-    { key: 'description', label: 'Description' },
+    { key: 'description', label: 'Description', multiline: true },
     { key: 'qty', label: 'Qty', width: 70, type: 'number', align: 'right' },
     { key: 'uom', label: 'UOM', width: 70 },
     { key: 'unitPrice', label: 'Unit Price', width: 120, type: 'number', align: 'right', step: 0.01 },
@@ -393,9 +393,9 @@ export default function QuotationEditor() {
     ) },
     { key: 'code', label: 'Code', width: 90, mono: true },
     { key: 'description', label: 'Description', width: 260, render: (r, idx) => (
-      <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+      <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
         <TextField value={r.description ?? ''} onChange={(e) => updateRow('components', idx, 'description', e.target.value)}
-          variant="standard" fullWidth disabled={isLegacy}
+          variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
           InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
           inputProps={{ style: { padding: '6px 4px' } }} />
         {r.group && <Chip label={r.group} size="small" color="warning" variant="outlined" onDelete={() => ungroupComp(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
@@ -468,9 +468,9 @@ export default function QuotationEditor() {
         ) },
         { key: 'code', label: 'Code', width: 90, mono: true },
         { key: 'description', label: 'Description', render: (r, idx) => (
-          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+          <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
             <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)}
-              variant="standard" fullWidth disabled={isLegacy}
+              variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
               inputProps={{ style: { padding: '6px 4px' } }} />
             {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupSvc(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
@@ -481,7 +481,7 @@ export default function QuotationEditor() {
       ]
     : [
         { key: 'code', label: 'Code', width: 90, mono: true },
-        { key: 'description', label: 'Description' },
+        { key: 'description', label: 'Description', multiline: true },
         { key: 'amount', label: 'Amount', width: 150, type: 'number', align: 'right', step: 0.01 },
       ];
 
