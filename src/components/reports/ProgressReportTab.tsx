@@ -1,5 +1,14 @@
-import React, { useCallback, useState, useEffect, useMemo } from 'react';
+import React, { useCallback, useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy,
+  rectSortingStrategy, arrayMove, useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import {
   Alert,
   Accordion,
@@ -25,12 +34,14 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  CircularProgress,
+  Tooltip,
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, CameraAlt as CameraAltIcon, OpenInNew as OpenInNewIcon, DragIndicator as DragIndicatorIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
-import { resolveCorporateDriveId, uploadFileToFolderById, ensureExecutionFolder } from '../../services/onedriveFolderService';
+import { resolveCorporateDriveId, uploadFileToFolderById, ensureExecutionFolder, getOrCreateChildFolderById, fetchDriveItemBlob } from '../../services/onedriveFolderService';
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 import dataService from '../../services/dataService';
@@ -42,15 +53,120 @@ import {
   saveWBS,
   parseWBSNum,
   ProgressSnapshot,
-  getProgressSnapshots,
-  saveProgressSnapshot,
-  updateProgressSnapshotAt,
-  deleteProgressSnapshotAt,
+  StoredProgressReport,
+  getProgressReports,
+  saveProgressReport,
+  updateProgressReport,
+  deleteProgressReport,
+  migrateProgressSnapshotsFromLocalStorage,
 } from '../ProjectDetails';
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
+
+interface PhotoItem {
+  localId: string;
+  file?: File;
+  previewUrl?: string;        // object URL for local preview (newly added only)
+  caption?: string;           // user-entered caption shown under the photo in the PDF
+  // populated after successful OneDrive upload
+  oneDriveId?: string;
+  filename?: string;
+  webUrl?: string;
+  uploadedAt?: string;
+  thumbnailDataUrl?: string;  // ~120px JPEG stored at upload time; survives page reload
+  uploadStatus: 'uploading' | 'done' | 'error';
+  errorMessage?: string;
+}
+
+/**
+ * Generic render-prop wrapper that makes an element sortable via @dnd-kit.
+ * The drag listeners are applied to a handle (not the whole element), and the
+ * sortable node ref + transform style go on the host element (a TableRow or a Box).
+ */
+function SortableItem({ id, children }: {
+  id: string;
+  children: (args: Pick<ReturnType<typeof useSortable>, 'setNodeRef' | 'attributes' | 'listeners'> & { style: CSSProperties }) => React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+    position: isDragging ? 'relative' : undefined,
+    zIndex: isDragging ? 1 : undefined,
+  };
+  return <>{children({ setNodeRef, attributes, listeners, style })}</>;
+}
+
+/**
+ * Generate a small thumbnail (~120px longest edge, JPEG 0.65) from a photo blob.
+ * Also corrects EXIF orientation so the on-screen thumbnail is upright.
+ */
+async function generateThumbnail(source: Blob): Promise<string> {
+  const MAX = 120;
+  try {
+    const bitmap = await createImageBitmap(source, { imageOrientation: 'from-image' } as unknown as ImageBitmapOptions);
+    const scale = Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
+    const w = Math.round(bitmap.width * scale);
+    const h = Math.round(bitmap.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    return canvas.toDataURL('image/jpeg', 0.65);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Convert a HEIC/HEIF file to JPEG. Returns the original file unchanged for
+ * any other format. The returned File has a .jpg extension so browsers can
+ * render it with createObjectURL / createImageBitmap.
+ */
+async function convertHeicToJpeg(file: File): Promise<File> {
+  const name = file.name.toLowerCase();
+  const isHeic = name.endsWith('.heic') || name.endsWith('.heif') ||
+    file.type === 'image/heic' || file.type === 'image/heif';
+  if (!isHeic) return file;
+  try {
+    const heic2any = (await import('heic2any')).default;
+    const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+    const blob = Array.isArray(result) ? result[0] : result;
+    const jpegName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
+    return new File([blob], jpegName, { type: 'image/jpeg' });
+  } catch {
+    return file; // fall back to original if conversion fails
+  }
+}
+
+/**
+ * Bake EXIF orientation into a canvas so jsPDF sees an already-rotated image.
+ * Falls back to a plain FileReader data URL if createImageBitmap is unavailable.
+ */
+async function normalizeImageOrientation(source: Blob): Promise<string> {
+  try {
+    const bitmap = await createImageBitmap(source, { imageOrientation: 'from-image' } as unknown as ImageBitmapOptions);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return canvas.toDataURL('image/jpeg', 0.9);
+  } catch {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(source);
+    });
+  }
+}
 
 const wbsInputSx = {
   '& .MuiOutlinedInput-root': { fontSize: '0.9375rem', backgroundColor: '#fff', '& fieldset': { borderColor: '#e2e8f0' }, '&:hover fieldset': { borderColor: '#cbd5e1' }, '&.Mui-focused fieldset': { borderWidth: '1px', borderColor: NET_PACIFIC_COLORS.primary } },
@@ -150,21 +266,50 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   clientContacts = [],
 }) => {
   const navigate = useNavigate();
-  const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const {
+    isConfigured: oneDriveConfigured,
+    isAuthenticated: oneDriveSignedIn,
+    isLoading: oneDriveAuthLoading,
+    login: oneDriveLogin,
+    getAccessToken: getOneDriveToken,
+  } = useOneDriveAuth();
   // Local copy of execution folder id — updated if we auto-create the folder on first export
   const [localExecutionFolderId, setLocalExecutionFolderId] = useState(project.executionFolderId);
   useEffect(() => { setLocalExecutionFolderId(project.executionFolderId); }, [project.id, project.executionFolderId]);
   // Resolved via project_no — ensures PDFs land in the IOCT ops folder, not a PCS subfolder
   const [resolvedExecFolderId, setResolvedExecFolderId] = useState<string | null>(null);
   useEffect(() => { setResolvedExecFolderId(null); }, [project.id]);
+
+  // Photo attachment state (general site photos for the progress report)
+  const [photos, setPhotos] = useState<PhotoItem[]>([]);
+  const [photosFolderId, setPhotosFolderId] = useState<string | null>(null);
+  const [photosFolderUrl, setPhotosFolderUrl] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  // Revoke object URLs on unmount to avoid memory leaks
+  const photosRef = useRef<PhotoItem[]>([]);
+  useEffect(() => { photosRef.current = photos; }, [photos]);
+  useEffect(() => () => {
+    photosRef.current.forEach(p => { if (p.previewUrl) URL.revokeObjectURL(p.previewUrl); });
+  }, []);
+  // Reset photos + folder refs when switching projects
+  useEffect(() => {
+    setPhotos(prev => {
+      prev.forEach(p => { if (p.previewUrl) URL.revokeObjectURL(p.previewUrl); });
+      return [];
+    });
+    setPhotosFolderId(null);
+    setPhotosFolderUrl(null);
+  }, [project.id]);
+
   const [wbsItems, setWbsItems] = useState<WBSItem[]>([]);
   const [pbInput, setPbInput] = useState(initialPb ?? '');
   const [showBillingHint, setShowBillingHint] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const [saveFeedback, setSaveFeedback] = useState(false);
-  const [snapshotVersion, setSnapshotVersion] = useState(0);
-  const [editingSnapshotIndex, setEditingSnapshotIndex] = useState<number | null>(null);
+  const [savedReports, setSavedReports] = useState<StoredProgressReport[]>([]);
+  const [savedLoading, setSavedLoading] = useState(false);
+  const [editingReportId, setEditingReportId] = useState<string | null>(null);
   const [wbsDraft, setWbsDraft] = useState<Record<string, { progress?: string; weight?: string }>>({});
   const [approvers, setApprovers] = useState<Approver[]>(() => {
     // Prefer client DB contact; fall back to parsing the legacy text field
@@ -185,6 +330,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     setup: true,
     wbs: true,
     signatories: false,
+    photos: false,
     savedReports: false,
   });
   const toggleSection = (section: string) => {
@@ -213,22 +359,41 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     }
   }, [clientApprover]);
 
-  // snapshotVersion triggers refetch when user saves a snapshot
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- snapshotVersion is intentional
-  const progressSnapshots = useMemo(() => getProgressSnapshots(project.id), [project.id, snapshotVersion]);
+  // Load saved progress reports from Firestore (and one-time migrate any localStorage snapshots)
+  const loadSavedReports = useCallback(async () => {
+    setSavedLoading(true);
+    try {
+      const reports = await getProgressReports(project.id);
+      setSavedReports(reports);
+    } catch {
+      // Keep stale list on transient error — don't wipe what the user can see.
+    } finally {
+      setSavedLoading(false);
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    setEditingReportId(null);
+    let cancelled = false;
+    (async () => {
+      await migrateProgressSnapshotsFromLocalStorage().catch(() => {});
+      if (!cancelled) await loadSavedReports();
+    })();
+    return () => { cancelled = true; };
+  }, [project.id, loadSavedReports]);
 
   // Auto-suggest next PB# based on saved reports
   useEffect(() => {
     if (pbInput || initialPb) return; // don't override user input or initialPb
-    if (progressSnapshots.length === 0) return;
-    const maxPb = progressSnapshots.reduce((max, s) => {
+    if (savedReports.length === 0) return;
+    const maxPb = savedReports.reduce((max, s) => {
       const num = parseInt(s.pbNumber, 10);
       return !isNaN(num) && num > max ? num : max;
     }, 0);
     if (maxPb > 0) {
       setPbInput(String(maxPb + 1));
     }
-  }, [progressSnapshots, initialPb]); // eslint-disable-line react-hooks/exhaustive-deps -- pbInput excluded to avoid re-triggering on user input
+  }, [savedReports, initialPb]); // eslint-disable-line react-hooks/exhaustive-deps -- pbInput excluded to avoid re-triggering on user input
 
   // Helper function to check if a code is a parent (has children)
   const isParentItem = useCallback((code: string, allItems: WBSItem[]): boolean => {
@@ -367,6 +532,22 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     dataService.updateProject(project.id, { actual_site_progress_percent: rounded }).catch(() => {});
   };
 
+  // Drag-and-drop reordering of WBS rows
+  const wbsSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const handleWbsDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIdx = wbsItems.findIndex((i) => i.id === active.id);
+    const newIdx = wbsItems.findIndex((i) => i.id === over.id);
+    if (oldIdx < 0 || newIdx < 0) return;
+    const next = arrayMove(wbsItems, oldIdx, newIdx);
+    setWbsItems(next);
+    saveWBS(project.id, next);
+  };
+
   const handleAddWBSItem = () => {
     const newItem: WBSItem = { id: `wbs-${Date.now()}`, code: '', name: '', weight: 0, progress: 0 };
     const next = [...wbsItems, newItem];
@@ -388,43 +569,47 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     syncProjectStatusFromWBS(next);
   };
 
-  const handleSaveProgress = () => {
+  const handleSaveProgress = async () => {
     const snapshot: ProgressSnapshot = {
       date: new Date().toISOString(),
       pbNumber: pbInput.trim() || '—',
       wbsItems: JSON.parse(JSON.stringify(wbsItems)),
       overallProgress: wbsOverallProgress,
     };
-    if (editingSnapshotIndex !== null && progressSnapshots[editingSnapshotIndex] != null) {
-      updateProgressSnapshotAt(project.id, editingSnapshotIndex, snapshot);
-      setEditingSnapshotIndex(null);
-    } else {
-      saveProgressSnapshot(project.id, snapshot);
+    try {
+      if (editingReportId) {
+        // Preserve the original snapshot date when updating in place
+        const existing = savedReports.find(r => r.id === editingReportId);
+        await updateProgressReport(editingReportId, { ...snapshot, date: existing?.date || snapshot.date });
+        setEditingReportId(null);
+      } else {
+        await saveProgressReport(project.id, snapshot);
+      }
+      setSaveFeedback(true);
+      setTimeout(() => setSaveFeedback(false), 2000);
+      await loadSavedReports();
+    } catch (e) {
+      setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'Failed to save progress report.' });
     }
-    setSaveFeedback(true);
-    setTimeout(() => setSaveFeedback(false), 2000);
-    setSnapshotVersion((v) => v + 1);
   };
 
-  const handleLoadSnapshot = (snapshot: ProgressSnapshot, index: number) => {
-    setWbsItems(snapshot.wbsItems);
-    setPbInput(snapshot.pbNumber === '—' ? '' : snapshot.pbNumber);
-    saveWBS(project.id, snapshot.wbsItems);
-    syncProjectStatusFromWBS(snapshot.wbsItems);
-    setEditingSnapshotIndex(index);
+  const handleLoadSnapshot = (report: StoredProgressReport) => {
+    setWbsItems(report.wbsItems);
+    setPbInput(report.pbNumber === '—' ? '' : report.pbNumber);
+    saveWBS(project.id, report.wbsItems);
+    syncProjectStatusFromWBS(report.wbsItems);
+    setEditingReportId(report.id);
   };
 
-  const handleDeleteSnapshot = (index: number) => {
-    const snapshot = progressSnapshots[index];
-    if (!snapshot) return;
-    if (!window.confirm(`Delete saved progress report "PB${snapshot.pbNumber}"? This cannot be undone.`)) return;
-    deleteProgressSnapshotAt(project.id, index);
-    if (editingSnapshotIndex === index) {
-      setEditingSnapshotIndex(null);
-    } else if (editingSnapshotIndex !== null && index < editingSnapshotIndex) {
-      setEditingSnapshotIndex(editingSnapshotIndex - 1);
+  const handleDeleteSnapshot = async (report: StoredProgressReport) => {
+    if (!window.confirm(`Delete saved progress report "PB${report.pbNumber}"? This cannot be undone.`)) return;
+    try {
+      await deleteProgressReport(report.id);
+      if (editingReportId === report.id) setEditingReportId(null);
+      await loadSavedReports();
+    } catch (e) {
+      setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'Failed to delete progress report.' });
     }
-    setSnapshotVersion((v) => v + 1);
   };
 
   const handleApplyTemplate = (templateKey: string) => {
@@ -445,12 +630,130 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     syncProjectStatusFromWBS(newItems);
   };
 
-  const buildPdf = async (preview: boolean): Promise<Blob | { blob: Blob; filename: string } | void> => {
+  const triggerPhotoInput = () => {
+    photoInputRef.current?.click();
+  };
+
+  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawFiles = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (rawFiles.length === 0) return;
+
+    // Convert HEIC/HEIF to JPEG before preview or upload
+    const files = await Promise.all(rawFiles.map(convertHeicToJpeg));
+
+    // Add to state immediately with local previews
+    const newItems: PhotoItem[] = files.map(file => ({
+      localId: `photo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+      uploadStatus: 'uploading' as const,
+    }));
+    setPhotos(prev => [...prev, ...newItems]);
+
+    if (!oneDriveSignedIn) {
+      setPhotos(prev => prev.map(p =>
+        newItems.some(n => n.localId === p.localId)
+          ? { ...p, uploadStatus: 'error', errorMessage: 'Sign in to OneDrive to upload photos.' }
+          : p
+      ));
+      return;
+    }
+
+    try {
+      const token = await getOneDriveToken();
+      if (!token) throw new Error('Could not get OneDrive token.');
+      const driveId = await resolveCorporateDriveId(token);
+
+      // Always resolve the execution folder by project_no so photos land under the
+      // IOCT ops folder, not inside a PCS proposal subfolder.
+      let execFolderId = resolvedExecFolderId;
+      if (!execFolderId) {
+        const projectCode = project.project_no || String(project.item_no ?? project.id);
+        const execFolder = await ensureExecutionFolder(token, { code: projectCode, name: project.project_name });
+        execFolderId = execFolder.id;
+        setResolvedExecFolderId(execFolderId);
+        if (!localExecutionFolderId) {
+          setLocalExecutionFolderId(execFolderId);
+          dataService.updateProject(project.id, { executionFolderId: execFolder.id, executionFolderUrl: execFolder.webUrl }).catch(() => {});
+        }
+      }
+
+      // Ensure Photos subfolder
+      let folderId = photosFolderId;
+      if (!folderId) {
+        const photosFolder = await getOrCreateChildFolderById(token, driveId, execFolderId, 'Photos');
+        folderId = photosFolder.id;
+        setPhotosFolderId(folderId);
+        if (photosFolder.webUrl) setPhotosFolderUrl(photosFolder.webUrl);
+      }
+
+      const reportPrefix = (`${project.project_no || String(project.item_no ?? project.id)}-PB${pbInput.trim() || '01'}`)
+        .replace(/[<>:"/\\|?*\s]/g, '_');
+
+      for (const item of newItems) {
+        try {
+          const ext = (item.file!.name.split('.').pop() || 'jpg').toLowerCase();
+          const filename = `${reportPrefix}_${Date.now()}.${ext}`;
+          const [uploaded, thumbnailDataUrl] = await Promise.all([
+            uploadFileToFolderById(token, driveId, folderId, filename, item.file!),
+            generateThumbnail(item.file!),
+          ]);
+          setPhotos(prev => prev.map(p => p.localId === item.localId ? {
+            ...p,
+            oneDriveId: uploaded.id,
+            filename: uploaded.name,
+            webUrl: uploaded.webUrl,
+            uploadedAt: new Date().toISOString(),
+            thumbnailDataUrl: thumbnailDataUrl || undefined,
+            uploadStatus: 'done' as const,
+          } : p));
+        } catch (err) {
+          setPhotos(prev => prev.map(p => p.localId === item.localId ? {
+            ...p,
+            uploadStatus: 'error' as const,
+            errorMessage: err instanceof Error ? err.message : 'Upload failed',
+          } : p));
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Upload failed';
+      setPhotos(prev => prev.map(p =>
+        newItems.some(n => n.localId === p.localId) && p.uploadStatus === 'uploading'
+          ? { ...p, uploadStatus: 'error' as const, errorMessage: msg }
+          : p
+      ));
+    }
+  };
+
+  const handleRemovePhoto = (localId: string) => {
+    setPhotos(prev => {
+      const removed = prev.find(p => p.localId === localId);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter(p => p.localId !== localId);
+    });
+  };
+
+  const handleCaptionChange = (localId: string, caption: string) => {
+    setPhotos(prev => prev.map(p => p.localId === localId ? { ...p, caption } : p));
+  };
+
+  const handlePhotoDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    setPhotos(prev => {
+      const oldIdx = prev.findIndex(p => p.localId === active.id);
+      const newIdx = prev.findIndex(p => p.localId === over.id);
+      if (oldIdx < 0 || newIdx < 0) return prev;
+      return arrayMove(prev, oldIdx, newIdx);
+    });
+  };
+
+  const buildPdf = async (preview: boolean): Promise<Blob | { blob: Blob; filename: string; missingPhotos?: number } | void> => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const margin = 16;
     const contentWidth = 210 - margin * 2;
     const pageHeight = 297;
-    const signatureStartY = 220; // Position for Prepared by / Approved by (moved up to avoid footer overlap)
     const footerY = pageHeight - 10; // Doc. No. and Page X of Y at very bottom
     const lineHeight = 5.2;
     const sectionGap = 6;
@@ -469,16 +772,13 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     const completionPct = Math.round(wbsOverallProgress * 100) / 100;
     const poNum = project.po_number || '—';
 
-    // Helper function to add header content (logo + project details) to a page
+    // Header — mirrors the Certificate of Completion layout for a uniform look:
+    // logo top-left, large blue document title top-right, blue company name, divider.
     const addPageHeader = async (pageY: number, isFirstPage: boolean = false): Promise<number> => {
-      let currentY = pageY;
-      
-      // Add "Progress Report" title in upper right
-      fontTitle();
-      doc.setFontSize(14);
-      doc.text('Progress Report', 210 - margin, currentY, { align: 'right' });
-      
-      // Add date below Progress Report (format: February 04, 2026)
+      const rightX = 210 - margin;
+      const headerStartY = pageY;
+
+      // Format the report date (e.g. June 23, 2026)
       const formatReportDate = (input: string | undefined): string => {
         const d = input ? (() => {
           const parts = input.trim().split(/[/-]/);
@@ -492,42 +792,54 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
         return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: '2-digit' });
       };
       const reportDate = formatReportDate(preparedBy.date);
-      fontBody();
-      doc.setFontSize(9);
-      doc.text(reportDate, 210 - margin, currentY + lineHeight, { align: 'right' });
-      
-      // Add logo - positioned higher to align with header
-      const logoY = pageY - 6; // Move logo up by 6mm to make it look more like a header
-      let logoHeight = 0;
+
+      // Logo (top-left)
+      let logoBottomY = headerStartY;
       if (reportCompany === 'ACT') {
         try {
           const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
           const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
           const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-          doc.addImage(logoDataUrl, 'PNG', margin, logoY, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT);
-          logoHeight = ACT_LOGO_PDF_HEIGHT;
-          currentY = Math.max(currentY, logoY + ACT_LOGO_PDF_HEIGHT + 4);
+          doc.addImage(logoDataUrl, 'PNG', margin, headerStartY, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT);
+          logoBottomY = headerStartY + ACT_LOGO_PDF_HEIGHT;
         } catch (_) {}
       } else if (reportCompany === 'IOCT') {
         try {
           const { loadImageDataUrl, IOCT_ICON_LOGO_PDF_SIZE } = await import('../../utils/logoUtils');
           const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
           const logoDataUrl = await loadImageDataUrl(logoUrl);
-          doc.addImage(logoDataUrl, 'PNG', margin, logoY, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
-          logoHeight = IOCT_ICON_LOGO_PDF_SIZE;
-          currentY = Math.max(currentY, logoY + IOCT_ICON_LOGO_PDF_SIZE + 4);
+          doc.addImage(logoDataUrl, 'PNG', margin, headerStartY, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
+          logoBottomY = headerStartY + IOCT_ICON_LOGO_PDF_SIZE;
         } catch (_) {}
       }
-      
-      // Add company name in bold below logo
-      if (logoHeight > 0) {
-        fontTitle();
-        doc.setFontSize(11);
-        doc.text(companyName, margin, currentY);
-        currentY += lineHeight + 2;
-      }
 
-      // Add Project Details
+      // Document title (right column, large, blue) — stacked to mirror the COC
+      doc.setTextColor(44, 90, 160);
+      fontTitle();
+      doc.setFontSize(20);
+      doc.text('Progress', rightX, headerStartY + 7, { align: 'right' });
+      doc.text('Report', rightX, headerStartY + 15, { align: 'right' });
+      doc.setTextColor(0, 0, 0);
+
+      // Company name (below logo, left column, blue)
+      let infoY = logoBottomY + 2;
+      doc.setTextColor(44, 90, 160);
+      fontTitle();
+      doc.setFontSize(10);
+      doc.text(companyName, margin, infoY);
+      infoY += 4.5;
+      doc.setTextColor(0, 0, 0);
+
+      // Horizontal divider below header
+      let currentY = Math.max(infoY, headerStartY + 22) + 3;
+      doc.setDrawColor(180, 180, 180);
+      doc.setLineWidth(0.5);
+      doc.line(margin, currentY, rightX, currentY);
+      doc.setDrawColor(0, 0, 0);
+      doc.setLineWidth(0.2);
+      currentY += 8;
+
+      // Project Details
       fontTitle();
       doc.setFontSize(12);
       doc.text('Project Details', margin, currentY);
@@ -553,9 +865,11 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           currentY += lineHeight;
           doc.text(valueLines[li], margin + labelWidth, currentY);
         }
-        currentY += lineHeight + sectionGap;
+        currentY += lineHeight;
       }
-      
+      doc.text(`Report Date: ${reportDate}`, margin, currentY);
+      currentY += lineHeight + sectionGap;
+
       // Add Project Status and Certification Statement only on first page
       if (isFirstPage) {
         fontTitle();
@@ -893,23 +1207,146 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       tableFinalY = docWithTable.lastAutoTable?.finalY ?? tableFinalY;
     }
 
-    // Signature section — only on the LAST page
+    // ── Site Photos ───────────────────────────────────────────────────────────
+    // Pre-fetch embeddable photos. A photo is embeddable when its original file
+    // is still in memory (even if the OneDrive upload failed) or when it can be
+    // re-fetched from OneDrive — don't silently drop attached photos.
+    const exportablePhotos = photos.filter(p => p.file || (p.uploadStatus === 'done' && p.oneDriveId));
+    const photoDataUrls = new Map<string, string>();
+    if (exportablePhotos.length > 0) {
+      let pdToken: string | null = null;
+      let pdDriveId: string | null = null;
+      if (oneDriveSignedIn) {
+        try {
+          pdToken = await getOneDriveToken();
+          if (pdToken) pdDriveId = await resolveCorporateDriveId(pdToken);
+        } catch (_) {}
+      }
+      await Promise.allSettled(exportablePhotos.map(async (photo) => {
+        try {
+          let blob: Blob | undefined;
+          if (photo.file) {
+            blob = photo.file;
+          } else if (pdToken && pdDriveId && photo.oneDriveId) {
+            blob = await fetchDriveItemBlob(pdToken, pdDriveId, photo.oneDriveId);
+            const lowerName = (photo.filename || '').toLowerCase();
+            if (blob && (lowerName.endsWith('.heic') || lowerName.endsWith('.heif') ||
+                blob.type === 'image/heic' || blob.type === 'image/heif')) {
+              blob = await convertHeicToJpeg(new File([blob], photo.filename || 'photo.heic', { type: blob.type }));
+            }
+          }
+          if (blob) {
+            const dataUrl = await normalizeImageOrientation(blob);
+            photoDataUrls.set(photo.localId, dataUrl);
+          }
+        } catch (_) {}
+      }));
+    }
+    const missingPhotos = exportablePhotos.length - photoDataUrls.size;
+
+    if (photoDataUrls.size > 0) {
+      const colCount = 2;
+      const gap = 5;
+      const photoW = (contentWidth - gap * (colCount - 1)) / colCount;
+      const photoMaxH = 55;
+      const captionH = 5;
+      const headingH = lineHeight + 4;
+
+      // Heading — keep it with at least one photo row on the same page
+      let y = tableFinalY + sectionGap + 2;
+      if (y + headingH + photoMaxH + captionH > pageHeight - 25) {
+        doc.addPage();
+        y = 20;
+      }
+      fontTitle();
+      doc.setFontSize(11);
+      doc.text('Site Photos', margin, y);
+      fontBody();
+      y += headingH;
+
+      let col = 0;
+      let rowTopY = y;
+      const photoList = exportablePhotos.filter(p => photoDataUrls.has(p.localId));
+      for (const photo of photoList) {
+        const dataUrl = photoDataUrls.get(photo.localId)!;
+
+        // Aspect-ratio fit within the cell
+        let drawW = photoW;
+        let drawH = photoMaxH;
+        try {
+          await new Promise<void>(res => {
+            const img = new Image();
+            img.onload = () => {
+              const aspect = img.naturalWidth / img.naturalHeight;
+              if (aspect > photoW / photoMaxH) { drawW = photoW; drawH = photoW / aspect; }
+              else { drawH = photoMaxH; drawW = photoMaxH * aspect; }
+              res();
+            };
+            img.onerror = () => res();
+            img.src = dataUrl;
+          });
+        } catch (_) {}
+
+        // New page if this row won't fit
+        if (rowTopY + photoMaxH + captionH + 4 > pageHeight - 25) {
+          doc.addPage();
+          rowTopY = 20;
+          col = 0;
+        }
+        const x = margin + col * (photoW + gap);
+
+        try {
+          const fmt = dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+          doc.addImage(dataUrl, fmt, x, rowTopY, drawW, drawH, undefined, 'FAST');
+        } catch (_) {}
+
+        fontBody();
+        doc.setFontSize(7);
+        const userCaption = (photo.caption || '').trim();
+        const rawName = photo.filename || photo.file?.name || '';
+        const caption = userCaption || rawName.replace(/^[^_]*_[^_]*_\d+\./, '').slice(0, 40) || rawName;
+        const captionLines = doc.splitTextToSize(caption, photoW);
+        doc.text(captionLines.slice(0, 2), x, rowTopY + photoMaxH + captionH, { maxWidth: photoW });
+
+        col++;
+        if (col >= colCount) {
+          col = 0;
+          rowTopY = rowTopY + photoMaxH + captionH + 4;
+        }
+      }
+      tableFinalY = col > 0 ? rowTopY + photoMaxH + captionH + 4 : rowTopY;
+    }
+
+    // ── Signature section — only on the LAST page ─────────────────────────────
     const projectNo = project.project_no || String(project.item_no ?? project.id) || '—';
     const pbNumRaw = pbInput.trim() || '0';
     const pbNum = pbNumRaw === '—' || pbNumRaw === '' ? '01' : String(Number(pbNumRaw) || 1).padStart(2, '0');
     const docNumber = `Doc. No.: ${projectNo}-PB-${pbNum}`;
-    const totalPages = doc.getNumberOfPages();
 
     const numApprovers = approvers.length > 0 ? Math.min(approvers.length, 3) : 1;
     const signatureGap = numApprovers === 3 ? 10 : 8;
+    const hasPhotos = photoDataUrls.size > 0;
 
-    // Add signature on last page only
-    doc.setPage(totalPages);
-    const calculatedSignatureStartY = tableFinalY + signatureGap;
-    const adjustedSignatureStartY = Math.max(calculatedSignatureStartY, signatureStartY);
-    const signatureEndY = addSignatureSection(adjustedSignatureStartY);
+    // Place the signature on the last page. Estimate the block height from the
+    // approver count (2–3 approvers stack the "Approved by" row below "Prepared by").
+    // Keep it on the current page whenever it fits — only break to a new page when
+    // it genuinely won't, so signatures never get orphaned on a near-empty page.
+    // When there's spare room, anchor near the bottom for a formal look.
+    doc.setPage(doc.getNumberOfPages());
+    const estSigHeight = numApprovers >= 2 ? 60 : 36;
+    const afterContentY = tableFinalY + signatureGap;
+    let signatureY;
+    if (afterContentY + estSigHeight <= footerY) {
+      const bottomAnchorY = footerY - estSigHeight - 4;
+      signatureY = (!hasPhotos && bottomAnchorY > afterContentY) ? bottomAnchorY : afterContentY;
+    } else {
+      doc.addPage();
+      signatureY = 24;
+    }
+    const signatureEndY = addSignatureSection(signatureY);
 
-    // Add Doc. No. and Page X of Y footer on every page
+    // Recompute page count after any page added for the signature, then stamp footers
+    const totalPages = doc.getNumberOfPages();
     fontBody();
     doc.setFontSize(8);
     for (let p = 1; p <= totalPages; p++) {
@@ -925,7 +1362,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     // Use Doc. No. as filename (without "Doc. No.: " prefix)
     const fileName = `${projectNo}-PB-${pbNum}.pdf`;
     doc.save(fileName);
-    return { blob: doc.output('blob') as Blob, filename: fileName };
+    return { blob: doc.output('blob') as Blob, filename: fileName, missingPhotos };
   };
 
   const handlePreview = async () => {
@@ -938,25 +1375,28 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     setExportFeedback(null);
     try {
       const result = await buildPdf(false);
-      // result is { blob, filename } for preview=false
+      // result is { blob, filename, missingPhotos } for preview=false
       if (!result || result instanceof Blob) return;
-      const { blob, filename } = result;
+      const { blob, filename, missingPhotos = 0 } = result;
+      const photoNote = missingPhotos > 0
+        ? ` ${missingPhotos} attached photo(s) could not be included in the PDF — sign in to OneDrive so saved photos can be fetched.`
+        : '';
 
       // Show billing hint if a PB# is set
       if (pbInput.trim()) setShowBillingHint(true);
 
       // Best-effort OneDrive upload — auto-creates the execution folder when it doesn't exist yet
       if (!isCorporateOneDriveConfigured()) {
-        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. OneDrive is not configured.' });
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. OneDrive is not configured.' + photoNote });
         return;
       }
       if (!oneDriveSignedIn) {
-        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Sign in to OneDrive to upload it.' });
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Sign in to OneDrive to upload it.' + photoNote });
         return;
       }
       const token = await getOneDriveToken();
       if (!token) {
-        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Could not get OneDrive access token.' });
+        setExportFeedback({ severity: 'warning', message: 'PDF exported locally. Could not get OneDrive access token.' + photoNote });
         return;
       }
       const driveId = await resolveCorporateDriveId(token);
@@ -974,7 +1414,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
         }
       }
       await uploadFileToFolderById(token, driveId, folderId, filename, blob);
-      setExportFeedback({ severity: 'success', message: `PDF exported and uploaded to OneDrive: ${filename}` });
+      setExportFeedback({ severity: photoNote ? 'warning' : 'success', message: `PDF exported and uploaded to OneDrive: ${filename}.` + photoNote });
     } catch (e) {
       setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'PDF exported locally, but OneDrive upload failed.' });
     } finally {
@@ -1082,10 +1522,15 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                 Add WBS item
               </Button>
             </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, pb: 1 }}>
+              Tip: a row becomes a bold <strong>sub-header</strong> automatically when other rows use its code as a prefix — e.g. code <strong>1</strong> is the &quot;Engineering Services&quot; header, and <strong>1.1</strong> / <strong>1.2</strong> are its items (their weight &amp; progress roll up into the header). Drag the <DragIndicatorIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} /> handle to reorder rows.
+            </Typography>
+            <DndContext sensors={wbsSensors} collisionDetection={closestCenter} onDragEnd={handleWbsDragEnd}>
             <TableContainer sx={{ border: 0, borderRadius: 0, overflow: 'auto' }}>
               <Table stickyHeader size="medium" sx={{ minWidth: 560 }}>
                 <TableHead>
                   <TableRow>
+                    <TableCell sx={{ width: 40, bgcolor: NET_PACIFIC_COLORS.primary, borderBottom: '2px solid #e2e8f0', py: 2, px: 0.5 }} />
                     <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Code</TableCell>
                     <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, minWidth: 200 }}>Name</TableCell>
                     <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Weight %</TableCell>
@@ -1096,10 +1541,11 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                 <TableBody>
                   {wbsItems.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} align="center" sx={{ py: 5, px: 2, color: 'text.secondary', fontSize: '0.9375rem' }}>No WBS items. Click &quot;Add WBS item&quot; below.</TableCell>
+                      <TableCell colSpan={6} align="center" sx={{ py: 5, px: 2, color: 'text.secondary', fontSize: '0.9375rem' }}>No WBS items. Click &quot;Add WBS item&quot; below.</TableCell>
                     </TableRow>
                   ) : (
-                    wbsItems.map((item, index) => {
+                    <SortableContext items={wbsItems.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+                    {wbsItems.map((item, index) => {
                       const code = (item.code || '').trim();
                       const isParent = isParentItem(code, wbsItems);
                       const indentLevel = getIndentLevel(code);
@@ -1107,8 +1553,11 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                       const parentTotals = isParent ? calculateParentTotals(code, wbsItems) : null;
 
                       return (
+                        <SortableItem key={item.id} id={item.id}>
+                          {({ setNodeRef, style, attributes, listeners }) => (
                         <TableRow
-                          key={item.id}
+                          ref={setNodeRef}
+                          style={style}
                           hover
                           sx={{
                             bgcolor: isParent ? '#fffacd' : (index % 2 === 0 ? '#fff' : 'grey.50'),
@@ -1117,6 +1566,14 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                             }
                           }}
                         >
+                          <TableCell
+                            {...attributes}
+                            {...listeners}
+                            sx={{ width: 40, px: 0.5, textAlign: 'center', verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9', cursor: 'grab', color: 'text.disabled', touchAction: 'none', '&:active': { cursor: 'grabbing' } }}
+                            title="Drag to reorder"
+                          >
+                            <DragIndicatorIcon fontSize="small" />
+                          </TableCell>
                           <TableCell sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             <TextField
                               size="small"
@@ -1166,10 +1623,11 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                                 size="small"
                                 type="number"
                                 fullWidth
-                                value={wbsDraft[item.id]?.weight ?? parseWBSNum(item.weight).toFixed(2)}
+                                value={wbsDraft[item.id]?.weight ?? String(parseWBSNum(item.weight))}
+                                onFocus={(e) => (e.target as HTMLInputElement).select()}
                                 onChange={(e) => setWbsDraft((prev) => ({ ...prev, [item.id]: { ...prev[item.id], weight: e.target.value } }))}
                                 onBlur={() => { const raw = wbsDraft[item.id]?.weight; if (raw !== undefined) { handleUpdateWBSItem(item.id, 'weight', parseWBSNum(raw)); setWbsDraft((prev) => { const next = { ...prev }; if (next[item.id]) { delete next[item.id].weight; if (Object.keys(next[item.id]).length === 0) delete next[item.id]; } return next; }); } }}
-                                inputProps={{ min: 0, max: 100, step: 0.01 }}
+                                inputProps={{ min: 0, max: 100, step: 1 }}
                                 variant="outlined"
                                 sx={wbsNumInputSx}
                               />
@@ -1185,10 +1643,11 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                                 size="small"
                                 type="number"
                                 fullWidth
-                                value={wbsDraft[item.id]?.progress ?? parseWBSNum(item.progress).toFixed(2)}
+                                value={wbsDraft[item.id]?.progress ?? String(parseWBSNum(item.progress))}
+                                onFocus={(e) => (e.target as HTMLInputElement).select()}
                                 onChange={(e) => setWbsDraft((prev) => ({ ...prev, [item.id]: { ...prev[item.id], progress: e.target.value } }))}
                                 onBlur={() => { const raw = wbsDraft[item.id]?.progress; if (raw !== undefined) { handleUpdateWBSItem(item.id, 'progress', parseWBSNum(raw)); setWbsDraft((prev) => { const next = { ...prev }; if (next[item.id]) { delete next[item.id].progress; if (Object.keys(next[item.id]).length === 0) delete next[item.id]; } return next; }); } }}
-                                inputProps={{ min: 0, max: 100, step: 0.01 }}
+                                inputProps={{ min: 0, max: 100, step: 1 }}
                                 variant="outlined"
                                 sx={wbsNumInputSx}
                               />
@@ -1198,8 +1657,11 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                             <IconButton size="small" onClick={() => handleDeleteWBSItem(item.id)} title="Delete" color="error"><DeleteIcon fontSize="small" /></IconButton>
                           </TableCell>
                         </TableRow>
+                          )}
+                        </SortableItem>
                       );
-                    })
+                    })}
+                    </SortableContext>
                   )}
                 </TableBody>
                 {wbsItems.length > 0 && (() => {
@@ -1226,7 +1688,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                   return (
                     <TableFooter>
                       <TableRow sx={{ bgcolor: '#f8fafc' }}>
-                        <TableCell colSpan={2} sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>Total progress</TableCell>
+                        <TableCell colSpan={3} sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>Total progress</TableCell>
                         <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>{totalWeight.toFixed(2)}%</TableCell>
                         <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>{wbsOverallProgress.toFixed(2)}%</TableCell>
                         <TableCell sx={{ borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }} />
@@ -1236,6 +1698,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                 })()}
               </Table>
             </TableContainer>
+            </DndContext>
           </AccordionDetails>
         </Accordion>
 
@@ -1367,7 +1830,134 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           </AccordionDetails>
         </Accordion>
 
-        {/* Accordion 4: Saved Reports */}
+        {/* Accordion 4: Site Photos */}
+        <Accordion
+          expanded={expandedSections.photos}
+          onChange={() => toggleSection('photos')}
+          disableGutters
+          elevation={0}
+          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+              Site Photos
+            </Typography>
+            {photos.length > 0 && (
+              <Chip
+                label={`${photos.length} photo${photos.length !== 1 ? 's' : ''}`}
+                size="small"
+                variant="outlined"
+                sx={{ mr: 1 }}
+              />
+            )}
+          </AccordionSummary>
+          <AccordionDetails>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+              {!oneDriveConfigured ? (
+                <Typography variant="caption" color="text.secondary">OneDrive is not configured for this environment.</Typography>
+              ) : !oneDriveSignedIn ? (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={oneDriveAuthLoading ? <CircularProgress size={14} /> : <CameraAltIcon />}
+                  disabled={oneDriveAuthLoading}
+                  onClick={() => oneDriveLogin()}
+                  sx={{ textTransform: 'none', borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+                >
+                  Sign in to OneDrive to attach photos
+                </Button>
+              ) : (
+                <Button
+                  size="small"
+                  startIcon={<CameraAltIcon />}
+                  onClick={triggerPhotoInput}
+                  sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary, borderColor: NET_PACIFIC_COLORS.primary }}
+                  variant="outlined"
+                >
+                  Add photos
+                </Button>
+              )}
+              {photosFolderUrl && (
+                <Button
+                  size="small"
+                  variant="text"
+                  endIcon={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+                  component="a"
+                  href={photosFolderUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ textTransform: 'none', color: 'text.secondary', fontSize: '0.75rem' }}
+                >
+                  Open Photos folder
+                </Button>
+              )}
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+              Photos are uploaded to the project&apos;s OneDrive <strong>Photos</strong> folder and embedded as a grid at the end of the exported PDF.
+            </Typography>
+            {photos.length > 0 && (
+              <>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                  Add a caption under each photo — it prints beneath the image in the PDF (the filename is used if left blank). Drag the <DragIndicatorIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} /> handle on a photo to change the order they appear.
+                </Typography>
+                <DndContext sensors={wbsSensors} collisionDetection={closestCenter} onDragEnd={handlePhotoDragEnd}>
+                <SortableContext items={photos.map(p => p.localId)} strategy={rectSortingStrategy}>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
+                  {photos.map(p => (
+                    <SortableItem key={p.localId} id={p.localId}>
+                      {({ setNodeRef, style, attributes, listeners }) => (
+                        <Box ref={setNodeRef} style={style} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, width: 110 }}>
+                          <Tooltip title={p.uploadStatus === 'error' ? (p.errorMessage || 'Upload failed') : (p.filename || p.file?.name || '')}>
+                            <Box sx={{ position: 'relative', width: 110, height: 84, borderRadius: 1, overflow: 'hidden', border: '1px solid #e2e8f0', bgcolor: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                              {(p.previewUrl || p.thumbnailDataUrl) && (
+                                <img src={p.previewUrl ?? p.thumbnailDataUrl} alt={p.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              )}
+                              {p.uploadStatus === 'uploading' && (
+                                <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <CircularProgress size={20} />
+                                </Box>
+                              )}
+                              <Box {...attributes} {...listeners} title="Drag to reorder"
+                                sx={{ position: 'absolute', top: 2, left: 2, bgcolor: 'rgba(0,0,0,0.5)', color: '#fff', borderRadius: 0.5, p: 0.25, display: 'flex', cursor: 'grab', touchAction: 'none', '&:active': { cursor: 'grabbing' }, '&:hover': { bgcolor: 'rgba(0,0,0,0.7)' } }}>
+                                <DragIndicatorIcon sx={{ fontSize: 14 }} />
+                              </Box>
+                              {p.uploadStatus === 'done' && p.webUrl && (
+                                <IconButton size="small" component="a" href={p.webUrl} target="_blank" rel="noopener noreferrer"
+                                  sx={{ position: 'absolute', bottom: 2, right: 20, bgcolor: 'rgba(0,0,0,0.45)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(0,0,0,0.7)' } }}>
+                                  <OpenInNewIcon sx={{ fontSize: 11 }} />
+                                </IconButton>
+                              )}
+                              {p.uploadStatus === 'error' && (
+                                <Chip label="Error" size="small" color="error" sx={{ position: 'absolute', bottom: 2, left: 2, fontSize: '0.6rem', height: 16 }} />
+                              )}
+                              <IconButton size="small" onClick={() => handleRemovePhoto(p.localId)}
+                                sx={{ position: 'absolute', top: 2, right: 2, bgcolor: 'rgba(0,0,0,0.5)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(200,0,0,0.8)' } }}>
+                                <DeleteIcon sx={{ fontSize: 12 }} />
+                              </IconButton>
+                            </Box>
+                          </Tooltip>
+                          <TextField
+                            size="small"
+                            variant="outlined"
+                            placeholder="Caption"
+                            value={p.caption ?? ''}
+                            onChange={(e) => handleCaptionChange(p.localId, e.target.value)}
+                            inputProps={{ maxLength: 80 }}
+                            sx={{ '& .MuiInputBase-input': { fontSize: '0.7rem', py: 0.5, px: 0.75 } }}
+                          />
+                        </Box>
+                      )}
+                    </SortableItem>
+                  ))}
+                </Box>
+                </SortableContext>
+                </DndContext>
+              </>
+            )}
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Accordion 5: Saved Reports */}
         <Accordion
           expanded={expandedSections.savedReports}
           onChange={() => toggleSection('savedReports')}
@@ -1379,12 +1969,13 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
             <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
               Saved Reports
             </Typography>
-            {progressSnapshots.length > 0 && (
-              <Chip label={String(progressSnapshots.length)} size="small" variant="outlined" sx={{ mr: 1 }} />
+            {savedReports.length > 0 && (
+              <Chip label={String(savedReports.length)} size="small" variant="outlined" sx={{ mr: 1 }} />
             )}
+            {savedLoading && <CircularProgress size={16} sx={{ color: NET_PACIFIC_COLORS.primary, mr: 1 }} />}
           </AccordionSummary>
           <AccordionDetails>
-            {progressSnapshots.length > 0 ? (
+            {savedReports.length > 0 ? (
               <TableContainer sx={{ mb: 1.5, border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 240 }}>
                 <Table size="small" stickyHeader>
                   <TableHead>
@@ -1396,14 +1987,14 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {progressSnapshots.map((s, idx) => (
-                      <TableRow key={`${s.date}-${s.pbNumber}-${idx}`} hover selected={editingSnapshotIndex === idx}>
+                    {savedReports.map((s) => (
+                      <TableRow key={s.id} hover selected={editingReportId === s.id}>
                         <TableCell>PB{s.pbNumber}</TableCell>
                         <TableCell>{new Date(s.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
                         <TableCell align="right">{Math.round(s.overallProgress * 100) / 100}%</TableCell>
                         <TableCell align="right">
-                          <Button size="small" onClick={() => handleLoadSnapshot(s, idx)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
-                          <IconButton size="small" color="error" onClick={() => handleDeleteSnapshot(idx)} title="Delete snapshot" aria-label="Delete snapshot">
+                          <Button size="small" onClick={() => handleLoadSnapshot(s)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
+                          <IconButton size="small" color="error" onClick={() => handleDeleteSnapshot(s)} title="Delete snapshot" aria-label="Delete snapshot">
                             <DeleteIcon fontSize="small" />
                           </IconButton>
                         </TableCell>
@@ -1422,6 +2013,9 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
 
 
       </Box>
+
+      {/* Hidden file input for site photos */}
+      <input ref={photoInputRef} type="file" accept="image/*,.heic,.heif" multiple style={{ display: 'none' }} onChange={handlePhotoSelect} />
 
       {/* Sticky bottom bar */}
       <Paper
@@ -1442,9 +2036,9 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
               <Typography variant="body2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
                 Overall: {wbsOverallProgress.toFixed(1)}%
               </Typography>
-              {editingSnapshotIndex !== null && progressSnapshots[editingSnapshotIndex] && (
+              {editingReportId && savedReports.find(r => r.id === editingReportId) && (
                 <Chip
-                  label={`Editing PB${progressSnapshots[editingSnapshotIndex].pbNumber}`}
+                  label={`Editing PB${savedReports.find(r => r.id === editingReportId)!.pbNumber}`}
                   size="small"
                   color="info"
                   variant="outlined"

@@ -2561,6 +2561,155 @@ app.delete('/api/service-reports/:id', async (req, res) => {
   }
 });
 
+// ========== PROGRESS REPORTS (saved WBS snapshots) ==========
+// Filter by project_id with an in-memory sort (no composite index required —
+// same pattern as calcsheet_quotation_versions).
+app.get('/api/progress-reports', async (req, res) => {
+  const { project_id } = req.query;
+  try {
+    let snap;
+    if (project_id) {
+      snap = await db.collection('progress_reports')
+        .where('project_id', '==', String(project_id))
+        .limit(200)
+        .get();
+    } else {
+      snap = await db.collection('progress_reports').orderBy('created_at', 'desc').limit(200).get();
+    }
+    const rows = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+    rows.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching progress reports:', err);
+    res.status(500).json({ error: 'Failed to fetch progress reports' });
+  }
+});
+
+app.post('/api/progress-reports', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.created_at = data.created_at || new Date().toISOString();
+    data.updated_at = new Date().toISOString();
+    const ref = await db.collection('progress_reports').add(data);
+    res.json({ ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error creating progress report:', err);
+    res.status(500).json({ error: 'Failed to create progress report' });
+  }
+});
+
+app.put('/api/progress-reports/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.updated_at = new Date().toISOString();
+    const ref = db.collection('progress_reports').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Progress report not found' });
+    await ref.update(data);
+    res.json({ ...doc.data(), ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error updating progress report:', err);
+    res.status(500).json({ error: 'Failed to update progress report' });
+  }
+});
+
+app.delete('/api/progress-reports/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const ref = db.collection('progress_reports').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Progress report not found' });
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting progress report:', err);
+    res.status(500).json({ error: 'Failed to delete progress report' });
+  }
+});
+
+// ========== COMPLETION CERTIFICATES ==========
+// Filter by project_id with an in-memory sort (no composite index required).
+app.get('/api/completion-certificates', async (req, res) => {
+  const { project_id } = req.query;
+  try {
+    let snap;
+    if (project_id) {
+      snap = await db.collection('completion_certificates')
+        .where('project_id', '==', String(project_id))
+        .limit(200)
+        .get();
+    } else {
+      snap = await db.collection('completion_certificates').orderBy('created_at', 'desc').limit(200).get();
+    }
+    const rows = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+    rows.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching completion certificates:', err);
+    res.status(500).json({ error: 'Failed to fetch completion certificates' });
+  }
+});
+
+app.post('/api/completion-certificates', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.created_at = data.created_at || new Date().toISOString();
+    data.updated_at = new Date().toISOString();
+    const ref = await db.collection('completion_certificates').add(data);
+    res.json({ ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error creating completion certificate:', err);
+    res.status(500).json({ error: 'Failed to create completion certificate' });
+  }
+});
+
+app.put('/api/completion-certificates/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.updated_at = new Date().toISOString();
+    const ref = db.collection('completion_certificates').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Completion certificate not found' });
+    await ref.update(data);
+    res.json({ ...doc.data(), ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error updating completion certificate:', err);
+    res.status(500).json({ error: 'Failed to update completion certificate' });
+  }
+});
+
+app.delete('/api/completion-certificates/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const ref = db.collection('completion_certificates').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Completion certificate not found' });
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting completion certificate:', err);
+    res.status(500).json({ error: 'Failed to delete completion certificate' });
+  }
+});
+
 // ─── DTR Entries ────────────────────────────────────────────────────────────
 app.get('/api/dtr', async (req, res) => {
   const user = await getCurrentUser(req);
