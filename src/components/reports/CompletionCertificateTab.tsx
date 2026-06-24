@@ -1,9 +1,17 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { Alert, Box, Chip, CircularProgress, Paper, Typography, Button, TextField, FormControl, InputLabel, Select, MenuItem, Grid } from '@mui/material';
-import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, CloudUpload as CloudUploadIcon, CheckCircle as CheckCircleIcon } from '@mui/icons-material';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { Alert, Box, Chip, CircularProgress, Paper, Typography, Button, TextField, FormControl, InputLabel, Select, MenuItem, Grid, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton } from '@mui/material';
+import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, CloudUpload as CloudUploadIcon, CheckCircle as CheckCircleIcon, Save as SaveIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
 import jsPDF from 'jspdf';
-import { REPORT_COMPANIES, type ReportCompanyKey } from '../ProjectDetails';
+import {
+  REPORT_COMPANIES,
+  type ReportCompanyKey,
+  CompletionCertificate,
+  getCompletionCertificates,
+  saveCompletionCertificate,
+  updateCompletionCertificate,
+  deleteCompletionCertificate,
+} from '../ProjectDetails';
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
@@ -109,6 +117,82 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     () => formatCompletionDateForPdf(completionDateOverride.trim() || undefined),
     [completionDateOverride]
   );
+
+  // Saved certificates (Firestore-backed history for backtracking)
+  const [savedCerts, setSavedCerts] = useState<CompletionCertificate[]>([]);
+  const [certsLoading, setCertsLoading] = useState(false);
+  const [editingCertId, setEditingCertId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const loadSavedCerts = useCallback(async () => {
+    setCertsLoading(true);
+    try {
+      setSavedCerts(await getCompletionCertificates(project.id));
+    } catch {
+      // Keep stale list on transient error.
+    } finally {
+      setCertsLoading(false);
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    setEditingCertId(null);
+    loadSavedCerts();
+  }, [project.id, loadSavedCerts]);
+
+  const handleSaveCertificate = async () => {
+    setSaving(true);
+    setExportFeedback(null);
+    const cert: Omit<CompletionCertificate, 'id' | 'createdAt'> = {
+      projectName: project.project_name || '—',
+      poNumber: project.po_number || '—',
+      client: project.account_name || '—',
+      completionDate: completionDateOverride.trim() || completionDateToInputValue(project.completion_date),
+      approverName: approverName.trim() || undefined,
+      approverDesignation: approverDesignation.trim() || undefined,
+      approverCompany: approverCompany.trim() || undefined,
+      preparedByName: (preparedBy.name || currentUser?.full_name || currentUser?.username || '').trim() || undefined,
+      preparedByDesignation: (preparedBy.designation || '').trim() || undefined,
+      reportCompany,
+      companyName: REPORT_COMPANIES[reportCompany],
+    };
+    try {
+      if (editingCertId) {
+        await updateCompletionCertificate(editingCertId, cert);
+      } else {
+        const created = await saveCompletionCertificate(project.id, cert);
+        setEditingCertId(created.id);
+      }
+      setExportFeedback({ severity: 'success', message: 'Certificate saved.' });
+      await loadSavedCerts();
+    } catch (e) {
+      setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'Failed to save certificate.' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleLoadCertificate = (cert: CompletionCertificate) => {
+    setCompletionDateOverride(cert.completionDate ? cert.completionDate.slice(0, 10) : '');
+    setApproverName(cert.approverName || '');
+    setApproverDesignation(cert.approverDesignation || '');
+    setApproverCompany(cert.approverCompany || '');
+    if (cert.reportCompany === 'IOCT' || cert.reportCompany === 'ACT') {
+      setReportCompany(cert.reportCompany as ReportCompanyKey);
+    }
+    setEditingCertId(cert.id);
+  };
+
+  const handleDeleteCertificate = async (cert: CompletionCertificate) => {
+    if (!window.confirm('Delete this saved certificate? This cannot be undone.')) return;
+    try {
+      await deleteCompletionCertificate(cert.id);
+      if (editingCertId === cert.id) setEditingCertId(null);
+      await loadSavedCerts();
+    } catch (e) {
+      setExportFeedback({ severity: 'error', message: e instanceof Error ? e.message : 'Failed to delete certificate.' });
+    }
+  };
 
   const buildPdf = async (preview: boolean): Promise<Blob | { blob: Blob; filename: string } | void> => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -439,8 +523,58 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
             <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
           </Select>
         </FormControl>
+        {editingCertId && (
+          <Chip label="Editing saved certificate" size="small" color="info" variant="outlined" />
+        )}
+        <Button variant="contained" size="small" startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />} onClick={handleSaveCertificate} disabled={saving} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{editingCertId ? 'Update Saved' : 'Save Certificate'}</Button>
         <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
         <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Uploading…' : 'Export Certificate of Completion'}</Button>
+      </Box>
+
+      {/* Saved certificates — Firestore history for backtracking */}
+      <Box sx={{ mt: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+            Saved Certificates
+          </Typography>
+          {savedCerts.length > 0 && <Chip label={String(savedCerts.length)} size="small" variant="outlined" />}
+          {certsLoading && <CircularProgress size={16} sx={{ color: NET_PACIFIC_COLORS.primary }} />}
+        </Box>
+        {savedCerts.length > 0 ? (
+          <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 280 }}>
+            <Table size="small" stickyHeader>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Saved</TableCell>
+                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Completion Date</TableCell>
+                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Company</TableCell>
+                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Approved By</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {savedCerts.map((c) => (
+                  <TableRow key={c.id} hover selected={editingCertId === c.id}>
+                    <TableCell>{c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-US', { dateStyle: 'medium' }) : '—'}</TableCell>
+                    <TableCell>{c.completionDate ? formatCompletionDateForPdf(c.completionDate) : '—'}</TableCell>
+                    <TableCell>{c.companyName || c.reportCompany}</TableCell>
+                    <TableCell>{c.approverName || '—'}</TableCell>
+                    <TableCell align="right">
+                      <Button size="small" onClick={() => handleLoadCertificate(c)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
+                      <IconButton size="small" color="error" onClick={() => handleDeleteCertificate(c)} title="Delete certificate" aria-label="Delete certificate">
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        ) : (
+          <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+            No saved certificates yet. Use <strong>Save Certificate</strong> to keep a record for backtracking.
+          </Typography>
+        )}
       </Box>
     </Paper>
   );

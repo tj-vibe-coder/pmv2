@@ -324,6 +324,164 @@ export async function migrateServiceReportsFromLocalStorage(): Promise<void> {
   if (!anyFailed) localStorage.setItem(SR_MIGRATION_KEY, '1');
 }
 
+// ─── Progress reports (saved WBS snapshots) — Firestore-backed ────────────────
+export interface StoredProgressReport {
+  id: string;
+  date: string;
+  pbNumber: string;
+  wbsItems: WBSItem[];
+  overallProgress: number;
+  createdAt: string;
+}
+
+function normalizeProgressReport(raw: Record<string, unknown>): StoredProgressReport {
+  return {
+    id: (raw.id as string) ?? '',
+    date: (raw.date as string) ?? '',
+    pbNumber: (raw.pbNumber as string) ?? '—',
+    wbsItems: ((raw.wbsItems as WBSItem[]) || []).map((i) => ({
+      ...i,
+      weight: parseWBSNum(i.weight),
+      progress: parseWBSNum(i.progress),
+    })),
+    overallProgress: typeof raw.overallProgress === 'number'
+      ? (raw.overallProgress as number)
+      : Number(raw.overallProgress) || 0,
+    createdAt: (raw.createdAt as string) ?? (raw.created_at as string) ?? '',
+  };
+}
+
+export async function getProgressReports(projectId: number): Promise<StoredProgressReport[]> {
+  const res = await fetch(`/api/progress-reports?project_id=${projectId}`, { headers: srAuthHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch progress reports');
+  const raw: Record<string, unknown>[] = await res.json();
+  return raw.map(normalizeProgressReport);
+}
+
+export async function saveProgressReport(projectId: number, snapshot: ProgressSnapshot): Promise<StoredProgressReport> {
+  const res = await fetch('/api/progress-reports', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...srAuthHeaders() },
+    body: JSON.stringify({ ...snapshot, project_id: String(projectId) }),
+  });
+  if (!res.ok) throw new Error('Failed to save progress report');
+  return normalizeProgressReport(await res.json());
+}
+
+export async function updateProgressReport(id: string, snapshot: ProgressSnapshot): Promise<void> {
+  const res = await fetch(`/api/progress-reports/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...srAuthHeaders() },
+    body: JSON.stringify(snapshot),
+  });
+  if (!res.ok) throw new Error('Failed to update progress report');
+}
+
+export async function deleteProgressReport(id: string): Promise<void> {
+  const res = await fetch(`/api/progress-reports/${id}`, { method: 'DELETE', headers: srAuthHeaders() });
+  if (!res.ok) throw new Error('Failed to delete progress report');
+}
+
+// One-time migration: moves any progress snapshots still in localStorage to Firestore.
+// Each successfully-migrated snapshot is removed from localStorage so a partial-failure
+// retry never duplicates. created_at is preserved from the snapshot's own date.
+const PR_MIGRATION_KEY = 'pr_migrated_v1';
+export async function migrateProgressSnapshotsFromLocalStorage(): Promise<void> {
+  if (localStorage.getItem(PR_MIGRATION_KEY)) return;
+  const raw = localStorage.getItem(PROJECT_PROGRESS_SNAPSHOTS_KEY);
+  if (!raw) { localStorage.setItem(PR_MIGRATION_KEY, '1'); return; }
+  let all: Record<string, ProgressSnapshot[]>;
+  try { all = JSON.parse(raw); } catch { localStorage.setItem(PR_MIGRATION_KEY, '1'); return; }
+
+  const token = localStorage.getItem('netpacific_token') || '';
+  const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  let anyFailed = false;
+
+  for (const [projectId, snaps] of Object.entries(all)) {
+    // localStorage stores newest-first (unshift); reverse → oldest-first
+    const inOrder = [...snaps].reverse();
+    const remaining: ProgressSnapshot[] = [];
+    for (const snap of inOrder) {
+      try {
+        const res = await fetch('/api/progress-reports', {
+          method: 'POST',
+          headers,
+          // Preserve original timestamp under the server's expected field name
+          body: JSON.stringify({ ...snap, project_id: projectId, created_at: snap.date }),
+        });
+        if (!res.ok) { remaining.push(snap); anyFailed = true; }
+      } catch { remaining.push(snap); anyFailed = true; }
+    }
+    if (remaining.length > 0) all[projectId] = remaining; else delete all[projectId];
+    const leftover = Object.keys(all);
+    if (leftover.length === 0) localStorage.removeItem(PROJECT_PROGRESS_SNAPSHOTS_KEY);
+    else localStorage.setItem(PROJECT_PROGRESS_SNAPSHOTS_KEY, JSON.stringify(all));
+  }
+
+  if (!anyFailed) localStorage.setItem(PR_MIGRATION_KEY, '1');
+}
+
+// ─── Completion certificates — Firestore-backed ──────────────────────────────
+export interface CompletionCertificate {
+  id: string;
+  projectName: string;
+  poNumber: string;
+  client: string;
+  completionDate: string;
+  approverName?: string;
+  approverDesignation?: string;
+  approverCompany?: string;
+  preparedByName?: string;
+  preparedByDesignation?: string;
+  reportCompany: string;   // 'IOCT' | 'ACT'
+  companyName: string;     // resolved company display name at save time
+  createdAt: string;
+}
+
+function normalizeCompletionCertificate(raw: Record<string, unknown>): CompletionCertificate {
+  return {
+    ...(raw as unknown as CompletionCertificate),
+    createdAt: (raw.createdAt as string) ?? (raw.created_at as string) ?? '',
+  };
+}
+
+export async function getCompletionCertificates(projectId: number): Promise<CompletionCertificate[]> {
+  const res = await fetch(`/api/completion-certificates?project_id=${projectId}`, { headers: srAuthHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch completion certificates');
+  const raw: Record<string, unknown>[] = await res.json();
+  return raw.map(normalizeCompletionCertificate);
+}
+
+export async function saveCompletionCertificate(
+  projectId: number,
+  cert: Omit<CompletionCertificate, 'id' | 'createdAt'>,
+): Promise<CompletionCertificate> {
+  const res = await fetch('/api/completion-certificates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...srAuthHeaders() },
+    body: JSON.stringify({ ...cert, project_id: String(projectId) }),
+  });
+  if (!res.ok) throw new Error('Failed to save completion certificate');
+  return normalizeCompletionCertificate(await res.json());
+}
+
+export async function updateCompletionCertificate(
+  id: string,
+  cert: Omit<CompletionCertificate, 'id' | 'createdAt'>,
+): Promise<void> {
+  const res = await fetch(`/api/completion-certificates/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...srAuthHeaders() },
+    body: JSON.stringify(cert),
+  });
+  if (!res.ok) throw new Error('Failed to update completion certificate');
+}
+
+export async function deleteCompletionCertificate(id: string): Promise<void> {
+  const res = await fetch(`/api/completion-certificates/${id}`, { method: 'DELETE', headers: srAuthHeaders() });
+  if (!res.ok) throw new Error('Failed to delete completion certificate');
+}
+
 interface ProjectExpenseRow {
   projectId: number;
   amount: number;
