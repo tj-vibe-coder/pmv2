@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Typography,
   Box,
@@ -131,6 +131,7 @@ const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR + 2 - 2025 }, (_, i) => 2
 
 const ExpenseMonitoring: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   // Mounted under both /expense-monitoring and /finance/expense-monitoring — match by suffix
   const isChildRoute = /\/(ca-form|liquidation-form|direct-labor)$/.test(location.pathname);
   
@@ -669,6 +670,15 @@ const ExpenseMonitoring: React.FC = () => {
             ))}
           </Select>
         </FormControl>
+        {selectedProjectId !== '' && (
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => navigate(`/finance/projects/${selectedProjectId}/expenses`)}
+          >
+            Full Report
+          </Button>
+        )}
       </Box>
 
       {/* Summary Cards */}

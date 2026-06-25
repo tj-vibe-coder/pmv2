@@ -14,6 +14,7 @@ import {
   Alert,
   CircularProgress,
   Chip,
+  LinearProgress,
   Collapse,
   Dialog,
   DialogActions,
@@ -667,7 +668,7 @@ export default function CAFormPage() {
                   return (
                   <React.Fragment key={ca.id}>
                   <TableRow hover>
-                    <TableCell sx={{ py: 0 }}>
+                    <TableCell sx={{ py: 0, whiteSpace: 'nowrap' }}>
                       <IconButton
                         size="small"
                         onClick={() => setExpandedId(expanded ? null : ca.id)}
@@ -675,6 +676,14 @@ export default function CAFormPage() {
                       >
                         {expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
                       </IconButton>
+                      {linkedLiqs.length > 0 && (
+                        <Chip
+                          size="small"
+                          label={linkedLiqs.length}
+                          color="info"
+                          sx={{ height: 18, fontSize: '0.7rem', '& .MuiChip-label': { px: 0.75 } }}
+                        />
+                      )}
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
                       {ca.ca_no || (
@@ -692,6 +701,15 @@ export default function CAFormPage() {
                     <TableCell>{Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
                     <TableCell sx={Number(ca.balance_remaining) < 0 ? { color: 'error.main', fontWeight: 600 } : undefined}>
                       {Number(ca.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                      {Number(ca.amount) > 0 && (
+                        <Tooltip title={`${Math.round(Math.min(100, Math.max(0, ((Number(ca.amount) - Number(ca.balance_remaining)) / Number(ca.amount)) * 100)))}% consumed`}>
+                          <LinearProgress
+                            variant="determinate"
+                            value={Math.min(100, Math.max(0, ((Number(ca.amount) - Number(ca.balance_remaining)) / Number(ca.amount)) * 100))}
+                            sx={{ mt: 0.5, height: 5, borderRadius: 3 }}
+                          />
+                        </Tooltip>
+                      )}
                     </TableCell>
                     <TableCell>
                       {ca.project_name

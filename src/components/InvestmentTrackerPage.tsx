@@ -99,6 +99,8 @@ const InvestmentTrackerPage: React.FC = () => {
   const [targetInput, setTargetInput] = useState('');
   const [targetSaving, setTargetSaving] = useState(false);
 
+  const [actualSpending, setActualSpending] = useState<{ total: number; count: number } | null>(null);
+
   const authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
 
   const load = useCallback(async () => {
@@ -127,6 +129,17 @@ const InvestmentTrackerPage: React.FC = () => {
   }, []); // eslint-disable-line
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const year = new Date().getFullYear();
+    const tok = localStorage.getItem('netpacific_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (tok) headers.Authorization = `Bearer ${tok}`;
+    fetch(`${API_BASE}/project-expenses/summary?year=${year}`, { headers })
+      .then(r => r.json())
+      .then(d => { if (d && d.success) setActualSpending({ total: Number(d.total) || 0, count: Number(d.count) || 0 }); })
+      .catch(() => {});
+  }, []);
 
   // ── Computed rows ────────────────────────────────────────────────────────────
   const rows = investments.map((inv, idx) => {
@@ -213,6 +226,31 @@ const InvestmentTrackerPage: React.FC = () => {
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
+
+      {actualSpending && (
+        <Paper
+          variant="outlined"
+          sx={{
+            mb: 2, p: 1.5,
+            borderStyle: 'dashed',
+            borderColor: NET_PACIFIC_COLORS.info,
+            bgcolor: 'rgba(116,185,255,0.06)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1,
+          }}
+        >
+          <Box>
+            <Typography variant="overline" sx={{ color: 'text.secondary', lineHeight: 1.2 }}>
+              Actual Project Spending (informational — not part of capital ledger)
+            </Typography>
+            <Typography variant="h6" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.secondary, lineHeight: 1.2 }}>
+              {formatPHP(actualSpending.total)}
+            </Typography>
+          </Box>
+          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+            {actualSpending.count} expense record(s) · {new Date().getFullYear()} · derived from project_expenses
+          </Typography>
+        </Paper>
+      )}
 
       {/* KPI Cards */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
