@@ -136,6 +136,61 @@ async function requireActiveUser(req, res) {
   return user;
 }
 
+// ========== MICROSOFT GRAPH APP-ONLY (CLIENT CREDENTIALS) HELPER ==========
+// Server-side OneDrive/Graph access using app-only auth (no signed-in user).
+// Used by the receipt-scanning feature to read the corporate proposal drive.
+let graphTokenCache = null; // { token, expiresAt }
+
+async function getGraphAppToken() {
+  if (graphTokenCache && Date.now() < graphTokenCache.expiresAt) {
+    return graphTokenCache.token;
+  }
+  const tenantId = process.env.ONEDRIVE_TENANT_ID;
+  const clientId = process.env.ONEDRIVE_CLIENT_ID;
+  const clientSecret = process.env.ONEDRIVE_CLIENT_SECRET;
+  const driveOwner = process.env.ONEDRIVE_DRIVE_OWNER;
+  if (!tenantId) throw new Error('OneDrive not configured: ONEDRIVE_TENANT_ID');
+  if (!clientId) throw new Error('OneDrive not configured: ONEDRIVE_CLIENT_ID');
+  if (!clientSecret) throw new Error('OneDrive not configured: ONEDRIVE_CLIENT_SECRET');
+  if (!driveOwner) throw new Error('OneDrive not configured: ONEDRIVE_DRIVE_OWNER');
+
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret,
+    scope: 'https://graph.microsoft.com/.default',
+  });
+  const resp = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error('Graph token error: ' + text);
+  }
+  const json = await resp.json();
+  graphTokenCache = {
+    token: json.access_token,
+    expiresAt: Date.now() + (json.expires_in - 60) * 1000,
+  };
+  return graphTokenCache.token;
+}
+
+async function resolveCorporateDriveId(token) {
+  const owner = process.env.ONEDRIVE_DRIVE_OWNER;
+  const resp = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(owner)}/drive`,
+    { headers: { Authorization: 'Bearer ' + token } }
+  );
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(text);
+  }
+  const body = await resp.json();
+  return body.id;
+}
+
 // ========== AUTH ROUTES ==========
 
 function userResponse(id, user) {
@@ -3089,6 +3144,141 @@ app.delete('/api/dtr/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete DTR entry' });
   }
 });
+
+// ========== ONEDRIVE / MICROSOFT GRAPH HEALTH ==========
+// Smoke test for server-side app-only Graph auth. Never exposes token/secret.
+app.get('/api/onedrive/health', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    res.json({ ok: true, owner: process.env.ONEDRIVE_DRIVE_OWNER, driveId, tokenCached: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// --- BEGIN RECEIPT PARSING BLOCK ---
+function extractJson(text) {
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) return fence[1].trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1) throw new Error('NO_JSON_IN_RESPONSE');
+  return text.slice(start, end + 1);
+}
+
+function normalizeReceipt(raw) {
+  if (!raw || typeof raw !== 'object') throw new Error('INVALID_JSON_OBJECT');
+  const safeNum = (val) => {
+    if (typeof val !== 'number' && typeof val !== 'string') return null;
+    if (typeof val === 'string' && val.trim() === '') return null;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const allowedCategories = ['Tools / Direct', 'Gas', 'Materials', 'Transportation', 'Accommodation', '3rd Party Labor', 'Others'];
+  const dateMatch = (typeof raw.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.date)) ? raw.date : null;
+  const suggestedCategory = allowedCategories.includes(raw.suggestedCategory) ? raw.suggestedCategory : 'Others';
+
+  let confidence = Number(raw.confidence);
+  if (!Number.isFinite(confidence)) confidence = 0;
+  confidence = Math.max(0, Math.min(1, confidence));
+
+  const lineItems = Array.isArray(raw.lineItems) ? raw.lineItems.filter(item => item && typeof item === 'object').map(item => ({
+    description: typeof item.description === 'string' ? item.description : String(item.description || ''),
+    qty: safeNum(item.qty),
+    unitPrice: safeNum(item.unitPrice),
+    amount: safeNum(item.amount)
+  })) : [];
+
+  return {
+    vendor: typeof raw.vendor === 'string' ? raw.vendor : null,
+    date: dateMatch,
+    currency: (typeof raw.currency === 'string' && raw.currency.trim().length > 0) ? raw.currency.trim() : 'PHP',
+    subtotal: safeNum(raw.subtotal),
+    tax: safeNum(raw.tax),
+    total: safeNum(raw.total),
+    paymentMethod: typeof raw.paymentMethod === 'string' ? raw.paymentMethod : null,
+    suggestedCategory,
+    lineItems,
+    confidence
+  };
+}
+
+async function parseReceiptWithGemini(imageBase64, mimeType) {
+  const { GoogleGenerativeAI } = require('@google/generative-ai'); // Lazy require
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const modelName = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+  const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
+
+  const RECEIPT_PROMPT = `You are an expert AI data extraction assistant. Extract receipt data from the provided image/pdf into a strict JSON object.
+Do NOT wrap the output in markdown code blocks. Output ONLY valid, parsable JSON.
+If a value is not found or unreadable, use null.
+Remove all currency symbols (e.g., ', '₱', 'PHP') and commas from numeric values before outputting.
+
+The JSON MUST exactly match this structure:
+{
+  "vendor": "String or null",
+  "date": "YYYY-MM-DD string or null",
+  "currency": "String, use 'PHP' if not explicitly stated otherwise",
+  "subtotal": Number or null,
+  "tax": Number or null,
+  "total": Number or null,
+  "paymentMethod": "String or null",
+  "suggestedCategory": "Must be exactly one of: 'Tools / Direct', 'Gas', 'Materials', 'Transportation', 'Accommodation', '3rd Party Labor', 'Others'. Guess the best fit based on vendor and items.",
+  "confidence": Number between 0.0 and 1.0 indicating extraction quality,
+  "lineItems": [
+    {
+      "description": "String",
+      "qty": Number or null,
+      "unitPrice": Number or null,
+      "amount": Number or null
+    }
+  ]
+}`;
+
+  const result = await model.generateContent([
+    { text: RECEIPT_PROMPT },
+    { inlineData: { mimeType, data: imageBase64.replace(/^data:.*?;base64,/, '') } }
+  ]);
+
+  const text = result.response.text();
+  const jsonStr = extractJson(text);
+  const parsed = JSON.parse(jsonStr);
+  return normalizeReceipt(parsed);
+}
+
+app.post('/api/receipts/parse', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+
+  const { imageBase64, mimeType } = req.body || {};
+  if (!imageBase64 || typeof imageBase64 !== 'string') {
+    return res.status(400).json({ ok: false, error: 'Missing or invalid imageBase64' });
+  }
+
+  const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'];
+  if (!mimeType || !allowedMimes.includes(mimeType)) {
+    return res.status(400).json({ ok: false, error: 'Unsupported mimeType. Allowed: jpeg, png, webp, heic, heif, pdf' });
+  }
+
+  try {
+    const receipt = await parseReceiptWithGemini(imageBase64, mimeType);
+    return res.json({ ok: true, receipt });
+  } catch (err) {
+    if (err.message === 'GEMINI_API_KEY not configured') {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+    console.error('[ReceiptParse Error]', err.message);
+    return res.status(502).json({ ok: false, error: err.message || 'Failed to parse receipt' });
+  }
+});
+// --- END RECEIPT PARSING BLOCK ---
 
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {
