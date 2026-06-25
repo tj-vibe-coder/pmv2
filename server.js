@@ -900,15 +900,24 @@ app.post('/api/project-expenses', async (req, res) => {
       if (hasPoRows || hasLiqRows) {
         const existingKeys = new Set();
         const fetchPromises = [];
-        if (hasPoRows) {
+        // Scope dedup scans to only the projectId(s) in this batch — a duplicate
+        // of a PO item / liquidation row always carries the same projectId as the
+        // original, so this is exact, and avoids an unbounded full-collection scan.
+        const poProjectIds = [...new Set(toInsert.filter(e => e.sourcePoId).map(e => String(e.projectId)))];
+        const liqProjectIds = [...new Set(toInsert.filter(e => e.sourceLiquidationId).map(e => String(e.projectId)))];
+        for (const pid of poProjectIds) {
           fetchPromises.push(
-            db.collection('project_expenses').where('sourceType', '==', 'po_sync').get()
+            db.collection('project_expenses')
+              .where('sourceType', '==', 'po_sync')
+              .where('projectId', '==', pid).get()
               .then(snap => snap.docs.forEach(d => { const k = syncKey(d.data()); if (k) existingKeys.add(k); }))
           );
         }
-        if (hasLiqRows) {
+        for (const pid of liqProjectIds) {
           fetchPromises.push(
-            db.collection('project_expenses').where('sourceType', '==', 'liquidation_sync').get()
+            db.collection('project_expenses')
+              .where('sourceType', '==', 'liquidation_sync')
+              .where('projectId', '==', pid).get()
               .then(snap => snap.docs.forEach(d => { const k = syncKey(d.data()); if (k) existingKeys.add(k); }))
           );
         }
