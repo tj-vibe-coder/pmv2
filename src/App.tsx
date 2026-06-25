@@ -32,6 +32,8 @@ import CollectionsDashboard from './components/CollectionsDashboard';
 import PayrollDashboard from './components/payroll/PayrollDashboard';
 import PayrollGuard from './components/payroll/PayrollGuard';
 import FinanceHomePage from './components/finance/FinanceHomePage';
+import ReimbursementDashboard from './components/ReimbursementDashboard';
+import ProjectExpenseReport from './components/finance/ProjectExpenseReport';
 import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
 import DTRPage from './components/employee/DTRPage';
@@ -455,6 +457,30 @@ function App() {
                 element={<DirectLaborPage />}
               />
             </Route>
+            <Route
+              path="/finance/reimbursements"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <ReimbursementDashboard />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/projects/:projectId/expenses"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <ProjectExpenseReport />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
             {/* ===== SALES WORKSPACE ===== */}
             {/* Legacy calcsheet paths redirect into the workspace, preserving params, query, and hash */}
             <Route path="/calcsheet/*" element={<RedirectCalcsheet />} />

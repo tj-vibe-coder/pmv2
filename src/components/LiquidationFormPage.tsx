@@ -183,44 +183,48 @@ const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
   remarks: '',
 });
 
-const PROJECT_EXPENSES_KEY = 'projectExpenses';
-function addLiquidationRowsToProjectExpenses(rows: LiquidationRow[], liquidationId?: string, formNo?: string): void {
+async function addLiquidationRowsToProjectExpenses(
+  rows: LiquidationRow[],
+  liquidationId?: string,
+  formNo?: string,
+  sourceCaId?: string
+): Promise<void> {
   try {
-    const raw = localStorage.getItem(PROJECT_EXPENSES_KEY);
-    const existing = raw ? JSON.parse(raw) : [];
+    const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
     const toAdd = rows.filter((r) => {
       const pid = r.projectId;
       const amt = Number(r.amount);
       return pid !== '' && pid !== null && pid !== undefined && amt > 0;
     });
-    // Build set of already-synced keys to avoid duplicates
-    const syncedKeys = new Set(
-      existing.filter((e: any) => e.sourceLiquidationId != null && e.sourceLiquidationRowId).map((e: any) => `${e.sourceLiquidationId}:${e.sourceLiquidationRowId}`)
-    );
-    const now = new Date().toISOString();
-    let added = 0;
-    toAdd.forEach((r) => {
-      const pid = r.projectId;
-      if (!pid) return;
-      if (liquidationId && syncedKeys.has(`${liquidationId}:${r.id}`)) return;
-      existing.unshift({
-        id: `exp-liq-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        projectId: pid,
+    if (toAdd.length === 0) return;
+    const expenses = toAdd.map((r) => {
+      const expense: Record<string, unknown> = {
+        projectId: r.projectId,
         projectName: (r.projectName || '').trim() || '—',
-        description: formNo ? `Liquidation ${formNo}: ${(r.particulars || '').trim() || 'Liquidation'}` : (r.particulars || '').trim() || 'Liquidation',
+        description: formNo
+          ? `Liquidation ${formNo}: ${(r.particulars || '').trim() || 'Liquidation'}`
+          : (r.particulars || '').trim() || 'Liquidation',
         amount: Number(r.amount),
-        date: r.date || now.slice(0, 10),
+        date: r.date || new Date().toISOString().slice(0, 10),
         category: (r.category || '').trim() || 'Others',
-        createdAt: now,
+        sourceType: 'liquidation_sync',
         sourceLiquidationId: liquidationId,
         sourceLiquidationRowId: r.id,
-      });
-      added++;
+      };
+      if (sourceCaId) expense.sourceCaId = sourceCaId;
+      return expense;
     });
-    if (added > 0) {
-      localStorage.setItem(PROJECT_EXPENSES_KEY, JSON.stringify(existing));
-    }
-  } catch (_) {}
+    await fetch(`${API_BASE}/api/project-expenses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ expenses }),
+    });
+  } catch (err) {
+    console.warn('[LiquidationFormPage] expense sync failed:', err);
+  }
 }
 
 export default function LiquidationFormPage() {
@@ -668,7 +672,7 @@ export default function LiquidationFormPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
-        addLiquidationRowsToProjectExpenses(rows, data.id ?? draftId ?? undefined, finalFormNo);
+        addLiquidationRowsToProjectExpenses(rows, data.id ?? draftId ?? undefined, finalFormNo, caId || undefined).catch(() => {});
         setDraftId(null);
         setLoadedOptionValue('');
         setIsViewingSubmitted(false);

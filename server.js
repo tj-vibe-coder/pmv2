@@ -782,6 +782,232 @@ app.post('/api/expenses', (req, res) => {
   res.status(201).json({ success: true, expense: { id: Date.now().toString(), projectId, category, description, amount: parseFloat(amount), date: date || new Date().toISOString(), status: 'pending', created_at: new Date().toISOString() } });
 });
 
+// ========== PROJECT EXPENSES ==========
+// Firestore collection: project_expenses
+// Fields: projectId, projectName, description, amount, date (YYYY-MM-DD),
+//   category, createdAt (ISO), createdBy (userId), sourceType
+//   (manual|liquidation_sync|po_sync|migrated), + optional source FK fields.
+
+app.get('/api/project-expenses/summary', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const { year } = req.query;
+    const snap = await db.collection('project_expenses').get();
+    let rows = snap.docs.map(doc => doc.data());
+    if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
+    const total = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    res.json({ success: true, total, count: rows.length, year: year || 'all' });
+  } catch (err) {
+    console.error('Error fetching project_expenses summary:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.get('/api/project-expenses', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { projectId, year, sourceType } = req.query;
+    let query = db.collection('project_expenses');
+    if (!isAdmin) query = query.where('createdBy', '==', user.id);
+    if (projectId) query = query.where('projectId', '==', String(projectId));
+    if (sourceType) query = query.where('sourceType', '==', String(sourceType));
+    const snap = await query.get();
+    let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
+    rows.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    res.json({ success: true, expenses: rows });
+  } catch (err) {
+    console.error('Error fetching project_expenses:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/project-expenses/migrate-from-localstorage', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Admin only' });
+  }
+  try {
+    const { expenses } = req.body;
+    if (!Array.isArray(expenses) || expenses.length === 0) {
+      return res.status(400).json({ success: false, error: 'expenses array required' });
+    }
+    // Dedup: load all existing migratedId values to avoid double-migration
+    const existingSnap = await db.collection('project_expenses')
+      .where('sourceType', '==', 'migrated').select('migratedId').get();
+    const seenIds = new Set(existingSnap.docs.map(d => d.data().migratedId).filter(Boolean));
+    const now = new Date().toISOString();
+    // Firestore batch limit is 500; chunk if needed
+    const toInsert = expenses.filter(e => e.id && e.projectId && e.amount && !seenIds.has(e.id));
+    let inserted = 0;
+    const skipped = expenses.length - toInsert.length;
+    for (let i = 0; i < toInsert.length; i += 499) {
+      const chunk = toInsert.slice(i, i + 499);
+      const batch = db.batch();
+      for (const exp of chunk) {
+        const ref = db.collection('project_expenses').doc();
+        const doc = {
+          projectId: String(exp.projectId),
+          projectName: exp.projectName || '',
+          description: exp.description || '',
+          amount: Number(exp.amount),
+          date: exp.date || now.slice(0, 10),
+          category: exp.category || 'Others',
+          createdAt: exp.createdAt || now,
+          createdBy: user.id,
+          sourceType: 'migrated',
+          migratedId: exp.id,
+        };
+        if (exp.sourcePoId) doc.sourcePoId = exp.sourcePoId;
+        if (exp.sourcePoItemId) doc.sourcePoItemId = exp.sourcePoItemId;
+        if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
+        if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
+        batch.set(ref, doc);
+      }
+      await batch.commit();
+      inserted += chunk.length;
+    }
+    res.json({ success: true, inserted, skipped, total: expenses.length });
+  } catch (err) {
+    console.error('Error migrating project_expenses:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/project-expenses', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const body = req.body;
+    const now = new Date().toISOString();
+    // Batch insert: body.expenses is an array
+    if (Array.isArray(body.expenses)) {
+      let toInsert = body.expenses.filter(e => e.projectId && e.amount);
+      if (toInsert.length === 0) return res.status(400).json({ success: false, error: 'No valid expenses in array' });
+      // Server-side dedup: prevent duplicate rows when re-syncing POs or liquidations
+      const syncKey = (e) => {
+        if (e.sourcePoId && e.sourcePoItemId) return `po:${e.sourcePoId}:${e.sourcePoItemId}`;
+        if (e.sourcePoId) return `po:${e.sourcePoId}`;
+        if (e.sourceLiquidationId && e.sourceLiquidationRowId) return `liq:${e.sourceLiquidationId}:${e.sourceLiquidationRowId}`;
+        return null;
+      };
+      const hasPoRows = toInsert.some(e => e.sourcePoId);
+      const hasLiqRows = toInsert.some(e => e.sourceLiquidationId);
+      if (hasPoRows || hasLiqRows) {
+        const existingKeys = new Set();
+        const fetchPromises = [];
+        // Scope dedup scans to only the projectId(s) in this batch — a duplicate
+        // of a PO item / liquidation row always carries the same projectId as the
+        // original, so this is exact, and avoids an unbounded full-collection scan.
+        const poProjectIds = [...new Set(toInsert.filter(e => e.sourcePoId).map(e => String(e.projectId)))];
+        const liqProjectIds = [...new Set(toInsert.filter(e => e.sourceLiquidationId).map(e => String(e.projectId)))];
+        for (const pid of poProjectIds) {
+          fetchPromises.push(
+            db.collection('project_expenses')
+              .where('sourceType', '==', 'po_sync')
+              .where('projectId', '==', pid).get()
+              .then(snap => snap.docs.forEach(d => { const k = syncKey(d.data()); if (k) existingKeys.add(k); }))
+          );
+        }
+        for (const pid of liqProjectIds) {
+          fetchPromises.push(
+            db.collection('project_expenses')
+              .where('sourceType', '==', 'liquidation_sync')
+              .where('projectId', '==', pid).get()
+              .then(snap => snap.docs.forEach(d => { const k = syncKey(d.data()); if (k) existingKeys.add(k); }))
+          );
+        }
+        await Promise.all(fetchPromises);
+        toInsert = toInsert.filter(e => {
+          const k = syncKey(e);
+          return !k || !existingKeys.has(k);
+        });
+        if (toInsert.length === 0) {
+          return res.status(200).json({ success: true, count: 0, expenses: [], message: 'All expenses already synced' });
+        }
+      }
+      const inserted = [];
+      for (let i = 0; i < toInsert.length; i += 499) {
+        const chunk = toInsert.slice(i, i + 499);
+        const batch = db.batch();
+        for (const exp of chunk) {
+          const ref = db.collection('project_expenses').doc();
+          const doc = {
+            projectId: String(exp.projectId),
+            projectName: exp.projectName || '',
+            description: exp.description || '',
+            amount: Number(exp.amount),
+            date: exp.date || now.slice(0, 10),
+            category: exp.category || 'Others',
+            createdAt: exp.createdAt || now,
+            createdBy: user.id,
+            sourceType: exp.sourceType || 'manual',
+          };
+          if (exp.sourcePoId) doc.sourcePoId = exp.sourcePoId;
+          if (exp.sourcePoItemId) doc.sourcePoItemId = exp.sourcePoItemId;
+          if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
+          if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
+          if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
+          batch.set(ref, doc);
+          inserted.push({ id: ref.id, ...doc });
+        }
+        await batch.commit();
+      }
+      return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
+    }
+    // Single insert
+    const { projectId, projectName, description, amount, date, category, sourceType,
+            sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId } = body;
+    if (!projectId || !amount) {
+      return res.status(400).json({ success: false, error: 'projectId and amount are required' });
+    }
+    const doc = {
+      projectId: String(projectId),
+      projectName: projectName || '',
+      description: description || '',
+      amount: Number(amount),
+      date: date || now.slice(0, 10),
+      category: category || 'Others',
+      createdAt: now,
+      createdBy: user.id,
+      sourceType: sourceType || 'manual',
+    };
+    if (sourcePoId) doc.sourcePoId = sourcePoId;
+    if (sourcePoItemId) doc.sourcePoItemId = sourcePoItemId;
+    if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
+    if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
+    if (sourceCaId) doc.sourceCaId = sourceCaId;
+    const ref = await db.collection('project_expenses').add(doc);
+    res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
+  } catch (err) {
+    console.error('Error creating project_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.delete('/api/project-expenses/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const ref = db.collection('project_expenses').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Not found' });
+    if (!isAdmin && doc.data().createdBy !== user.id) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting project_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 // ========== CASH ADVANCES ==========
 
 function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -1098,6 +1324,63 @@ app.patch('/api/liquidations/:id', async (req, res) => {
     res.json({ success: true, message: reimbursement_status === 'reimbursed' ? 'Marked as reimbursed' : 'Reverted to pending reimbursement' });
   } catch (err) {
     console.error('Error updating liquidation reimbursement status:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: list liquidations pending reimbursement (submitted, no CA).
+app.get('/api/reimbursements', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  try {
+    const snap = await db.collection('liquidations').where('reimbursement_status', '==', 'pending').get();
+    const rows = await Promise.all(snap.docs.map(async doc => {
+      const liq = { id: doc.id, ...doc.data() };
+      if (liq.user_id) {
+        const uDoc = await db.collection('users').doc(liq.user_id).get();
+        if (uDoc.exists) { liq.username = uDoc.data().username; liq.full_name = uDoc.data().full_name; }
+      }
+      return liq;
+    }));
+    rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    res.json({ success: true, reimbursements: rows });
+  } catch (err) {
+    console.error('Error fetching reimbursements:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: batch-mark pending (no-CA submitted) liquidations as reimbursed.
+app.post('/api/reimbursements/batch-mark', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ success: false, error: 'ids must be a non-empty array' });
+  if (ids.some(id => typeof id !== 'string' || !id.trim())) return res.status(400).json({ success: false, error: 'Each id must be a non-empty string' });
+  if (ids.length > 500) return res.status(400).json({ success: false, error: 'Maximum 500 ids per request' });
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const batch = db.batch();
+    const skipped = [];
+    let updated = 0;
+    for (const id of ids) {
+      const ref = db.collection('liquidations').doc(id);
+      const doc = await ref.get();
+      if (!doc.exists) { skipped.push({ id, reason: 'not found' }); continue; }
+      const liq = doc.data();
+      if (liq.status !== 'submitted' || liq.ca_id || liq.reimbursement_status !== 'pending') {
+        skipped.push({ id, reason: 'not a pending no-CA submitted liquidation' });
+        continue;
+      }
+      batch.update(ref, { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id, updated_at: now });
+      updated++;
+    }
+    if (updated > 0) await batch.commit();
+    res.json({ success: true, updated, skipped, message: `Marked ${updated} as reimbursed` });
+  } catch (err) {
+    console.error('Error batch-marking reimbursements:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
