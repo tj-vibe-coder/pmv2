@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -30,20 +30,51 @@ import {
   Snackbar,
   Tooltip,
 } from '@mui/material';
-import { Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
+import { Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, PhotoCamera as PhotoCameraIcon } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 import PdfPreviewDialog from './PdfPreviewDialog';
+import { parseReceipt } from '../services/receiptParseService';
+import { fileToParseInput, compressForUpload } from '../utils/receipts/imageCompress';
+import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
+import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
+import { resolveCorporateDriveId, ensureFolder, uploadFileToFolderById, sanitizeForOneDrive } from '../services/onedriveFolderService';
 
 const CA_CATEGORIES = ['Materials', 'Accommodation', 'Allowance', 'Transportation', 'Entertainment'] as const;
 
 interface BreakdownItem {
+  _uid: string;
   category: string;
   description: string;
   amount: string;
+}
+
+// Receipts come back categorized in the liquidation taxonomy; map to the CA set.
+const LIQ_TO_CA_CATEGORY: Record<string, string> = {
+  'Tools / Direct': 'Materials',
+  'Gas': 'Transportation',
+  'Materials': 'Materials',
+  'Transportation': 'Transportation',
+  'Accommodation': 'Accommodation',
+  '3rd Party Labor': 'Materials',
+  'Others': 'Allowance',
+};
+
+async function convertHeicToJpeg(file: File): Promise<File> {
+  const name = file.name.toLowerCase();
+  const isHeic = name.endsWith('.heic') || name.endsWith('.heif') || file.type === 'image/heic' || file.type === 'image/heif';
+  if (!isHeic) return file;
+  try {
+    const heic2any = (await import('heic2any')).default;
+    const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+    const blob = Array.isArray(result) ? result[0] : result;
+    return new File([blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
+  } catch {
+    return file;
+  }
 }
 
 interface ProjectOption {
@@ -115,7 +146,7 @@ export default function CAFormPage() {
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
   const [purpose, setPurpose] = useState('');
   const [dateRequested, setDateRequested] = useState(() => new Date().toISOString().slice(0, 10));
-  const [breakdown, setBreakdown] = useState<BreakdownItem[]>([{ category: 'Materials', description: '', amount: '' }]);
+  const [breakdown, setBreakdown] = useState<BreakdownItem[]>([{ _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
   const [submitting, setSubmitting] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CashAdvanceRow | null>(null);
@@ -123,6 +154,13 @@ export default function CAFormPage() {
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
   const [pdfPreviewBlob, setPdfPreviewBlob] = useState<Blob | null>(null);
   const [pdfPreviewTitle, setPdfPreviewTitle] = useState('');
+
+  const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const scanInputRef = useRef<HTMLInputElement>(null);
+  const scanRowIdRef = useRef<string | null>(null);
+  const pendingReceiptsRef = useRef<Record<string, File>>({});
+  const [scanningRowId, setScanningRowId] = useState<string | null>(null);
+  const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; severity: 'success' | 'error'; message: string }>({ open: false, severity: 'success', message: '' });
 
   const breakdownTotal = breakdown.reduce((sum, r) => sum + (parseFloat(String(r.amount)) || 0), 0);
   const canSubmit = breakdownTotal > 0 && (selectedProject != null || purpose.trim() !== '');
@@ -174,10 +212,82 @@ export default function CAFormPage() {
       .catch(() => {});
   }, []);
 
-  const addBreakdownRow = () => setBreakdown((b) => [...b, { category: 'Materials', description: '', amount: '' }]);
-  const removeBreakdownRow = (index: number) => setBreakdown((b) => (b.length <= 1 ? b : b.filter((_, i) => i !== index)));
+  const addBreakdownRow = () => setBreakdown((b) => [...b, { _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
+  const removeBreakdownRow = (index: number) =>
+    setBreakdown((b) => {
+      if (b.length <= 1) return b;
+      const removed = b[index];
+      if (removed && pendingReceiptsRef.current[removed._uid]) delete pendingReceiptsRef.current[removed._uid];
+      return b.filter((_, i) => i !== index);
+    });
   const updateBreakdown = (index: number, field: 'category' | 'description' | 'amount', value: string) =>
     setBreakdown((b) => b.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+
+  const triggerScan = (uid: string) => {
+    scanRowIdRef.current = uid;
+    scanInputRef.current?.click();
+  };
+
+  const handleScanInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const rowId = scanRowIdRef.current;
+    e.target.value = '';
+    if (!file || !rowId) return;
+    setScanningRowId(rowId);
+    const safeFile = await convertHeicToJpeg(file);
+    pendingReceiptsRef.current[rowId] = safeFile;
+    try {
+      const { imageBase64, mimeType } = await fileToParseInput(safeFile);
+      const parsed = await parseReceipt(imageBase64, mimeType);
+      setBreakdown((prev) => prev.map((r) => {
+        if (r._uid !== rowId) return r;
+        const amt = parsed.total ?? parsed.subtotal;
+        const mapped = parsed.suggestedCategory ? (LIQ_TO_CA_CATEGORY[parsed.suggestedCategory] || 'Materials') : r.category;
+        return {
+          ...r,
+          category: mapped,
+          amount: (typeof amt === 'number' && amt > 0) ? String(amt) : r.amount,
+          description: (!r.description || r.description.trim() === '')
+            ? (parsed.vendor || parsed.lineItems?.[0]?.description || '')
+            : r.description,
+        };
+      }));
+      const shown = parsed.total ?? parsed.subtotal ?? 0;
+      setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(shown).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+    } catch (err) {
+      setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Failed to parse receipt' });
+    } finally {
+      setScanningRowId((prev) => (prev === rowId ? null : prev));
+      if (scanRowIdRef.current === rowId) scanRowIdRef.current = null;
+    }
+  };
+
+  // Best-effort: after the CA is created and has a ca_no, push the held receipt
+  // photos to OneDrive under `Cash Advance Receipts/{year}/{ca_no}/`. Never
+  // blocks or fails CA creation.
+  const uploadPendingReceipts = (caNo: string, files: File[]) => {
+    if (!caNo || files.length === 0) return;
+    void (async () => {
+      try {
+        if (!isCorporateOneDriveConfigured() || !oneDriveSignedIn) return;
+        const odToken = await getOneDriveToken();
+        if (!odToken) return;
+        const driveId = await resolveCorporateDriveId(odToken);
+        const year = String(new Date().getFullYear());
+        await ensureFolder(odToken, driveId, '', 'Cash Advance Receipts');
+        await ensureFolder(odToken, driveId, 'Cash Advance Receipts', year);
+        const folder = await ensureFolder(odToken, driveId, `Cash Advance Receipts/${year}`, sanitizeForOneDrive(caNo));
+        if (!folder?.id) return;
+        await Promise.all(files.map(async (f, i) => {
+          const blob = await compressForUpload(f);
+          const uploadName = `${i + 1}_${sanitizeForOneDrive(f.name)}`;
+          await uploadFileToFolderById(odToken, driveId, folder.id, uploadName, blob);
+        }));
+      } catch (err) {
+        console.warn('[OneDrive] CA receipt upload failed (CA created successfully):', err);
+      }
+    })();
+  };
 
   const buildCAFormPdf = (data: {
     projectName: string;
@@ -406,10 +516,13 @@ export default function CAFormPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
+        const heldFiles = Object.values(pendingReceiptsRef.current);
+        pendingReceiptsRef.current = {};
+        if (data.ca_no) uploadPendingReceipts(String(data.ca_no), heldFiles);
         setDateRequested(new Date().toISOString().slice(0, 10));
         setSelectedProject(null);
         setPurpose('');
-        setBreakdown([{ category: 'Materials', description: '', amount: '' }]);
+        setBreakdown([{ _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
         setSnackbar(data.ca_no ? `Cash advance ${data.ca_no} requested` : 'Cash advance requested');
         fetchList();
       } else {
@@ -531,12 +644,12 @@ export default function CAFormPage() {
                 <TableCell sx={{ fontWeight: 600, width: 160 }}>Category</TableCell>
                 <TableCell sx={{ fontWeight: 600 }}>Details</TableCell>
                 <TableCell sx={{ fontWeight: 600, width: 120 }} align="right">Amount</TableCell>
-                <TableCell sx={{ width: 48 }} />
+                <TableCell sx={{ width: 96 }} />
               </TableRow>
             </TableHead>
             <TableBody>
               {breakdown.map((row, idx) => (
-                <TableRow key={idx}>
+                <TableRow key={row._uid}>
                   <TableCell sx={{ py: 0.5 }}>
                     <FormControl size="small" fullWidth>
                       <InputLabel>Category</InputLabel>
@@ -571,7 +684,16 @@ export default function CAFormPage() {
                       sx={{ width: 100 }}
                     />
                   </TableCell>
-                  <TableCell sx={{ py: 0.5 }}>
+                  <TableCell sx={{ py: 0.5, whiteSpace: 'nowrap' }}>
+                    <IconButton
+                      size="small"
+                      color="primary"
+                      onClick={() => triggerScan(row._uid)}
+                      disabled={scanningRowId === row._uid}
+                      title="Scan receipt with AI"
+                    >
+                      {scanningRowId === row._uid ? <CircularProgress size={18} /> : <PhotoCameraIcon fontSize="small" />}
+                    </IconButton>
                     <IconButton size="small" onClick={() => removeBreakdownRow(idx)} disabled={breakdown.length <= 1} color="error">
                       <RemoveIcon fontSize="small" />
                     </IconButton>
@@ -612,7 +734,7 @@ export default function CAFormPage() {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={handleRequest}
-            disabled={submitting || !canSubmit}
+            disabled={submitting || !canSubmit || scanningRowId !== null}
             sx={{ bgcolor: theme.primary, '&:hover': { bgcolor: theme.secondary } }}
           >
             Request CA
@@ -863,6 +985,29 @@ export default function CAFormPage() {
           </Button>
         </DialogActions>
       </Dialog>
+      <input
+        type="file"
+        ref={scanInputRef}
+        accept="image/*"
+        capture="environment"
+        style={{ display: 'none' }}
+        onChange={handleScanInputChange}
+      />
+      <Snackbar
+        open={scanSnackbar.open}
+        autoHideDuration={5000}
+        onClose={() => setScanSnackbar((p) => ({ ...p, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+      >
+        <Alert
+          onClose={() => setScanSnackbar((p) => ({ ...p, open: false }))}
+          severity={scanSnackbar.severity}
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {scanSnackbar.message}
+        </Alert>
+      </Snackbar>
       <Snackbar
         open={!!snackbar}
         autoHideDuration={4000}

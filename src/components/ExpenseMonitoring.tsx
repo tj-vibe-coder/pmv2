@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Typography,
@@ -26,6 +26,9 @@ import {
   SelectChangeEvent,
   IconButton,
   Chip,
+  CircularProgress,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import {
@@ -43,15 +46,31 @@ import {
   Area,
   AreaChart
 } from 'recharts';
-import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import { getBudgets } from '../utils/projectBudgetStorage';
 import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem } from './PurchaseOrderPage';
 import { API_BASE } from '../config/api';
 import { EXPENSE_CATEGORIES } from '../data/financeCategories';
+import { parseReceipt } from '../services/receiptParseService';
+import { fileToParseInput } from '../utils/receipts/imageCompress';
 
 const EXPENSES_KEY = 'projectExpenses';
+
+async function convertHeicToJpeg(file: File): Promise<File> {
+  const name = file.name.toLowerCase();
+  const isHeic = name.endsWith('.heic') || name.endsWith('.heif') || file.type === 'image/heic' || file.type === 'image/heif';
+  if (!isHeic) return file;
+  try {
+    const heic2any = (await import('heic2any')).default;
+    const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+    const blob = Array.isArray(result) ? result[0] : result;
+    return new File([blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
+  } catch {
+    return file;
+  }
+}
 
 export interface ProjectExpense {
   id: string;
@@ -148,6 +167,9 @@ const ExpenseMonitoring: React.FC = () => {
   const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [expenseDescription, setExpenseDescription] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('');
+  const scanInputRef = useRef<HTMLInputElement>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; severity: 'success' | 'error'; message: string }>({ open: false, severity: 'success', message: '' });
   const [expensesDialogProject, setExpensesDialogProject] = useState<Project | null>(null);
   const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
   const [migrating, setMigrating] = useState(false);
@@ -505,6 +527,31 @@ const ExpenseMonitoring: React.FC = () => {
       }
     } catch {
       // silent — expense stays in list if request fails
+    }
+  };
+
+  const handleScanInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setIsScanning(true);
+    const safeFile = await convertHeicToJpeg(file);
+    try {
+      const { imageBase64, mimeType } = await fileToParseInput(safeFile);
+      const parsed = await parseReceipt(imageBase64, mimeType);
+      const amt = parsed.total ?? parsed.subtotal;
+      if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
+      if (parsed.date) setExpenseDate(parsed.date);
+      if (parsed.suggestedCategory && (EXPENSE_CATEGORIES as readonly string[]).includes(parsed.suggestedCategory)) {
+        setExpenseCategory(parsed.suggestedCategory);
+      }
+      const desc = parsed.vendor || parsed.lineItems?.[0]?.description;
+      if (desc && !expenseDescription.trim()) setExpenseDescription(desc);
+      setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+    } catch (err) {
+      setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Failed to parse receipt' });
+    } finally {
+      setIsScanning(false);
     }
   };
 
@@ -1068,16 +1115,35 @@ const ExpenseMonitoring: React.FC = () => {
             </Grid>
           </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAddExpenseOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={handleAddExpense}
-            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+        <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
+          <IconButton
+            color="primary"
+            onClick={() => scanInputRef.current?.click()}
+            disabled={isScanning}
+            title="Scan receipt with AI"
           >
-            Add Expense
-          </Button>
+            {isScanning ? <CircularProgress size={24} /> : <PhotoCameraIcon />}
+          </IconButton>
+          <Box>
+            <Button onClick={() => setAddExpenseOpen(false)}>Cancel</Button>
+            <Button
+              variant="contained"
+              onClick={handleAddExpense}
+              disabled={isScanning}
+              sx={{ ml: 1, backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+            >
+              Add Expense
+            </Button>
+          </Box>
         </DialogActions>
+        <input
+          type="file"
+          ref={scanInputRef}
+          accept="image/*"
+          capture="environment"
+          style={{ display: 'none' }}
+          onChange={handleScanInputChange}
+        />
       </Dialog>
 
       {/* View expenses per project dialog */}
@@ -1138,6 +1204,22 @@ const ExpenseMonitoring: React.FC = () => {
           )}
         </DialogActions>
       </Dialog>
+
+      <Snackbar
+        open={scanSnackbar.open}
+        autoHideDuration={5000}
+        onClose={() => setScanSnackbar((p) => ({ ...p, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setScanSnackbar((p) => ({ ...p, open: false }))}
+          severity={scanSnackbar.severity}
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {scanSnackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };
