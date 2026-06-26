@@ -357,6 +357,43 @@ export async function fetchDriveItemBlob(
 }
 
 /**
+ * Delete a drive item by id. Best-effort; resolves true on 204/404, false on
+ * other errors. Used to clean up an orphaned receipt file when its expense record
+ * is deleted — a failure here must never block the Firestore delete.
+ */
+export async function deleteDriveItem(token: string, driveId: string, itemId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(itemId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    // 204 = deleted, 404 = already gone — both are "success" for cleanup purposes
+    return res.ok || res.status === 404;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[OneDrive] deleteDriveItem failed:', err);
+    return false;
+  }
+}
+
+/**
+ * Fetch a medium thumbnail URL for a drive item. Returns a short-lived
+ * pre-authed URL usable directly as an `<img src>`, or null on any failure.
+ */
+export async function getDriveItemThumbnailUrl(token: string, driveId: string, itemId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(itemId)}/thumbnails/0/medium`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data && typeof data.url === 'string') ? data.url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Upload a single file to `folderPath` under the drive root. The file is created
  * (or overwritten — Graph default is `replace`) at `${folderPath}/${filename}`.
  *

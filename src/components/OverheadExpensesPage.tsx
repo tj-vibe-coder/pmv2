@@ -40,7 +40,7 @@ import { parseReceipt } from '../services/receiptParseService';
 import { fileToParseInput, compressForUpload } from '../utils/receipts/imageCompress';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
-import { resolveCorporateDriveId, ensureFolder, uploadFileToFolderById, sanitizeForOneDrive } from '../services/onedriveFolderService';
+import { resolveCorporateDriveId, ensureFolder, uploadFileToFolderById, sanitizeForOneDrive, deleteDriveItem, getDriveItemThumbnailUrl } from '../services/onedriveFolderService';
 import {
   fetchOverheadExpenses,
   createOverheadExpense,
@@ -89,7 +89,8 @@ const OverheadExpensesPage: React.FC = () => {
   const pendingReceiptRef = React.useRef<File | null>(null);
   const [receiptAttached, setReceiptAttached] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [snackbar, setSnackbar] = useState<{ open: boolean; severity: 'success' | 'error'; message: string }>({ open: false, severity: 'success', message: '' });
+  const [snackbar, setSnackbar] = useState<{ open: boolean; severity: 'success' | 'error' | 'warning'; message: string }>({ open: false, severity: 'success', message: '' });
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -104,6 +105,36 @@ const OverheadExpensesPage: React.FC = () => {
   }, [year, filterCategory]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Best-effort lazy receipt thumbnails: for each expense with a OneDrive receipt
+  // not yet in `thumbs`, fetch a short-lived pre-authed thumbnail URL. Never throws.
+  useEffect(() => {
+    let cancelled = false;
+    const loadThumbs = async () => {
+      const missing = expenses.filter((e) => e.receiptRef?.oneDriveId && !thumbs[e.receiptRef.oneDriveId!]);
+      if (missing.length === 0) return;
+      if (!isCorporateOneDriveConfigured() || !oneDriveSignedIn) return;
+      try {
+        const token = await getOneDriveToken();
+        if (!token) return;
+        const driveId = await resolveCorporateDriveId(token);
+        const entries: Array<[string, string]> = [];
+        for (const e of missing) {
+          const oneDriveId = e.receiptRef!.oneDriveId!;
+          const url = await getDriveItemThumbnailUrl(token, driveId, oneDriveId);
+          if (url) entries.push([oneDriveId, url]);
+        }
+        if (!cancelled && entries.length > 0) {
+          setThumbs((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+        }
+      } catch (err) {
+        console.warn('[OneDrive] overhead receipt thumbnail fetch failed:', err);
+      }
+    };
+    void loadThumbs();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expenses, oneDriveSignedIn]);
 
   const totalYtd = expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
 
@@ -127,6 +158,8 @@ const OverheadExpensesPage: React.FC = () => {
     try {
       const { imageBase64, mimeType } = await fileToParseInput(safeFile);
       const parsed = await parseReceipt(imageBase64, mimeType);
+      const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
+      const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
       const amt = parsed.total ?? parsed.subtotal;
       if (typeof amt === 'number' && amt > 0) setAmount(String(amt));
       if (parsed.date) setDate(parsed.date);
@@ -135,7 +168,11 @@ const OverheadExpensesPage: React.FC = () => {
       }
       const desc = parsed.vendor || parsed.lineItems?.[0]?.description;
       if (desc && !description.trim()) setDescription(desc);
-      setSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+      if (lowConf) {
+        setSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category.` });
+      } else {
+        setSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+      }
     } catch (e) {
       setSnackbar({ open: true, severity: 'error', message: e instanceof Error ? e.message : 'Failed to parse receipt' });
     } finally {
@@ -197,11 +234,24 @@ const OverheadExpensesPage: React.FC = () => {
 
   const handleDelete = async (id?: string) => {
     if (!id) return;
+    const exp = expenses.find((x) => x.id === id);
     setDeletingId(id);
     try {
       await deleteOverheadExpense(id);
       setExpenses((prev) => prev.filter((e) => e.id !== id));
       setSnackbar({ open: true, severity: 'success', message: 'Deleted' });
+      // best-effort OneDrive cleanup (never blocks the delete — Firestore is source of truth):
+      if (exp?.receiptRef?.oneDriveId && isCorporateOneDriveConfigured() && oneDriveSignedIn) {
+        try {
+          const token = await getOneDriveToken();
+          if (token) {
+            const driveId = await resolveCorporateDriveId(token);
+            await deleteDriveItem(token, driveId, exp.receiptRef.oneDriveId);
+          }
+        } catch (err) {
+          console.warn('[OneDrive] overhead receipt delete failed (expense already removed):', err);
+        }
+      }
     } catch (e) {
       setSnackbar({ open: true, severity: 'error', message: e instanceof Error ? e.message : 'Failed to delete' });
     } finally {
@@ -292,7 +342,11 @@ const OverheadExpensesPage: React.FC = () => {
                     <TableCell>{e.category}</TableCell>
                     <TableCell align="right">{formatCurrency(Number(e.amount) || 0)}</TableCell>
                     <TableCell>
-                      {e.receiptRef?.webUrl ? (
+                      {e.receiptRef?.oneDriveId && thumbs[e.receiptRef.oneDriveId] ? (
+                        <Link href={e.receiptRef.webUrl} target="_blank" rel="noopener">
+                          <Box component="img" src={thumbs[e.receiptRef.oneDriveId]} alt="receipt" onError={() => setThumbs((prev) => { const next = { ...prev }; delete next[e.receiptRef!.oneDriveId!]; return next; })} sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, border: '1px solid', borderColor: 'divider' }} />
+                        </Link>
+                      ) : e.receiptRef?.webUrl ? (
                         <Link href={e.receiptRef.webUrl} target="_blank" rel="noopener" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
                           <OpenInNewIcon fontSize="small" /> View
                         </Link>

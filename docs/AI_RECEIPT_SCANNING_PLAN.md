@@ -454,19 +454,23 @@ Receipts for CAs are stored separately. A new `receipts` sub-field could be adde
 
 **Notes**: Firestore schema `overhead_expenses` = `{ description, amount, date, category, createdAt, createdBy, sourceType('manual'|'receipt_scan'), updatedAt?, receiptRef?{oneDriveId,webUrl,filename} }`. NO composite index (equality-only `where(createdBy==)`/`where(category==)` + in-memory sort — served by automatic single-field indexes via zig-zag merge, same rationale as the Phase-3 `project_expenses` index removal). tsc + `CI=true npm run build` + `node --check server.js` all clean. **Deferred to Phase 5 / follow-ups**: receipt thumbnails on the page (currently a "View" link to the OneDrive webUrl); OneDrive file deletion when an overhead expense is deleted (currently orphaned); Finance Home KPI does not yet sum `overhead_expenses` (Phase 5.6). Runtime E2E (live Gemini parse + OneDrive upload + prod Firestore writes) needs a manual in-app smoke test — not verifiable headlessly.
 
-### Phase 5: Polish & Hardening
+### Phase 5: Polish & Hardening — DONE (2026-06-26)
 
 **Duration**: One session  
 **Milestone**: Edge cases handled, no regressions, build passes
 
-| # | Task | Details |
+| # | Task | Status |
 |---|---|---|
-| 5.1 | Low-confidence warning UI | Yellow banner when Gemini returns `confidence: 'low'` |
-| 5.2 | Graceful offline fallback | If Gemini API is unreachable, existing manual-entry flow still works (no change needed) |
-| 5.3 | Batch scan | Optional: scan multiple receipts sequentially with a "Scan Next" button |
-| 5.4 | Type definitions | Create `src/types/Receipt.ts` with all receipt-related interfaces |
-| 5.5 | Build verification | `npx tsc --noEmit` + `CI=true npm run build` — fix all type/lint errors |
-| 5.6 | Update Aggregator | Update Finance Home KPI that sums all expenses to include overhead_expenses |
+| 5.1 | Low-confidence warning UI | DONE — `confidence` is a NUMBER (0..1), not the string `'low'` the v2 plan assumed. When `confidence < 0.5` the scan-result Snackbar switches to `severity: 'warning'` ("Low confidence (N%) — please verify amount, date & category") instead of the success message. Applied to all 4 inline scan surfaces: `LiquidationFormPage.tsx` (`scanReceiptForRow`), `CAFormPage.tsx` + `ExpenseMonitoring.tsx` + `OverheadExpensesPage.tsx` (`handleScanInputChange`). Each surface's snackbar severity union widened to include `'warning'`. (No banner — Phase 2 went inline with no result dialog to host one, so the existing snackbar carries the warning.) |
+| 5.2 | Graceful offline fallback | DONE — no change needed; the existing `catch` → error-snackbar → manual-entry path already degrades gracefully. |
+| 5.3 | Batch scan | SKIPPED (explicitly optional) — not worth the added surface area for a polish phase. |
+| 5.4 | Type definitions | ALREADY DONE — `src/types/Receipt.ts` already centralizes `ParsedReceipt`, `ReceiptLineItem`, `ParsedReceiptResponse`; Scout confirmed no competing receipt interfaces exist elsewhere. |
+| 5.5 | Build verification | DONE — `npx tsc --noEmit` clean + `CI=true npm run build` compiled successfully. |
+| 5.6 | Update Aggregator | DONE — `FinanceHomePage.tsx` "Total Expenses (YTD)" KPI now sums `project_expenses` + `overhead_expenses` via `Promise.all` of both `/summary?year=` endpoints, each contribution coerced to 0 on failure/non-success (KPI can never be NaN). No server change (the overhead summary endpoint already existed from Phase 4). |
+
+**Also (Phase 4 deferred items, closed here):** OverheadExpensesPage now (a) **deletes the OneDrive receipt file** when an overhead expense is deleted — best-effort, runs after the Firestore delete, can never block it (new `deleteDriveItem` helper); (b) renders **receipt thumbnails** (lazy, best-effort) instead of a bare "View" link, falling back to the link then to "—" (new `getDriveItemThumbnailUrl` helper; `onError` reverts an expired thumbnail URL to the View link). Both helpers added to `src/services/onedriveFolderService.ts`, mirroring the existing `GRAPH_BASE` + Bearer pattern.
+
+**Crew / verification:** Scout (DeepSeek) recon → 3 Backend builders (Opus, disjoint file sets, parallel) → Reviewer (DeepSeek V4 Pro) **APPROVED** (0 HIGH/0 MEDIUM, 3 LOW; applied 1 — the thumbnail `onError` fallback; discarded 2 as already-handled / pre-existing-out-of-scope). Diff: 6 files, +130/−13. **NOT runtime-verified end-to-end** — live Gemini parse (real confidence values), OneDrive Graph (thumbnails/delete) and prod Firestore writes can't run headlessly; needs a manual in-app smoke test.
 
 ---
 

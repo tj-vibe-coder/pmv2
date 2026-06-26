@@ -255,7 +255,7 @@ export default function LiquidationFormPage() {
   const scanInputRef = useRef<HTMLInputElement>(null);
   const scanRowIdRef = useRef<string | null>(null);
   const [scanningRowId, setScanningRowId] = useState<string | null>(null);
-  const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({ open: false, message: '', severity: 'success' });
+  const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
   const receiptsFolderRef = useRef<{ key: string; driveId: string; folderId: string } | null>(null);
   const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken, login: oneDriveLogin } = useOneDriveAuth();
   const [saving, setSaving] = useState(false);
@@ -429,7 +429,13 @@ export default function LiquidationFormPage() {
         };
       }));
       const shown = parsed.total ?? parsed.subtotal ?? 0;
-      setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(shown).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+      const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
+      const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
+      if (lowConf) {
+        setScanSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category. Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(shown).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+      } else {
+        setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(shown).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+      }
     } catch (e) {
       setScanSnackbar({ open: true, severity: 'error', message: e instanceof Error ? e.message : 'Failed to parse receipt' });
     } finally {

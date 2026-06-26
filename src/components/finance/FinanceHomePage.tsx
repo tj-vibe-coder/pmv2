@@ -97,9 +97,17 @@ const FinanceHomePage: React.FC = () => {
     }
 
     const year = new Date().getFullYear();
-    fetch(`${API}/project-expenses/summary?year=${year}`, { headers: authHeaders })
-      .then(r => r.json())
-      .then(data => { if (data.success) setTotalExpensesYtd(data.total || 0); })
+    Promise.all([
+      fetch(`${API}/project-expenses/summary?year=${year}`, { headers: authHeaders })
+        .then(r => r.json())
+        .then(d => (d && d.success ? Number(d.total) || 0 : 0))
+        .catch(() => 0),
+      fetch(`${API}/overhead-expenses/summary?year=${year}`, { headers: authHeaders })
+        .then(r => r.json())
+        .then(d => (d && d.success ? Number(d.total) || 0 : 0))
+        .catch(() => 0),
+    ])
+      .then(([projectTotal, overheadTotal]) => setTotalExpensesYtd(projectTotal + overheadTotal))
       .catch(() => { /* expenses KPI optional */ });
 
     fetch(`${API}/cash-advances`, { headers: authHeaders })
