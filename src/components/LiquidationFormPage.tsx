@@ -48,16 +48,7 @@ import { API_BASE } from '../config/api';
 import { fileToParseInput } from '../utils/receipts/imageCompress';
 import { parseReceipt } from '../services/receiptParseService';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
-
-const LIQUIDATION_CATEGORIES = [
-  'Tools / Direct',
-  'Gas',
-  'Materials',
-  'Transportation',
-  'Accommodation',
-  '3rd Party Labor',
-  'Others',
-] as const;
+import { LIQUIDATION_CATEGORIES } from '../data/financeCategories';
 
 interface LiquidationRow {
   id: string;

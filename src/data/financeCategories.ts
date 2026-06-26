@@ -7,6 +7,13 @@ export const EXPENSE_CATEGORIES = [
   'Airfare',
   'Gas',
   'Tools / Direct',
+  'Rent',
+  'Salaries & Wages',
+  'Supplies',
+  'Communication & Utilities',
+  'Meals',
+  'Advertising/Marketing',
+  'Repairs & Maintenance',
   'Others',
 ] as const;
 
@@ -19,6 +26,13 @@ export const LIQUIDATION_CATEGORIES = [
   'Transportation',
   'Accommodation',
   '3rd Party Labor',
+  'Rent',
+  'Salaries & Wages',
+  'Supplies',
+  'Communication & Utilities',
+  'Meals',
+  'Advertising/Marketing',
+  'Repairs & Maintenance',
   'Others',
 ] as const;
 
