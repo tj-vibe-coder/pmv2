@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -17,6 +18,11 @@ const ALLOWED_ORIGINS = [
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    // Dev only: allow private-LAN origins so you can test from a phone/other device on the same network.
+    if (process.env.NODE_ENV !== 'production' &&
+        /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+):\d+$/.test(origin)) {
+      return callback(null, true);
+    }
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
@@ -111,6 +117,17 @@ async function getCurrentUser(req) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.substring(7);
   try {
+    // Scanner (QR-paired) sessions use 'scan_'-prefixed tokens. Standard base64
+    // login tokens never contain '_', so this prefix is unambiguous.
+    if (token.startsWith('scan_')) {
+      const sessSnap = await db.collection('scanner_sessions').doc(token).get();
+      if (!sessSnap.exists) return null;
+      const sess = sessSnap.data();
+      if (!sess || Date.now() > sess.expiresAt) return null;
+      const su = await db.collection('users').doc(sess.userId).get();
+      if (!su.exists) return null;
+      return { id: su.id, ...su.data(), scannerScope: true };
+    }
     const decoded = Buffer.from(token, 'base64').toString();
     const [userId] = decoded.split(':');
     if (!userId) return null;
@@ -1016,7 +1033,8 @@ app.post('/api/project-expenses', async (req, res) => {
     }
     // Single insert
     const { projectId, projectName, description, amount, date, category, sourceType,
-            sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId } = body;
+            sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
+            supplier, invoiceNo, invoiceType, vat } = body;
     if (!projectId || !amount) {
       return res.status(400).json({ success: false, error: 'projectId and amount are required' });
     }
@@ -1036,6 +1054,11 @@ app.post('/api/project-expenses', async (req, res) => {
     if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
     if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
     if (sourceCaId) doc.sourceCaId = sourceCaId;
+    if (receiptRef) doc.receiptRef = receiptRef;
+    if (supplier) doc.supplier = String(supplier);
+    if (invoiceNo) doc.invoiceNo = String(invoiceNo);
+    if (invoiceType) doc.invoiceType = String(invoiceType);
+    if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     const ref = await db.collection('project_expenses').add(doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
   } catch (err) {
@@ -3159,6 +3182,413 @@ app.get('/api/onedrive/health', async (req, res) => {
   }
 });
 
+// ========== APP-ONLY ONEDRIVE FILE OPERATIONS (Phase A) ==========
+// Idempotently ensure a nested folder path exists under the drive root; returns the deepest folder's { id, webUrl, name }.
+async function ensureFolderByPath(token, driveId, folderPath) {
+  const segments = String(folderPath).split('/').map((s) => s.trim()).filter(Boolean);
+  let parentPath = '';
+  let current = null;
+  for (const name of segments) {
+    const fullPath = parentPath ? `${parentPath}/${name}` : name;
+    // lookup-first
+    const enc = fullPath.split('/').map(encodeURIComponent).join('/');
+    const lookup = await fetch(`https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}`, { headers: { Authorization: 'Bearer ' + token } });
+    if (lookup.ok) { current = await lookup.json(); parentPath = fullPath; continue; }
+    // create
+    const encParent = parentPath ? parentPath.split('/').map(encodeURIComponent).join('/') : '';
+    const createUrl = parentPath
+      ? `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${encParent}:/children`
+      : `https://graph.microsoft.com/v1.0/drives/${driveId}/root/children`;
+    const cr = await fetch(createUrl, { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) });
+    if (cr.status === 409) {
+      const again = await fetch(`https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}`, { headers: { Authorization: 'Bearer ' + token } });
+      current = await again.json();
+    } else if (cr.ok) {
+      current = await cr.json();
+    } else {
+      const t = await cr.text().catch(() => '');
+      throw new Error(`Folder create failed (${cr.status}) at "${fullPath}": ${t.slice(0, 300)}`);
+    }
+    parentPath = fullPath;
+  }
+  if (!current) throw new Error('Empty folder path');
+  return { id: current.id, webUrl: current.webUrl || '', name: current.name };
+}
+
+function contentTypeForFilename(filename) {
+  const ext = String(filename).toLowerCase().split('.').pop();
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'pdf') return 'application/pdf';
+  return 'application/octet-stream';
+}
+
+// 1. Upload a base64 file into a folder path (folder ensured idempotently).
+app.post('/api/onedrive/upload', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { folderPath, filename, contentBase64 } = req.body || {};
+  if (!folderPath || !filename || !contentBase64) {
+    return res.status(400).json({ error: 'folderPath, filename, and contentBase64 are required' });
+  }
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const folder = await ensureFolderByPath(token, driveId, folderPath);
+    const buf = Buffer.from(contentBase64, 'base64');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(folder.id)}:/${encodeURIComponent(filename)}:/content`,
+      { method: 'PUT', headers: { Authorization: 'Bearer ' + token, 'Content-Type': contentTypeForFilename(filename) }, body: buf }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Upload failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 2. Delete an item by id (404 treated as success — already gone).
+app.delete('/api/onedrive/item/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}`,
+      { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (!r.ok && r.status !== 404) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Delete failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 3. Medium thumbnail URL for an item.
+app.get('/api/onedrive/item/:id/thumbnail', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/thumbnails/0/medium`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.ok) {
+      const json = await r.json();
+      if (json && json.url) return res.json({ ok: true, url: json.url });
+    }
+    res.json({ ok: false });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 4. Stream an item's raw bytes (Graph redirects to content; fetch follows).
+app.get('/api/onedrive/item/:id/content', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/content`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Content fetch failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const ab = await r.arrayBuffer();
+    res.set('Content-Type', r.headers.get('content-type') || 'application/octet-stream');
+    res.send(Buffer.from(ab));
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 5. Ensure a folder path exists.
+app.post('/api/onedrive/ensure-folder', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { path: folderPath } = req.body || {};
+  if (!folderPath) return res.status(400).json({ error: 'path is required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const f = await ensureFolderByPath(token, driveId, folderPath);
+    res.json({ ok: true, id: f.id, webUrl: f.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 6. Move (and optionally rename) an item into a destination folder path.
+app.post('/api/onedrive/move', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { itemId, destPath, name } = req.body || {};
+  if (!itemId || !destPath) return res.status(400).json({ error: 'itemId and destPath are required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const dest = await ensureFolderByPath(token, driveId, destPath);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(itemId)}`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentReference: { id: dest.id }, ...(name ? { name } : {}) }),
+      }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Move failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Upload a file directly into a folder identified by its drive item id.
+app.post('/api/onedrive/upload-by-id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { folderId, filename, contentBase64 } = req.body || {};
+  if (!folderId || !filename || !contentBase64) {
+    return res.status(400).json({ error: 'folderId, filename and contentBase64 are required' });
+  }
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const buf = Buffer.from(contentBase64, 'base64');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(folderId)}:/${encodeURIComponent(filename)}:/content`,
+      { method: 'PUT', headers: { Authorization: 'Bearer ' + token, 'Content-Type': contentTypeForFilename(filename) }, body: buf }
+    );
+    if (!r.ok) throw new Error('upload-by-id failed ' + r.status + ' ' + (await r.text()).slice(0, 300));
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Metadata lookup by drive item id. Placed AFTER /item/:id/thumbnail and /item/:id/content.
+app.get('/api/onedrive/item/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}?$select=id,webUrl,name`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.status === 404 || r.status === 410) return res.json({ ok: false });
+    if (!r.ok) throw new Error('item meta failed ' + r.status);
+    const d = await r.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Resolve a drive item by its path under the corporate drive root.
+app.get('/api/onedrive/by-path', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!req.query.path) return res.status(400).json({ error: 'path is required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const enc = String(req.query.path).split('/').map(encodeURIComponent).join('/');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}?$select=id,webUrl,name`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.status === 404) return res.json({ ok: false });
+    if (!r.ok) throw new Error('by-path failed ' + r.status);
+    const d = await r.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// List children of a folder (by path; empty path = root) with optional name-prefix filter.
+app.get('/api/onedrive/children', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const path = req.query.path ? String(req.query.path) : '';
+    const prefix = req.query.prefix ? String(req.query.prefix).toLowerCase() : '';
+    const enc = path ? path.split('/').map(encodeURIComponent).join('/') : '';
+    const url = path
+      ? `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}:/children?$top=500&$select=id,webUrl,name,folder`
+      : `https://graph.microsoft.com/v1.0/drives/${driveId}/root/children?$top=500&$select=id,webUrl,name,folder`;
+    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+    if (r.status === 404) return res.json({ ok: true, items: [] });
+    if (!r.ok) throw new Error('children failed ' + r.status);
+    const d = await r.json();
+    let items = (d.value || []).map(x => ({ id: x.id, webUrl: x.webUrl, name: x.name, isFolder: !!x.folder }));
+    if (prefix) items = items.filter(x => (x.name || '').toLowerCase().startsWith(prefix));
+    res.json({ ok: true, items });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Get-or-create a child folder under a parent identified by its drive item id.
+app.post('/api/onedrive/child-folder', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { parentId, name } = req.body || {};
+  if (!parentId || !name) return res.status(400).json({ error: 'parentId and name are required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const cr = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(parentId)}/children`,
+      { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) }
+    );
+    if (cr.status === 409) {
+      // already exists — find it among children
+      const lr = await fetch(
+        `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(parentId)}/children?$top=500&$select=id,webUrl,name`,
+        { headers: { Authorization: 'Bearer ' + token } }
+      );
+      const ld = await lr.json();
+      const found = (ld.value || []).find(x => x.name === name);
+      if (found) return res.json({ ok: true, id: found.id, webUrl: found.webUrl, name: found.name });
+      throw new Error('child-folder 409 but not found');
+    }
+    if (!cr.ok) throw new Error('child-folder failed ' + cr.status + ' ' + (await cr.text()).slice(0, 200));
+    const d = await cr.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Resolve a sharing URL to the underlying drive item.
+app.post('/api/onedrive/share', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { url } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'url is required' });
+  try {
+    const token = await getGraphAppToken();
+    const u = String(url);
+    const b64 = Buffer.from(u).toString('base64').replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/shares/u!${b64}/driveItem?$select=id,webUrl,name,folder`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (!r.ok) throw new Error('share resolve failed ' + r.status);
+    const d = await r.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name, isFolder: !!d.folder });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// ========== QR PHONE-PAIRING AUTH (Phase C) ==========
+// Desktop user starts a pairing — short-lived token encoded into a QR code.
+app.post('/api/auth/qr/start', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    // Invalidate any prior unused pairings for this user (caps active codes; complements single-use).
+    const prior = await db.collection('qr_pairings').where('userId', '==', user.id).where('used', '==', false).get();
+    if (!prior.empty) { const b = db.batch(); prior.docs.forEach((d) => b.delete(d.ref)); await b.commit(); }
+    const pairingToken = crypto.randomBytes(24).toString('hex');
+    await db.collection('qr_pairings').doc(pairingToken).set({
+      token: pairingToken,
+      userId: user.id,
+      username: user.username,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 120000,
+      used: false,
+    });
+    res.json({ ok: true, pairingToken, expiresInMs: 120000 });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to start pairing', detail: err.message });
+  }
+});
+
+// Phone scans the QR and exchanges the pairing token for a scanner session token. PUBLIC.
+app.post('/api/auth/qr/exchange', async (req, res) => {
+  const { pairingToken } = req.body || {};
+  if (!pairingToken) return res.status(400).json({ error: 'pairingToken is required' });
+  try {
+    const pairRef = db.collection('qr_pairings').doc(pairingToken);
+    // Atomically validate + mark used so a pairing token can never be exchanged twice (TOCTOU-safe).
+    let pairing;
+    try {
+      pairing = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(pairRef);
+        if (!snap.exists) { const e = new Error('Invalid code'); e.httpStatus = 404; throw e; }
+        const p = snap.data();
+        if (p.used === true) { const e = new Error('Code already used'); e.httpStatus = 410; throw e; }
+        if (Date.now() > p.expiresAt) { const e = new Error('Code expired'); e.httpStatus = 410; throw e; }
+        tx.update(pairRef, { used: true });
+        return p;
+      });
+    } catch (e) {
+      if (e.httpStatus) return res.status(e.httpStatus).json({ error: e.message });
+      throw e;
+    }
+    const userDoc = await db.collection('users').doc(pairing.userId).get();
+    if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+    const scannerToken = 'scan_' + crypto.randomBytes(24).toString('hex');
+    // Expire at the next midnight in PH time (UTC+8), independent of the server's timezone.
+    // Shift now into PH wall-clock, snap to next midnight, then shift back to real UTC.
+    const PH_OFFSET = 8 * 3600000;
+    const phMidnight = new Date(Date.now() + PH_OFFSET);
+    phMidnight.setUTCHours(24, 0, 0, 0);
+    const expiresAt = phMidnight.getTime() - PH_OFFSET;
+    await db.collection('scanner_sessions').doc(scannerToken).set({
+      token: scannerToken,
+      userId: pairing.userId,
+      username: pairing.username,
+      createdAt: Date.now(),
+      expiresAt,
+    });
+    res.json({ ok: true, token: scannerToken, user: userResponse(userDoc.id, userDoc.data()), expiresAt });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to exchange code', detail: err.message });
+  }
+});
+
+// Desktop polls whether the QR has been scanned/paired yet.
+app.get('/api/auth/qr/status', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { pairingToken } = req.query || {};
+  if (!pairingToken) return res.status(400).json({ error: 'pairingToken is required' });
+  try {
+    const pairSnap = await db.collection('qr_pairings').doc(String(pairingToken)).get();
+    const pairing = pairSnap.exists ? pairSnap.data() : null;
+    res.json({ ok: true, paired: !!(pairing && pairing.used) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to read pairing status', detail: err.message });
+  }
+});
+
 // --- BEGIN RECEIPT PARSING BLOCK ---
 function extractJson(text) {
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -3193,12 +3623,20 @@ function normalizeReceipt(raw) {
     amount: safeNum(item.amount)
   })) : [];
 
+  const allowedInvoiceTypes = ['Service Invoice', 'Sales Invoice', 'Official Receipt', 'Other'];
+  const invoiceType = allowedInvoiceTypes.includes(raw.invoiceType) ? raw.invoiceType : null;
+  const vatable = typeof raw.vatable === 'boolean' ? raw.vatable : null;
+
   return {
     vendor: typeof raw.vendor === 'string' ? raw.vendor : null,
+    description: (typeof raw.description === 'string' && raw.description.trim().length > 0) ? raw.description.trim() : null,
+    invoiceNumber: (typeof raw.invoiceNumber === 'string' && raw.invoiceNumber.trim().length > 0) ? raw.invoiceNumber.trim() : null,
+    invoiceType,
     date: dateMatch,
     currency: (typeof raw.currency === 'string' && raw.currency.trim().length > 0) ? raw.currency.trim() : 'PHP',
     subtotal: safeNum(raw.subtotal),
     tax: safeNum(raw.tax),
+    vatable,
     total: safeNum(raw.total),
     paymentMethod: typeof raw.paymentMethod === 'string' ? raw.paymentMethod : null,
     suggestedCategory,
@@ -3223,11 +3661,15 @@ Remove all currency symbols (e.g., ', '₱', 'PHP') and commas from numeric valu
 
 The JSON MUST exactly match this structure:
 {
-  "vendor": "String or null",
+  "vendor": "Supplier / merchant business name as printed, or null",
+  "description": "Short plain summary of the goods or services purchased (e.g. 'Business cards', 'Diesel fuel', 'Office supplies'). Read the 'description / nature of service / particulars' area and any line items. Do NOT just repeat the vendor name. String or null",
+  "invoiceNumber": "The receipt/invoice serial number exactly as printed (e.g. the 'No.' value, OR/SI number). String or null",
+  "invoiceType": "The document type from its title/header. One of: 'Service Invoice', 'Sales Invoice', 'Official Receipt', 'Other', or null",
   "date": "YYYY-MM-DD string or null",
   "currency": "String, use 'PHP' if not explicitly stated otherwise",
   "subtotal": Number or null,
-  "tax": Number or null,
+  "tax": "The VAT / tax amount as a number, or null if none. Non-VAT receipts have null.",
+  "vatable": "Boolean: true if this is a VAT receipt (VAT-registered, shows a VAT amount or '12% VAT'); false if it is explicitly NON-VAT; null if unclear",
   "total": Number or null,
   "paymentMethod": "String or null",
   "suggestedCategory": "Must be exactly one of: 'Tools / Direct', 'Gas', 'Materials', 'Transportation', 'Accommodation', '3rd Party Labor', 'Others'. Guess the best fit based on vendor and items.",
@@ -3276,6 +3718,63 @@ app.post('/api/receipts/parse', async (req, res) => {
     }
     console.error('[ReceiptParse Error]', err.message);
     return res.status(502).json({ ok: false, error: err.message || 'Failed to parse receipt' });
+  }
+});
+async function detectCropWithGemini(imageBase64, mimeType) {
+  const { GoogleGenerativeAI } = require('@google/generative-ai');
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const modelName = process.env.GEMINI_CROP_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+  const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
+
+  const CROP_PROMPT = `Locate the document, receipt, or piece of paper in this photo and return the coordinates of its 4 corners.
+Output ONLY valid JSON — no markdown, no explanation.
+Coordinates are fractions from 0.0 to 1.0 relative to image size (0,0 = top-left corner, 1,1 = bottom-right corner).
+Return corners in this exact order: topLeft, topRight, bottomRight, bottomLeft.
+Example: {"topLeft":{"x":0.05,"y":0.1},"topRight":{"x":0.9,"y":0.08},"bottomRight":{"x":0.92,"y":0.95},"bottomLeft":{"x":0.04,"y":0.93}}
+If no document is visible, return: null`;
+
+  const result = await model.generateContent([
+    { text: CROP_PROMPT },
+    { inlineData: { mimeType, data: imageBase64.replace(/^data:.*?;base64,/, '') } },
+  ]);
+
+  const text = result.response.text();
+  const jsonStr = extractJson(text);
+  const parsed = JSON.parse(jsonStr);
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const clamp = (v) => Math.min(1, Math.max(0, Number(v) || 0));
+  const tl = parsed.topLeft || {};
+  const tr = parsed.topRight || {};
+  const br = parsed.bottomRight || {};
+  const bl = parsed.bottomLeft || {};
+
+  return [
+    { x: clamp(tl.x), y: clamp(tl.y) },
+    { x: clamp(tr.x), y: clamp(tr.y) },
+    { x: clamp(br.x), y: clamp(br.y) },
+    { x: clamp(bl.x), y: clamp(bl.y) },
+  ];
+}
+
+app.post('/api/receipts/detect-crop', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+
+  const { imageBase64, mimeType } = req.body || {};
+  if (!imageBase64 || typeof imageBase64 !== 'string') {
+    return res.status(400).json({ ok: false, error: 'Missing imageBase64' });
+  }
+
+  try {
+    const quad = await detectCropWithGemini(imageBase64, mimeType || 'image/jpeg');
+    return res.json({ ok: true, quad });
+  } catch (err) {
+    console.error('[CropDetect Error]', err.message);
+    return res.status(502).json({ ok: false, error: err.message });
   }
 });
 // --- END RECEIPT PARSING BLOCK ---
@@ -3360,7 +3859,8 @@ app.post('/api/overhead-expenses', async (req, res) => {
       }
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
-    const { description, amount, date, category, sourceType, receiptRef } = body;
+    const { description, amount, date, category, sourceType, receiptRef,
+            supplier, invoiceNo, invoiceType, vat } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
       description: description || '',
@@ -3372,6 +3872,10 @@ app.post('/api/overhead-expenses', async (req, res) => {
       sourceType: sourceType || 'manual',
     };
     if (receiptRef) doc.receiptRef = receiptRef;
+    if (supplier) doc.supplier = String(supplier);
+    if (invoiceNo) doc.invoiceNo = String(invoiceNo);
+    if (invoiceType) doc.invoiceType = String(invoiceType);
+    if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     const ref = await db.collection('overhead_expenses').add(doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
   } catch (err) {
