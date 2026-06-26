@@ -34,6 +34,7 @@ import PayrollGuard from './components/payroll/PayrollGuard';
 import FinanceHomePage from './components/finance/FinanceHomePage';
 import ReimbursementDashboard from './components/ReimbursementDashboard';
 import ProjectExpenseReport from './components/finance/ProjectExpenseReport';
+import OverheadExpensesPage from './components/OverheadExpensesPage';
 import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
 import DTRPage from './components/employee/DTRPage';
@@ -476,6 +477,18 @@ function App() {
                   <EmployeeGuard>
                     <AppLayout>
                       <ProjectExpenseReport />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/overhead-expenses"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <OverheadExpensesPage />
                     </AppLayout>
                   </EmployeeGuard>
                 </ProtectedRoute>

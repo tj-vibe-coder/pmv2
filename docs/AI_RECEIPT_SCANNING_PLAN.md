@@ -439,18 +439,20 @@ Receipts for CAs are stored separately. A new `receipts` sub-field could be adde
 
 **Implementation notes**: reused the existing Phase 2 infrastructure (`receiptParseService.ts`, `utils/receipts/imageCompress.ts`, OneDrive helpers in `onedriveFolderService.ts`) — no new services. CA breakdown rows gained a stable `_uid` (so async scans target the right row); parsed liquidation-taxonomy categories are mapped to the CA category set via `LIQ_TO_CA_CATEGORY`. tsc + `CI=true npm run build` both clean. Runtime E2E (live Gemini parse + OneDrive upload) still needs a manual in-app smoke test — not verifiable headlessly.
 
-### Phase 4: Overhead Expenses (separate page & collection)
+### Phase 4: Overhead Expenses (separate page & collection) — DONE (2026-06-26)
 
 **Duration**: One session  
 **Milestone**: Users can scan a receipt and assign it as overhead (no project link)
 
-| # | Task | Exact File | Details |
+| # | Task | Exact File | Status |
 |---|---|---|---|
-| 4.1 | Add overhead toggle to ReceiptScanDialog | `ReceiptScanDialog.tsx` | Radio: Project (dropdown) vs Overhead |
-| 4.2 | Create overhead expense server endpoints | `server.js` | `POST/GET/DELETE /api/overhead-expenses` |
-| 4.3 | Create `overheadExpenseService.ts` | `src/services/overheadExpenseService.ts` | Client-side CRUD |
-| 4.4 | Create `OverheadExpensesPage.tsx` | `src/components/OverheadExpensesPage.tsx` | List/delete overhead expenses with receipt thumbnails |
-| 4.5 | Add route + nav link | `App.tsx` + `FinanceNavList.tsx` | `/finance/overhead-expenses` route |
+| 4.1 | Overhead entry + AI scan delivered as a standalone page (no shared ReceiptScanDialog — Phase 2 went inline, so the page hosts its own "Add Overhead Expense" dialog with a camera scan button) | `OverheadExpensesPage.tsx` | DONE (no project field; scan prefills amount/date/description/category) |
+| 4.2 | Overhead server endpoints: `GET /summary`, `GET`, `POST` (single+batch), `PATCH /:id`, `DELETE /:id` — collection `overhead_expenses` | `server.js` | DONE (mirrors `project_expenses`; equality-only queries, no composite index needed; summary scoped per-user for non-admins) |
+| 4.3 | `overheadExpenseService.ts` client CRUD (`fetch/create/update/delete/summary`) | `src/services/overheadExpenseService.ts` | DONE |
+| 4.4 | `OverheadExpensesPage.tsx` — KPI card, year/category filters, list table, delete, receipt "View" link, best-effort OneDrive upload to `00 Overhead Receipts/{year}/` then PATCH `receiptRef` | `src/components/OverheadExpensesPage.tsx` | DONE |
+| 4.5 | Route `/finance/overhead-expenses` + sidebar nav link | `App.tsx` + `FinanceNavList.tsx` | DONE |
+
+**Notes**: Firestore schema `overhead_expenses` = `{ description, amount, date, category, createdAt, createdBy, sourceType('manual'|'receipt_scan'), updatedAt?, receiptRef?{oneDriveId,webUrl,filename} }`. NO composite index (equality-only `where(createdBy==)`/`where(category==)` + in-memory sort — served by automatic single-field indexes via zig-zag merge, same rationale as the Phase-3 `project_expenses` index removal). tsc + `CI=true npm run build` + `node --check server.js` all clean. **Deferred to Phase 5 / follow-ups**: receipt thumbnails on the page (currently a "View" link to the OneDrive webUrl); OneDrive file deletion when an overhead expense is deleted (currently orphaned); Finance Home KPI does not yet sum `overhead_expenses` (Phase 5.6). Runtime E2E (live Gemini parse + OneDrive upload + prod Firestore writes) needs a manual in-app smoke test — not verifiable headlessly.
 
 ### Phase 5: Polish & Hardening
 

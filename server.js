@@ -3280,6 +3280,154 @@ app.post('/api/receipts/parse', async (req, res) => {
 });
 // --- END RECEIPT PARSING BLOCK ---
 
+// ========== OVERHEAD EXPENSES ==========
+// Firestore collection: overhead_expenses
+// Company expenses NOT tied to any project (rent, utilities, supplies, subs).
+// Fields: description, amount, date (YYYY-MM-DD), category, createdAt (ISO),
+//   createdBy (userId), sourceType (manual|receipt_scan), optional updatedAt,
+//   optional receiptRef { oneDriveId, webUrl, filename }.
+// Queries are equality-only (where createdBy ==) + in-memory sort, so Firestore
+// automatic single-field indexes cover them — NO composite index needed.
+
+app.get('/api/overhead-expenses/summary', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { year } = req.query;
+    let query = db.collection('overhead_expenses');
+    if (!isAdmin) query = query.where('createdBy', '==', user.id);
+    const snap = await query.get();
+    let rows = snap.docs.map(doc => doc.data());
+    if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
+    const total = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    res.json({ success: true, total, count: rows.length, year: year || 'all' });
+  } catch (err) {
+    console.error('Error fetching overhead_expenses summary:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.get('/api/overhead-expenses', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { year, category } = req.query;
+    let query = db.collection('overhead_expenses');
+    if (!isAdmin) query = query.where('createdBy', '==', user.id);
+    if (category) query = query.where('category', '==', String(category));
+    const snap = await query.get();
+    let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
+    rows.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    res.json({ success: true, expenses: rows });
+  } catch (err) {
+    console.error('Error fetching overhead_expenses:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/overhead-expenses', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const body = req.body;
+    const now = new Date().toISOString();
+    if (Array.isArray(body.expenses)) {
+      const toInsert = body.expenses.filter(e => Number(e.amount) > 0);
+      if (toInsert.length === 0) return res.status(400).json({ success: false, error: 'No valid expenses in array' });
+      const inserted = [];
+      for (let i = 0; i < toInsert.length; i += 499) {
+        const chunk = toInsert.slice(i, i + 499);
+        const batch = db.batch();
+        for (const exp of chunk) {
+          const ref = db.collection('overhead_expenses').doc();
+          const doc = {
+            description: exp.description || '',
+            amount: Number(exp.amount),
+            date: exp.date || now.slice(0, 10),
+            category: exp.category || 'Others',
+            createdAt: exp.createdAt || now,
+            createdBy: user.id,
+            sourceType: exp.sourceType || 'manual',
+          };
+          if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
+          batch.set(ref, doc);
+          inserted.push({ id: ref.id, ...doc });
+        }
+        await batch.commit();
+      }
+      return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
+    }
+    const { description, amount, date, category, sourceType, receiptRef } = body;
+    if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
+    const doc = {
+      description: description || '',
+      amount: Number(amount),
+      date: date || now.slice(0, 10),
+      category: category || 'Others',
+      createdAt: now,
+      createdBy: user.id,
+      sourceType: sourceType || 'manual',
+    };
+    if (receiptRef) doc.receiptRef = receiptRef;
+    const ref = await db.collection('overhead_expenses').add(doc);
+    res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
+  } catch (err) {
+    console.error('Error creating overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.patch('/api/overhead-expenses/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const ref = db.collection('overhead_expenses').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ success: false, error: 'Not found' });
+    if (!isAdmin && snap.data().createdBy !== user.id) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+    const allowed = {};
+    const { description, amount, date, category, receiptRef } = req.body;
+    if (description !== undefined) allowed.description = String(description);
+    if (amount !== undefined) allowed.amount = Number(amount);
+    if (date !== undefined) allowed.date = String(date);
+    if (category !== undefined) allowed.category = String(category);
+    if (receiptRef !== undefined) allowed.receiptRef = receiptRef;
+    allowed.updatedAt = new Date().toISOString();
+    await ref.update(allowed);
+    const updated = await ref.get();
+    res.json({ success: true, expense: { id: updated.id, ...updated.data() } });
+  } catch (err) {
+    console.error('Error updating overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.delete('/api/overhead-expenses/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const ref = db.collection('overhead_expenses').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Not found' });
+    if (!isAdmin && doc.data().createdBy !== user.id) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+// ========== END OVERHEAD EXPENSES ==========
+
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {
   app.use(express.static(path.join(__dirname, 'build')));
