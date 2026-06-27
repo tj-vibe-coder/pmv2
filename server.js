@@ -883,11 +883,19 @@ app.get('/api/project-expenses', async (req, res) => {
   try {
     const { projectId, year, sourceType } = req.query;
     let query = db.collection('project_expenses');
-    if (!isAdmin) query = query.where('createdBy', '==', user.id);
     if (projectId) query = query.where('projectId', '==', String(projectId));
     if (sourceType) query = query.where('sourceType', '==', String(sourceType));
     const snap = await query.get();
     let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // Non-admins normally see only the project_expenses they created. System-generated sync rows
+    // (PO/liquidation/migrated) have no natural per-user owner, so expose them to every finance user —
+    // otherwise the per-project Expense Monitoring list would hide costs (e.g. synced PO items or
+    // liquidation rows) the company P&L still counts, producing a confusing reconciliation gap.
+    // In-memory filter only, so no Firestore composite index is needed.
+    if (!isAdmin) {
+      const SYNC_SOURCE_TYPES = new Set(['po_sync', 'liquidation_sync', 'migrated']);
+      rows = rows.filter(r => r.createdBy === user.id || SYNC_SOURCE_TYPES.has(r.sourceType));
+    }
     if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
     rows.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
     res.json({ success: true, expenses: rows });
@@ -3879,6 +3887,8 @@ app.get('/api/overhead-expenses/summary', async (req, res) => {
 app.get('/api/finance/pnl', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  // P&L is a management report — superadmin only (no per-user/role separation yet).
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Forbidden' });
   try {
     const year = req.query.year ? String(req.query.year) : String(new Date().getFullYear());
     const [invoicesSnap, projExpSnap, overExpSnap] = await Promise.all([

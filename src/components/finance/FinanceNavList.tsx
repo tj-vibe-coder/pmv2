@@ -239,7 +239,8 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
         </Tooltip>
       </ListItem>
 
-      {/* Profit & Loss */}
+      {/* Profit & Loss — superadmin only */}
+      {user?.role === 'superadmin' && (
       <ListItem disablePadding sx={{ mb: 0.5 }}>
         <Tooltip title={isExpanded ? '' : 'Profit & Loss'} placement="right" arrow>
           <ListItemButton
@@ -261,6 +262,7 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
           </ListItemButton>
         </Tooltip>
       </ListItem>
+      )}
 
       {/* Payroll — only visible to authorized users */}
       {isPayrollAuthorized(user?.username) && (

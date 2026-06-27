@@ -501,11 +501,11 @@ function App() {
               path="/finance/pnl"
               element={
                 <ProtectedRoute>
-                  <EmployeeGuard>
+                  <SuperadminRoute>
                     <AppLayout>
                       <CompanyPnLPage />
                     </AppLayout>
-                  </EmployeeGuard>
+                  </SuperadminRoute>
                 </ProtectedRoute>
               }
             />
