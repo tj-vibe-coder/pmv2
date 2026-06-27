@@ -28,6 +28,7 @@ import {
   Select,
   FormControl,
   InputLabel,
+  LinearProgress,
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -543,6 +544,9 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   const [editingSchedule, setEditingSchedule] = useState<BillingMilestone[]>([]);
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const [scheduleErr, setScheduleErr] = useState('');
+  // Auto-generate schedule from payment terms (DP % + number of progress draws)
+  const [genDpPct, setGenDpPct] = useState<number>(() => Math.round((project.down_payment_percent || 0) * (project.down_payment_percent <= 1 ? 100 : 1)));
+  const [genDraws, setGenDraws] = useState<number>(2);
 
   // Invoice creation from milestone
   const [createInvoiceForMilestone, setCreateInvoiceForMilestone] = useState<BillingMilestone | null>(null);
@@ -674,9 +678,52 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     }
   };
 
+  // Auto-generate: DP at trigger 0 (billable on PO), then N progress draws splitting the
+  // remaining contract %. Trigger thresholds are seeded as an even-spaced HINT — they're
+  // meant to be edited manually, since billing depends on per-project customer approval.
+  const autoGenerateSchedule = () => {
+    const dp = Math.max(0, Math.min(100, Math.round(genDpPct)));
+    const draws = Math.max(1, Math.min(12, Math.round(genDraws)));
+    const now = Date.now();
+    const rows: BillingMilestone[] = [];
+    let pb = 1;
+    if (dp > 0) {
+      rows.push({ id: `ms-${now}-dp`, label: 'Downpayment', trigger_pct: 0, billing_pct: dp, pb_number: `PB${pb++}` });
+    }
+    const remaining = 100 - dp;
+    const per = Math.floor((remaining / draws) * 100) / 100; // 2-dp even split
+    let allocated = 0;
+    for (let i = 1; i <= draws; i++) {
+      const isLast = i === draws;
+      const billing = isLast ? Math.round((remaining - allocated) * 100) / 100 : per;
+      allocated += per;
+      const triggerHint = Math.round((i / draws) * 100); // even-spaced hint, editable
+      rows.push({
+        id: `ms-${now}-${i}`,
+        label: isLast ? 'Upon Completion' : `${triggerHint}% Progress Billing`,
+        trigger_pct: triggerHint,
+        billing_pct: billing,
+        pb_number: `PB${pb++}`,
+      });
+    }
+    setEditingSchedule(rows);
+    setScheduleErr('');
+  };
+
   const addMilestoneRow = () => {
     const n = editingSchedule.length + 1;
     setEditingSchedule(prev => [...prev, { id: `ms-${Date.now()}`, label: '', trigger_pct: 100, billing_pct: 0, pb_number: `PB${n}` }]);
+  };
+
+  // Distribute the remaining billing % so the schedule totals exactly 100%,
+  // adding the difference to the last progress milestone (or last row).
+  const balanceBillingToHundred = () => {
+    setEditingSchedule(prev => {
+      if (prev.length === 0) return prev;
+      const sumExceptLast = prev.slice(0, -1).reduce((s, m) => s + (Number(m.billing_pct) || 0), 0);
+      const lastBilling = Math.round((100 - sumExceptLast) * 100) / 100;
+      return prev.map((m, i) => i === prev.length - 1 ? { ...m, billing_pct: Math.max(0, lastBilling) } : m);
+    });
   };
 
   const updateMilestoneField = (id: string, field: keyof BillingMilestone, value: string | number) => {
@@ -1277,6 +1324,37 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                   ))}
                 </Grid>
 
+                {/* Site progress vs Billing progress — the DP gap is expected: billing can lead site work */}
+                {(() => {
+                  const sitePct = Math.max(0, Math.min(100, currentProgress));
+                  const billingPct = contract > 0 ? Math.max(0, Math.min(100, Math.round((arSummary.totalInvoiced / contract) * 1000) / 10)) : 0;
+                  const rows = [
+                    { label: 'Site Progress', pct: sitePct, color: NET_PACIFIC_COLORS.accent1, hint: 'physical completion' },
+                    { label: 'Billing Progress', pct: billingPct, color: NET_PACIFIC_COLORS.primary, hint: '% of contract billed' },
+                  ];
+                  return (
+                    <Box sx={{ mb: 2, p: 1.5, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}>
+                      <Stack spacing={1}>
+                        {rows.map(r => (
+                          <Box key={r.label}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 0.25 }}>
+                              <Typography variant="caption" color="text.secondary">
+                                {r.label} <Typography component="span" variant="caption" color="text.disabled">· {r.hint}</Typography>
+                              </Typography>
+                              <Typography variant="caption" fontWeight={700} sx={{ color: r.color }}>{r.pct}%</Typography>
+                            </Box>
+                            <LinearProgress
+                              variant="determinate"
+                              value={r.pct}
+                              sx={{ height: 6, borderRadius: 3, bgcolor: 'grey.100', '& .MuiLinearProgress-bar': { backgroundColor: r.color } }}
+                            />
+                          </Box>
+                        ))}
+                      </Stack>
+                    </Box>
+                  );
+                })()}
+
                 {/* Schedule editor */}
                 {scheduleEditMode && (
                   <Box sx={{ mb: 2 }}>
@@ -1301,6 +1379,41 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                             sx={{ fontSize: '0.7rem' }}
                           />
                         ))}
+                      </Stack>
+                    </Box>
+
+                    {/* Auto-generate from payment terms */}
+                    <Box sx={{ mb: 1.5, p: 1.5, borderRadius: 1, bgcolor: 'grey.50', border: '1px solid', borderColor: 'divider' }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                        Auto-generate from payment terms — splits the contract into a downpayment plus progress draws.
+                        Trigger % is seeded as a hint; edit each row's trigger to match customer approval.
+                      </Typography>
+                      <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                        <TextField
+                          size="small"
+                          type="number"
+                          label="Downpayment"
+                          value={genDpPct}
+                          onChange={e => setGenDpPct(Number(e.target.value))}
+                          inputProps={{ min: 0, max: 100, style: { fontSize: '0.8rem', width: 70 } }}
+                          InputProps={{ endAdornment: <Typography variant="caption">%</Typography> }}
+                        />
+                        <TextField
+                          size="small"
+                          type="number"
+                          label="Progress draws"
+                          value={genDraws}
+                          onChange={e => setGenDraws(Number(e.target.value))}
+                          inputProps={{ min: 1, max: 12, style: { fontSize: '0.8rem', width: 70 } }}
+                        />
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={autoGenerateSchedule}
+                          sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+                        >
+                          Generate
+                        </Button>
                       </Stack>
                     </Box>
 
@@ -1383,6 +1496,24 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                         </TableBody>
                       </Table>
                     </TableContainer>
+
+                    {(() => {
+                      const billingSum = Math.round(editingSchedule.reduce((s, m) => s + (Number(m.billing_pct) || 0), 0) * 100) / 100;
+                      const balanced = billingSum === 100;
+                      if (editingSchedule.length === 0) return null;
+                      return (
+                        <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                          <Typography variant="caption" sx={{ color: balanced ? 'success.main' : 'warning.main', fontWeight: 600 }}>
+                            Total billing: {billingSum}% {balanced ? '✓' : '(should be 100%)'}
+                          </Typography>
+                          {!balanced && (
+                            <Button size="small" variant="text" onClick={balanceBillingToHundred} sx={{ fontSize: '0.7rem' }}>
+                              Balance to 100%
+                            </Button>
+                          )}
+                        </Box>
+                      );
+                    })()}
 
                     <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
                       <Button size="small" startIcon={<AddIcon />} variant="text" onClick={addMilestoneRow}>
