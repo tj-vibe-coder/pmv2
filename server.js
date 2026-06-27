@@ -1812,11 +1812,74 @@ app.post('/api/payroll/runs', async (req, res) => {
 app.post('/api/payroll/runs/:id/approve', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   try {
-    const ref = db.collection('payroll_runs').doc(req.params.id);
+    const runId = req.params.id;
+    const ref = db.collection('payroll_runs').doc(runId);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
-    await ref.update({ status: 'APPROVED', approvedBy: user.username, approvedAt: new Date().toISOString() });
-    res.json({ success: true });
+
+    const runData = doc.data();
+    // Don't downgrade an already-PAID run back to APPROVED on a re-approve call.
+    const nextStatus = runData.status === 'PAID' ? 'PAID' : 'APPROVED';
+    await ref.update({ status: nextStatus, approvedBy: user.username, approvedAt: new Date().toISOString() });
+
+    // --- Overhead sync (best-effort; must never fail the approval) ---
+    // Posts OFFICE-staff payroll cost into overhead_expenses so it flows into the company P&L OPEX.
+    // Uses DETERMINISTIC doc ids keyed on the run, so re-approving overwrites (never duplicates) the
+    // rows and stays correct even under concurrent approve calls — no read-then-write race, no index.
+    let overheadSynced = false;
+    try {
+      const payslipsSnap = await ref.collection('payslips').get();
+      let totalOfficeGross = 0;
+      let totalOfficeERGovt = 0;
+      payslipsSnap.forEach((pSnap) => {
+        const p = pSnap.data();
+        if (p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE') {
+          totalOfficeGross += Number(p.grossPay || 0);
+          totalOfficeERGovt += Number(p.erSSS || 0) + Number(p.erPhilhealth || 0) + Number(p.erPagibig || 0);
+        }
+      });
+
+      const expenseDate = runData.payDate || runData.periodEnd || new Date().toISOString().slice(0, 10);
+      const baseDoc = {
+        date: expenseDate,
+        sourceType: 'payroll_sync',
+        sourceRunId: runId,
+        createdAt: new Date().toISOString(),
+        createdBy: user.id || user.username,
+      };
+
+      const batch = db.batch();
+      const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
+      const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
+      // set when > 0, otherwise delete any stale row from a prior approve (delete of a missing doc is a no-op).
+      if (totalOfficeGross > 0) {
+        batch.set(salariesRef, {
+          ...baseDoc,
+          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Office salaries`,
+          amount: totalOfficeGross,
+          category: 'Salaries & Wages',
+        });
+      } else {
+        batch.delete(salariesRef);
+      }
+      if (totalOfficeERGovt > 0) {
+        batch.set(govtRef, {
+          ...baseDoc,
+          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Employer gov't contributions`,
+          amount: totalOfficeERGovt,
+          category: 'Government Contributions',
+        });
+      } else {
+        batch.delete(govtRef);
+      }
+      await batch.commit();
+      overheadSynced = true;
+    } catch (syncErr) {
+      console.error('Payroll overhead sync failed for run', runId, syncErr);
+    }
+    // --- end overhead sync ---
+
+    res.json({ success: true, overheadSynced });
   } catch (err) { res.status(500).json({ error: 'Failed to approve run' }); }
 });
 

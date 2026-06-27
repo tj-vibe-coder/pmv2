@@ -148,6 +148,7 @@ const CompanyPnLPage: React.FC = () => {
                 <Typography variant="caption" display="block" sx={{ mt: 2 }} color="text.secondary">
                   Revenue is accrual (invoiced); {formatPHP(data.revenueCollected)} collected to date. The 3% percentage tax is estimated on collections (gross receipts).<br />
                   Revenue and cost are each recognized in the period recorded and are not matched per project, so a single year&apos;s margin can be distorted by billing/spend timing.<br />
+                  Cost of Services currently excludes in-house field-labor payroll (posted in a later update), so gross margin may be overstated for projects staffed by own field crews.<br />
                   Corporate income tax (RCIT/MCIT) is estimated separately at year-end and is not included here.
                 </Typography>
               </Paper>

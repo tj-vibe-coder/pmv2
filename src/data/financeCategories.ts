@@ -20,6 +20,7 @@ export const OVERHEAD_CATEGORIES = [
   'Communication & Utilities',
   'Advertising/Marketing',
   'Repairs & Maintenance',
+  'Government Contributions',
   'Others',
 ] as const;
 
@@ -64,6 +65,7 @@ export const ACCOUNT_MAP: Record<string, { code: string; type: AccountType }> = 
   'Communication & Utilities': { code: '6005', type: 'operating_expense' },
   'Advertising/Marketing': { code: '6006', type: 'operating_expense' },
   'Repairs & Maintenance': { code: '6007', type: 'operating_expense' },
+  'Government Contributions': { code: '6010', type: 'operating_expense' },
   'Others': { code: '6900', type: 'operating_expense' },
 
   // Equity (3xxx)
