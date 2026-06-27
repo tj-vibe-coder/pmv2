@@ -34,6 +34,8 @@ import PayrollGuard from './components/payroll/PayrollGuard';
 import FinanceHomePage from './components/finance/FinanceHomePage';
 import ReimbursementDashboard from './components/ReimbursementDashboard';
 import ProjectExpenseReport from './components/finance/ProjectExpenseReport';
+import OverheadExpensesPage from './components/OverheadExpensesPage';
+import CompanyPnLPage from './components/finance/CompanyPnLPage';
 import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
 import DTRPage from './components/employee/DTRPage';
@@ -47,6 +49,7 @@ import CalcsheetQuotationEditor from './components/calcsheet/CalcsheetQuotationE
 import CalcsheetCompareView from './components/calcsheet/CalcsheetCompareView';
 import CalcsheetClients from './components/calcsheet/CalcsheetClients';
 import CalcsheetPresets from './components/calcsheet/CalcsheetPresets';
+import ScanPage from './components/ScanPage';
 import { useQuotationStore } from './store/quotationStore';
 
 const theme = createTheme({
@@ -208,6 +211,7 @@ function App() {
         <Router>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/scan" element={<ScanPage />} />
             <Route
               path="/dashboard"
               element={
@@ -478,6 +482,30 @@ function App() {
                       <ProjectExpenseReport />
                     </AppLayout>
                   </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/overhead-expenses"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <OverheadExpensesPage />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/pnl"
+              element={
+                <ProtectedRoute>
+                  <SuperadminRoute>
+                    <AppLayout>
+                      <CompanyPnLPage />
+                    </AppLayout>
+                  </SuperadminRoute>
                 </ProtectedRoute>
               }
             />

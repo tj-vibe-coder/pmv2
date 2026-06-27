@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -17,6 +18,11 @@ const ALLOWED_ORIGINS = [
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    // Dev only: allow private-LAN origins so you can test from a phone/other device on the same network.
+    if (process.env.NODE_ENV !== 'production' &&
+        /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+):\d+$/.test(origin)) {
+      return callback(null, true);
+    }
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
@@ -111,6 +117,17 @@ async function getCurrentUser(req) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.substring(7);
   try {
+    // Scanner (QR-paired) sessions use 'scan_'-prefixed tokens. Standard base64
+    // login tokens never contain '_', so this prefix is unambiguous.
+    if (token.startsWith('scan_')) {
+      const sessSnap = await db.collection('scanner_sessions').doc(token).get();
+      if (!sessSnap.exists) return null;
+      const sess = sessSnap.data();
+      if (!sess || Date.now() > sess.expiresAt) return null;
+      const su = await db.collection('users').doc(sess.userId).get();
+      if (!su.exists) return null;
+      return { id: su.id, ...su.data(), scannerScope: true };
+    }
     const decoded = Buffer.from(token, 'base64').toString();
     const [userId] = decoded.split(':');
     if (!userId) return null;
@@ -134,6 +151,61 @@ async function requireActiveUser(req, res) {
     return null;
   }
   return user;
+}
+
+// ========== MICROSOFT GRAPH APP-ONLY (CLIENT CREDENTIALS) HELPER ==========
+// Server-side OneDrive/Graph access using app-only auth (no signed-in user).
+// Used by the receipt-scanning feature to read the corporate proposal drive.
+let graphTokenCache = null; // { token, expiresAt }
+
+async function getGraphAppToken() {
+  if (graphTokenCache && Date.now() < graphTokenCache.expiresAt) {
+    return graphTokenCache.token;
+  }
+  const tenantId = process.env.ONEDRIVE_TENANT_ID;
+  const clientId = process.env.ONEDRIVE_CLIENT_ID;
+  const clientSecret = process.env.ONEDRIVE_CLIENT_SECRET;
+  const driveOwner = process.env.ONEDRIVE_DRIVE_OWNER;
+  if (!tenantId) throw new Error('OneDrive not configured: ONEDRIVE_TENANT_ID');
+  if (!clientId) throw new Error('OneDrive not configured: ONEDRIVE_CLIENT_ID');
+  if (!clientSecret) throw new Error('OneDrive not configured: ONEDRIVE_CLIENT_SECRET');
+  if (!driveOwner) throw new Error('OneDrive not configured: ONEDRIVE_DRIVE_OWNER');
+
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret,
+    scope: 'https://graph.microsoft.com/.default',
+  });
+  const resp = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error('Graph token error: ' + text);
+  }
+  const json = await resp.json();
+  graphTokenCache = {
+    token: json.access_token,
+    expiresAt: Date.now() + (json.expires_in - 60) * 1000,
+  };
+  return graphTokenCache.token;
+}
+
+async function resolveCorporateDriveId(token) {
+  const owner = process.env.ONEDRIVE_DRIVE_OWNER;
+  const resp = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(owner)}/drive`,
+    { headers: { Authorization: 'Bearer ' + token } }
+  );
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(text);
+  }
+  const body = await resp.json();
+  return body.id;
 }
 
 // ========== AUTH ROUTES ==========
@@ -811,11 +883,19 @@ app.get('/api/project-expenses', async (req, res) => {
   try {
     const { projectId, year, sourceType } = req.query;
     let query = db.collection('project_expenses');
-    if (!isAdmin) query = query.where('createdBy', '==', user.id);
     if (projectId) query = query.where('projectId', '==', String(projectId));
     if (sourceType) query = query.where('sourceType', '==', String(sourceType));
     const snap = await query.get();
     let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // Non-admins normally see only the project_expenses they created. System-generated sync rows
+    // (PO/liquidation/migrated) have no natural per-user owner, so expose them to every finance user —
+    // otherwise the per-project Expense Monitoring list would hide costs (e.g. synced PO items or
+    // liquidation rows) the company P&L still counts, producing a confusing reconciliation gap.
+    // In-memory filter only, so no Firestore composite index is needed.
+    if (!isAdmin) {
+      const SYNC_SOURCE_TYPES = new Set(['po_sync', 'liquidation_sync', 'migrated']);
+      rows = rows.filter(r => r.createdBy === user.id || SYNC_SOURCE_TYPES.has(r.sourceType));
+    }
     if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
     rows.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
     res.json({ success: true, expenses: rows });
@@ -961,7 +1041,8 @@ app.post('/api/project-expenses', async (req, res) => {
     }
     // Single insert
     const { projectId, projectName, description, amount, date, category, sourceType,
-            sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId } = body;
+            sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
+            supplier, invoiceNo, invoiceType, vat, tin } = body;
     if (!projectId || !amount) {
       return res.status(400).json({ success: false, error: 'projectId and amount are required' });
     }
@@ -981,6 +1062,12 @@ app.post('/api/project-expenses', async (req, res) => {
     if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
     if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
     if (sourceCaId) doc.sourceCaId = sourceCaId;
+    if (receiptRef) doc.receiptRef = receiptRef;
+    if (supplier) doc.supplier = String(supplier);
+    if (invoiceNo) doc.invoiceNo = String(invoiceNo);
+    if (invoiceType) doc.invoiceType = String(invoiceType);
+    if (tin) doc.tin = String(tin);
+    if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     const ref = await db.collection('project_expenses').add(doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
   } catch (err) {
@@ -1733,11 +1820,74 @@ app.post('/api/payroll/runs', async (req, res) => {
 app.post('/api/payroll/runs/:id/approve', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   try {
-    const ref = db.collection('payroll_runs').doc(req.params.id);
+    const runId = req.params.id;
+    const ref = db.collection('payroll_runs').doc(runId);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
-    await ref.update({ status: 'APPROVED', approvedBy: user.username, approvedAt: new Date().toISOString() });
-    res.json({ success: true });
+
+    const runData = doc.data();
+    // Don't downgrade an already-PAID run back to APPROVED on a re-approve call.
+    const nextStatus = runData.status === 'PAID' ? 'PAID' : 'APPROVED';
+    await ref.update({ status: nextStatus, approvedBy: user.username, approvedAt: new Date().toISOString() });
+
+    // --- Overhead sync (best-effort; must never fail the approval) ---
+    // Posts OFFICE-staff payroll cost into overhead_expenses so it flows into the company P&L OPEX.
+    // Uses DETERMINISTIC doc ids keyed on the run, so re-approving overwrites (never duplicates) the
+    // rows and stays correct even under concurrent approve calls — no read-then-write race, no index.
+    let overheadSynced = false;
+    try {
+      const payslipsSnap = await ref.collection('payslips').get();
+      let totalOfficeGross = 0;
+      let totalOfficeERGovt = 0;
+      payslipsSnap.forEach((pSnap) => {
+        const p = pSnap.data();
+        if (p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE') {
+          totalOfficeGross += Number(p.grossPay || 0);
+          totalOfficeERGovt += Number(p.erSSS || 0) + Number(p.erPhilhealth || 0) + Number(p.erPagibig || 0);
+        }
+      });
+
+      const expenseDate = runData.payDate || runData.periodEnd || new Date().toISOString().slice(0, 10);
+      const baseDoc = {
+        date: expenseDate,
+        sourceType: 'payroll_sync',
+        sourceRunId: runId,
+        createdAt: new Date().toISOString(),
+        createdBy: user.id || user.username,
+      };
+
+      const batch = db.batch();
+      const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
+      const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
+      // set when > 0, otherwise delete any stale row from a prior approve (delete of a missing doc is a no-op).
+      if (totalOfficeGross > 0) {
+        batch.set(salariesRef, {
+          ...baseDoc,
+          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Office salaries`,
+          amount: totalOfficeGross,
+          category: 'Salaries & Wages',
+        });
+      } else {
+        batch.delete(salariesRef);
+      }
+      if (totalOfficeERGovt > 0) {
+        batch.set(govtRef, {
+          ...baseDoc,
+          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Employer gov't contributions`,
+          amount: totalOfficeERGovt,
+          category: 'Government Contributions',
+        });
+      } else {
+        batch.delete(govtRef);
+      }
+      await batch.commit();
+      overheadSynced = true;
+    } catch (syncErr) {
+      console.error('Payroll overhead sync failed for run', runId, syncErr);
+    }
+    // --- end overhead sync ---
+
+    res.json({ success: true, overheadSynced });
   } catch (err) { res.status(500).json({ error: 'Failed to approve run' }); }
 });
 
@@ -3089,6 +3239,855 @@ app.delete('/api/dtr/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete DTR entry' });
   }
 });
+
+// ========== ONEDRIVE / MICROSOFT GRAPH HEALTH ==========
+// Smoke test for server-side app-only Graph auth. Never exposes token/secret.
+app.get('/api/onedrive/health', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    res.json({ ok: true, owner: process.env.ONEDRIVE_DRIVE_OWNER, driveId, tokenCached: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ========== APP-ONLY ONEDRIVE FILE OPERATIONS (Phase A) ==========
+// Idempotently ensure a nested folder path exists under the drive root; returns the deepest folder's { id, webUrl, name }.
+async function ensureFolderByPath(token, driveId, folderPath) {
+  const segments = String(folderPath).split('/').map((s) => s.trim()).filter(Boolean);
+  let parentPath = '';
+  let current = null;
+  for (const name of segments) {
+    const fullPath = parentPath ? `${parentPath}/${name}` : name;
+    // lookup-first
+    const enc = fullPath.split('/').map(encodeURIComponent).join('/');
+    const lookup = await fetch(`https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}`, { headers: { Authorization: 'Bearer ' + token } });
+    if (lookup.ok) { current = await lookup.json(); parentPath = fullPath; continue; }
+    // create
+    const encParent = parentPath ? parentPath.split('/').map(encodeURIComponent).join('/') : '';
+    const createUrl = parentPath
+      ? `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${encParent}:/children`
+      : `https://graph.microsoft.com/v1.0/drives/${driveId}/root/children`;
+    const cr = await fetch(createUrl, { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) });
+    if (cr.status === 409) {
+      const again = await fetch(`https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}`, { headers: { Authorization: 'Bearer ' + token } });
+      current = await again.json();
+    } else if (cr.ok) {
+      current = await cr.json();
+    } else {
+      const t = await cr.text().catch(() => '');
+      throw new Error(`Folder create failed (${cr.status}) at "${fullPath}": ${t.slice(0, 300)}`);
+    }
+    parentPath = fullPath;
+  }
+  if (!current) throw new Error('Empty folder path');
+  return { id: current.id, webUrl: current.webUrl || '', name: current.name };
+}
+
+function contentTypeForFilename(filename) {
+  const ext = String(filename).toLowerCase().split('.').pop();
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'pdf') return 'application/pdf';
+  return 'application/octet-stream';
+}
+
+// 1. Upload a base64 file into a folder path (folder ensured idempotently).
+app.post('/api/onedrive/upload', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { folderPath, filename, contentBase64 } = req.body || {};
+  if (!folderPath || !filename || !contentBase64) {
+    return res.status(400).json({ error: 'folderPath, filename, and contentBase64 are required' });
+  }
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const folder = await ensureFolderByPath(token, driveId, folderPath);
+    const buf = Buffer.from(contentBase64, 'base64');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(folder.id)}:/${encodeURIComponent(filename)}:/content`,
+      { method: 'PUT', headers: { Authorization: 'Bearer ' + token, 'Content-Type': contentTypeForFilename(filename) }, body: buf }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Upload failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 2. Delete an item by id (404 treated as success — already gone).
+app.delete('/api/onedrive/item/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}`,
+      { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (!r.ok && r.status !== 404) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Delete failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 3. Medium thumbnail URL for an item.
+app.get('/api/onedrive/item/:id/thumbnail', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/thumbnails/0/medium`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.ok) {
+      const json = await r.json();
+      if (json && json.url) return res.json({ ok: true, url: json.url });
+    }
+    res.json({ ok: false });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 4. Stream an item's raw bytes (Graph redirects to content; fetch follows).
+app.get('/api/onedrive/item/:id/content', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/content`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Content fetch failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const ab = await r.arrayBuffer();
+    res.set('Content-Type', r.headers.get('content-type') || 'application/octet-stream');
+    res.send(Buffer.from(ab));
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 5. Ensure a folder path exists.
+app.post('/api/onedrive/ensure-folder', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { path: folderPath } = req.body || {};
+  if (!folderPath) return res.status(400).json({ error: 'path is required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const f = await ensureFolderByPath(token, driveId, folderPath);
+    res.json({ ok: true, id: f.id, webUrl: f.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 6. Move (and optionally rename) an item into a destination folder path.
+app.post('/api/onedrive/move', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { itemId, destPath, name } = req.body || {};
+  if (!itemId || !destPath) return res.status(400).json({ error: 'itemId and destPath are required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const dest = await ensureFolderByPath(token, driveId, destPath);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(itemId)}`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentReference: { id: dest.id }, ...(name ? { name } : {}) }),
+      }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Move failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Upload a file directly into a folder identified by its drive item id.
+app.post('/api/onedrive/upload-by-id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { folderId, filename, contentBase64 } = req.body || {};
+  if (!folderId || !filename || !contentBase64) {
+    return res.status(400).json({ error: 'folderId, filename and contentBase64 are required' });
+  }
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const buf = Buffer.from(contentBase64, 'base64');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(folderId)}:/${encodeURIComponent(filename)}:/content`,
+      { method: 'PUT', headers: { Authorization: 'Bearer ' + token, 'Content-Type': contentTypeForFilename(filename) }, body: buf }
+    );
+    if (!r.ok) throw new Error('upload-by-id failed ' + r.status + ' ' + (await r.text()).slice(0, 300));
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Metadata lookup by drive item id. Placed AFTER /item/:id/thumbnail and /item/:id/content.
+app.get('/api/onedrive/item/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}?$select=id,webUrl,name`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.status === 404 || r.status === 410) return res.json({ ok: false });
+    if (!r.ok) throw new Error('item meta failed ' + r.status);
+    const d = await r.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Resolve a drive item by its path under the corporate drive root.
+app.get('/api/onedrive/by-path', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!req.query.path) return res.status(400).json({ error: 'path is required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const enc = String(req.query.path).split('/').map(encodeURIComponent).join('/');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}?$select=id,webUrl,name`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.status === 404) return res.json({ ok: false });
+    if (!r.ok) throw new Error('by-path failed ' + r.status);
+    const d = await r.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// List children of a folder (by path; empty path = root) with optional name-prefix filter.
+app.get('/api/onedrive/children', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const path = req.query.path ? String(req.query.path) : '';
+    const prefix = req.query.prefix ? String(req.query.prefix).toLowerCase() : '';
+    const enc = path ? path.split('/').map(encodeURIComponent).join('/') : '';
+    const url = path
+      ? `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}:/children?$top=500&$select=id,webUrl,name,folder`
+      : `https://graph.microsoft.com/v1.0/drives/${driveId}/root/children?$top=500&$select=id,webUrl,name,folder`;
+    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+    if (r.status === 404) return res.json({ ok: true, items: [] });
+    if (!r.ok) throw new Error('children failed ' + r.status);
+    const d = await r.json();
+    let items = (d.value || []).map(x => ({ id: x.id, webUrl: x.webUrl, name: x.name, isFolder: !!x.folder }));
+    if (prefix) items = items.filter(x => (x.name || '').toLowerCase().startsWith(prefix));
+    res.json({ ok: true, items });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Get-or-create a child folder under a parent identified by its drive item id.
+app.post('/api/onedrive/child-folder', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { parentId, name } = req.body || {};
+  if (!parentId || !name) return res.status(400).json({ error: 'parentId and name are required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const cr = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(parentId)}/children`,
+      { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) }
+    );
+    if (cr.status === 409) {
+      // already exists — find it among children
+      const lr = await fetch(
+        `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(parentId)}/children?$top=500&$select=id,webUrl,name`,
+        { headers: { Authorization: 'Bearer ' + token } }
+      );
+      const ld = await lr.json();
+      const found = (ld.value || []).find(x => x.name === name);
+      if (found) return res.json({ ok: true, id: found.id, webUrl: found.webUrl, name: found.name });
+      throw new Error('child-folder 409 but not found');
+    }
+    if (!cr.ok) throw new Error('child-folder failed ' + cr.status + ' ' + (await cr.text()).slice(0, 200));
+    const d = await cr.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Resolve a sharing URL to the underlying drive item.
+app.post('/api/onedrive/share', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { url } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'url is required' });
+  try {
+    const token = await getGraphAppToken();
+    const u = String(url);
+    const b64 = Buffer.from(u).toString('base64').replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/shares/u!${b64}/driveItem?$select=id,webUrl,name,folder`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (!r.ok) throw new Error('share resolve failed ' + r.status);
+    const d = await r.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name, isFolder: !!d.folder });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// ========== QR PHONE-PAIRING AUTH (Phase C) ==========
+// Desktop user starts a pairing — short-lived token encoded into a QR code.
+app.post('/api/auth/qr/start', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    // Invalidate any prior unused pairings for this user (caps active codes; complements single-use).
+    const prior = await db.collection('qr_pairings').where('userId', '==', user.id).where('used', '==', false).get();
+    if (!prior.empty) { const b = db.batch(); prior.docs.forEach((d) => b.delete(d.ref)); await b.commit(); }
+    const pairingToken = crypto.randomBytes(24).toString('hex');
+    await db.collection('qr_pairings').doc(pairingToken).set({
+      token: pairingToken,
+      userId: user.id,
+      username: user.username,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 120000,
+      used: false,
+    });
+    res.json({ ok: true, pairingToken, expiresInMs: 120000 });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to start pairing', detail: err.message });
+  }
+});
+
+// Phone scans the QR and exchanges the pairing token for a scanner session token. PUBLIC.
+app.post('/api/auth/qr/exchange', async (req, res) => {
+  const { pairingToken } = req.body || {};
+  if (!pairingToken) return res.status(400).json({ error: 'pairingToken is required' });
+  try {
+    const pairRef = db.collection('qr_pairings').doc(pairingToken);
+    // Atomically validate + mark used so a pairing token can never be exchanged twice (TOCTOU-safe).
+    let pairing;
+    try {
+      pairing = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(pairRef);
+        if (!snap.exists) { const e = new Error('Invalid code'); e.httpStatus = 404; throw e; }
+        const p = snap.data();
+        if (p.used === true) { const e = new Error('Code already used'); e.httpStatus = 410; throw e; }
+        if (Date.now() > p.expiresAt) { const e = new Error('Code expired'); e.httpStatus = 410; throw e; }
+        tx.update(pairRef, { used: true });
+        return p;
+      });
+    } catch (e) {
+      if (e.httpStatus) return res.status(e.httpStatus).json({ error: e.message });
+      throw e;
+    }
+    const userDoc = await db.collection('users').doc(pairing.userId).get();
+    if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+    const scannerToken = 'scan_' + crypto.randomBytes(24).toString('hex');
+    // Expire at the next midnight in PH time (UTC+8), independent of the server's timezone.
+    // Shift now into PH wall-clock, snap to next midnight, then shift back to real UTC.
+    const PH_OFFSET = 8 * 3600000;
+    const phMidnight = new Date(Date.now() + PH_OFFSET);
+    phMidnight.setUTCHours(24, 0, 0, 0);
+    const expiresAt = phMidnight.getTime() - PH_OFFSET;
+    await db.collection('scanner_sessions').doc(scannerToken).set({
+      token: scannerToken,
+      userId: pairing.userId,
+      username: pairing.username,
+      createdAt: Date.now(),
+      expiresAt,
+    });
+    res.json({ ok: true, token: scannerToken, user: userResponse(userDoc.id, userDoc.data()), expiresAt });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to exchange code', detail: err.message });
+  }
+});
+
+// Desktop polls whether the QR has been scanned/paired yet.
+app.get('/api/auth/qr/status', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { pairingToken } = req.query || {};
+  if (!pairingToken) return res.status(400).json({ error: 'pairingToken is required' });
+  try {
+    const pairSnap = await db.collection('qr_pairings').doc(String(pairingToken)).get();
+    const pairing = pairSnap.exists ? pairSnap.data() : null;
+    res.json({ ok: true, paired: !!(pairing && pairing.used) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to read pairing status', detail: err.message });
+  }
+});
+
+// --- BEGIN RECEIPT PARSING BLOCK ---
+function extractJson(text) {
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) return fence[1].trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1) throw new Error('NO_JSON_IN_RESPONSE');
+  return text.slice(start, end + 1);
+}
+
+function normalizeReceipt(raw) {
+  if (!raw || typeof raw !== 'object') throw new Error('INVALID_JSON_OBJECT');
+  const safeNum = (val) => {
+    if (typeof val !== 'number' && typeof val !== 'string') return null;
+    if (typeof val === 'string' && val.trim() === '') return null;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const allowedCategories = ['Tools / Direct', 'Gas', 'Materials', 'Transportation', 'Accommodation', '3rd Party Labor', 'Others'];
+  const dateMatch = (typeof raw.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.date)) ? raw.date : null;
+  const suggestedCategory = allowedCategories.includes(raw.suggestedCategory) ? raw.suggestedCategory : 'Others';
+
+  let confidence = Number(raw.confidence);
+  if (!Number.isFinite(confidence)) confidence = 0;
+  confidence = Math.max(0, Math.min(1, confidence));
+
+  const lineItems = Array.isArray(raw.lineItems) ? raw.lineItems.filter(item => item && typeof item === 'object').map(item => ({
+    description: typeof item.description === 'string' ? item.description : String(item.description || ''),
+    qty: safeNum(item.qty),
+    unitPrice: safeNum(item.unitPrice),
+    amount: safeNum(item.amount)
+  })) : [];
+
+  const allowedInvoiceTypes = ['Service Invoice', 'Sales Invoice', 'Official Receipt', 'Other'];
+  const invoiceType = allowedInvoiceTypes.includes(raw.invoiceType) ? raw.invoiceType : null;
+  const vatable = typeof raw.vatable === 'boolean' ? raw.vatable : null;
+
+  return {
+    vendor: typeof raw.vendor === 'string' ? raw.vendor : null,
+    description: (typeof raw.description === 'string' && raw.description.trim().length > 0) ? raw.description.trim() : null,
+    invoiceNumber: (typeof raw.invoiceNumber === 'string' && raw.invoiceNumber.trim().length > 0) ? raw.invoiceNumber.trim() : null,
+    invoiceType,
+    date: dateMatch,
+    currency: (typeof raw.currency === 'string' && raw.currency.trim().length > 0) ? raw.currency.trim() : 'PHP',
+    subtotal: safeNum(raw.subtotal),
+    tax: safeNum(raw.tax),
+    vatable,
+    total: safeNum(raw.total),
+    paymentMethod: typeof raw.paymentMethod === 'string' ? raw.paymentMethod : null,
+    suggestedCategory,
+    lineItems,
+    confidence
+  };
+}
+
+async function parseReceiptWithGemini(imageBase64, mimeType) {
+  const { GoogleGenerativeAI } = require('@google/generative-ai'); // Lazy require
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const modelName = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+  const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
+
+  const RECEIPT_PROMPT = `You are an expert AI data extraction assistant. Extract receipt data from the provided image/pdf into a strict JSON object.
+Do NOT wrap the output in markdown code blocks. Output ONLY valid, parsable JSON.
+If a value is not found or unreadable, use null.
+Remove all currency symbols (e.g., ', '₱', 'PHP') and commas from numeric values before outputting.
+
+The JSON MUST exactly match this structure:
+{
+  "vendor": "Supplier / merchant business name as printed, or null",
+  "description": "Short plain summary of the goods or services purchased (e.g. 'Business cards', 'Diesel fuel', 'Office supplies'). Read the 'description / nature of service / particulars' area and any line items. Do NOT just repeat the vendor name. String or null",
+  "invoiceNumber": "The receipt/invoice serial number exactly as printed (e.g. the 'No.' value, OR/SI number). String or null",
+  "invoiceType": "The document type from its title/header. One of: 'Service Invoice', 'Sales Invoice', 'Official Receipt', 'Other', or null",
+  "date": "YYYY-MM-DD string or null",
+  "currency": "String, use 'PHP' if not explicitly stated otherwise",
+  "subtotal": Number or null,
+  "tax": "The VAT / tax amount as a number, or null if none. Non-VAT receipts have null.",
+  "vatable": "Boolean: true if this is a VAT receipt (VAT-registered, shows a VAT amount or '12% VAT'); false if it is explicitly NON-VAT; null if unclear",
+  "total": Number or null,
+  "paymentMethod": "String or null",
+  "suggestedCategory": "Must be exactly one of: 'Tools / Direct', 'Gas', 'Materials', 'Transportation', 'Accommodation', '3rd Party Labor', 'Others'. Guess the best fit based on vendor and items.",
+  "confidence": Number between 0.0 and 1.0 indicating extraction quality,
+  "lineItems": [
+    {
+      "description": "String",
+      "qty": Number or null,
+      "unitPrice": Number or null,
+      "amount": Number or null
+    }
+  ]
+}`;
+
+  const result = await model.generateContent([
+    { text: RECEIPT_PROMPT },
+    { inlineData: { mimeType, data: imageBase64.replace(/^data:.*?;base64,/, '') } }
+  ]);
+
+  const text = result.response.text();
+  const jsonStr = extractJson(text);
+  const parsed = JSON.parse(jsonStr);
+  return normalizeReceipt(parsed);
+}
+
+app.post('/api/receipts/parse', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+
+  const { imageBase64, mimeType } = req.body || {};
+  if (!imageBase64 || typeof imageBase64 !== 'string') {
+    return res.status(400).json({ ok: false, error: 'Missing or invalid imageBase64' });
+  }
+
+  const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'];
+  if (!mimeType || !allowedMimes.includes(mimeType)) {
+    return res.status(400).json({ ok: false, error: 'Unsupported mimeType. Allowed: jpeg, png, webp, heic, heif, pdf' });
+  }
+
+  try {
+    const receipt = await parseReceiptWithGemini(imageBase64, mimeType);
+    return res.json({ ok: true, receipt });
+  } catch (err) {
+    if (err.message === 'GEMINI_API_KEY not configured') {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+    console.error('[ReceiptParse Error]', err.message);
+    return res.status(502).json({ ok: false, error: err.message || 'Failed to parse receipt' });
+  }
+});
+async function detectCropWithGemini(imageBase64, mimeType) {
+  const { GoogleGenerativeAI } = require('@google/generative-ai');
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const modelName = process.env.GEMINI_CROP_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+  const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
+
+  const CROP_PROMPT = `Locate the document, receipt, or piece of paper in this photo and return the coordinates of its 4 corners.
+Output ONLY valid JSON — no markdown, no explanation.
+Coordinates are fractions from 0.0 to 1.0 relative to image size (0,0 = top-left corner, 1,1 = bottom-right corner).
+Return corners in this exact order: topLeft, topRight, bottomRight, bottomLeft.
+Example: {"topLeft":{"x":0.05,"y":0.1},"topRight":{"x":0.9,"y":0.08},"bottomRight":{"x":0.92,"y":0.95},"bottomLeft":{"x":0.04,"y":0.93}}
+If no document is visible, return: null`;
+
+  const result = await model.generateContent([
+    { text: CROP_PROMPT },
+    { inlineData: { mimeType, data: imageBase64.replace(/^data:.*?;base64,/, '') } },
+  ]);
+
+  const text = result.response.text();
+  const jsonStr = extractJson(text);
+  const parsed = JSON.parse(jsonStr);
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const clamp = (v) => Math.min(1, Math.max(0, Number(v) || 0));
+  const tl = parsed.topLeft || {};
+  const tr = parsed.topRight || {};
+  const br = parsed.bottomRight || {};
+  const bl = parsed.bottomLeft || {};
+
+  return [
+    { x: clamp(tl.x), y: clamp(tl.y) },
+    { x: clamp(tr.x), y: clamp(tr.y) },
+    { x: clamp(br.x), y: clamp(br.y) },
+    { x: clamp(bl.x), y: clamp(bl.y) },
+  ];
+}
+
+app.post('/api/receipts/detect-crop', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+
+  const { imageBase64, mimeType } = req.body || {};
+  if (!imageBase64 || typeof imageBase64 !== 'string') {
+    return res.status(400).json({ ok: false, error: 'Missing imageBase64' });
+  }
+
+  try {
+    const quad = await detectCropWithGemini(imageBase64, mimeType || 'image/jpeg');
+    return res.json({ ok: true, quad });
+  } catch (err) {
+    console.error('[CropDetect Error]', err.message);
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+// --- END RECEIPT PARSING BLOCK ---
+
+// ========== OVERHEAD EXPENSES ==========
+// Firestore collection: overhead_expenses
+// Company expenses NOT tied to any project (rent, utilities, supplies, subs).
+// Fields: description, amount, date (YYYY-MM-DD), category, createdAt (ISO),
+//   createdBy (userId), sourceType (manual|receipt_scan), optional updatedAt,
+//   optional receiptRef { oneDriveId, webUrl, filename }.
+// Queries are equality-only (where createdBy ==) + in-memory sort, so Firestore
+// automatic single-field indexes cover them — NO composite index needed.
+
+app.get('/api/overhead-expenses/summary', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { year } = req.query;
+    let query = db.collection('overhead_expenses');
+    if (!isAdmin) query = query.where('createdBy', '==', user.id);
+    const snap = await query.get();
+    let rows = snap.docs.map(doc => doc.data());
+    if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
+    const total = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    res.json({ success: true, total, count: rows.length, year: year || 'all' });
+  } catch (err) {
+    console.error('Error fetching overhead_expenses summary:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// GET /api/finance/pnl?year=YYYY — company-wide income statement (Profit & Loss).
+// Aggregates invoices (revenue, accrual), project_expenses (cost of services) and
+// overhead_expenses (operating expenses) for the given year. In-memory date-prefix
+// filtering mirrors the summary endpoints — NO composite index required.
+// COMPANY-WIDE for all authenticated users (management report; no per-user scoping).
+app.get('/api/finance/pnl', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  // P&L is a management report — superadmin only (no per-user/role separation yet).
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Forbidden' });
+  try {
+    const year = req.query.year ? String(req.query.year) : String(new Date().getFullYear());
+    const [invoicesSnap, projExpSnap, overExpSnap] = await Promise.all([
+      db.collection('invoices').get(),
+      db.collection('project_expenses').get(),
+      db.collection('overhead_expenses').get(),
+    ]);
+
+    let revenue = 0, revenueCollected = 0, invoiceCount = 0;
+    invoicesSnap.docs.forEach(doc => {
+      const d = doc.data();
+      if (d.invoice_date && String(d.invoice_date).startsWith(year)) {
+        revenue += Number(d.amount) || 0;
+        revenueCollected += Number(d.amount_collected) || 0;
+        invoiceCount++;
+      }
+    });
+
+    let costOfServices = 0;
+    projExpSnap.docs.forEach(doc => {
+      const d = doc.data();
+      if (d.date && String(d.date).startsWith(year)) {
+        costOfServices += Number(d.amount) || 0;
+      }
+    });
+
+    let operatingExpenses = 0;
+    const catMap = {};
+    overExpSnap.docs.forEach(doc => {
+      const d = doc.data();
+      if (d.date && String(d.date).startsWith(year)) {
+        const amt = Number(d.amount) || 0;
+        operatingExpenses += amt;
+        const cat = d.category || 'Uncategorized';
+        catMap[cat] = (catMap[cat] || 0) + amt;
+      }
+    });
+    const overheadByCategory = Object.entries(catMap)
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount);
+
+    const grossProfit = revenue - costOfServices;
+    const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
+    const operatingIncome = grossProfit - operatingExpenses;
+    const percentageTaxEstimate = revenueCollected * 0.03; // PH 2551Q: 3% on gross receipts (collected), not accrual
+    const netIncomeBeforeIncomeTax = operatingIncome - percentageTaxEstimate;
+
+    res.json({
+      success: true,
+      year,
+      generatedAt: new Date().toISOString(),
+      revenue,
+      revenueCollected,
+      invoiceCount,
+      costOfServices,
+      grossProfit,
+      grossMarginPct,
+      operatingExpenses,
+      overheadByCategory,
+      operatingIncome,
+      percentageTaxEstimate,
+      netIncomeBeforeIncomeTax,
+    });
+  } catch (err) {
+    console.error('Error computing finance P&L:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.get('/api/overhead-expenses', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { year, category } = req.query;
+    let query = db.collection('overhead_expenses');
+    if (!isAdmin) query = query.where('createdBy', '==', user.id);
+    if (category) query = query.where('category', '==', String(category));
+    const snap = await query.get();
+    let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
+    rows.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    res.json({ success: true, expenses: rows });
+  } catch (err) {
+    console.error('Error fetching overhead_expenses:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/overhead-expenses', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const body = req.body;
+    const now = new Date().toISOString();
+    if (Array.isArray(body.expenses)) {
+      const toInsert = body.expenses.filter(e => Number(e.amount) > 0);
+      if (toInsert.length === 0) return res.status(400).json({ success: false, error: 'No valid expenses in array' });
+      const inserted = [];
+      for (let i = 0; i < toInsert.length; i += 499) {
+        const chunk = toInsert.slice(i, i + 499);
+        const batch = db.batch();
+        for (const exp of chunk) {
+          const ref = db.collection('overhead_expenses').doc();
+          const doc = {
+            description: exp.description || '',
+            amount: Number(exp.amount),
+            date: exp.date || now.slice(0, 10),
+            category: exp.category || 'Others',
+            createdAt: exp.createdAt || now,
+            createdBy: user.id,
+            sourceType: exp.sourceType || 'manual',
+          };
+          if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
+          batch.set(ref, doc);
+          inserted.push({ id: ref.id, ...doc });
+        }
+        await batch.commit();
+      }
+      return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
+    }
+    const { description, amount, date, category, sourceType, receiptRef,
+            supplier, invoiceNo, invoiceType, vat, tin } = body;
+    if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
+    const doc = {
+      description: description || '',
+      amount: Number(amount),
+      date: date || now.slice(0, 10),
+      category: category || 'Others',
+      createdAt: now,
+      createdBy: user.id,
+      sourceType: sourceType || 'manual',
+    };
+    if (receiptRef) doc.receiptRef = receiptRef;
+    if (supplier) doc.supplier = String(supplier);
+    if (invoiceNo) doc.invoiceNo = String(invoiceNo);
+    if (invoiceType) doc.invoiceType = String(invoiceType);
+    if (tin) doc.tin = String(tin);
+    if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
+    const ref = await db.collection('overhead_expenses').add(doc);
+    res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
+  } catch (err) {
+    console.error('Error creating overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.patch('/api/overhead-expenses/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const ref = db.collection('overhead_expenses').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ success: false, error: 'Not found' });
+    if (!isAdmin && snap.data().createdBy !== user.id) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+    const allowed = {};
+    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin } = req.body;
+    if (description !== undefined) allowed.description = String(description);
+    if (amount !== undefined) allowed.amount = Number(amount);
+    if (date !== undefined) allowed.date = String(date);
+    if (category !== undefined) allowed.category = String(category);
+    if (receiptRef !== undefined) allowed.receiptRef = receiptRef;
+    if (supplier !== undefined) allowed.supplier = String(supplier);
+    if (invoiceNo !== undefined) allowed.invoiceNo = String(invoiceNo);
+    if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
+    if (vat !== undefined && Number.isFinite(Number(vat))) allowed.vat = Number(vat);
+    if (tin !== undefined) allowed.tin = String(tin);
+    allowed.updatedAt = new Date().toISOString();
+    await ref.update(allowed);
+    const updated = await ref.get();
+    res.json({ success: true, expense: { id: updated.id, ...updated.data() } });
+  } catch (err) {
+    console.error('Error updating overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.delete('/api/overhead-expenses/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const ref = db.collection('overhead_expenses').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Not found' });
+    if (!isAdmin && doc.data().createdBy !== user.id) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+// ========== END OVERHEAD EXPENSES ==========
 
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {
