@@ -29,6 +29,9 @@ import {
   CircularProgress,
   Snackbar,
   Alert,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
 } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import {
@@ -46,15 +49,16 @@ import {
   Area,
   AreaChart
 } from 'recharts';
-import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon } from '@mui/icons-material';
+import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import { getBudgets } from '../utils/projectBudgetStorage';
 import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem } from './PurchaseOrderPage';
 import { API_BASE } from '../config/api';
-import { EXPENSE_CATEGORIES } from '../data/financeCategories';
+import { PROJECT_EXPENSE_CATEGORIES, INVOICE_TYPES } from '../data/financeCategories';
 import { parseReceipt } from '../services/receiptParseService';
 import { fileToParseInput } from '../utils/receipts/imageCompress';
+import ScanWithPhoneButton from './ScanWithPhoneButton';
 
 const EXPENSES_KEY = 'projectExpenses';
 
@@ -89,6 +93,11 @@ export interface ProjectExpense {
   sourceLiquidationRowId?: string;
   sourceType?: 'manual' | 'po_sync' | 'liquidation_sync' | 'migrated';
   sourceCaId?: string;
+  supplier?: string;
+  invoiceNo?: string;
+  invoiceType?: string;
+  vat?: number;
+  tin?: string;
 }
 
 const loadExpenses = (): ProjectExpense[] => {
@@ -167,6 +176,11 @@ const ExpenseMonitoring: React.FC = () => {
   const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [expenseDescription, setExpenseDescription] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('');
+  const [expenseSupplier, setExpenseSupplier] = useState('');
+  const [expenseInvoiceNo, setExpenseInvoiceNo] = useState('');
+  const [expenseInvoiceType, setExpenseInvoiceType] = useState('');
+  const [expenseVat, setExpenseVat] = useState('');
+  const [expenseTin, setExpenseTin] = useState('');
   const scanInputRef = useRef<HTMLInputElement>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; severity: 'success' | 'error' | 'warning'; message: string }>({ open: false, severity: 'success', message: '' });
@@ -542,11 +556,18 @@ const ExpenseMonitoring: React.FC = () => {
       const amt = parsed.total ?? parsed.subtotal;
       if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
       if (parsed.date) setExpenseDate(parsed.date);
-      if (parsed.suggestedCategory && (EXPENSE_CATEGORIES as readonly string[]).includes(parsed.suggestedCategory)) {
+      if (parsed.suggestedCategory && (PROJECT_EXPENSE_CATEGORIES as readonly string[]).includes(parsed.suggestedCategory)) {
         setExpenseCategory(parsed.suggestedCategory);
       }
       const desc = parsed.vendor || parsed.lineItems?.[0]?.description;
       if (desc && !expenseDescription.trim()) setExpenseDescription(desc);
+      if (parsed.vendor) setExpenseSupplier(parsed.vendor);
+      if (parsed.invoiceNumber) setExpenseInvoiceNo(parsed.invoiceNumber);
+      if (parsed.invoiceType) {
+        const matched = INVOICE_TYPES.find((t) => t.toLowerCase() === parsed.invoiceType?.toLowerCase());
+        setExpenseInvoiceType(matched || '');
+      }
+      if (parsed.tax !== null && parsed.tax !== undefined) setExpenseVat(String(parsed.tax));
       const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
       const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
       if (lowConf) {
@@ -580,6 +601,11 @@ const ExpenseMonitoring: React.FC = () => {
           date: expenseDate,
           category: expenseCategory.trim() || '—',
           sourceType: 'manual',
+          ...(expenseSupplier.trim() ? { supplier: expenseSupplier.trim() } : {}),
+          ...(expenseInvoiceNo.trim() ? { invoiceNo: expenseInvoiceNo.trim() } : {}),
+          ...(expenseInvoiceType ? { invoiceType: expenseInvoiceType } : {}),
+          ...(expenseVat && !isNaN(Number(expenseVat)) ? { vat: Number(expenseVat) } : {}),
+          ...(expenseTin.trim() ? { tin: expenseTin.trim() } : {}),
         }),
       });
       const data = await res.json().catch(() => ({ success: false }));
@@ -590,6 +616,11 @@ const ExpenseMonitoring: React.FC = () => {
         setExpenseDate(new Date().toISOString().slice(0, 10));
         setExpenseDescription('');
         setExpenseCategory('');
+        setExpenseSupplier('');
+        setExpenseInvoiceNo('');
+        setExpenseInvoiceType('');
+        setExpenseVat('');
+        setExpenseTin('');
         await fetchExpenses();
       }
     } catch {
@@ -630,6 +661,7 @@ const ExpenseMonitoring: React.FC = () => {
           Expense Monitoring
         </Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
+          <ScanWithPhoneButton />
           <Button
             variant="outlined"
             startIcon={<SyncIcon />}
@@ -649,7 +681,7 @@ const ExpenseMonitoring: React.FC = () => {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={() => setAddExpenseOpen(true)}
+            onClick={() => { setExpenseSupplier(''); setExpenseInvoiceNo(''); setExpenseInvoiceType(''); setExpenseVat(''); setExpenseTin(''); setAddExpenseOpen(true); }}
             sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
           >
             Add Expense
@@ -1112,11 +1144,43 @@ const ExpenseMonitoring: React.FC = () => {
                     onChange={(e) => setExpenseCategory(e.target.value)}
                   >
                     <MenuItem value="">— Select category —</MenuItem>
-                    {EXPENSE_CATEGORIES.map((cat) => (
+                    {PROJECT_EXPENSE_CATEGORIES.map((cat) => (
                       <MenuItem key={cat} value={cat}>{cat}</MenuItem>
                     ))}
                   </Select>
                 </FormControl>
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <Accordion variant="outlined" disableGutters sx={{ mt: 1 }}>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Typography variant="body2" color="text.secondary">BIR Substantiation Details (Optional)</Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <Grid container spacing={2}>
+                      <Grid size={{ xs: 12 }}>
+                        <TextField fullWidth size="small" label="Supplier / Vendor Name" value={expenseSupplier} onChange={(e) => setExpenseSupplier(e.target.value)} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Supplier TIN" placeholder="000-000-000-00000" value={expenseTin} onChange={(e) => setExpenseTin(e.target.value)} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel>Document Type</InputLabel>
+                          <Select label="Document Type" value={expenseInvoiceType} onChange={(e) => setExpenseInvoiceType(e.target.value)}>
+                            <MenuItem value="">— None —</MenuItem>
+                            {INVOICE_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+                          </Select>
+                        </FormControl>
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Invoice / OR Number" value={expenseInvoiceNo} onChange={(e) => setExpenseInvoiceNo(e.target.value)} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Input VAT (supplier)" type="number" value={expenseVat} onChange={(e) => setExpenseVat(e.target.value)} inputProps={{ min: 0, step: 0.01 }} />
+                      </Grid>
+                    </Grid>
+                  </AccordionDetails>
+                </Accordion>
               </Grid>
             </Grid>
           </Box>
@@ -1201,6 +1265,11 @@ const ExpenseMonitoring: React.FC = () => {
                 setExpenseDate(new Date().toISOString().slice(0, 10));
                 setExpenseDescription('');
                 setExpenseCategory('');
+                setExpenseSupplier('');
+                setExpenseInvoiceNo('');
+                setExpenseInvoiceType('');
+                setExpenseVat('');
+                setExpenseTin('');
                 setAddExpenseOpen(true);
                 setExpensesDialogProject(null);
               }}

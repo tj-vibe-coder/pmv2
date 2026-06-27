@@ -1034,7 +1034,7 @@ app.post('/api/project-expenses', async (req, res) => {
     // Single insert
     const { projectId, projectName, description, amount, date, category, sourceType,
             sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
-            supplier, invoiceNo, invoiceType, vat } = body;
+            supplier, invoiceNo, invoiceType, vat, tin } = body;
     if (!projectId || !amount) {
       return res.status(400).json({ success: false, error: 'projectId and amount are required' });
     }
@@ -1058,6 +1058,7 @@ app.post('/api/project-expenses', async (req, res) => {
     if (supplier) doc.supplier = String(supplier);
     if (invoiceNo) doc.invoiceNo = String(invoiceNo);
     if (invoiceType) doc.invoiceType = String(invoiceType);
+    if (tin) doc.tin = String(tin);
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     const ref = await db.collection('project_expenses').add(doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
@@ -3807,6 +3808,83 @@ app.get('/api/overhead-expenses/summary', async (req, res) => {
   }
 });
 
+// GET /api/finance/pnl?year=YYYY — company-wide income statement (Profit & Loss).
+// Aggregates invoices (revenue, accrual), project_expenses (cost of services) and
+// overhead_expenses (operating expenses) for the given year. In-memory date-prefix
+// filtering mirrors the summary endpoints — NO composite index required.
+// COMPANY-WIDE for all authenticated users (management report; no per-user scoping).
+app.get('/api/finance/pnl', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const year = req.query.year ? String(req.query.year) : String(new Date().getFullYear());
+    const [invoicesSnap, projExpSnap, overExpSnap] = await Promise.all([
+      db.collection('invoices').get(),
+      db.collection('project_expenses').get(),
+      db.collection('overhead_expenses').get(),
+    ]);
+
+    let revenue = 0, revenueCollected = 0, invoiceCount = 0;
+    invoicesSnap.docs.forEach(doc => {
+      const d = doc.data();
+      if (d.invoice_date && String(d.invoice_date).startsWith(year)) {
+        revenue += Number(d.amount) || 0;
+        revenueCollected += Number(d.amount_collected) || 0;
+        invoiceCount++;
+      }
+    });
+
+    let costOfServices = 0;
+    projExpSnap.docs.forEach(doc => {
+      const d = doc.data();
+      if (d.date && String(d.date).startsWith(year)) {
+        costOfServices += Number(d.amount) || 0;
+      }
+    });
+
+    let operatingExpenses = 0;
+    const catMap = {};
+    overExpSnap.docs.forEach(doc => {
+      const d = doc.data();
+      if (d.date && String(d.date).startsWith(year)) {
+        const amt = Number(d.amount) || 0;
+        operatingExpenses += amt;
+        const cat = d.category || 'Uncategorized';
+        catMap[cat] = (catMap[cat] || 0) + amt;
+      }
+    });
+    const overheadByCategory = Object.entries(catMap)
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount);
+
+    const grossProfit = revenue - costOfServices;
+    const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
+    const operatingIncome = grossProfit - operatingExpenses;
+    const percentageTaxEstimate = revenueCollected * 0.03; // PH 2551Q: 3% on gross receipts (collected), not accrual
+    const netIncomeBeforeIncomeTax = operatingIncome - percentageTaxEstimate;
+
+    res.json({
+      success: true,
+      year,
+      generatedAt: new Date().toISOString(),
+      revenue,
+      revenueCollected,
+      invoiceCount,
+      costOfServices,
+      grossProfit,
+      grossMarginPct,
+      operatingExpenses,
+      overheadByCategory,
+      operatingIncome,
+      percentageTaxEstimate,
+      netIncomeBeforeIncomeTax,
+    });
+  } catch (err) {
+    console.error('Error computing finance P&L:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 app.get('/api/overhead-expenses', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -3860,7 +3938,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     const { description, amount, date, category, sourceType, receiptRef,
-            supplier, invoiceNo, invoiceType, vat } = body;
+            supplier, invoiceNo, invoiceType, vat, tin } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
       description: description || '',
@@ -3875,6 +3953,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
     if (supplier) doc.supplier = String(supplier);
     if (invoiceNo) doc.invoiceNo = String(invoiceNo);
     if (invoiceType) doc.invoiceType = String(invoiceType);
+    if (tin) doc.tin = String(tin);
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     const ref = await db.collection('overhead_expenses').add(doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
@@ -3896,12 +3975,17 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, receiptRef } = req.body;
+    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin } = req.body;
     if (description !== undefined) allowed.description = String(description);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
     if (category !== undefined) allowed.category = String(category);
     if (receiptRef !== undefined) allowed.receiptRef = receiptRef;
+    if (supplier !== undefined) allowed.supplier = String(supplier);
+    if (invoiceNo !== undefined) allowed.invoiceNo = String(invoiceNo);
+    if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
+    if (vat !== undefined && Number.isFinite(Number(vat))) allowed.vat = Number(vat);
+    if (tin !== undefined) allowed.tin = String(tin);
     allowed.updatedAt = new Date().toISOString();
     await ref.update(allowed);
     const updated = await ref.get();

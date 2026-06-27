@@ -26,6 +26,9 @@ import {
   Tooltip,
   Link,
   LinearProgress,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
 } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import {
@@ -34,8 +37,9 @@ import {
   PhotoCamera as PhotoCameraIcon,
   OpenInNew as OpenInNewIcon,
   AccountBalanceWallet as WalletIcon,
+  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
-import { EXPENSE_CATEGORIES } from '../data/financeCategories';
+import { OVERHEAD_CATEGORIES, INVOICE_TYPES } from '../data/financeCategories';
 import { parseReceipt } from '../services/receiptParseService';
 import { fileToParseInput, compressForUpload } from '../utils/receipts/imageCompress';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
@@ -48,6 +52,7 @@ import {
   deleteOverheadExpense,
   type OverheadExpense,
 } from '../services/overheadExpenseService';
+import ScanWithPhoneButton from './ScanWithPhoneButton';
 
 const NET_PACIFIC_COLORS = {
   primary: '#2c5aa0',
@@ -84,6 +89,11 @@ const OverheadExpensesPage: React.FC = () => {
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [category, setCategory] = useState('');
+  const [supplier, setSupplier] = useState('');
+  const [invoiceNo, setInvoiceNo] = useState('');
+  const [invoiceType, setInvoiceType] = useState('');
+  const [vat, setVat] = useState('');
+  const [tin, setTin] = useState('');
 
   const scanInputRef = React.useRef<HTMLInputElement>(null);
   const pendingReceiptRef = React.useRef<File | null>(null);
@@ -143,6 +153,11 @@ const OverheadExpensesPage: React.FC = () => {
     setAmount('');
     setDate(new Date().toISOString().slice(0, 10));
     setCategory('');
+    setSupplier('');
+    setInvoiceNo('');
+    setInvoiceType('');
+    setVat('');
+    setTin('');
     pendingReceiptRef.current = null;
     setReceiptAttached(false);
   };
@@ -163,11 +178,18 @@ const OverheadExpensesPage: React.FC = () => {
       const amt = parsed.total ?? parsed.subtotal;
       if (typeof amt === 'number' && amt > 0) setAmount(String(amt));
       if (parsed.date) setDate(parsed.date);
-      if (parsed.suggestedCategory && (EXPENSE_CATEGORIES as readonly string[]).includes(parsed.suggestedCategory)) {
+      if (parsed.suggestedCategory && (OVERHEAD_CATEGORIES as readonly string[]).includes(parsed.suggestedCategory)) {
         setCategory(parsed.suggestedCategory);
       }
       const desc = parsed.vendor || parsed.lineItems?.[0]?.description;
       if (desc && !description.trim()) setDescription(desc);
+      if (parsed.vendor) setSupplier(parsed.vendor);
+      if (parsed.invoiceNumber) setInvoiceNo(parsed.invoiceNumber);
+      if (parsed.invoiceType) {
+        const matched = INVOICE_TYPES.find((t) => t.toLowerCase() === parsed.invoiceType?.toLowerCase());
+        setInvoiceType(matched || '');
+      }
+      if (parsed.tax !== null && parsed.tax !== undefined) setVat(String(parsed.tax));
       if (lowConf) {
         setSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category.` });
       } else {
@@ -215,6 +237,11 @@ const OverheadExpensesPage: React.FC = () => {
         date,
         category: category || 'Others',
         sourceType: pendingReceiptRef.current ? 'receipt_scan' : 'manual',
+        ...(supplier.trim() ? { supplier: supplier.trim() } : {}),
+        ...(invoiceNo.trim() ? { invoiceNo: invoiceNo.trim() } : {}),
+        ...(invoiceType ? { invoiceType } : {}),
+        ...(vat && !isNaN(Number(vat)) ? { vat: Number(vat) } : {}),
+        ...(tin.trim() ? { tin: tin.trim() } : {}),
       });
       const file = pendingReceiptRef.current;
       setAddOpen(false);
@@ -269,14 +296,17 @@ const OverheadExpensesPage: React.FC = () => {
         <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
           Overhead Expenses
         </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => { resetForm(); setAddOpen(true); }}
-          sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
-        >
-          Add Overhead Expense
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <ScanWithPhoneButton />
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => { resetForm(); setAddOpen(true); }}
+            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+          >
+            Add Overhead Expense
+          </Button>
+        </Box>
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Company expenses not tied to any project (rent, utilities, supplies, subscriptions). Scan a receipt to auto-fill.
@@ -306,7 +336,7 @@ const OverheadExpensesPage: React.FC = () => {
             <InputLabel>Category</InputLabel>
             <Select label="Category" value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
               <MenuItem value="">All categories</MenuItem>
-              {EXPENSE_CATEGORIES.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+              {OVERHEAD_CATEGORIES.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
             </Select>
           </FormControl>
         </Grid>
@@ -386,9 +416,41 @@ const OverheadExpensesPage: React.FC = () => {
                   <InputLabel>Category</InputLabel>
                   <Select label="Category" value={category} onChange={(e) => setCategory(e.target.value)}>
                     <MenuItem value="">— Select category —</MenuItem>
-                    {EXPENSE_CATEGORIES.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+                    {OVERHEAD_CATEGORIES.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
                   </Select>
                 </FormControl>
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <Accordion variant="outlined" disableGutters sx={{ mt: 1 }}>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Typography variant="body2" color="text.secondary">BIR Substantiation Details (Optional)</Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <Grid container spacing={2}>
+                      <Grid size={{ xs: 12 }}>
+                        <TextField fullWidth size="small" label="Supplier / Vendor Name" value={supplier} onChange={(e) => setSupplier(e.target.value)} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Supplier TIN" placeholder="000-000-000-00000" value={tin} onChange={(e) => setTin(e.target.value)} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel>Document Type</InputLabel>
+                          <Select label="Document Type" value={invoiceType} onChange={(e) => setInvoiceType(e.target.value)}>
+                            <MenuItem value="">— None —</MenuItem>
+                            {INVOICE_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+                          </Select>
+                        </FormControl>
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Invoice / OR Number" value={invoiceNo} onChange={(e) => setInvoiceNo(e.target.value)} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Input VAT (supplier)" type="number" value={vat} onChange={(e) => setVat(e.target.value)} inputProps={{ min: 0, step: 0.01 }} />
+                      </Grid>
+                    </Grid>
+                  </AccordionDetails>
+                </Accordion>
               </Grid>
               {receiptAttached && (
                 <Grid size={{ xs: 12 }}>

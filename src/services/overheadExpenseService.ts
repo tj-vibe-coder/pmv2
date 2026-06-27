@@ -17,6 +17,11 @@ export interface OverheadExpense {
   createdAt?: string;
   createdBy?: string;
   updatedAt?: string;
+  supplier?: string;
+  invoiceNo?: string;
+  invoiceType?: string;
+  vat?: number;
+  tin?: string;
 }
 
 function authHeaders(): Record<string, string> {

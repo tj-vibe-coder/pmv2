@@ -20,6 +20,7 @@ import {
   Paid as PaidIcon,
   Build as BuildIcon,
   RequestQuote as OverheadIcon,
+  Summarize as PnLIcon,
 } from '@mui/icons-material';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
 
@@ -230,6 +231,29 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
               <ListItemText
                 primary="Overhead Expenses"
                 secondary="Non-project company expenses"
+                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                sx={{ color: 'white' }}
+              />
+            )}
+          </ListItemButton>
+        </Tooltip>
+      </ListItem>
+
+      {/* Profit & Loss */}
+      <ListItem disablePadding sx={{ mb: 0.5 }}>
+        <Tooltip title={isExpanded ? '' : 'Profit & Loss'} placement="right" arrow>
+          <ListItemButton
+            selected={location.pathname === '/finance/pnl'}
+            onClick={() => navigate('/finance/pnl')}
+            sx={navBtnSx(location.pathname === '/finance/pnl')}
+          >
+            <ListItemIcon sx={iconSx()}>
+              <PnLIcon />
+            </ListItemIcon>
+            {isExpanded && (
+              <ListItemText
+                primary="Profit & Loss"
+                secondary="Company income statement"
                 secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                 sx={{ color: 'white' }}
               />
