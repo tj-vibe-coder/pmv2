@@ -1,24 +1,25 @@
 /**
  * OneDrive folder service for the corporate shared library.
  *
- * Targets the OneDrive for Business drive owned by `onedriveConfig.driveOwner`
- * (e.g. `projects@iocontroltech.com`). The signed-in user must have at least
- * read/write access shared from that owner — the `Files.ReadWrite.All` delegated
- * scope grants the necessary breadth on the Graph side.
+ * Previously this module talked to Microsoft Graph directly using a delegated
+ * user token. It now calls our OWN backend proxy endpoints (`/api/onedrive/*`),
+ * which authenticate to Graph server-side with an app-only account and resolve
+ * the corporate drive themselves.
  *
- * Endpoints used (Microsoft Graph v1.0):
- *   GET  /users/{owner}/drive
- *   GET  /drives/{driveId}/root:/{path}
- *   POST /drives/{driveId}/root:/{parentPath}:/children   (create folder)
- *   PUT  /drives/{driveId}/root:/{folderPath}/{filename}:/content   (upload file)
+ * IMPORTANT — backward compatibility: every exported function keeps its original
+ * signature, including the leading `token` and (where present) `driveId`
+ * parameters. Those parameters are now IGNORED — the server handles auth and
+ * drive resolution — but they are retained so the ~13 existing call sites keep
+ * working unchanged. `resolveCorporateDriveId` returns the sentinel `'server'`,
+ * which callers pass onward as `driveId` to functions that ignore it.
  *
- * All operations are idempotent: if a folder by `name` already exists at
- * `parentPath`, the existing item is returned rather than failing.
+ * All operations remain idempotent: if a folder by `name` already exists at
+ * `parentPath`, the existing item is returned rather than failing (the proxy
+ * preserves this behavior).
  */
 
 import { onedriveConfig } from '../config/onedriveConfig';
-
-const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
+import { API_BASE } from '../config/api';
 
 export interface DriveItemRef {
   id: string;
@@ -26,74 +27,59 @@ export interface DriveItemRef {
   name?: string;
 }
 
-const DRIVE_ID_CACHE_KEY = 'ioct.onedrive.driveId.v1';
+function authHeaders(): Record<string, string> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onloadend = () => { const s = String(r.result); resolve(s.slice(s.indexOf(',') + 1)); };
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+}
 
 /**
- * Resolve the driveId for the corporate shared OneDrive owner (cached in localStorage).
- * Subsequent calls hit the cache; pass `force=true` to refresh.
+ * Drive resolution now happens server-side, so there is nothing to look up from
+ * the client. Returns the sentinel `'server'` which callers thread through as the
+ * `driveId` argument to the (now-proxied) primitives, all of which ignore it.
+ *
+ * Kept async + `Promise<string>` and the original parameters for call-site
+ * compatibility. `token`/`ownerEmail`/`force` are ignored.
  */
 export async function resolveCorporateDriveId(
-  token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  token?: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   ownerEmail = onedriveConfig.driveOwner,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   force = false,
 ): Promise<string> {
-  if (!ownerEmail) throw new Error('OneDrive driveOwner is not configured');
-
-  if (!force) {
-    try {
-      const cached = localStorage.getItem(DRIVE_ID_CACHE_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached) as { owner: string; driveId: string };
-        if (parsed.owner === ownerEmail && parsed.driveId) return parsed.driveId;
-      }
-    } catch {
-      // ignore cache parse errors
-    }
-  }
-
-  const url = `${GRAPH_BASE}/users/${encodeURIComponent(ownerEmail)}/drive`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    throw new Error(`Drive lookup failed (${res.status}): ${errText.slice(0, 300)}`);
-  }
-  const data = await res.json();
-  const driveId = data?.id;
-  if (!driveId) throw new Error('Drive response had no id');
-
-  try {
-    localStorage.setItem(DRIVE_ID_CACHE_KEY, JSON.stringify({ owner: ownerEmail, driveId }));
-  } catch {
-    // localStorage may be unavailable; non-fatal
-  }
-  return driveId;
-}
-
-/** URL-encode each segment of a path, preserving the slashes. */
-function encodePath(path: string): string {
-  return path
-    .split('/')
-    .filter((seg) => seg.length > 0)
-    .map((seg) => encodeURIComponent(seg))
-    .join('/');
+  return 'server';
 }
 
 /**
- * Look up a single drive item by its full path under the drive root. Returns null on 404.
+ * Look up a single drive item by its full path under the drive root. Returns null
+ * when the item does not exist.
  */
 async function getItemByPath(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   driveId: string,
   path: string,
 ): Promise<DriveItemRef | null> {
-  const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(path)}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 404) return null;
+  const res = await fetch(`${API_BASE}/api/onedrive/by-path?path=${encodeURIComponent(path)}`, {
+    headers: authHeaders(),
+  });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Lookup failed (${res.status}) at "${path}": ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
+  if (!data?.ok) return null;
   return { id: data.id, webUrl: data.webUrl || '', name: data.name };
 }
 
@@ -107,62 +93,50 @@ async function getItemByPath(
  * Files are filtered out — only folders are returned. Empty array on no match.
  */
 export async function listFoldersWithPrefix(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   driveId: string,
   parentPath: string,
   prefix: string,
 ): Promise<DriveItemRef[]> {
   if (!prefix) return [];
-  const normalizedPrefix = prefix.toLowerCase();
-  const url = parentPath
-    ? `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(parentPath)}:/children?$top=500&$select=id,name,webUrl,folder`
-    : `${GRAPH_BASE}/drives/${driveId}/root/children?$top=500&$select=id,name,webUrl,folder`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(
+    `${API_BASE}/api/onedrive/children?path=${encodeURIComponent(parentPath)}&prefix=${encodeURIComponent(prefix)}`,
+    { headers: authHeaders() },
+  );
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`List children failed (${res.status}) at "${parentPath}": ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
-  const items = Array.isArray(data?.value) ? data.value : [];
+  const items: Array<{ id: string; name?: string; webUrl?: string; isFolder?: boolean }> =
+    Array.isArray(data?.items) ? data.items : [];
   return items
-    .filter((it: { name?: string; folder?: unknown }) =>
-      !!it.folder &&
-      typeof it.name === 'string' &&
-      it.name.toLowerCase().startsWith(normalizedPrefix),
-    )
-    .map((it: { id: string; name: string; webUrl?: string }) => ({
-      id: it.id,
-      webUrl: it.webUrl || '',
-      name: it.name,
-    }));
+    .filter((it) => it.isFolder)
+    .map((it) => ({ id: it.id, webUrl: it.webUrl || '', name: it.name }));
 }
 
 /**
  * Resolve any OneDrive folder URL — long Documents-path URL OR short `:f:/p/...`
- * share link — to a drive item. Uses Graph's /shares/{encoded-url}/driveItem
- * endpoint, which transparently handles both forms.
- *
- * URL encoding per Microsoft Graph docs: base64-url encode the sharing URL,
- * prefix with `u!`. Strip any trailing `=` padding and replace `+` → `-`, `/` → `_`.
+ * share link — to a drive item. The proxy handles the Graph `/shares` resolution.
  *
  * Use case: "Link existing folder" — the user pastes a OneDrive URL of a folder
  * they want to associate with a calcsheet project (e.g. a historical folder
  * whose name doesn't match the canonical PCS… convention).
  */
 export async function resolveSharingUrl(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   token: string,
   sharingUrl: string,
 ): Promise<DriveItemRef & { isFolder: boolean }> {
   if (!sharingUrl) throw new Error('Empty URL');
   const trimmed = sharingUrl.trim();
-  // base64url-encode the URL
-  const b64 = btoa(unescape(encodeURIComponent(trimmed)))
-    .replace(/=+$/, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-  const encoded = `u!${b64}`;
-  const url = `${GRAPH_BASE}/shares/${encoded}/driveItem`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(`${API_BASE}/api/onedrive/share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ url: trimmed }),
+  });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Could not resolve OneDrive URL (${res.status}): ${errText.slice(0, 300)}`);
@@ -172,35 +146,32 @@ export async function resolveSharingUrl(
     id: data.id,
     webUrl: data.webUrl || trimmed,
     name: data.name,
-    isFolder: !!data.folder,
+    isFolder: !!data.isFolder,
   };
 }
 
 /**
- * Verify a drive item by ID still exists. Returns true if the item is reachable,
- * false on 404 (deleted/moved-out-of-scope), and throws on any other error.
- * Used to detect stale folder URLs stored on calcsheet projects when the user
- * has deleted the folder in OneDrive directly.
- */
-/**
  * Verify a drive item still exists. Returns the item's current metadata
  * (including a fresh webUrl that reflects any moves) or null if deleted/gone.
- * Throws on unexpected non-404 errors.
+ * Throws on unexpected transport errors.
  */
 export async function verifyDriveItem(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   driveId: string,
   itemId: string,
 ): Promise<{ webUrl: string } | null> {
   if (!itemId) return null;
-  const url = `${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(itemId)}?$select=id,webUrl`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 404 || res.status === 410) return null;
+  const res = await fetch(`${API_BASE}/api/onedrive/item/${encodeURIComponent(itemId)}`, {
+    headers: authHeaders(),
+  });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Item verify failed (${res.status}): ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
+  if (!data?.ok) return null;
   return { webUrl: data.webUrl || '' };
 }
 
@@ -213,7 +184,9 @@ export async function verifyDriveItem(
  * - `name` must not contain `/` or `\`.
  */
 export async function ensureFolder(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   driveId: string,
   parentPath: string,
   name: string,
@@ -221,44 +194,16 @@ export async function ensureFolder(
   if (!name || /[\\/]/.test(name)) {
     throw new Error(`Invalid folder name: "${name}"`);
   }
-
   const fullPath = parentPath ? `${parentPath}/${name}` : name;
-
-  // Fast path: lookup-first avoids a 409 on the common case where the folder already exists.
-  const existing = await getItemByPath(token, driveId, fullPath);
-  if (existing) return existing;
-
-  // Create. conflictBehavior=fail so that if two concurrent calls race, we surface the
-  // 409 and re-fetch (rather than silently renaming or replacing).
-  const createUrl = parentPath
-    ? `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(parentPath)}:/children`
-    : `${GRAPH_BASE}/drives/${driveId}/root/children`;
-
-  const res = await fetch(createUrl, {
+  const res = await fetch(`${API_BASE}/api/onedrive/ensure-folder`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      name,
-      folder: {},
-      '@microsoft.graph.conflictBehavior': 'fail',
-    }),
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ path: fullPath }),
   });
-
-  if (res.status === 409) {
-    // Race: another caller created it; fetch and return.
-    const after = await getItemByPath(token, driveId, fullPath);
-    if (after) return after;
-    throw new Error(`Folder creation reported conflict but lookup failed for "${fullPath}"`);
-  }
-
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Folder create failed (${res.status}) at "${fullPath}": ${errText.slice(0, 300)}`);
   }
-
   const data = await res.json();
   return { id: data.id, webUrl: data.webUrl || '', name: data.name };
 }
@@ -268,12 +213,11 @@ export async function ensureFolder(
  * Preferred over `uploadFileToFolder` (path-based) when the caller already has
  * the folder's ID, since it survives folder moves/renames between proposal and
  * execution locations.
- *
- * Endpoint: PUT /drives/{driveId}/items/{parentId}:/{filename}:/content
- * Up to 250 MB; for larger payloads use a resumable upload session.
  */
 export async function uploadFileToFolderById(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   driveId: string,
   parentFolderId: string,
   filename: string,
@@ -283,61 +227,44 @@ export async function uploadFileToFolderById(
   if (!filename || /[\\/]/.test(filename)) {
     throw new Error(`Invalid filename: "${filename}"`);
   }
-  const url = `${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(parentFolderId)}:/${encodeURIComponent(filename)}:/content`;
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': blob.type || 'application/octet-stream',
-    },
-    body: blob,
+  const contentBase64 = await blobToBase64(blob);
+  const res = await fetch(`${API_BASE}/api/onedrive/upload-by-id`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ folderId: parentFolderId, filename, contentBase64 }),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Upload failed (${res.status}) for "${filename}": ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
-  return { id: data.id, webUrl: data.webUrl || '', name: data.name };
+  return { id: data.id, webUrl: data.webUrl || '', name: filename };
 }
 
 /**
  * Get or create a named child folder under a parent folder identified by its drive
- * item ID. Tries to create with conflictBehavior:'fail'; on 409 walks the children
- * list to return the existing folder. Safe to call concurrently for the same name.
+ * item ID. Safe to call concurrently for the same name (the proxy returns the
+ * existing folder on conflict).
  */
 export async function getOrCreateChildFolderById(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   driveId: string,
   parentFolderId: string,
   folderName: string,
 ): Promise<DriveItemRef> {
-  const childrenUrl = `${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(parentFolderId)}/children`;
-  const createRes = await fetch(childrenUrl, {
+  const res = await fetch(`${API_BASE}/api/onedrive/child-folder`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: folderName, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ parentId: parentFolderId, name: folderName }),
   });
-  if (createRes.ok) {
-    const d = await createRes.json();
-    return { id: d.id, webUrl: d.webUrl || '', name: d.name };
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Failed to get/create subfolder "${folderName}": ${errText.slice(0, 200)}`);
   }
-  if (createRes.status === 409) {
-    // Already exists — scan children to find the folder.
-    // Include `folder` in $select so the property is present for the type check.
-    let cursor: string | undefined = `${childrenUrl}?$top=200&$select=id,name,webUrl,folder`;
-    while (cursor) {
-      // eslint-disable-next-line no-await-in-loop
-      const scanRes: Response = await fetch(cursor, { headers: { Authorization: `Bearer ${token}` } });
-      if (!scanRes.ok) break;
-      // eslint-disable-next-line no-await-in-loop
-      const scanData: { value: Array<{ id: string; name: string; webUrl: string; folder?: unknown }>; '@odata.nextLink'?: string } = await scanRes.json();
-      const found = scanData.value.find(item => item.name === folderName && item.folder !== undefined);
-      if (found) return { id: found.id, webUrl: found.webUrl || '', name: found.name };
-      cursor = scanData['@odata.nextLink'];
-    }
-  }
-  const errText = await createRes.text().catch(() => '');
-  throw new Error(`Failed to get/create subfolder "${folderName}": ${errText.slice(0, 200)}`);
+  const data = await res.json();
+  return { id: data.id, webUrl: data.webUrl || '', name: data.name };
 }
 
 /**
@@ -346,29 +273,38 @@ export async function getOrCreateChildFolderById(
  * orientation correction) before passing to jsPDF's addImage.
  */
 export async function fetchDriveItemBlob(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   driveId: string,
   itemId: string,
 ): Promise<Blob> {
-  const url = `${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(itemId)}/content`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(`${API_BASE}/api/onedrive/item/${encodeURIComponent(itemId)}/content`, {
+    headers: authHeaders(),
+  });
   if (!res.ok) throw new Error(`Fetch item content failed (${res.status})`);
   return res.blob();
 }
 
 /**
- * Delete a drive item by id. Best-effort; resolves true on 204/404, false on
- * other errors. Used to clean up an orphaned receipt file when its expense record
- * is deleted — a failure here must never block the Firestore delete.
+ * Delete a drive item by id. Best-effort; resolves true on any 2xx (the proxy
+ * treats already-gone as success too), false on other errors. Used to clean up an
+ * orphaned receipt file when its expense record is deleted — a failure here must
+ * never block the Firestore delete.
  */
-export async function deleteDriveItem(token: string, driveId: string, itemId: string): Promise<boolean> {
+export async function deleteDriveItem(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  driveId: string,
+  itemId: string,
+): Promise<boolean> {
   try {
-    const res = await fetch(`${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(itemId)}`, {
+    const res = await fetch(`${API_BASE}/api/onedrive/item/${encodeURIComponent(itemId)}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(),
     });
-    // 204 = deleted, 404 = already gone — both are "success" for cleanup purposes
-    return res.ok || res.status === 404;
+    return res.ok;
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[OneDrive] deleteDriveItem failed:', err);
@@ -377,17 +313,23 @@ export async function deleteDriveItem(token: string, driveId: string, itemId: st
 }
 
 /**
- * Fetch a medium thumbnail URL for a drive item. Returns a short-lived
- * pre-authed URL usable directly as an `<img src>`, or null on any failure.
+ * Fetch a thumbnail URL for a drive item. Returns a short-lived pre-authed URL
+ * usable directly as an `<img src>`, or null on any failure.
  */
-export async function getDriveItemThumbnailUrl(token: string, driveId: string, itemId: string): Promise<string | null> {
+export async function getDriveItemThumbnailUrl(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  driveId: string,
+  itemId: string,
+): Promise<string | null> {
   try {
-    const res = await fetch(`${GRAPH_BASE}/drives/${driveId}/items/${encodeURIComponent(itemId)}/thumbnails/0/medium`, {
-      headers: { Authorization: `Bearer ${token}` },
+    const res = await fetch(`${API_BASE}/api/onedrive/item/${encodeURIComponent(itemId)}/thumbnail`, {
+      headers: authHeaders(),
     });
     if (!res.ok) return null;
     const data = await res.json();
-    return (data && typeof data.url === 'string') ? data.url : null;
+    return data?.ok && typeof data.url === 'string' ? data.url : null;
   } catch {
     return null;
   }
@@ -395,14 +337,12 @@ export async function getDriveItemThumbnailUrl(token: string, driveId: string, i
 
 /**
  * Upload a single file to `folderPath` under the drive root. The file is created
- * (or overwritten — Graph default is `replace`) at `${folderPath}/${filename}`.
- *
- * Uses the simple PUT endpoint, which supports files up to 250 MB. Quotation PDFs
- * and XLSX exports are well under that. For larger files, a resumable upload session
- * would be required.
+ * (or overwritten) at `${folderPath}/${filename}`.
  */
 export async function uploadFileToFolder(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   driveId: string,
   folderPath: string,
   filename: string,
@@ -412,23 +352,18 @@ export async function uploadFileToFolder(
     throw new Error(`Invalid filename: "${filename}"`);
   }
   const itemPath = folderPath ? `${folderPath}/${filename}` : filename;
-  const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(itemPath)}:/content`;
-
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': blob.type || 'application/octet-stream',
-    },
-    body: blob,
+  const contentBase64 = await blobToBase64(blob);
+  const res = await fetch(`${API_BASE}/api/onedrive/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ folderPath, filename, contentBase64 }),
   });
-
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Upload failed (${res.status}) for "${itemPath}": ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
-  return { id: data.id, webUrl: data.webUrl || '', name: data.name };
+  return { id: data.id, webUrl: data.webUrl || '', name: filename };
 }
 
 // ---------------------------------------------------------------------------
@@ -523,14 +458,10 @@ export async function ensureExecutionFolder(
   return ensureInRoot(token, project, onedriveConfig.executionRoot, true);
 }
 
-/** Lightweight single-item lookup — returns null on 404 or any error. */
+/** Lightweight single-item lookup — returns null on not-found or any error. */
 async function tryGetItem(token: string, driveId: string, itemPath: string): Promise<DriveItemRef | null> {
   try {
-    const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(itemPath)}`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return { id: data.id, webUrl: data.webUrl || '', name: data.name } as DriveItemRef;
+    return await getItemByPath(token, driveId, itemPath);
   } catch {
     return null;
   }
@@ -594,36 +525,28 @@ async function ensureInRoot(
  * Move a drive item to a new parent path. The item's ID is preserved; only its
  * parentReference and webUrl change. Returns the updated item.
  *
- * If `newName` is provided, the item is also renamed as part of the same PATCH.
+ * If `newName` is provided, the item is also renamed as part of the same move.
  */
 export async function moveItem(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   driveId: string,
   itemId: string,
   newParentPath: string,
   newName?: string,
 ): Promise<DriveItemRef> {
-  const parent = await getItemByPath(token, driveId, newParentPath);
-  if (!parent) {
-    throw new Error(`Move target parent not found: "${newParentPath}"`);
-  }
-  const body: Record<string, unknown> = { parentReference: { id: parent.id } };
-  if (newName) body.name = newName;
-
-  const res = await fetch(`${GRAPH_BASE}/drives/${driveId}/items/${itemId}`, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
+  const res = await fetch(`${API_BASE}/api/onedrive/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ itemId, destPath: newParentPath, name: newName }),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Move failed (${res.status}) item ${itemId} → "${newParentPath}": ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
-  return { id: data.id, webUrl: data.webUrl || '', name: data.name };
+  return { id: data.id, webUrl: data.webUrl || '', name: newName };
 }
 
 /**

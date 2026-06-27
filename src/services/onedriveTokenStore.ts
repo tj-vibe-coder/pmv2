@@ -18,12 +18,7 @@ interface OneDriveTokenStore {
   getToken: TokenGetter;
 }
 
-const noopGetToken: TokenGetter = async () => null;
-
-let current: OneDriveTokenStore = {
-  isAuthenticated: false,
-  getToken: noopGetToken,
-};
+let current: OneDriveTokenStore = { isAuthenticated: true, getToken: async () => 'server' };
 
 /** Called by OneDriveAuthProvider whenever auth state or token getter changes. */
 export function setOneDriveTokenStore(next: OneDriveTokenStore): void {
