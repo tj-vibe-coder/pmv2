@@ -31,6 +31,23 @@ export interface ParsedReceipt {
   paymentMethod: string | null;
   /** Auto-suggested expense category, mapped onto the canonical liquidation categories. */
   suggestedCategory: LiquidationCategoryType;
+  /** AI suggestion: is this a write-off (income-tax-deductible business expense)? null if unclear. */
+  deductible: boolean | null;
+  /** Short reason explaining the deductible suggestion. */
+  deductibleReason: string | null;
+  /** Buyer/customer name as written on the receipt. */
+  customerName: string | null;
+  /** Buyer/customer TIN as written. */
+  customerTin: string | null;
+  /** Buyer/customer address as written. */
+  customerAddress: string | null;
+  /** Validation of the buyer block against IOCT's registered details. */
+  customerValidation: {
+    nameOk: boolean;
+    tinOk: boolean;
+    addressOk: boolean;
+    issues: string[];
+  } | null;
   lineItems: ReceiptLineItem[];
   /** Model confidence 0..1. */
   confidence: number;
