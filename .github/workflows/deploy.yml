@@ -45,20 +45,33 @@ jobs:
           REACT_APP_ONEDRIVE_PROPOSAL_ROOT: ${{ secrets.REACT_APP_ONEDRIVE_PROPOSAL_ROOT }}
           REACT_APP_ONEDRIVE_EXECUTION_ROOT: ${{ secrets.REACT_APP_ONEDRIVE_EXECUTION_ROOT }}
 
+      - name: Write functions/.env
+        run: |
+          cat > functions/.env <<'EOF'
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL=gemini-3.1-flash-lite
+          ONEDRIVE_CLIENT_ID=${{ secrets.REACT_APP_ONEDRIVE_CLIENT_ID }}
+          ONEDRIVE_TENANT_ID=${{ secrets.REACT_APP_ONEDRIVE_TENANT_ID }}
+          ONEDRIVE_CLIENT_SECRET=${{ secrets.ONEDRIVE_CLIENT_SECRET }}
+          ONEDRIVE_DRIVE_OWNER=${{ secrets.REACT_APP_ONEDRIVE_DRIVE_OWNER }}
+          ONEDRIVE_OVERHEAD_ROOT=02 Overhead/Receipts
+          ONEDRIVE_INBOX_ROOT=02 Overhead/_Inbox
+          EOF
+
       - name: Deploy to Firebase (all)
         if: ${{ github.event_name == 'push' || inputs.target == 'all' }}
-        run: npx firebase-tools deploy --token "$FIREBASE_TOKEN" --project pmv2-851ae --non-interactive
+        run: bash scripts/firebase-deploy.sh
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
       - name: Deploy to Firebase (hosting only)
         if: ${{ inputs.target == 'hosting' }}
-        run: npx firebase-tools deploy --only hosting --token "$FIREBASE_TOKEN" --project pmv2-851ae --non-interactive
+        run: bash scripts/firebase-deploy.sh --only hosting
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
       - name: Deploy to Firebase (functions only)
         if: ${{ inputs.target == 'functions' }}
-        run: npx firebase-tools deploy --only functions --token "$FIREBASE_TOKEN" --project pmv2-851ae --non-interactive
+        run: bash scripts/firebase-deploy.sh --only functions
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}

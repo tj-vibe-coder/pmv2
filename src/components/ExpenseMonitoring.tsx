@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Typography,
   Box,
@@ -25,6 +25,13 @@ import {
   TextField,
   SelectChangeEvent,
   IconButton,
+  Chip,
+  CircularProgress,
+  Snackbar,
+  Alert,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
 } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import {
@@ -42,24 +49,32 @@ import {
   Area,
   AreaChart
 } from 'recharts';
-import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import { getBudgets } from '../utils/projectBudgetStorage';
 import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem } from './PurchaseOrderPage';
 import { API_BASE } from '../config/api';
+import { PROJECT_EXPENSE_CATEGORIES, INVOICE_TYPES } from '../data/financeCategories';
+import { parseReceipt } from '../services/receiptParseService';
+import { fileToParseInput } from '../utils/receipts/imageCompress';
+import ScanWithPhoneButton from './ScanWithPhoneButton';
 
 const EXPENSES_KEY = 'projectExpenses';
 
-const EXPENSE_CATEGORIES = [
-  '3rd Party Labor',
-  'Materials',
-  'Transportation',
-  'Accomodation',
-  'Entertainment',
-  'Airfare',
-  'Others',
-] as const;
+async function convertHeicToJpeg(file: File): Promise<File> {
+  const name = file.name.toLowerCase();
+  const isHeic = name.endsWith('.heic') || name.endsWith('.heif') || file.type === 'image/heic' || file.type === 'image/heif';
+  if (!isHeic) return file;
+  try {
+    const heic2any = (await import('heic2any')).default;
+    const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+    const blob = Array.isArray(result) ? result[0] : result;
+    return new File([blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
+  } catch {
+    return file;
+  }
+}
 
 export interface ProjectExpense {
   id: string;
@@ -76,6 +91,13 @@ export interface ProjectExpense {
   /** When synced from Liquidation, avoid duplicate sync */
   sourceLiquidationId?: string;
   sourceLiquidationRowId?: string;
+  sourceType?: 'manual' | 'po_sync' | 'liquidation_sync' | 'migrated';
+  sourceCaId?: string;
+  supplier?: string;
+  invoiceNo?: string;
+  invoiceType?: string;
+  vat?: number;
+  tin?: string;
 }
 
 const loadExpenses = (): ProjectExpense[] => {
@@ -84,12 +106,6 @@ const loadExpenses = (): ProjectExpense[] => {
     if (raw) return JSON.parse(raw);
   } catch (_) {}
   return [];
-};
-
-const saveExpenses = (data: ProjectExpense[]) => {
-  try {
-    localStorage.setItem(EXPENSES_KEY, JSON.stringify(data));
-  } catch (_) {}
 };
 
 const loadPOs = (): PurchaseOrder[] => {
@@ -143,6 +159,7 @@ const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR + 2 - 2025 }, (_, i) => 2
 
 const ExpenseMonitoring: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   // Mounted under both /expense-monitoring and /finance/expense-monitoring — match by suffix
   const isChildRoute = /\/(ca-form|liquidation-form|direct-labor)$/.test(location.pathname);
   
@@ -153,13 +170,47 @@ const ExpenseMonitoring: React.FC = () => {
   const [addExpenseOpen, setAddExpenseOpen] = useState(false);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [expenses, setExpenses] = useState<ProjectExpense[]>([]);
+  const [expensesLoading, setExpensesLoading] = useState(false);
   const [expenseProjectId, setExpenseProjectId] = useState<string | ''>('');
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [expenseDescription, setExpenseDescription] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('');
+  const [expenseSupplier, setExpenseSupplier] = useState('');
+  const [expenseInvoiceNo, setExpenseInvoiceNo] = useState('');
+  const [expenseInvoiceType, setExpenseInvoiceType] = useState('');
+  const [expenseVat, setExpenseVat] = useState('');
+  const [expenseTin, setExpenseTin] = useState('');
+  const scanInputRef = useRef<HTMLInputElement>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; severity: 'success' | 'error' | 'warning'; message: string }>({ open: false, severity: 'success', message: '' });
   const [expensesDialogProject, setExpensesDialogProject] = useState<Project | null>(null);
   const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
+  const [migrating, setMigrating] = useState(false);
+  const [localStorageCount] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem(EXPENSES_KEY);
+      if (!raw) return 0;
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.length : 0;
+    } catch (_) { return 0; }
+  });
+
+  const fetchExpenses = useCallback(async () => {
+    setExpensesLoading(true);
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/project-expenses`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json().catch(() => ({ success: false, expenses: [] }));
+      setExpenses(data.expenses || []);
+    } catch {
+      setExpenses([]);
+    } finally {
+      setExpensesLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -177,15 +228,15 @@ const ExpenseMonitoring: React.FC = () => {
 
   useEffect(() => {
     setBudgets(getBudgets());
-    setExpenses(loadExpenses());
-  }, []);
+    fetchExpenses();
+  }, [fetchExpenses]);
 
   // Reload expenses when navigating within expense monitoring (e.g. back from Liquidation form) so liquidations are reflected
   useEffect(() => {
     if (location.pathname.includes('/expense-monitoring')) {
-      setExpenses(loadExpenses());
+      fetchExpenses();
     }
-  }, [location.pathname]);
+  }, [location.pathname, fetchExpenses]);
 
   const expensesInYear = useMemo(() => {
     if (selectedYear === 0) return expenses;
@@ -271,14 +322,8 @@ const ExpenseMonitoring: React.FC = () => {
 
   const expensesForProject = (projectId: string) => expenses.filter((e) => String(e.projectId) === projectId);
 
-  const handleSyncFromPO = () => {
+  const handleSyncFromPO = async () => {
     const pos = loadPOs();
-    const existing = loadExpenses();
-    const syncedPoIds = new Set(existing.filter((e) => e.sourcePoId && !e.sourcePoItemId).map((e) => e.sourcePoId!));
-    const syncedPoItemKeys = new Set(
-      existing.filter((e) => e.sourcePoId && e.sourcePoItemId).map((e) => `${e.sourcePoId}:${e.sourcePoItemId}`)
-    );
-
     const newExpenses: ProjectExpense[] = [];
     const isMultiMRF = (po: { mrfIds?: string[]; mrfRequestNos?: string[] }) =>
       (po.mrfIds && po.mrfIds.length > 1) || (po.mrfRequestNos && po.mrfRequestNos.length > 1);
@@ -296,8 +341,6 @@ const ExpenseMonitoring: React.FC = () => {
         for (const item of po.items || []) {
           const amt = lineTotal(item);
           if (amt <= 0) continue;
-          const key = `${po.id}:${item.id}`;
-          if (syncedPoItemKeys.has(key)) continue;
 
           const mrfRequestNo = (() => {
             if (po.mrfIds && po.mrfRequestNos && item.id) {
@@ -319,12 +362,11 @@ const ExpenseMonitoring: React.FC = () => {
             createdAt: new Date().toISOString(),
             sourcePoId: po.id,
             sourcePoItemId: item.id,
+            sourceType: 'po_sync',
           });
-          syncedPoItemKeys.add(key);
         }
       } else {
         // Single MRF: one expense per PO (total)
-        if (syncedPoIds.has(po.id)) continue;
         const total = (po.items || []).reduce((sum, item) => sum + lineTotal(item), 0);
         if (total <= 0) continue;
 
@@ -338,18 +380,38 @@ const ExpenseMonitoring: React.FC = () => {
           category: 'Materials',
           createdAt: new Date().toISOString(),
           sourcePoId: po.id,
+          sourceType: 'po_sync',
         });
-        syncedPoIds.add(po.id);
       }
     }
 
     if (newExpenses.length === 0) {
       setSyncMessage({ type: 'info', text: 'No new POs with prices to sync. All POs are already logged or have no item prices.' });
-    } else {
-      const next = [...newExpenses, ...existing];
-      setExpenses(next);
-      saveExpenses(next);
-      setSyncMessage({ type: 'success', text: `Synced ${newExpenses.length} expense(s) — total ${formatCurrency(newExpenses.reduce((s, e) => s + e.amount, 0))} logged.` });
+      setTimeout(() => setSyncMessage(null), 4000);
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/project-expenses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ expenses: newExpenses }),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        const count = data.count ?? newExpenses.length;
+        if (count === 0) {
+          setSyncMessage({ type: 'info', text: 'No new POs with prices to sync. All POs are already logged or have no item prices.' });
+        } else {
+          setSyncMessage({ type: 'success', text: `Synced ${count} expense(s) from PO.` });
+        }
+        await fetchExpenses();
+      } else {
+        setSyncMessage({ type: 'error', text: 'Failed to sync PO expenses.' });
+      }
+    } catch {
+      setSyncMessage({ type: 'error', text: 'Error syncing PO expenses.' });
     }
     setTimeout(() => setSyncMessage(null), 4000);
   };
@@ -373,11 +435,6 @@ const ExpenseMonitoring: React.FC = () => {
       }
 
       const submitted = data.liquidations.filter((l: any) => l.status === 'submitted');
-      const existing = loadExpenses();
-      const syncedKeys = new Set(
-        existing.filter((e) => e.sourceLiquidationId != null && e.sourceLiquidationRowId).map((e) => `${e.sourceLiquidationId}:${e.sourceLiquidationRowId}`)
-      );
-
       const newExpenses: ProjectExpense[] = [];
       for (const liq of submitted) {
         let rows: any[] = [];
@@ -388,9 +445,6 @@ const ExpenseMonitoring: React.FC = () => {
           if (!pid) continue;
           const amt = Number(row.amount);
           if (!amt || amt <= 0) continue;
-
-          const key = `${liq.id}:${row.id}`;
-          if (syncedKeys.has(key)) continue;
 
           const project = allProjects.find((p) => String(p.id) === pid);
           const projectName = row.projectName || project?.project_name || '—';
@@ -406,18 +460,31 @@ const ExpenseMonitoring: React.FC = () => {
             createdAt: new Date().toISOString(),
             sourceLiquidationId: liq.id,
             sourceLiquidationRowId: row.id,
+            sourceType: 'liquidation_sync',
           });
-          syncedKeys.add(key);
         }
       }
 
       if (newExpenses.length === 0) {
         setSyncMessage({ type: 'info', text: 'No new liquidation expenses to sync. All submitted liquidations are already logged.' });
       } else {
-        const next = [...newExpenses, ...existing];
-        setExpenses(next);
-        saveExpenses(next);
-        setSyncMessage({ type: 'success', text: `Synced ${newExpenses.length} liquidation expense(s) — total ${formatCurrency(newExpenses.reduce((s, e) => s + e.amount, 0))} logged.` });
+        const syncRes = await fetch(`${API_BASE}/api/project-expenses`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ expenses: newExpenses }),
+        });
+        const syncData = await syncRes.json().catch(() => ({ success: false }));
+        if (syncData.success) {
+          const count = syncData.count ?? newExpenses.length;
+          if (count === 0) {
+            setSyncMessage({ type: 'info', text: 'No new liquidation expenses to sync. All submitted liquidations are already logged.' });
+          } else {
+            setSyncMessage({ type: 'success', text: `Synced ${count} liquidation expense(s).` });
+          }
+          await fetchExpenses();
+        } else {
+          setSyncMessage({ type: 'error', text: 'Failed to save liquidation expenses.' });
+        }
       }
     } catch (err) {
       setSyncMessage({ type: 'error', text: 'Error syncing liquidations.' });
@@ -425,38 +492,140 @@ const ExpenseMonitoring: React.FC = () => {
     setTimeout(() => setSyncMessage(null), 4000);
   };
 
-  const handleDeleteExpense = (id: string) => {
-    if (!window.confirm('Delete this expense? This cannot be undone.')) return;
-    const next = expenses.filter((e) => e.id !== id);
-    setExpenses(next);
-    saveExpenses(next);
+  const handleMigrateToCloud = async () => {
+    const localExpenses = loadExpenses();
+    if (localExpenses.length === 0) {
+      setSyncMessage({ type: 'info', text: 'No local expenses found to migrate.' });
+      setTimeout(() => setSyncMessage(null), 4000);
+      return;
+    }
+    if (!window.confirm(`Migrate ${localExpenses.length} local expense(s) to Firestore? Duplicates are skipped automatically.`)) return;
+    setMigrating(true);
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      if (!token) {
+        setSyncMessage({ type: 'error', text: 'Not authenticated. Please log in first.' });
+        setTimeout(() => setSyncMessage(null), 4000);
+        return;
+      }
+      const res = await fetch(`${API_BASE}/api/project-expenses/migrate-from-localstorage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ expenses: localExpenses }),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        setSyncMessage({ type: 'success', text: `Migration complete: ${data.inserted} expense(s) saved to cloud, ${data.skipped} already existed.` });
+      } else {
+        setSyncMessage({ type: 'error', text: data.error || 'Migration failed. You may not have admin access.' });
+      }
+    } catch {
+      setSyncMessage({ type: 'error', text: 'Migration failed. Check your connection.' });
+    } finally {
+      setMigrating(false);
+      setTimeout(() => setSyncMessage(null), 6000);
+    }
   };
 
-  const handleAddExpense = () => {
+  const handleDeleteExpense = async (id: string) => {
+    if (!window.confirm('Delete this expense? This cannot be undone.')) return;
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/project-expenses/${id}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        await fetchExpenses();
+      }
+    } catch {
+      // silent — expense stays in list if request fails
+    }
+  };
+
+  const handleScanInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setIsScanning(true);
+    const safeFile = await convertHeicToJpeg(file);
+    try {
+      const { imageBase64, mimeType } = await fileToParseInput(safeFile);
+      const parsed = await parseReceipt(imageBase64, mimeType);
+      const amt = parsed.total ?? parsed.subtotal;
+      if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
+      if (parsed.date) setExpenseDate(parsed.date);
+      if (parsed.suggestedCategory && (PROJECT_EXPENSE_CATEGORIES as readonly string[]).includes(parsed.suggestedCategory)) {
+        setExpenseCategory(parsed.suggestedCategory);
+      }
+      const desc = parsed.vendor || parsed.lineItems?.[0]?.description;
+      if (desc && !expenseDescription.trim()) setExpenseDescription(desc);
+      if (parsed.vendor) setExpenseSupplier(parsed.vendor);
+      if (parsed.invoiceNumber) setExpenseInvoiceNo(parsed.invoiceNumber);
+      if (parsed.invoiceType) {
+        const matched = INVOICE_TYPES.find((t) => t.toLowerCase() === parsed.invoiceType?.toLowerCase());
+        setExpenseInvoiceType(matched || '');
+      }
+      if (parsed.tax !== null && parsed.tax !== undefined) setExpenseVat(String(parsed.tax));
+      const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
+      const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
+      if (lowConf) {
+        setScanSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category. Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+      } else {
+        setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+      }
+    } catch (err) {
+      setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Failed to parse receipt' });
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const handleAddExpense = async () => {
     const pid = expenseProjectId === '' ? null : String(expenseProjectId);
     const amount = Number(expenseAmount) || 0;
     if (pid == null) return;
     if (amount <= 0) return;
     const project = allProjects.find((p) => String(p.id) === pid);
-    const newExpense: ProjectExpense = {
-      id: `exp-${Date.now()}`,
-      projectId: pid,
-      projectName: project?.project_name ?? '—',
-      description: expenseDescription.trim() || '—',
-      amount,
-      date: expenseDate,
-      category: expenseCategory.trim() || '—',
-      createdAt: new Date().toISOString(),
-    };
-    const next = [newExpense, ...expenses];
-    setExpenses(next);
-    saveExpenses(next);
-    setAddExpenseOpen(false);
-    setExpenseProjectId('');
-    setExpenseAmount('');
-    setExpenseDate(new Date().toISOString().slice(0, 10));
-    setExpenseDescription('');
-    setExpenseCategory('');
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/project-expenses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          projectId: pid,
+          projectName: project?.project_name ?? '—',
+          description: expenseDescription.trim() || '—',
+          amount,
+          date: expenseDate,
+          category: expenseCategory.trim() || '—',
+          sourceType: 'manual',
+          ...(expenseSupplier.trim() ? { supplier: expenseSupplier.trim() } : {}),
+          ...(expenseInvoiceNo.trim() ? { invoiceNo: expenseInvoiceNo.trim() } : {}),
+          ...(expenseInvoiceType ? { invoiceType: expenseInvoiceType } : {}),
+          ...(expenseVat && !isNaN(Number(expenseVat)) ? { vat: Number(expenseVat) } : {}),
+          ...(expenseTin.trim() ? { tin: expenseTin.trim() } : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        setAddExpenseOpen(false);
+        setExpenseProjectId('');
+        setExpenseAmount('');
+        setExpenseDate(new Date().toISOString().slice(0, 10));
+        setExpenseDescription('');
+        setExpenseCategory('');
+        setExpenseSupplier('');
+        setExpenseInvoiceNo('');
+        setExpenseInvoiceType('');
+        setExpenseVat('');
+        setExpenseTin('');
+        await fetchExpenses();
+      }
+    } catch {
+      // silent
+    }
   };
 
   const formatCurrency = (amount: number) => {
@@ -492,6 +661,7 @@ const ExpenseMonitoring: React.FC = () => {
           Expense Monitoring
         </Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
+          <ScanWithPhoneButton />
           <Button
             variant="outlined"
             startIcon={<SyncIcon />}
@@ -511,13 +681,17 @@ const ExpenseMonitoring: React.FC = () => {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={() => setAddExpenseOpen(true)}
+            onClick={() => { setExpenseSupplier(''); setExpenseInvoiceNo(''); setExpenseInvoiceType(''); setExpenseVat(''); setExpenseTin(''); setAddExpenseOpen(true); }}
             sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
           >
             Add Expense
           </Button>
         </Box>
       </Box>
+
+      <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', mb: 1 }}>
+        PO totals are read from browser storage.
+      </Typography>
 
       {syncMessage && (
         <Box
@@ -533,6 +707,29 @@ const ExpenseMonitoring: React.FC = () => {
           {syncMessage.text}
         </Box>
       )}
+
+      {localStorageCount > 0 && (
+        <Box
+          sx={{
+            py: 1, px: 2, mb: 2, borderRadius: 1,
+            bgcolor: 'info.light', color: 'info.dark',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2,
+          }}
+        >
+          <Typography variant="body2">
+            {localStorageCount} expense{localStorageCount !== 1 ? 's' : ''} stored locally (browser only). Migrate to cloud so all team members can see them.
+          </Typography>
+          <Button
+            size="small" variant="outlined" disabled={migrating}
+            onClick={handleMigrateToCloud}
+            sx={{ borderColor: 'info.dark', color: 'info.dark', whiteSpace: 'nowrap', flexShrink: 0 }}
+          >
+            {migrating ? 'Migrating…' : 'Migrate to cloud'}
+          </Button>
+        </Box>
+      )}
+
+      {expensesLoading && <LinearProgress sx={{ mb: 1 }} />}
 
       {/* Filters */}
       <Box display="flex" gap={2} mb={2} flexWrap="wrap">
@@ -558,6 +755,15 @@ const ExpenseMonitoring: React.FC = () => {
             ))}
           </Select>
         </FormControl>
+        {selectedProjectId !== '' && (
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => navigate(`/finance/projects/${selectedProjectId}/expenses`)}
+          >
+            Full Report
+          </Button>
+        )}
       </Box>
 
       {/* Summary Cards */}
@@ -816,13 +1022,14 @@ const ExpenseMonitoring: React.FC = () => {
                   <TableCell>Category</TableCell>
                   <TableCell>Description Part #</TableCell>
                   <TableCell align="right">Amount</TableCell>
+                  <TableCell>Source</TableCell>
                   <TableCell padding="none" align="center" width={48}>Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {expensesInYear.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                    <TableCell colSpan={9} align="center" sx={{ py: 3, color: 'text.secondary' }}>
                       {selectedYear === 0
                         ? 'No expenses yet. Use the Add Expense button to add an expense.'
                         : `No expenses in ${selectedYear}. Use the Add Expense button to add an expense.`}
@@ -844,6 +1051,20 @@ const ExpenseMonitoring: React.FC = () => {
                       <TableCell>{expense.category}</TableCell>
                       <TableCell>{expense.description}</TableCell>
                       <TableCell align="right">{formatCurrency(expense.amount)}</TableCell>
+                      <TableCell>
+                        <Chip
+                          size="small"
+                          label={
+                            expense.sourceType === 'po_sync' ? 'PO' :
+                            expense.sourceType === 'liquidation_sync' ? 'Liquidation' :
+                            expense.sourceType === 'migrated' ? 'Migrated' : 'Manual'
+                          }
+                          color={
+                            expense.sourceType === 'po_sync' ? 'primary' :
+                            expense.sourceType === 'liquidation_sync' ? 'warning' : 'default'
+                          }
+                        />
+                      </TableCell>
                       <TableCell padding="none" align="center">
                         <IconButton size="small" onClick={() => handleDeleteExpense(expense.id)} title="Delete expense" color="error">
                           <DeleteIcon fontSize="small" />
@@ -923,25 +1144,76 @@ const ExpenseMonitoring: React.FC = () => {
                     onChange={(e) => setExpenseCategory(e.target.value)}
                   >
                     <MenuItem value="">— Select category —</MenuItem>
-                    {EXPENSE_CATEGORIES.map((cat) => (
+                    {PROJECT_EXPENSE_CATEGORIES.map((cat) => (
                       <MenuItem key={cat} value={cat}>{cat}</MenuItem>
                     ))}
                   </Select>
                 </FormControl>
               </Grid>
+              <Grid size={{ xs: 12 }}>
+                <Accordion variant="outlined" disableGutters sx={{ mt: 1 }}>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Typography variant="body2" color="text.secondary">BIR Substantiation Details (Optional)</Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <Grid container spacing={2}>
+                      <Grid size={{ xs: 12 }}>
+                        <TextField fullWidth size="small" label="Supplier / Vendor Name" value={expenseSupplier} onChange={(e) => setExpenseSupplier(e.target.value)} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Supplier TIN" placeholder="000-000-000-00000" value={expenseTin} onChange={(e) => setExpenseTin(e.target.value)} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel>Document Type</InputLabel>
+                          <Select label="Document Type" value={expenseInvoiceType} onChange={(e) => setExpenseInvoiceType(e.target.value)}>
+                            <MenuItem value="">— None —</MenuItem>
+                            {INVOICE_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+                          </Select>
+                        </FormControl>
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Invoice / OR Number" value={expenseInvoiceNo} onChange={(e) => setExpenseInvoiceNo(e.target.value)} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Input VAT (supplier)" type="number" value={expenseVat} onChange={(e) => setExpenseVat(e.target.value)} inputProps={{ min: 0, step: 0.01 }} />
+                      </Grid>
+                    </Grid>
+                  </AccordionDetails>
+                </Accordion>
+              </Grid>
             </Grid>
           </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAddExpenseOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={handleAddExpense}
-            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+        <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
+          <IconButton
+            color="primary"
+            onClick={() => scanInputRef.current?.click()}
+            disabled={isScanning}
+            title="Scan receipt with AI"
           >
-            Add Expense
-          </Button>
+            {isScanning ? <CircularProgress size={24} /> : <PhotoCameraIcon />}
+          </IconButton>
+          <Box>
+            <Button onClick={() => setAddExpenseOpen(false)}>Cancel</Button>
+            <Button
+              variant="contained"
+              onClick={handleAddExpense}
+              disabled={isScanning}
+              sx={{ ml: 1, backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+            >
+              Add Expense
+            </Button>
+          </Box>
         </DialogActions>
+        <input
+          type="file"
+          ref={scanInputRef}
+          accept="image/*"
+          capture="environment"
+          style={{ display: 'none' }}
+          onChange={handleScanInputChange}
+        />
       </Dialog>
 
       {/* View expenses per project dialog */}
@@ -993,6 +1265,11 @@ const ExpenseMonitoring: React.FC = () => {
                 setExpenseDate(new Date().toISOString().slice(0, 10));
                 setExpenseDescription('');
                 setExpenseCategory('');
+                setExpenseSupplier('');
+                setExpenseInvoiceNo('');
+                setExpenseInvoiceType('');
+                setExpenseVat('');
+                setExpenseTin('');
                 setAddExpenseOpen(true);
                 setExpensesDialogProject(null);
               }}
@@ -1002,6 +1279,22 @@ const ExpenseMonitoring: React.FC = () => {
           )}
         </DialogActions>
       </Dialog>
+
+      <Snackbar
+        open={scanSnackbar.open}
+        autoHideDuration={5000}
+        onClose={() => setScanSnackbar((p) => ({ ...p, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setScanSnackbar((p) => ({ ...p, open: false }))}
+          severity={scanSnackbar.severity}
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {scanSnackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

@@ -12,7 +12,8 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import PaymentIcon from '@mui/icons-material/Payment';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import type { ProjectInvoice, InvoiceStatus } from '../types/Invoice';
+import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
+import type { ProjectInvoice, InvoiceStatus, BillingMilestone } from '../types/Invoice';
 import {
   getInvoiceStatus,
   computeDueDate,
@@ -70,6 +71,7 @@ interface InvoiceForm {
   payment_terms_days: number;
   due_date: string;
   notes: string;
+  pb_number: string;
 }
 
 const blankForm = (): InvoiceForm => ({
@@ -82,6 +84,7 @@ const blankForm = (): InvoiceForm => ({
   payment_terms_days: 30,
   due_date: computeDueDate(TODAY(), 30),
   notes: '',
+  pb_number: '',
 });
 
 interface CollectForm {
@@ -182,6 +185,34 @@ export default function CollectionsDashboard() {
     return { totalInvoiced, totalCollected, outstanding, overdueAmount, overdueCount };
   }, [enriched]);
 
+  // Milestones eligible to invoice: site progress has reached the trigger, and no
+  // invoice yet carries that milestone's pb_number for the project. When the page is
+  // filtered to one project (?project_id=), invoices only cover that project, so we
+  // scope the scan to it to avoid false positives for projects whose invoices aren't loaded.
+  const readyToInvoice = useMemo(() => {
+    const invoicedKeys = new Set(
+      invoices.filter(i => i.pb_number).map(i => `${i.project_id}::${i.pb_number}`)
+    );
+    const scanProjects = preselectedProjectId
+      ? projects.filter(p => String(p.id) === preselectedProjectId)
+      : projects;
+    const items: { project: Project; milestone: BillingMilestone; amount: number }[] = [];
+    scanProjects.forEach(p => {
+      const schedule = p.billing_schedule || [];
+      if (schedule.length === 0) return;
+      const site = p.actual_site_progress_percent ?? 0;
+      const contract = p.updated_contract_amount || p.contract_amount || 0;
+      schedule.forEach(m => {
+        if (site >= m.trigger_pct && !invoicedKeys.has(`${p.id}::${m.pb_number}`)) {
+          items.push({ project: p, milestone: m, amount: contract > 0 ? (m.billing_pct / 100) * contract : 0 });
+        }
+      });
+    });
+    return items;
+  }, [projects, invoices, preselectedProjectId]);
+
+  const readyTotal = useMemo(() => readyToInvoice.reduce((s, r) => s + r.amount, 0), [readyToInvoice]);
+
   // ─── form helpers ────────────────────────────────────────────────────────
   const handleFormChange = (field: keyof InvoiceForm, value: string | number) => {
     setForm(prev => {
@@ -211,10 +242,35 @@ export default function CollectionsDashboard() {
       payment_terms_days: inv.payment_terms_days,
       due_date: inv.due_date,
       notes: inv.notes || '',
+      pb_number: inv.pb_number || '',
     });
     setFormErr('');
     setEditTarget(inv);
     setInvoiceDialog('edit');
+  };
+
+  // Pre-fill the add dialog for a milestone that's ready to invoice (carries pb_number
+  // so the new invoice links back to the milestone in Progress Billing).
+  const openCreateForMilestone = (project: Project, m: BillingMilestone) => {
+    const contract = project.updated_contract_amount || project.contract_amount || 0;
+    const amount = contract > 0 ? Math.round((m.billing_pct / 100) * contract * 100) / 100 : 0;
+    const terms = (m.trigger_pct === 0 || m.trigger_pct >= 100) ? 0 : 30;
+    const today = TODAY();
+    setForm({
+      project_id: String(project.id),
+      project_name: project.project_name || '',
+      project_no: project.project_no || '',
+      invoice_no: '',
+      invoice_date: today,
+      amount: String(amount),
+      payment_terms_days: terms,
+      due_date: computeDueDate(today, terms),
+      notes: [m.label, m.pb_number].filter(Boolean).join(' — '),
+      pb_number: m.pb_number,
+    });
+    setFormErr('');
+    setEditTarget(null);
+    setInvoiceDialog('add');
   };
 
   const openCollect = (inv: ProjectInvoice) => {
@@ -245,6 +301,7 @@ export default function CollectionsDashboard() {
         payment_terms_days: form.payment_terms_days,
         due_date: form.due_date,
         notes: form.notes.trim() || undefined,
+        pb_number: form.pb_number || undefined,
         ...(invoiceDialog === 'add' ? { amount_collected: 0 } : {}),
       };
       const url = invoiceDialog === 'edit' && editTarget
@@ -481,6 +538,48 @@ export default function CollectionsDashboard() {
           </Card>
         </Grid>
       </Grid>
+
+      {/* Ready-to-invoice notification — milestones whose site progress reached the trigger */}
+      {readyToInvoice.length > 0 && (
+        <Paper variant="outlined" sx={{ p: 1.5, mb: 2, borderRadius: 2, borderColor: NET_PACIFIC_COLORS.warning, bgcolor: '#fffbe6' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+            <NotificationsActiveIcon sx={{ color: '#b7791f' }} fontSize="small" />
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              {readyToInvoice.length} milestone{readyToInvoice.length !== 1 ? 's' : ''} ready to invoice
+            </Typography>
+            <Typography variant="body2" color="text.secondary">· {PHP.format(readyTotal)}</Typography>
+          </Box>
+          <Stack spacing={0} sx={{ maxHeight: 240, overflowY: 'auto' }}>
+            {readyToInvoice.map(r => (
+              <Box
+                key={`${r.project.id}-${r.milestone.pb_number}`}
+                sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap', py: 0.75, borderTop: '1px solid', borderColor: 'rgba(0,0,0,0.06)' }}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {r.project.project_no || r.project.project_name || `Project ${r.project.id}`}
+                    {' — '}
+                    <Box component="span" sx={{ fontFamily: 'monospace', color: NET_PACIFIC_COLORS.primary }}>{r.milestone.pb_number}</Box>
+                    {r.milestone.label ? ` ${r.milestone.label}` : ''}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Site {r.project.actual_site_progress_percent ?? 0}% ≥ trigger {r.milestone.trigger_pct}% · bills {r.milestone.billing_pct}% = {PHP.format(r.amount)}
+                  </Typography>
+                </Box>
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<AddIcon />}
+                  onClick={() => openCreateForMilestone(r.project, r.milestone)}
+                  sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary }, flexShrink: 0 }}
+                >
+                  Create Invoice
+                </Button>
+              </Box>
+            ))}
+          </Stack>
+        </Paper>
+      )}
 
       {/* Filters */}
       <Paper sx={{ p: 1.5, mb: 1.5, borderRadius: 2 }}>

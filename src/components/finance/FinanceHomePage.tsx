@@ -56,11 +56,16 @@ const FinanceHomePage: React.FC = () => {
   const { user } = useAuth();
   const payrollAllowed = isPayrollAuthorized(user?.username);
 
+  const isAdmin = user?.role === 'superadmin' || user?.role === 'admin';
+
   const [invoices, setInvoices] = useState<ProjectInvoice[]>([]);
   const [investments, setInvestments] = useState<InvestmentRecord[]>([]);
   const [investmentTarget, setInvestmentTarget] = useState<number | null>(null);
   const [latestRun, setLatestRun] = useState<PayrollRun | null>(null);
   const [error, setError] = useState('');
+  const [totalExpensesYtd, setTotalExpensesYtd] = useState(0);
+  const [pendingReimbursements, setPendingReimbursements] = useState(0);
+  const [outstandingCA, setOutstandingCA] = useState(0);
 
   useEffect(() => {
     const token = localStorage.getItem('netpacific_token') || '';
@@ -90,7 +95,39 @@ const FinanceHomePage: React.FC = () => {
         })
         .catch(() => { /* payroll card simply shows no run */ });
     }
-  }, [user?.username]);
+
+    const year = new Date().getFullYear();
+    Promise.all([
+      fetch(`${API}/project-expenses/summary?year=${year}`, { headers: authHeaders })
+        .then(r => r.json())
+        .then(d => (d && d.success ? Number(d.total) || 0 : 0))
+        .catch(() => 0),
+      fetch(`${API}/overhead-expenses/summary?year=${year}`, { headers: authHeaders })
+        .then(r => r.json())
+        .then(d => (d && d.success ? Number(d.total) || 0 : 0))
+        .catch(() => 0),
+    ])
+      .then(([projectTotal, overheadTotal]) => setTotalExpensesYtd(projectTotal + overheadTotal))
+      .catch(() => { /* expenses KPI optional */ });
+
+    fetch(`${API}/cash-advances`, { headers: authHeaders })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          const out = (data.cash_advances || []).reduce(
+            (s: number, ca: any) => s + Math.max(0, Number(ca.balance_remaining) || 0), 0);
+          setOutstandingCA(out);
+        }
+      })
+      .catch(() => { /* CA KPI optional */ });
+
+    if (user?.role === 'superadmin' || user?.role === 'admin') {
+      fetch(`${API}/reimbursements`, { headers: authHeaders })
+        .then(r => r.json())
+        .then(data => { if (data.success) setPendingReimbursements((data.reimbursements || []).length); })
+        .catch(() => { /* reimbursements KPI optional */ });
+    }
+  }, [user?.username, user?.role]);
 
   const arSummary = useMemo(() => {
     const enriched = invoices.map(inv => ({
@@ -134,6 +171,14 @@ const FinanceHomePage: React.FC = () => {
           description: 'Employees, payroll runs, DTR, and payslips.',
           icon: <PaymentsIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
           path: '/finance/payroll',
+        }]
+      : []),
+    ...(isAdmin
+      ? [{
+          title: 'Reimbursements',
+          description: 'Review and mark out-of-pocket liquidation claims as reimbursed.',
+          icon: <ReceiptIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+          path: '/finance/reimbursements',
         }]
       : []),
   ];
@@ -220,6 +265,41 @@ const FinanceHomePage: React.FC = () => {
                     ? `${latestRun.periodStart?.slice(0, 10)} – ${latestRun.periodEnd?.slice(0, 10)}`
                     : 'No runs yet'}
                 </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+
+        {/* Total Expenses (YTD) */}
+        <Grid size={{ xs: 6, sm: 3 }}>
+          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent1} 0%, ${NET_PACIFIC_COLORS.accent2} 100%)`, color: 'white' }}>
+            <CardContent sx={{ p: 2 }}>
+              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Expenses (YTD)</Typography>
+              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{formatPHP(totalExpensesYtd)}</Typography>
+              <Typography variant="caption" sx={{ opacity: 0.8 }}>{`Year ${new Date().getFullYear()}`}</Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Outstanding Cash Advances */}
+        <Grid size={{ xs: 6, sm: 3 }}>
+          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
+            <CardContent sx={{ p: 2 }}>
+              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Outstanding Cash Advances</Typography>
+              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{formatPHP(outstandingCA)}</Typography>
+              <Typography variant="caption" sx={{ opacity: 0.8 }}>Unliquidated balances</Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Pending Reimbursements — admin only */}
+        {isAdmin && (
+          <Grid size={{ xs: 6, sm: 3 }}>
+            <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`, color: '#2d3436' }}>
+              <CardContent sx={{ p: 2 }}>
+                <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Pending Reimbursements</Typography>
+                <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{pendingReimbursements}</Typography>
+                <Typography variant="caption" sx={{ opacity: 0.8 }}>Awaiting payout</Typography>
               </CardContent>
             </Card>
           </Grid>

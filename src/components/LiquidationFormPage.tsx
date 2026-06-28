@@ -24,10 +24,11 @@ import {
   DialogContent,
   DialogContentText,
   DialogActions,
+  Snackbar,
   Tooltip,
 } from '@mui/material';
 import { useLocation } from 'react-router-dom';
-import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
+import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon } from '@mui/icons-material';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import {
@@ -44,17 +45,10 @@ import dataService from '../services/dataService';
 import { Project } from '../types/Project';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
+import { fileToParseInput } from '../utils/receipts/imageCompress';
+import { parseReceipt } from '../services/receiptParseService';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
-
-const LIQUIDATION_CATEGORIES = [
-  'Tools / Direct',
-  'Gas',
-  'Materials',
-  'Transportation',
-  'Accommodation',
-  '3rd Party Labor',
-  'Others',
-] as const;
+import { LIQUIDATION_CATEGORIES } from '../data/financeCategories';
 
 interface LiquidationRow {
   id: string;
@@ -183,44 +177,48 @@ const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
   remarks: '',
 });
 
-const PROJECT_EXPENSES_KEY = 'projectExpenses';
-function addLiquidationRowsToProjectExpenses(rows: LiquidationRow[], liquidationId?: string, formNo?: string): void {
+async function addLiquidationRowsToProjectExpenses(
+  rows: LiquidationRow[],
+  liquidationId?: string,
+  formNo?: string,
+  sourceCaId?: string
+): Promise<void> {
   try {
-    const raw = localStorage.getItem(PROJECT_EXPENSES_KEY);
-    const existing = raw ? JSON.parse(raw) : [];
+    const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
     const toAdd = rows.filter((r) => {
       const pid = r.projectId;
       const amt = Number(r.amount);
       return pid !== '' && pid !== null && pid !== undefined && amt > 0;
     });
-    // Build set of already-synced keys to avoid duplicates
-    const syncedKeys = new Set(
-      existing.filter((e: any) => e.sourceLiquidationId != null && e.sourceLiquidationRowId).map((e: any) => `${e.sourceLiquidationId}:${e.sourceLiquidationRowId}`)
-    );
-    const now = new Date().toISOString();
-    let added = 0;
-    toAdd.forEach((r) => {
-      const pid = r.projectId;
-      if (!pid) return;
-      if (liquidationId && syncedKeys.has(`${liquidationId}:${r.id}`)) return;
-      existing.unshift({
-        id: `exp-liq-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        projectId: pid,
+    if (toAdd.length === 0) return;
+    const expenses = toAdd.map((r) => {
+      const expense: Record<string, unknown> = {
+        projectId: r.projectId,
         projectName: (r.projectName || '').trim() || '—',
-        description: formNo ? `Liquidation ${formNo}: ${(r.particulars || '').trim() || 'Liquidation'}` : (r.particulars || '').trim() || 'Liquidation',
+        description: formNo
+          ? `Liquidation ${formNo}: ${(r.particulars || '').trim() || 'Liquidation'}`
+          : (r.particulars || '').trim() || 'Liquidation',
         amount: Number(r.amount),
-        date: r.date || now.slice(0, 10),
+        date: r.date || new Date().toISOString().slice(0, 10),
         category: (r.category || '').trim() || 'Others',
-        createdAt: now,
+        sourceType: 'liquidation_sync',
         sourceLiquidationId: liquidationId,
         sourceLiquidationRowId: r.id,
-      });
-      added++;
+      };
+      if (sourceCaId) expense.sourceCaId = sourceCaId;
+      return expense;
     });
-    if (added > 0) {
-      localStorage.setItem(PROJECT_EXPENSES_KEY, JSON.stringify(existing));
-    }
-  } catch (_) {}
+    await fetch(`${API_BASE}/api/project-expenses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ expenses }),
+    });
+  } catch (err) {
+    console.warn('[LiquidationFormPage] expense sync failed:', err);
+  }
 }
 
 export default function LiquidationFormPage() {
@@ -245,6 +243,10 @@ export default function LiquidationFormPage() {
   const [receipts, setReceipts] = useState<ReceiptAttachment[]>([]);
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const receiptRowIdRef = useRef<string | null>(null);
+  const scanInputRef = useRef<HTMLInputElement>(null);
+  const scanRowIdRef = useRef<string | null>(null);
+  const [scanningRowId, setScanningRowId] = useState<string | null>(null);
+  const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
   const receiptsFolderRef = useRef<{ key: string; driveId: string; folderId: string } | null>(null);
   const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken, login: oneDriveLogin } = useOneDriveAuth();
   const [saving, setSaving] = useState(false);
@@ -386,6 +388,51 @@ export default function LiquidationFormPage() {
   };
 
   const removeReceipt = (id: string) => setReceipts((prev) => prev.filter((r) => r.id !== id));
+
+  const scanReceiptForRow = async (rowId: string, file: File) => {
+    if (!file) return;
+    setScanningRowId(rowId);
+    // Convert HEIC->JPEG once so attach and parse share one safe JPEG (avoids a
+    // duplicate heic2any pass and sending an unparseable HEIC to the parser).
+    const safeFile = await convertHeicToJpeg(file);
+    // Keep the photo even if AI parsing fails — attach via the existing flow.
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(safeFile);
+      void attachReceipts(rowId, dt.files);
+    } catch {
+      void attachReceipts(rowId, [safeFile] as unknown as FileList);
+    }
+    try {
+      const { imageBase64, mimeType } = await fileToParseInput(safeFile);
+      const parsed = await parseReceipt(imageBase64, mimeType);
+      setRows((prev) => prev.map((r) => {
+        if (r.id !== rowId) return r;
+        const amt = parsed.total ?? parsed.subtotal;
+        return {
+          ...r,
+          date: parsed.date || r.date,
+          category: parsed.suggestedCategory || r.category,
+          amount: (typeof amt === 'number' && amt > 0) ? amt : r.amount,
+          particulars: (!r.particulars || r.particulars.trim() === '')
+            ? (parsed.vendor || parsed.lineItems?.[0]?.description || '')
+            : r.particulars,
+        };
+      }));
+      const shown = parsed.total ?? parsed.subtotal ?? 0;
+      const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
+      const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
+      if (lowConf) {
+        setScanSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category. Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(shown).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+      } else {
+        setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(shown).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+      }
+    } catch (e) {
+      setScanSnackbar({ open: true, severity: 'error', message: e instanceof Error ? e.message : 'Failed to parse receipt' });
+    } finally {
+      setScanningRowId(null);
+    }
+  };
 
   const payload = () => ({
     form_no: formNo,
@@ -668,7 +715,7 @@ export default function LiquidationFormPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
-        addLiquidationRowsToProjectExpenses(rows, data.id ?? draftId ?? undefined, finalFormNo);
+        addLiquidationRowsToProjectExpenses(rows, data.id ?? draftId ?? undefined, finalFormNo, caId || undefined).catch(() => {});
         setDraftId(null);
         setLoadedOptionValue('');
         setIsViewingSubmitted(false);
@@ -1541,6 +1588,24 @@ export default function LiquidationFormPage() {
                       />
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                      <Tooltip title="Scan receipt with camera">
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => {
+                              scanRowIdRef.current = row.id;
+                              scanInputRef.current?.click();
+                            }}
+                            disabled={isViewingSubmitted || !!scanningRowId}
+                            sx={{ color: theme.primary }}
+                            aria-label="Scan receipt"
+                          >
+                            {scanningRowId === row.id
+                              ? <CircularProgress size={20} color="inherit" />
+                              : <PhotoCameraIcon fontSize="small" />}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                       <Tooltip title="Attach receipt (photo or PDF)">
                         <span>
                           <IconButton
@@ -1589,6 +1654,19 @@ export default function LiquidationFormPage() {
           onChange={(e) => {
             const rid = receiptRowIdRef.current;
             if (rid) attachReceipts(rid, e.target.files);
+            e.target.value = '';
+          }}
+        />
+        <input
+          type="file"
+          ref={scanInputRef}
+          accept="image/*"
+          capture="environment"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const rid = scanRowIdRef.current;
+            const file = e.target.files?.[0];
+            if (rid && file) scanReceiptForRow(rid, file);
             e.target.value = '';
           }}
         />
@@ -1685,6 +1763,20 @@ export default function LiquidationFormPage() {
           </Button>
         </DialogActions>
       </Dialog>
+      <Snackbar
+        open={scanSnackbar.open}
+        autoHideDuration={5000}
+        onClose={() => setScanSnackbar((p) => ({ ...p, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setScanSnackbar((p) => ({ ...p, open: false }))}
+          severity={scanSnackbar.severity}
+          sx={{ width: '100%', boxShadow: 3 }}
+        >
+          {scanSnackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }
