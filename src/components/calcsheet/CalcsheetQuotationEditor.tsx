@@ -1057,36 +1057,32 @@ export default function QuotationEditor() {
       {/* Markup, Contingency & Tax */}
       <Paper sx={{ p: 2 }}>
         <Stack spacing={2}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Markups, Contingency & Tax</Typography>
-          <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-              Product contingency seeds Section B rows and can be overridden per product line.
-              Manpower-priced Engineering Services use manpower cost per LOT multiplied by Qty.
-            </Typography>
-            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-              <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} sx={{ width: 150 }} disabled={isLegacy} />
-              <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} sx={{ width: 180 }} helperText="Default for product rows" disabled={isLegacy} />
-              <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { const mult = 1 + (v || 0) / 100; setField('services', quotation.services.map((s) => (s.days || 0) > 0 ? { ...s, amount: (s.days || 0) * teamDailyRate * mult } : s)); } }} sx={{ width: 150 }} helperText="Applied on top of manpower cost" disabled={isLegacy} />
-              <NumField label="Gen. Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} sx={{ width: 160 }} disabled={isLegacy} />
-              <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} sx={{ width: 170 }} helperText="Not applied to manpower pricing" disabled={isLegacy} />
-              <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} sx={{ width: 130 }} disabled={isLegacy} />
-              <Stack direction="row" spacing={1} alignItems="center">
-                <FormControlLabel
-                  control={
-                    <Switch
-                      size="small"
-                      checked={quotation.vatPct > 0}
-                      onChange={(e) => setField('vatPct', e.target.checked ? 12 : 0)}
-                      disabled={isLegacy}
-                    />
-                  }
-                  label={<Typography variant="caption">Include VAT</Typography>}
-                />
-                {quotation.vatPct > 0 && (
-                  <NumField label="VAT %" value={quotation.vatPct} onChange={(v) => setField('vatPct', v)} sx={{ width: 100 }} disabled={isLegacy} />
-                )}
-              </Stack>
+          <Stack direction="row" justifyContent="space-between" alignItems="center">
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Pricing Controls</Typography>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <FormControlLabel
+                control={
+                  <Switch
+                    size="small"
+                    checked={quotation.vatPct > 0}
+                    onChange={(e) => setField('vatPct', e.target.checked ? 12 : 0)}
+                    disabled={isLegacy}
+                  />
+                }
+                label={<Typography variant="body2">Include VAT</Typography>}
+              />
+              {quotation.vatPct > 0 && (
+                <NumField label="VAT %" value={quotation.vatPct} onChange={(v) => setField('vatPct', v)} sx={{ width: 80 }} disabled={isLegacy} />
+              )}
             </Stack>
+          </Stack>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' }, gap: 2 }}>
+            <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} disabled={isLegacy} fullWidth />
+            <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} helperText="Default for product rows" disabled={isLegacy} fullWidth />
+            <NumField label="General Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} disabled={isLegacy} fullWidth />
+            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { const mult = 1 + (v || 0) / 100; setField('services', quotation.services.map((s) => (s.days || 0) > 0 ? { ...s, amount: (s.days || 0) * teamDailyRate * mult } : s)); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} fullWidth />
+            <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={isLegacy} fullWidth />
+            <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} disabled={isLegacy} fullWidth />
           </Box>
         </Stack>
       </Paper>
