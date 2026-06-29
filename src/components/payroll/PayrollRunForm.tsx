@@ -7,6 +7,7 @@ import {
 import { Employee, DTRInput, Payslip, PayrollRun, DayType } from '../../types/Payroll';
 import { getEmployees, createPayrollRun, savePayslips, approvePayrollRun } from '../../utils/firebasePayroll';
 import { computePayslip } from '../../utils/payrollEngine';
+import { CONTRIB_DEFAULTS } from '../../utils/governmentContrib';
 import { useAuth } from '../../contexts/AuthContext';
 
 const STEPS = ['Period Setup', 'DTR Entry', 'Preview & Adjustments', 'Approve & Lock'];
@@ -85,18 +86,22 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
     setSaving(true);
     setError('');
     try {
+      // Snapshot the statutory rates in effect now, so a later refresh of the global
+      // defaults never recomputes this run at different rates.
+      const snapshotRates = CONTRIB_DEFAULTS;
       const run = await createPayrollRun({
         periodStart,
         periodEnd,
         payDate,
         status: 'DRAFT',
         createdBy: user?.username ?? '',
+        contribRates: snapshotRates,
       });
       setCreatedRun(run);
 
-      // Save with final adjustments applied
+      // Save with final adjustments applied, using the run's snapshotted rates
       const finalSlips = dtrInputs.map((dtr) =>
-        computePayslip(run.id, dtr, adjustments[dtr.employeeId] ?? 0)
+        computePayslip(run.id, dtr, adjustments[dtr.employeeId] ?? 0, run.contribRates ?? snapshotRates)
       );
       await savePayslips(run.id, finalSlips);
       setStep(3);

@@ -1,3 +1,5 @@
+import type { ContribRates } from '../utils/governmentContrib';
+
 export type EmployeeType = 'FIELD' | 'OFFICE';
 export type PayFrequency = 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY';
 
@@ -54,6 +56,12 @@ export interface PayrollRun {
   status: 'DRAFT' | 'APPROVED' | 'PAID';
   createdBy: string;
   createdAt: string;
+  /**
+   * Statutory contribution rates snapshotted at run creation. Payslips for this run are
+   * computed with these rates, so refreshing the global CONTRIB_DEFAULTS never retro-changes
+   * an existing run. Optional for backward-compat with runs created before snapshotting.
+   */
+  contribRates?: ContribRates;
 }
 
 export interface Payslip {
