@@ -4089,6 +4089,60 @@ app.delete('/api/overhead-expenses/:id', async (req, res) => {
 });
 // ========== END OVERHEAD EXPENSES ==========
 
+// ========== PRICELISTS ==========
+
+app.get('/api/pricelists/filters', async (req, res) => {
+  try {
+    const snap = await db.collection('pricelist_items').get();
+    const items = snap.docs.map((d) => d.data());
+    const suppliers = [...new Set(items.map((i) => i.supplier).filter(Boolean))].sort();
+    const brands = [...new Set(items.map((i) => i.brand).filter(Boolean))].sort();
+    const categories = [...new Set(items.map((i) => i.category).filter(Boolean))].sort();
+    const poles = [...new Set(items.map((i) => i.poles).filter((p) => p != null))].sort((a, b) => a - b);
+    res.json({ success: true, suppliers, brands, categories, poles });
+  } catch (err) {
+    console.error('[pricelists] get filters failed:', err);
+    res.status(500).json({ error: 'Failed to get pricelist filters' });
+  }
+});
+
+app.get('/api/pricelists', async (req, res) => {
+  try {
+    const snap = await db.collection('pricelist_items').orderBy('category').orderBy('catalogNo').get();
+    let items = snap.docs.map((d) => {
+      const { id: _stored, ...data } = d.data();
+      return { ...data, id: d.id };
+    });
+
+    // In-memory filtering
+    const { supplier, brand, category, poles, minPrice, maxPrice, search } = req.query;
+    if (supplier) items = items.filter((i) => i.supplier === supplier);
+    if (brand) items = items.filter((i) => i.brand === brand);
+    if (category) {
+      const cats = Array.isArray(category) ? category : [category];
+      items = items.filter((i) => cats.includes(i.category));
+    }
+    if (poles) items = items.filter((i) => i.poles === Number(poles));
+    if (minPrice) items = items.filter((i) => i.sellingPrice >= Number(minPrice));
+    if (maxPrice) items = items.filter((i) => i.sellingPrice <= Number(maxPrice));
+    if (search) {
+      const q = String(search).toLowerCase();
+      items = items.filter((i) =>
+        (i.catalogNo || '').toLowerCase().includes(q) ||
+        (i.description || '').toLowerCase().includes(q) ||
+        (i.abbRefNo || '').toLowerCase().includes(q) ||
+        (i.sepEquivalent || '').toLowerCase().includes(q) ||
+        (i.categoryLabel || '').toLowerCase().includes(q)
+      );
+    }
+
+    res.json({ success: true, items });
+  } catch (err) {
+    console.error('[pricelists] get items failed:', err);
+    res.status(500).json({ error: 'Failed to get pricelist items' });
+  }
+});
+
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {
   app.use(express.static(path.join(__dirname, 'build')));
