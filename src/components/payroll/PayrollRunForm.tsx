@@ -65,6 +65,10 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
         specialHolidayDays: 0,
         restDayOTHours: 0,
         regularHolidayOTHours: 0,
+        regularHolidayRestDayDays: 0,
+        specialHolidayRestDayDays: 0,
+        regularHolidayRestDayOTHours: 0,
+        specialHolidayRestDayOTHours: 0,
       })));
       setStep(1);
     } catch { setError('Failed to load employees.'); }
@@ -176,7 +180,7 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
             <Table size="small">
               <TableHead sx={{ bgcolor: '#2c3242' }}>
                 <TableRow>
-                  {['Employee', 'Day Type', 'Work Days', 'Reg Hrs', 'OT Hrs', 'Rest Day OT', 'Hol OT', 'Night Diff Hrs', 'Tardiness (min)', 'Reg Hol Days', 'Spl Hol Days'].map((h) => (
+                  {['Employee', 'Day Type', 'Work Days', 'Reg Hrs', 'OT Hrs', 'Rest Day OT', 'Hol OT', 'Reg Hol Rest OT', 'Spl Hol Rest OT', 'Night Diff Hrs', 'Tardiness (min)', 'Reg Hol Days', 'Reg Hol Rest Days', 'Spl Hol Days', 'Spl Hol Rest Days'].map((h) => (
                     <TableCell key={h} sx={{ color: 'white', fontWeight: 600, whiteSpace: 'nowrap', fontSize: '0.75rem' }}>{h}</TableCell>
                   ))}
                 </TableRow>
@@ -192,7 +196,7 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
                         {DAY_TYPES.map((t) => <MenuItem key={t} value={t}>{t.replace(/_/g, ' ')}</MenuItem>)}
                       </TextField>
                     </TableCell>
-                    {(['workingDays', 'regularHours', 'overtimeHours', 'restDayOTHours', 'regularHolidayOTHours', 'nightDiffHours', 'tardinessMinutes', 'regularHolidayDays', 'specialHolidayDays'] as (keyof DTRInput)[]).map((field) => (
+                    {(['workingDays', 'regularHours', 'overtimeHours', 'restDayOTHours', 'regularHolidayOTHours', 'regularHolidayRestDayOTHours', 'specialHolidayRestDayOTHours', 'nightDiffHours', 'tardinessMinutes', 'regularHolidayDays', 'regularHolidayRestDayDays', 'specialHolidayDays', 'specialHolidayRestDayDays'] as (keyof DTRInput)[]).map((field) => (
                       <TableCell key={field}>
                         <TextField type="number" size="small" value={(dtr as any)[field]}
                           onChange={(e) => updateDtr(dtr.employeeId, field, parseFloat(e.target.value) || 0)}
@@ -204,6 +208,9 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
               </TableBody>
             </Table>
           </TableContainer>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+            Count each calendar day under exactly one holiday/rest-day column (e.g. a regular holiday worked on a rest day goes in "Reg Hol Rest Days" only, not also "Reg Hol Days") to avoid double-paying the same day.
+          </Typography>
           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
             <Button onClick={() => setStep(0)}>Back</Button>
             <Button variant="contained" onClick={handleNextStep2} sx={{ bgcolor: '#2853c0' }}>Preview</Button>

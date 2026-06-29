@@ -127,4 +127,8 @@ export interface DTRInput {
   specialHolidayDays: number;
   restDayOTHours: number;
   regularHolidayOTHours: number;
+  regularHolidayRestDayDays?: number;
+  specialHolidayRestDayDays?: number;
+  regularHolidayRestDayOTHours?: number;
+  specialHolidayRestDayOTHours?: number;
 }
