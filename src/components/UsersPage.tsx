@@ -38,7 +38,7 @@ interface UserRow {
   updated_at: number;
 }
 
-const ROLES = ['superadmin', 'admin', 'user', 'viewer'] as const;
+const ROLES = ['superadmin', 'admin', 'user', 'viewer', 'tax_filer'] as const;
 
 export default function UsersPage() {
   const { user, updateCachedUser } = useAuth();

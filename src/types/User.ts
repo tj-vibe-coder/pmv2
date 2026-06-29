@@ -2,7 +2,7 @@ export interface User {
   id: string | number;
   username: string;
   email: string;
-  role: 'superadmin' | 'admin' | 'user' | 'viewer';
+  role: 'superadmin' | 'admin' | 'user' | 'viewer' | 'tax_filer';
   approved?: number;
   full_name?: string | null;
   designation?: string | null;

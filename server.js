@@ -371,7 +371,7 @@ usersRouter.patch('/:id', async (req, res) => {
   if (full_name !== undefined) updates.full_name = full_name == null ? null : String(full_name).trim();
   if (designation !== undefined) updates.designation = designation == null ? null : String(designation).trim();
   if (contact_number !== undefined) updates.contact_number = contact_number == null ? null : String(contact_number).trim();
-  if (role !== undefined && ['superadmin', 'admin', 'user', 'viewer'].includes(role)) updates.role = role;
+  if (role !== undefined && ['superadmin', 'admin', 'user', 'viewer', 'tax_filer'].includes(role)) updates.role = role;
   if (approved !== undefined) updates.approved = approved ? 1 : 0;
   if (Object.keys(updates).length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update' });
   updates.updated_at = Math.floor(Date.now() / 1000);

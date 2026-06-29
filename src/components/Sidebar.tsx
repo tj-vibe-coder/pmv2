@@ -266,6 +266,7 @@ const Sidebar: React.FC = () => {
                   />
                 </ListItemButton>
               </ListItem>
+              {user?.role !== 'tax_filer' && (
               <ListItem disablePadding sx={{ mb: 0.5 }}>
                 <ListItemButton
                   selected={location.pathname === '/expense-monitoring/ca-form'}
@@ -282,6 +283,8 @@ const Sidebar: React.FC = () => {
                   />
                 </ListItemButton>
               </ListItem>
+              )}
+              {user?.role !== 'tax_filer' && (
               <ListItem disablePadding sx={{ mb: 0.5 }}>
                 <ListItemButton
                   selected={location.pathname === '/expense-monitoring/liquidation-form'}
@@ -298,6 +301,7 @@ const Sidebar: React.FC = () => {
                   />
                 </ListItemButton>
               </ListItem>
+              )}
               <ListItem disablePadding sx={{ mb: 0.5 }}>
                 <ListItemButton
                   selected={location.pathname === '/expense-monitoring/direct-labor'}

@@ -21,6 +21,7 @@ import {
   Build as BuildIcon,
   RequestQuote as OverheadIcon,
   Summarize as PnLIcon,
+  ReceiptLong as TaxLedgerIcon,
 } from '@mui/icons-material';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
 
@@ -142,6 +143,7 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
               />
             </ListItemButton>
           </ListItem>
+          {user?.role !== 'tax_filer' && (
           <ListItem disablePadding sx={{ mb: 0.5 }}>
             <ListItemButton
               selected={location.pathname === '/finance/expense-monitoring/ca-form'}
@@ -158,6 +160,8 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
               />
             </ListItemButton>
           </ListItem>
+          )}
+          {user?.role !== 'tax_filer' && (
           <ListItem disablePadding sx={{ mb: 0.5 }}>
             <ListItemButton
               selected={location.pathname === '/finance/expense-monitoring/liquidation-form'}
@@ -174,6 +178,7 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
               />
             </ListItemButton>
           </ListItem>
+          )}
           <ListItem disablePadding sx={{ mb: 0.5 }}>
             <ListItemButton
               selected={location.pathname === '/finance/expense-monitoring/direct-labor'}
@@ -264,8 +269,31 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
       </ListItem>
       )}
 
+      {/* Tax Filer Ledger — consolidated BIR substantiation ledger */}
+      <ListItem disablePadding sx={{ mb: 0.5 }}>
+        <Tooltip title={isExpanded ? '' : 'Tax Filer Ledger'} placement="right" arrow>
+          <ListItemButton
+            selected={location.pathname === '/finance/tax-ledger'}
+            onClick={() => navigate('/finance/tax-ledger')}
+            sx={navBtnSx(location.pathname === '/finance/tax-ledger')}
+          >
+            <ListItemIcon sx={iconSx()}>
+              <TaxLedgerIcon />
+            </ListItemIcon>
+            {isExpanded && (
+              <ListItemText
+                primary="Tax Filer Ledger"
+                secondary="Expense & payroll substantiation"
+                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                sx={{ color: 'white' }}
+              />
+            )}
+          </ListItemButton>
+        </Tooltip>
+      </ListItem>
+
       {/* Payroll — only visible to authorized users */}
-      {isPayrollAuthorized(user?.username) && (
+      {isPayrollAuthorized(user?.username) && user?.role !== 'tax_filer' && (
         <ListItem disablePadding sx={{ mb: 0.5 }}>
           <Tooltip title={isExpanded ? '' : 'Payroll'} placement="right" arrow>
             <ListItemButton
