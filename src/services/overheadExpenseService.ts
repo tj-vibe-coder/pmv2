@@ -22,6 +22,8 @@ export interface OverheadExpense {
   invoiceType?: string;
   vat?: number;
   tin?: string;
+  deductible?: boolean | null;
+  deductibleReason?: string;
 }
 
 function authHeaders(): Record<string, string> {

@@ -325,12 +325,14 @@ const ScanPage: React.FC = () => {
     }
 
     // Optional receipt metadata captured by the scanner (omit empties).
-    const meta: Record<string, string | number> = {};
+    const meta: Record<string, string | number | boolean> = {};
     if (supplier.trim()) meta.supplier = supplier.trim();
     if (invoiceNumber.trim()) meta.invoiceNo = invoiceNumber.trim();
     if (invoiceType.trim()) meta.invoiceType = invoiceType.trim();
     const vatNum = Number(vat);
     if (vat.trim() && Number.isFinite(vatNum) && vatNum > 0) meta.vat = vatNum;
+    if (typeof deductible === 'boolean') meta.deductible = deductible;
+    if (deductibleReason && deductibleReason.trim()) meta.deductibleReason = deductibleReason.trim();
 
     try {
       const url = mode === 'project'
