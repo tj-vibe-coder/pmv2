@@ -21,9 +21,10 @@ const Row: React.FC<RowProps> = ({ label, value, bold, indent }) => (
 interface Props {
   payslip: Payslip;
   onBack?: () => void;
+  canSeeRate?: boolean;
 }
 
-const PayslipCard: React.FC<Props> = ({ payslip: s, onBack }) => {
+const PayslipCard: React.FC<Props> = ({ payslip: s, onBack, canSeeRate = true }) => {
   const emp = s.employeeSnapshot;
   const rate = emp.employeeType === 'FIELD'
     ? `₱${fmt(emp.dailyRate ?? 0)}/day`
@@ -86,14 +87,18 @@ const PayslipCard: React.FC<Props> = ({ payslip: s, onBack }) => {
               <Typography variant="caption" color="text.secondary">DESIGNATION</Typography>
               <Typography fontWeight={600}>{emp.designation}</Typography>
             </Box>
-            <Box>
-              <Typography variant="caption" color="text.secondary">RATE</Typography>
-              <Typography fontWeight={600}>{rate}</Typography>
-            </Box>
-            <Box>
-              <Typography variant="caption" color="text.secondary">MEAL ALLOW.</Typography>
-              <Typography fontWeight={600}>₱{fmt(emp.mealAllowance ?? 0)}/day</Typography>
-            </Box>
+            {canSeeRate && (
+              <Box>
+                <Typography variant="caption" color="text.secondary">RATE</Typography>
+                <Typography fontWeight={600}>{rate}</Typography>
+              </Box>
+            )}
+            {canSeeRate && (
+              <Box>
+                <Typography variant="caption" color="text.secondary">MEAL ALLOW.</Typography>
+                <Typography fontWeight={600}>₱{fmt(emp.mealAllowance ?? 0)}/day</Typography>
+              </Box>
+            )}
           </Box>
           <Divider sx={{ my: 1 }} />
           <Box sx={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>

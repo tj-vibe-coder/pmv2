@@ -12,6 +12,7 @@ interface Props {
   employee?: Employee | null;
   onClose: () => void;
   onSave: (data: Omit<Employee, 'id' | 'createdAt'>) => Promise<void>;
+  canEditRate?: boolean;
 }
 
 const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
@@ -31,7 +32,7 @@ const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
   tinNumber: '',
 };
 
-const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave }) => {
+const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEditRate = true }) => {
   const [form, setForm] = useState<Omit<Employee, 'id' | 'createdAt'>>(EMPTY);
   const [saving, setSaving] = useState(false);
 
@@ -91,19 +92,21 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave }) => {
             </TextField>
           </Grid>
 
-          {form.employeeType === 'FIELD' && (
+          {form.employeeType === 'FIELD' && canEditRate && (
             <Grid size={{ xs: 12, sm: 4 }}>
               <TextField fullWidth label="Daily Rate (₱)" type="number" value={form.dailyRate} onChange={set('dailyRate')} inputProps={{ min: 0 }} />
             </Grid>
           )}
-          {form.employeeType === 'OFFICE' && (
+          {form.employeeType === 'OFFICE' && canEditRate && (
             <Grid size={{ xs: 12, sm: 4 }}>
               <TextField fullWidth label="Monthly Rate (₱)" type="number" value={form.monthlyRate} onChange={set('monthlyRate')} inputProps={{ min: 0 }} />
             </Grid>
           )}
-          <Grid size={{ xs: 12, sm: 4 }}>
-            <TextField fullWidth label="Meal Allowance (₱/day)" type="number" value={form.mealAllowance} onChange={set('mealAllowance')} inputProps={{ min: 0 }} />
-          </Grid>
+          {canEditRate && (
+            <Grid size={{ xs: 12, sm: 4 }}>
+              <TextField fullWidth label="Meal Allowance (₱/day)" type="number" value={form.mealAllowance} onChange={set('mealAllowance')} inputProps={{ min: 0 }} />
+            </Grid>
+          )}
           <Grid size={{ xs: 12, sm: 4 }}>
             <TextField fullWidth label="Date Hired" type="date" value={form.dateHired} onChange={set('dateHired')} InputLabelProps={{ shrink: true }} />
           </Grid>
