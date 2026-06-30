@@ -8,6 +8,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import PersonOffIcon from '@mui/icons-material/PersonOff';
 import { Employee } from '../../types/Payroll';
 import { getEmployees, createEmployee, updateEmployee, deactivateEmployee } from '../../utils/firebasePayroll';
+import { useAuth } from '../../contexts/AuthContext';
 import EmployeeForm from './EmployeeForm';
 
 const fmt = (n?: number) =>
@@ -16,6 +17,7 @@ const fmt = (n?: number) =>
     : '—';
 
 const EmployeeList: React.FC = () => {
+  const { user } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -123,6 +125,7 @@ const EmployeeList: React.FC = () => {
         employee={editing}
         onClose={() => setFormOpen(false)}
         onSave={handleSave}
+        canEditRate={user?.role === 'superadmin'}
       />
     </Box>
   );

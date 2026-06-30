@@ -10,6 +10,7 @@ import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { getEmployees, getPayrollRuns, getPayslipsForRun } from '../../utils/firebasePayroll';
 import { Payslip } from '../../types/Payroll';
+import { useAuth } from '../../contexts/AuthContext';
 import PayrollRegister from './PayrollRegister';
 import EmployeeList from './EmployeeList';
 import PayrollRunForm from './PayrollRunForm';
@@ -42,6 +43,7 @@ const KPICard: React.FC<KPICardProps> = ({ icon, label, value, color }) => (
 type TabView = 'register' | 'employees' | 'new_run' | 'view_run' | 'gov_contrib' | 'holidays' | 'settings';
 
 const PayrollDashboard: React.FC = () => {
+  const { user } = useAuth();
   const [tab, setTab] = useState(0);
   const [view, setView] = useState<TabView>('register');
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -94,7 +96,7 @@ const PayrollDashboard: React.FC = () => {
   };
 
   if (selectedPayslip) {
-    return <PayslipCard payslip={selectedPayslip} onBack={() => setSelectedPayslip(null)} />;
+    return <PayslipCard payslip={selectedPayslip} onBack={() => setSelectedPayslip(null)} canSeeRate={user?.role === 'superadmin'} />;
   }
 
   if (view === 'new_run') {
