@@ -3184,6 +3184,63 @@ app.delete('/api/completion-certificates/:id', async (req, res) => {
   }
 });
 
+// ─── DTR Aggregation (for payroll auto-populate) ────────────────────────────
+app.get('/api/dtr/aggregate', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { periodStart, periodEnd } = req.query;
+  if (!periodStart || !periodEnd) return res.status(400).json({ error: 'periodStart and periodEnd required' });
+  try {
+    // Fetch all DTR entries within the date range
+    const snap = await db.collection('dtr_entries')
+      .where('entryDate', '>=', periodStart)
+      .where('entryDate', '<=', periodEnd)
+      .get();
+
+    // Group by employeeId and aggregate
+    const byEmployee = {};
+    snap.docs.forEach(d => {
+      const entry = d.data();
+      const eid = entry.employeeId;
+      if (!byEmployee[eid]) {
+        byEmployee[eid] = {
+          employeeId: eid,
+          workingDays: 0,
+          regularHours: 0,
+          overtimeHours: 0,
+          nightDiffHours: 0,
+          tardinessMinutes: 0,
+          regularHolidayDays: 0,
+          specialHolidayDays: 0,
+          restDayOTHours: 0,
+          regularHolidayOTHours: 0,
+          regularHolidayRestDayDays: 0,
+          specialHolidayRestDayDays: 0,
+          regularHolidayRestDayOTHours: 0,
+          specialHolidayRestDayOTHours: 0,
+        };
+      }
+      const agg = byEmployee[eid];
+      if (!entry.isAbsent) {
+        // Count working days for non-absent entries
+        if (entry.dayType === 'REGULAR') agg.workingDays++;
+        else if (entry.dayType === 'REST_DAY') { /* rest day doesn't count as working day unless OT */ }
+        else if (entry.dayType === 'REGULAR_HOLIDAY') agg.regularHolidayDays++;
+        else if (entry.dayType === 'SPECIAL_HOLIDAY') agg.specialHolidayDays++;
+        else if (entry.dayType === 'DOUBLE_HOLIDAY') { agg.regularHolidayDays++; agg.specialHolidayDays++; }
+      }
+      agg.regularHours += Number(entry.regularHours) || 0;
+      agg.overtimeHours += Number(entry.overtimeHours) || 0;
+      agg.nightDiffHours += Number(entry.nightDiffHours) || 0;
+      agg.tardinessMinutes += Number(entry.tardinessMinutes) || 0;
+    });
+
+    res.json({ success: true, aggregates: byEmployee });
+  } catch (err) {
+    console.error('GET /api/dtr/aggregate error:', err);
+    res.status(500).json({ error: 'Failed to aggregate DTR entries' });
+  }
+});
+
 // ─── DTR Entries ────────────────────────────────────────────────────────────
 app.get('/api/dtr', async (req, res) => {
   const user = await getCurrentUser(req);

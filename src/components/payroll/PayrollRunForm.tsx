@@ -2,13 +2,16 @@ import React, { useState } from 'react';
 import {
   Box, Button, Step, StepLabel, Stepper, Typography, TextField,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Paper, MenuItem, Alert, CircularProgress, Divider,
+  Paper, MenuItem, Alert, CircularProgress, Divider, Snackbar,
 } from '@mui/material';
+import SyncIcon from '@mui/icons-material/Sync';
 import { Employee, DTRInput, Payslip, PayrollRun, DayType } from '../../types/Payroll';
 import { getEmployees, createPayrollRun, savePayslips, approvePayrollRun } from '../../utils/firebasePayroll';
 import { computePayslip } from '../../utils/payrollEngine';
 import { CONTRIB_DEFAULTS } from '../../utils/governmentContrib';
 import { useAuth } from '../../contexts/AuthContext';
+
+const API_BASE = process.env.REACT_APP_API_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
 
 const STEPS = ['Period Setup', 'DTR Entry', 'Preview & Adjustments', 'Approve & Lock'];
 const DAY_TYPES: DayType[] = ['REGULAR', 'REST_DAY', 'SPECIAL_HOLIDAY', 'REGULAR_HOLIDAY', 'DOUBLE_HOLIDAY'];
@@ -43,6 +46,62 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
 
   // Step 4
   const [createdRun, setCreatedRun] = useState<PayrollRun | null>(null);
+
+  // DTR pull
+  const [pullingDtr, setPullingDtr] = useState(false);
+  const [dtrNotice, setDtrNotice] = useState('');
+
+  const pullFromDTR = async () => {
+    if (!periodStart || !periodEnd) return;
+    setPullingDtr(true);
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(
+        `${API_BASE}/api/dtr/aggregate?periodStart=${periodStart}&periodEnd=${periodEnd}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+      );
+      if (!res.ok) throw new Error('Failed to fetch DTR');
+      const { aggregates } = await res.json();
+
+      // Match DTR records (keyed by userId) to payroll employees (via employee.userId)
+      let matched = 0;
+      setDtrInputs((prev) =>
+        prev.map((dtr) => {
+          // The DTR employeeId is the user's ID; match via employee.userId
+          const userIdKey = dtr.employee.userId;
+          const agg = userIdKey ? aggregates[userIdKey] : null;
+          if (agg) {
+            matched++;
+            return {
+              ...dtr,
+              workingDays: agg.workingDays ?? 0,
+              regularHours: agg.regularHours ?? 0,
+              overtimeHours: agg.overtimeHours ?? 0,
+              nightDiffHours: agg.nightDiffHours ?? 0,
+              tardinessMinutes: agg.tardinessMinutes ?? 0,
+              regularHolidayDays: agg.regularHolidayDays ?? 0,
+              specialHolidayDays: agg.specialHolidayDays ?? 0,
+              restDayOTHours: agg.restDayOTHours ?? 0,
+              regularHolidayOTHours: agg.regularHolidayOTHours ?? 0,
+              regularHolidayRestDayDays: agg.regularHolidayRestDayDays ?? 0,
+              specialHolidayRestDayDays: agg.specialHolidayRestDayDays ?? 0,
+              regularHolidayRestDayOTHours: agg.regularHolidayRestDayOTHours ?? 0,
+              specialHolidayRestDayOTHours: agg.specialHolidayRestDayOTHours ?? 0,
+            };
+          }
+          return dtr;
+        })
+      );
+      setDtrNotice(matched > 0
+        ? `Pulled DTR for ${matched} employee(s). Review and adjust as needed.`
+        : 'No DTR records found for this period. Employees may not have linked user accounts.'
+      );
+    } catch {
+      setDtrNotice('Failed to pull DTR data.');
+    } finally {
+      setPullingDtr(false);
+    }
+  };
 
   // ── Step 1 → 2: load active employees ────────────────────────────────────
   const handleNextStep1 = async () => {
@@ -173,9 +232,20 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
       {/* ── STEP 2 ─────────────────────────────────────────────────────────── */}
       {step === 1 && (
         <Box>
-          <Typography variant="subtitle1" fontWeight={600} mb={2}>
-            DTR Entry — {employees.length} active employee(s)
-          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <Typography variant="subtitle1" fontWeight={600}>
+              DTR Entry — {employees.length} active employee(s)
+            </Typography>
+            <Button
+              variant="outlined"
+              startIcon={pullingDtr ? <CircularProgress size={16} /> : <SyncIcon />}
+              onClick={pullFromDTR}
+              disabled={pullingDtr}
+              size="small"
+            >
+              {pullingDtr ? 'Pulling…' : 'Pull from DTR'}
+            </Button>
+          </Box>
           <TableContainer component={Paper} sx={{ borderRadius: 2, mb: 2, overflowX: 'auto' }}>
             <Table size="small">
               <TableHead sx={{ bgcolor: '#2c3242' }}>
@@ -300,6 +370,13 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
           </Box>
         </Paper>
       )}
+
+      <Snackbar
+        open={!!dtrNotice}
+        autoHideDuration={5000}
+        onClose={() => setDtrNotice('')}
+        message={dtrNotice}
+      />
     </Box>
   );
 };
