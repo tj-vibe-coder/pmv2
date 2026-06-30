@@ -240,10 +240,10 @@ const LoginPage: React.FC = () => {
           {!logoError ? (
             <Box
               component="img"
-              src="/logo192.png"
-              alt="Logo"
+              src="/logo-ioct.png"
+              alt="IOCT Logo"
               onError={() => setLogoError(true)}
-              sx={{ height: 48, width: 'auto' }}
+              sx={{ height: 64, width: 'auto' }}
             />
           ) : (
             <Typography sx={{ color: '#5a5a5a', fontWeight: 500, fontSize: '1rem' }}>
