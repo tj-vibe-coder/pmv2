@@ -7,7 +7,7 @@ import { isPayrollAuthorized } from '../../config/payrollAccess';
 const PayrollGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
 
-  if (!isPayrollAuthorized(user?.username)) {
+  if (!isPayrollAuthorized(user?.role)) {
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 400, gap: 2 }}>
         <LockOutlinedIcon sx={{ fontSize: 64, color: 'text.disabled' }} />
