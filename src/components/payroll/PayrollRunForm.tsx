@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Box, Button, Step, StepLabel, Stepper, Typography, TextField,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Paper, MenuItem, Alert, CircularProgress, Divider, Snackbar,
+  Paper, MenuItem, Alert, CircularProgress, Divider,
 } from '@mui/material';
 import SyncIcon from '@mui/icons-material/Sync';
 import { Employee, DTRInput, Payslip, PayrollRun, DayType } from '../../types/Payroll';
@@ -54,6 +54,7 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
   const pullFromDTR = async () => {
     if (!periodStart || !periodEnd) return;
     setPullingDtr(true);
+    setDtrNotice('');
     try {
       const token = localStorage.getItem('netpacific_token');
       const res = await fetch(
@@ -61,17 +62,25 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
         { headers: token ? { Authorization: `Bearer ${token}` } : {} }
       );
       if (!res.ok) throw new Error('Failed to fetch DTR');
-      const { aggregates } = await res.json();
+      const { aggregates, submitters } = await res.json() as {
+        aggregates: Record<string, Record<string, number>>;
+        submitters?: Record<string, string>;
+      };
+
+      const dtrSubmitterCount = Object.keys(aggregates).length;
 
       // Match DTR records (keyed by userId) to payroll employees (via employee.userId)
       let matched = 0;
+      const unmatchedEmployees: string[] = [];
+      const matchedUserIds = new Set<string>();
+
       setDtrInputs((prev) =>
         prev.map((dtr) => {
-          // The DTR employeeId is the user's ID; match via employee.userId
           const userIdKey = dtr.employee.userId;
           const agg = userIdKey ? aggregates[userIdKey] : null;
           if (agg) {
             matched++;
+            matchedUserIds.add(userIdKey!);
             return {
               ...dtr,
               workingDays: agg.workingDays ?? 0,
@@ -89,13 +98,37 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
               specialHolidayRestDayOTHours: agg.specialHolidayRestDayOTHours ?? 0,
             };
           }
+          // Track why this employee didn't match
+          if (!userIdKey) {
+            unmatchedEmployees.push(`${dtr.employee.name} (no linked user account)`);
+          } else if (!aggregates[userIdKey]) {
+            unmatchedEmployees.push(`${dtr.employee.name} (no DTR submitted)`);
+          }
           return dtr;
         })
       );
-      setDtrNotice(matched > 0
-        ? `Pulled DTR for ${matched} employee(s). Review and adjust as needed.`
-        : 'No DTR records found for this period. Employees may not have linked user accounts.'
-      );
+
+      // Detect DTR submissions that couldn't be matched to any payroll employee
+      const orphanedDtr = Object.keys(aggregates)
+        .filter((uid) => !matchedUserIds.has(uid))
+        .map((uid) => submitters?.[uid] || uid);
+
+      // Build detailed notice
+      const lines: string[] = [];
+      if (matched > 0) lines.push(`Pulled DTR for ${matched} employee(s).`);
+      if (unmatchedEmployees.length > 0) {
+        lines.push(`Skipped ${unmatchedEmployees.length}: ${unmatchedEmployees.join('; ')}.`);
+      }
+      if (orphanedDtr.length > 0) {
+        lines.push(`${orphanedDtr.length} DTR submission(s) not linked to any payroll employee: ${orphanedDtr.join(', ')}.`);
+      }
+      if (dtrSubmitterCount === 0) {
+        lines.push('No DTR submissions found for this period.');
+      }
+      if (lines.length === 0) {
+        lines.push('No DTR records found and no employees to match.');
+      }
+      setDtrNotice(lines.join(' '));
     } catch {
       setDtrNotice('Failed to pull DTR data.');
     } finally {
@@ -371,12 +404,15 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel }) => {
         </Paper>
       )}
 
-      <Snackbar
-        open={!!dtrNotice}
-        autoHideDuration={5000}
-        onClose={() => setDtrNotice('')}
-        message={dtrNotice}
-      />
+      {dtrNotice && step === 1 && (
+        <Alert
+          severity={dtrNotice.includes('Skipped') || dtrNotice.includes('not linked') ? 'warning' : dtrNotice.includes('Failed') ? 'error' : 'info'}
+          onClose={() => setDtrNotice('')}
+          sx={{ mt: 1, whiteSpace: 'pre-line' }}
+        >
+          {dtrNotice}
+        </Alert>
+      )}
     </Box>
   );
 };

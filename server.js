@@ -3234,7 +3234,22 @@ app.get('/api/dtr/aggregate', async (req, res) => {
       agg.tardinessMinutes += Number(entry.tardinessMinutes) || 0;
     });
 
-    res.json({ success: true, aggregates: byEmployee });
+    // Look up submitter names for each DTR employeeId (user account)
+    const submitterIds = Object.keys(byEmployee);
+    const submitters = {};
+    for (const uid of submitterIds) {
+      try {
+        const uDoc = await db.collection('users').doc(uid).get();
+        if (uDoc.exists) {
+          const u = uDoc.data();
+          submitters[uid] = u.full_name || u.username || uid;
+        } else {
+          submitters[uid] = uid;
+        }
+      } catch { submitters[uid] = uid; }
+    }
+
+    res.json({ success: true, aggregates: byEmployee, submitters });
   } catch (err) {
     console.error('GET /api/dtr/aggregate error:', err);
     res.status(500).json({ error: 'Failed to aggregate DTR entries' });
