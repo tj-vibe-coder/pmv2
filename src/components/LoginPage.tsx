@@ -64,7 +64,7 @@ const LoginPage: React.FC = () => {
 
   useEffect(() => {
     if (isAuthenticated && user) {
-      const target = (user.role === 'user' || user.role === 'viewer') ? '/employee' : '/dashboard';
+      const target = (user.role === 'user' || user.role === 'viewer') ? '/employee' : (user.role === 'tax_filer' ? '/finance/tax-ledger' : '/dashboard');
       navigate(target, { replace: true });
     }
   }, [isAuthenticated, user, navigate]);
@@ -92,7 +92,7 @@ const LoginPage: React.FC = () => {
       const result = await login(loginData);
       if (result.success) {
         const cachedUser = JSON.parse(localStorage.getItem('netpacific_user') || '{}');
-        const target = (cachedUser.role === 'user' || cachedUser.role === 'viewer') ? '/employee' : '/dashboard';
+        const target = (cachedUser.role === 'user' || cachedUser.role === 'viewer') ? '/employee' : (cachedUser.role === 'tax_filer' ? '/finance/tax-ledger' : '/dashboard');
         navigate(target, { replace: true });
       } else setError(result.error || 'Login failed');
     } catch (err) {

@@ -86,7 +86,7 @@ const FinanceHomePage: React.FC = () => {
       .then(data => { if (data.success) setInvestmentTarget(data.target); })
       .catch(() => { /* target is a caption only */ });
 
-    if (isPayrollAuthorized(user?.username)) {
+    if (isPayrollAuthorized(user?.username) && user?.role !== 'tax_filer') {
       getPayrollRuns()
         .then(runs => {
           if (runs.length === 0) return;
@@ -165,7 +165,7 @@ const FinanceHomePage: React.FC = () => {
       icon: <TrendingUpIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
       path: '/finance/investment-tracker',
     },
-    ...(payrollAllowed
+    ...(payrollAllowed && user?.role !== 'tax_filer'
       ? [{
           title: 'Payroll',
           description: 'Employees, payroll runs, DTR, and payslips.',
@@ -252,7 +252,7 @@ const FinanceHomePage: React.FC = () => {
         </Grid>
 
         {/* Latest Payroll Run — only for authorized users */}
-        {payrollAllowed && (
+        {payrollAllowed && user?.role !== 'tax_filer' && (
           <Grid size={{ xs: 6, sm: 3 }}>
             <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
               <CardContent sx={{ p: 2 }}>

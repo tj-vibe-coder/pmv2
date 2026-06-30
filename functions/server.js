@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -17,6 +18,11 @@ const ALLOWED_ORIGINS = [
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    // Dev only: allow private-LAN origins so you can test from a phone/other device on the same network.
+    if (process.env.NODE_ENV !== 'production' &&
+        /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+):\d+$/.test(origin)) {
+      return callback(null, true);
+    }
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
@@ -111,6 +117,17 @@ async function getCurrentUser(req) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.substring(7);
   try {
+    // Scanner (QR-paired) sessions use 'scan_'-prefixed tokens. Standard base64
+    // login tokens never contain '_', so this prefix is unambiguous.
+    if (token.startsWith('scan_')) {
+      const sessSnap = await db.collection('scanner_sessions').doc(token).get();
+      if (!sessSnap.exists) return null;
+      const sess = sessSnap.data();
+      if (!sess || Date.now() > sess.expiresAt) return null;
+      const su = await db.collection('users').doc(sess.userId).get();
+      if (!su.exists) return null;
+      return { id: su.id, ...su.data(), scannerScope: true };
+    }
     const decoded = Buffer.from(token, 'base64').toString();
     const [userId] = decoded.split(':');
     if (!userId) return null;
@@ -134,6 +151,61 @@ async function requireActiveUser(req, res) {
     return null;
   }
   return user;
+}
+
+// ========== MICROSOFT GRAPH APP-ONLY (CLIENT CREDENTIALS) HELPER ==========
+// Server-side OneDrive/Graph access using app-only auth (no signed-in user).
+// Used by the receipt-scanning feature to read the corporate proposal drive.
+let graphTokenCache = null; // { token, expiresAt }
+
+async function getGraphAppToken() {
+  if (graphTokenCache && Date.now() < graphTokenCache.expiresAt) {
+    return graphTokenCache.token;
+  }
+  const tenantId = process.env.ONEDRIVE_TENANT_ID;
+  const clientId = process.env.ONEDRIVE_CLIENT_ID;
+  const clientSecret = process.env.ONEDRIVE_CLIENT_SECRET;
+  const driveOwner = process.env.ONEDRIVE_DRIVE_OWNER;
+  if (!tenantId) throw new Error('OneDrive not configured: ONEDRIVE_TENANT_ID');
+  if (!clientId) throw new Error('OneDrive not configured: ONEDRIVE_CLIENT_ID');
+  if (!clientSecret) throw new Error('OneDrive not configured: ONEDRIVE_CLIENT_SECRET');
+  if (!driveOwner) throw new Error('OneDrive not configured: ONEDRIVE_DRIVE_OWNER');
+
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret,
+    scope: 'https://graph.microsoft.com/.default',
+  });
+  const resp = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error('Graph token error: ' + text);
+  }
+  const json = await resp.json();
+  graphTokenCache = {
+    token: json.access_token,
+    expiresAt: Date.now() + (json.expires_in - 60) * 1000,
+  };
+  return graphTokenCache.token;
+}
+
+async function resolveCorporateDriveId(token) {
+  const owner = process.env.ONEDRIVE_DRIVE_OWNER;
+  const resp = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(owner)}/drive`,
+    { headers: { Authorization: 'Bearer ' + token } }
+  );
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(text);
+  }
+  const body = await resp.json();
+  return body.id;
 }
 
 // ========== AUTH ROUTES ==========
@@ -299,7 +371,7 @@ usersRouter.patch('/:id', async (req, res) => {
   if (full_name !== undefined) updates.full_name = full_name == null ? null : String(full_name).trim();
   if (designation !== undefined) updates.designation = designation == null ? null : String(designation).trim();
   if (contact_number !== undefined) updates.contact_number = contact_number == null ? null : String(contact_number).trim();
-  if (role !== undefined && ['superadmin', 'admin', 'user', 'viewer'].includes(role)) updates.role = role;
+  if (role !== undefined && ['superadmin', 'admin', 'user', 'viewer', 'tax_filer'].includes(role)) updates.role = role;
   if (approved !== undefined) updates.approved = approved ? 1 : 0;
   if (Object.keys(updates).length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update' });
   updates.updated_at = Math.floor(Date.now() / 1000);
@@ -782,7 +854,295 @@ app.post('/api/expenses', (req, res) => {
   res.status(201).json({ success: true, expense: { id: Date.now().toString(), projectId, category, description, amount: parseFloat(amount), date: date || new Date().toISOString(), status: 'pending', created_at: new Date().toISOString() } });
 });
 
+// ========== PROJECT EXPENSES ==========
+// Firestore collection: project_expenses
+// Fields: projectId, projectName, description, amount, date (YYYY-MM-DD),
+//   category, createdAt (ISO), createdBy (userId), sourceType
+//   (manual|liquidation_sync|po_sync|migrated), + optional source FK fields.
+
+app.get('/api/project-expenses/summary', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const { year } = req.query;
+    const snap = await db.collection('project_expenses').get();
+    let rows = snap.docs.map(doc => doc.data());
+    if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
+    const total = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    res.json({ success: true, total, count: rows.length, year: year || 'all' });
+  } catch (err) {
+    console.error('Error fetching project_expenses summary:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.get('/api/project-expenses', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { projectId, year, sourceType } = req.query;
+    let query = db.collection('project_expenses');
+    if (projectId) query = query.where('projectId', '==', String(projectId));
+    if (sourceType) query = query.where('sourceType', '==', String(sourceType));
+    const snap = await query.get();
+    let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // Non-admins normally see only the project_expenses they created. System-generated sync rows
+    // (PO/liquidation/migrated) have no natural per-user owner, so expose them to every finance user —
+    // otherwise the per-project Expense Monitoring list would hide costs (e.g. synced PO items or
+    // liquidation rows) the company P&L still counts, producing a confusing reconciliation gap.
+    // In-memory filter only, so no Firestore composite index is needed.
+    if (!isAdmin) {
+      const SYNC_SOURCE_TYPES = new Set(['po_sync', 'liquidation_sync', 'migrated']);
+      rows = rows.filter(r => r.createdBy === user.id || SYNC_SOURCE_TYPES.has(r.sourceType));
+    }
+    if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
+    rows.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    res.json({ success: true, expenses: rows });
+  } catch (err) {
+    console.error('Error fetching project_expenses:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/project-expenses/migrate-from-localstorage', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Admin only' });
+  }
+  try {
+    const { expenses } = req.body;
+    if (!Array.isArray(expenses) || expenses.length === 0) {
+      return res.status(400).json({ success: false, error: 'expenses array required' });
+    }
+    // Dedup: load all existing migratedId values to avoid double-migration
+    const existingSnap = await db.collection('project_expenses')
+      .where('sourceType', '==', 'migrated').select('migratedId').get();
+    const seenIds = new Set(existingSnap.docs.map(d => d.data().migratedId).filter(Boolean));
+    const now = new Date().toISOString();
+    // Firestore batch limit is 500; chunk if needed
+    const toInsert = expenses.filter(e => e.id && e.projectId && e.amount && !seenIds.has(e.id));
+    let inserted = 0;
+    const skipped = expenses.length - toInsert.length;
+    for (let i = 0; i < toInsert.length; i += 499) {
+      const chunk = toInsert.slice(i, i + 499);
+      const batch = db.batch();
+      for (const exp of chunk) {
+        const ref = db.collection('project_expenses').doc();
+        const doc = {
+          projectId: String(exp.projectId),
+          projectName: exp.projectName || '',
+          description: exp.description || '',
+          amount: Number(exp.amount),
+          date: exp.date || now.slice(0, 10),
+          category: exp.category || 'Others',
+          createdAt: exp.createdAt || now,
+          createdBy: user.id,
+          sourceType: 'migrated',
+          migratedId: exp.id,
+        };
+        if (exp.sourcePoId) doc.sourcePoId = exp.sourcePoId;
+        if (exp.sourcePoItemId) doc.sourcePoItemId = exp.sourcePoItemId;
+        if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
+        if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
+        batch.set(ref, doc);
+      }
+      await batch.commit();
+      inserted += chunk.length;
+    }
+    res.json({ success: true, inserted, skipped, total: expenses.length });
+  } catch (err) {
+    console.error('Error migrating project_expenses:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/project-expenses', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const body = req.body;
+    const now = new Date().toISOString();
+    // Batch insert: body.expenses is an array
+    if (Array.isArray(body.expenses)) {
+      let toInsert = body.expenses.filter(e => e.projectId && e.amount);
+      if (toInsert.length === 0) return res.status(400).json({ success: false, error: 'No valid expenses in array' });
+      // Server-side dedup: prevent duplicate rows when re-syncing POs or liquidations
+      const syncKey = (e) => {
+        if (e.sourcePoId && e.sourcePoItemId) return `po:${e.sourcePoId}:${e.sourcePoItemId}`;
+        if (e.sourcePoId) return `po:${e.sourcePoId}`;
+        if (e.sourceLiquidationId && e.sourceLiquidationRowId) return `liq:${e.sourceLiquidationId}:${e.sourceLiquidationRowId}`;
+        return null;
+      };
+      const hasPoRows = toInsert.some(e => e.sourcePoId);
+      const hasLiqRows = toInsert.some(e => e.sourceLiquidationId);
+      if (hasPoRows || hasLiqRows) {
+        const existingKeys = new Set();
+        const fetchPromises = [];
+        // Scope dedup scans to only the projectId(s) in this batch — a duplicate
+        // of a PO item / liquidation row always carries the same projectId as the
+        // original, so this is exact, and avoids an unbounded full-collection scan.
+        const poProjectIds = [...new Set(toInsert.filter(e => e.sourcePoId).map(e => String(e.projectId)))];
+        const liqProjectIds = [...new Set(toInsert.filter(e => e.sourceLiquidationId).map(e => String(e.projectId)))];
+        for (const pid of poProjectIds) {
+          fetchPromises.push(
+            db.collection('project_expenses')
+              .where('sourceType', '==', 'po_sync')
+              .where('projectId', '==', pid).get()
+              .then(snap => snap.docs.forEach(d => { const k = syncKey(d.data()); if (k) existingKeys.add(k); }))
+          );
+        }
+        for (const pid of liqProjectIds) {
+          fetchPromises.push(
+            db.collection('project_expenses')
+              .where('sourceType', '==', 'liquidation_sync')
+              .where('projectId', '==', pid).get()
+              .then(snap => snap.docs.forEach(d => { const k = syncKey(d.data()); if (k) existingKeys.add(k); }))
+          );
+        }
+        await Promise.all(fetchPromises);
+        toInsert = toInsert.filter(e => {
+          const k = syncKey(e);
+          return !k || !existingKeys.has(k);
+        });
+        if (toInsert.length === 0) {
+          return res.status(200).json({ success: true, count: 0, expenses: [], message: 'All expenses already synced' });
+        }
+      }
+      const inserted = [];
+      for (let i = 0; i < toInsert.length; i += 499) {
+        const chunk = toInsert.slice(i, i + 499);
+        const batch = db.batch();
+        for (const exp of chunk) {
+          const ref = db.collection('project_expenses').doc();
+          const doc = {
+            projectId: String(exp.projectId),
+            projectName: exp.projectName || '',
+            description: exp.description || '',
+            amount: Number(exp.amount),
+            date: exp.date || now.slice(0, 10),
+            category: exp.category || 'Others',
+            createdAt: exp.createdAt || now,
+            createdBy: user.id,
+            sourceType: exp.sourceType || 'manual',
+          };
+          if (exp.sourcePoId) doc.sourcePoId = exp.sourcePoId;
+          if (exp.sourcePoItemId) doc.sourcePoItemId = exp.sourcePoItemId;
+          if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
+          if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
+          if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
+          // BIR substantiation passthrough — mirrors the single-insert path so
+          // liquidation/PO-synced rows carry supplier/invoice detail into the tax ledger.
+          if (exp.supplier) doc.supplier = String(exp.supplier);
+          if (exp.invoiceNo) doc.invoiceNo = String(exp.invoiceNo);
+          if (exp.invoiceType) doc.invoiceType = String(exp.invoiceType);
+          if (exp.tin) doc.tin = String(exp.tin);
+          if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
+          if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
+          if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
+          batch.set(ref, doc);
+          inserted.push({ id: ref.id, ...doc });
+        }
+        await batch.commit();
+      }
+      return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
+    }
+    // Single insert
+    const { projectId, projectName, description, amount, date, category, sourceType,
+            sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
+            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = body;
+    if (!projectId || !amount) {
+      return res.status(400).json({ success: false, error: 'projectId and amount are required' });
+    }
+    const doc = {
+      projectId: String(projectId),
+      projectName: projectName || '',
+      description: description || '',
+      amount: Number(amount),
+      date: date || now.slice(0, 10),
+      category: category || 'Others',
+      createdAt: now,
+      createdBy: user.id,
+      sourceType: sourceType || 'manual',
+    };
+    if (sourcePoId) doc.sourcePoId = sourcePoId;
+    if (sourcePoItemId) doc.sourcePoItemId = sourcePoItemId;
+    if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
+    if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
+    if (sourceCaId) doc.sourceCaId = sourceCaId;
+    if (receiptRef) doc.receiptRef = receiptRef;
+    if (supplier) doc.supplier = String(supplier);
+    if (invoiceNo) doc.invoiceNo = String(invoiceNo);
+    if (invoiceType) doc.invoiceType = String(invoiceType);
+    if (tin) doc.tin = String(tin);
+    if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
+    if (typeof deductible === 'boolean') doc.deductible = deductible;
+    if (deductibleReason) doc.deductibleReason = String(deductibleReason);
+    const ref = await db.collection('project_expenses').add(doc);
+    res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
+  } catch (err) {
+    console.error('Error creating project_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.delete('/api/project-expenses/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const ref = db.collection('project_expenses').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Not found' });
+    if (!isAdmin && doc.data().createdBy !== user.id) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting project_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 // ========== CASH ADVANCES ==========
+
+function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Human-readable CA reference number. Per-project sequence when the CA is tied
+// to a project with a project_no (e.g. IOCT2606001-CA01); otherwise a global
+// monthly fallback (e.g. CA2606-001) for out-of-project / prospect CAs.
+// Scan-max with no transaction — same approach as nextIoctProjectNo() and
+// /api/liquidations/next-form-no; volume is low and `id` stays the real key.
+async function nextCaNo(projectId, dateLike) {
+  let projectNo = null;
+  if (projectId) {
+    const pDoc = await db.collection('projects').doc(String(projectId)).get();
+    if (pDoc.exists) projectNo = String(pDoc.data().project_no || '').trim().toUpperCase() || null;
+  }
+  if (projectNo) {
+    const snap = await db.collection('cash_advances')
+      .where('project_id', '==', String(projectId)).select('ca_no').get();
+    const re = new RegExp(`^${escapeRegExp(projectNo)}-CA(\\d+)$`);
+    let max = 0;
+    for (const d of snap.docs) {
+      const m = String(d.data().ca_no || '').trim().toUpperCase().match(re);
+      if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > max) max = n; }
+    }
+    return `${projectNo}-CA${String(max + 1).padStart(2, '0')}`;
+  }
+  const prefix = `CA${phYearMonth(dateLike)}-`;
+  const snap = await db.collection('cash_advances').select('ca_no').get();
+  const re = new RegExp(`^${escapeRegExp(prefix)}(\\d{3})$`);
+  let max = 0;
+  for (const d of snap.docs) {
+    const m = String(d.data().ca_no || '').trim().toUpperCase().match(re);
+    if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > max) max = n; }
+  }
+  return `${prefix}${String(max + 1).padStart(3, '0')}`;
+}
+
 app.get('/api/cash-advances', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -827,14 +1187,19 @@ app.post('/api/cash-advances', async (req, res) => {
     if (items.length > 0) { breakdown = items; if (sum > 0) amount = sum; }
   }
   if (!amount || amount <= 0) return res.status(400).json({ success: false, error: 'Add at least one breakdown line with an amount (total is auto-computed)' });
+  // CAs may pre-date a project (e.g. prospect work before a quotation) — in
+  // that case a purpose/prospect description is required instead.
+  const purpose = String(req.body.purpose ?? '').trim() || null;
+  if (!projectId && !purpose) return res.status(400).json({ success: false, error: 'Select a project or describe the purpose/prospect' });
   let requestedAt = Math.floor(Date.now() / 1000);
   const dateRequested = req.body.date_requested;
   if (dateRequested && /^\d{4}-\d{2}-\d{2}$/.test(String(dateRequested).trim())) {
     requestedAt = Math.floor(new Date(dateRequested + 'T12:00:00').getTime() / 1000);
   }
   try {
-    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose: null, breakdown: breakdown || null, project_id: projectId || null, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt });
-    res.status(201).json({ success: true, id: ref.id, message: 'Cash advance requested' });
+    const caNo = await nextCaNo(projectId, new Date(requestedAt * 1000));
+    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt });
+    res.status(201).json({ success: true, id: ref.id, ca_no: caNo, message: `Cash advance ${caNo} requested` });
   } catch (err) {
     console.error('Error creating cash advance:', err);
     res.status(500).json({ success: false, error: 'Database error' });
@@ -878,6 +1243,14 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
       if (ca.user_id !== user.id) return res.status(403).json({ success: false, error: 'You can only delete your own request' });
     }
     const liqSnap = await db.collection('liquidations').where('ca_id', '==', id).get();
+    // Submitted liquidations have already deducted from this CA's balance —
+    // silently unlinking them would orphan that money trail. Block the delete
+    // and let the user resolve the liquidations first. Drafts are just unlinked.
+    const submittedLiqs = liqSnap.docs.filter(lDoc => lDoc.data().status === 'submitted');
+    if (submittedLiqs.length > 0) {
+      const formNos = submittedLiqs.map(lDoc => lDoc.data().form_no || lDoc.id).slice(0, 5).join(', ');
+      return res.status(400).json({ success: false, error: `This CA has ${submittedLiqs.length} submitted liquidation(s) (${formNos}). Delete or unlink them first.` });
+    }
     if (!liqSnap.empty) {
       const batch = db.batch();
       liqSnap.docs.forEach(lDoc => batch.update(lDoc.ref, { ca_id: null }));
@@ -952,8 +1325,9 @@ app.get('/api/liquidations/:id', async (req, res) => {
 app.post('/api/liquidations', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
-  const { form_no, date_of_submission, employee_name, employee_number, rows_json, total_amount, status, ca_id } = req.body;
+  const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
   const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
+  const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
   const total = parseFloat(total_amount) || 0;
   const now = Math.floor(Date.now() / 1000);
   const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
@@ -962,8 +1336,17 @@ app.post('/api/liquidations', async (req, res) => {
     if (liqStatus === 'submitted' && caId) {
       const caDoc = await db.collection('cash_advances').doc(caId).get();
       if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
+      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
+      if (total > bal) return res.status(400).json({ success: false, error: `Liquidation (₱${total.toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
     }
-    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), total_amount: total, ca_id: caId, status: liqStatus, created_at: now, updated_at: now });
+    if (liqStatus === 'submitted' && form_no) {
+      const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
+      if (!dupSnap.empty) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
+    }
+    // No-CA submitted liquidations are out-of-pocket reimbursement claims —
+    // tracked so the requester gets paid back (see PATCH below).
+    const reimbursementStatus = liqStatus === 'submitted' && !caId ? 'pending' : null;
+    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
     }
@@ -985,8 +1368,9 @@ app.put('/api/liquidations/:id', async (req, res) => {
     const existing = doc.data();
     if (existing.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (existing.status === 'submitted') return res.status(400).json({ success: false, error: 'Cannot edit submitted liquidation' });
-    const { form_no, date_of_submission, employee_name, employee_number, rows_json, total_amount, status, ca_id } = req.body;
+    const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
     const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
+    const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
     const total = parseFloat(total_amount) || 0;
     const now = Math.floor(Date.now() / 1000);
     const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
@@ -994,14 +1378,107 @@ app.put('/api/liquidations/:id', async (req, res) => {
     if (liqStatus === 'submitted' && caId) {
       const caDoc = await db.collection('cash_advances').doc(caId).get();
       if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
+      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
+      if (total > bal) return res.status(400).json({ success: false, error: `Liquidation (₱${total.toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
     }
-    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), total_amount: total, ca_id: caId, status: liqStatus, updated_at: now });
+    if (liqStatus === 'submitted' && form_no) {
+      const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
+      if (dupSnap.docs.some(d => d.id !== id)) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
+    }
+    const reimbursementStatus = liqStatus === 'submitted' && !caId ? 'pending' : null;
+    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
     }
     res.json({ success: true, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
   } catch (err) {
     console.error('Error updating liquidation:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: mark an out-of-pocket (no-CA) submitted liquidation as
+// reimbursed (or revert to pending). CA-linked liquidations settle through the
+// CA balance instead, so reimbursement tracking does not apply to them.
+app.patch('/api/liquidations/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { reimbursement_status } = req.body;
+  if (reimbursement_status !== 'pending' && reimbursement_status !== 'reimbursed') return res.status(400).json({ success: false, error: 'reimbursement_status must be pending or reimbursed' });
+  try {
+    const ref = db.collection('liquidations').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    if (liq.status !== 'submitted' || liq.ca_id) return res.status(400).json({ success: false, error: 'Reimbursement status only applies to submitted liquidations without a CA' });
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({
+      reimbursement_status,
+      reimbursed_at: reimbursement_status === 'reimbursed' ? now : null,
+      reimbursed_by: reimbursement_status === 'reimbursed' ? user.id : null,
+      updated_at: now,
+    });
+    res.json({ success: true, message: reimbursement_status === 'reimbursed' ? 'Marked as reimbursed' : 'Reverted to pending reimbursement' });
+  } catch (err) {
+    console.error('Error updating liquidation reimbursement status:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: list liquidations pending reimbursement (submitted, no CA).
+app.get('/api/reimbursements', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  try {
+    const snap = await db.collection('liquidations').where('reimbursement_status', '==', 'pending').get();
+    const rows = await Promise.all(snap.docs.map(async doc => {
+      const liq = { id: doc.id, ...doc.data() };
+      if (liq.user_id) {
+        const uDoc = await db.collection('users').doc(liq.user_id).get();
+        if (uDoc.exists) { liq.username = uDoc.data().username; liq.full_name = uDoc.data().full_name; }
+      }
+      return liq;
+    }));
+    rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    res.json({ success: true, reimbursements: rows });
+  } catch (err) {
+    console.error('Error fetching reimbursements:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: batch-mark pending (no-CA submitted) liquidations as reimbursed.
+app.post('/api/reimbursements/batch-mark', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ success: false, error: 'ids must be a non-empty array' });
+  if (ids.some(id => typeof id !== 'string' || !id.trim())) return res.status(400).json({ success: false, error: 'Each id must be a non-empty string' });
+  if (ids.length > 500) return res.status(400).json({ success: false, error: 'Maximum 500 ids per request' });
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const batch = db.batch();
+    const skipped = [];
+    let updated = 0;
+    for (const id of ids) {
+      const ref = db.collection('liquidations').doc(id);
+      const doc = await ref.get();
+      if (!doc.exists) { skipped.push({ id, reason: 'not found' }); continue; }
+      const liq = doc.data();
+      if (liq.status !== 'submitted' || liq.ca_id || liq.reimbursement_status !== 'pending') {
+        skipped.push({ id, reason: 'not a pending no-CA submitted liquidation' });
+        continue;
+      }
+      batch.update(ref, { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id, updated_at: now });
+      updated++;
+    }
+    if (updated > 0) await batch.commit();
+    res.json({ success: true, updated, skipped, message: `Marked ${updated} as reimbursed` });
+  } catch (err) {
+    console.error('Error batch-marking reimbursements:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
@@ -1354,11 +1831,74 @@ app.post('/api/payroll/runs', async (req, res) => {
 app.post('/api/payroll/runs/:id/approve', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   try {
-    const ref = db.collection('payroll_runs').doc(req.params.id);
+    const runId = req.params.id;
+    const ref = db.collection('payroll_runs').doc(runId);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
-    await ref.update({ status: 'APPROVED', approvedBy: user.username, approvedAt: new Date().toISOString() });
-    res.json({ success: true });
+
+    const runData = doc.data();
+    // Don't downgrade an already-PAID run back to APPROVED on a re-approve call.
+    const nextStatus = runData.status === 'PAID' ? 'PAID' : 'APPROVED';
+    await ref.update({ status: nextStatus, approvedBy: user.username, approvedAt: new Date().toISOString() });
+
+    // --- Overhead sync (best-effort; must never fail the approval) ---
+    // Posts OFFICE-staff payroll cost into overhead_expenses so it flows into the company P&L OPEX.
+    // Uses DETERMINISTIC doc ids keyed on the run, so re-approving overwrites (never duplicates) the
+    // rows and stays correct even under concurrent approve calls — no read-then-write race, no index.
+    let overheadSynced = false;
+    try {
+      const payslipsSnap = await ref.collection('payslips').get();
+      let totalOfficeGross = 0;
+      let totalOfficeERGovt = 0;
+      payslipsSnap.forEach((pSnap) => {
+        const p = pSnap.data();
+        if (p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE') {
+          totalOfficeGross += Number(p.grossPay || 0);
+          totalOfficeERGovt += Number(p.erSSS || 0) + Number(p.erPhilhealth || 0) + Number(p.erPagibig || 0);
+        }
+      });
+
+      const expenseDate = runData.payDate || runData.periodEnd || new Date().toISOString().slice(0, 10);
+      const baseDoc = {
+        date: expenseDate,
+        sourceType: 'payroll_sync',
+        sourceRunId: runId,
+        createdAt: new Date().toISOString(),
+        createdBy: user.id || user.username,
+      };
+
+      const batch = db.batch();
+      const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
+      const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
+      // set when > 0, otherwise delete any stale row from a prior approve (delete of a missing doc is a no-op).
+      if (totalOfficeGross > 0) {
+        batch.set(salariesRef, {
+          ...baseDoc,
+          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Office salaries`,
+          amount: totalOfficeGross,
+          category: 'Salaries & Wages',
+        });
+      } else {
+        batch.delete(salariesRef);
+      }
+      if (totalOfficeERGovt > 0) {
+        batch.set(govtRef, {
+          ...baseDoc,
+          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Employer gov't contributions`,
+          amount: totalOfficeERGovt,
+          category: 'Government Contributions',
+        });
+      } else {
+        batch.delete(govtRef);
+      }
+      await batch.commit();
+      overheadSynced = true;
+    } catch (syncErr) {
+      console.error('Payroll overhead sync failed for run', runId, syncErr);
+    }
+    // --- end overhead sync ---
+
+    res.json({ success: true, overheadSynced });
   } catch (err) { res.status(500).json({ error: 'Failed to approve run' }); }
 });
 
@@ -1421,6 +1961,35 @@ app.post('/api/payroll/runs/:runId/payslips', async (req, res) => {
     await batch.commit();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to save payslips' }); }
+});
+
+// ── Employee Payslip (self-service) ────────────────────────────────────────
+app.get('/api/payroll/my-payslips', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const runsSnap = await db.collection('payroll_runs').orderBy('payDate', 'desc').get();
+    const payslips = [];
+    for (const runDoc of runsSnap.docs) {
+      // Payslip doc ID = employeeId
+      const slipDoc = await runDoc.ref.collection('payslips').doc(user.id).get();
+      if (slipDoc.exists) {
+        payslips.push({
+          ...slipDoc.data(),
+          id: slipDoc.id,
+          payrollRunId: runDoc.id,
+          payDate: runDoc.data().payDate,
+          periodStart: runDoc.data().periodStart,
+          periodEnd: runDoc.data().periodEnd,
+          runStatus: runDoc.data().status,
+        });
+      }
+    }
+    res.json(payslips);
+  } catch (err) {
+    console.error('GET /api/payroll/my-payslips error:', err);
+    res.status(500).json({ error: 'Failed to fetch payslips' });
+  }
 });
 
 // ── Contribution Settings ──────────────────────────────────────────────────
@@ -1913,6 +2482,9 @@ app.delete('/api/calcsheet/projects/:id', async (req, res) => {
     // Also delete all quotations for this project
     const qsnap = await db.collection('calcsheet_quotations').where('projectId', '==', req.params.id).get();
     await Promise.all(qsnap.docs.map((d) => d.ref.delete()));
+    // And their version snapshots
+    const vsnap = await db.collection('calcsheet_quotation_versions').where('projectId', '==', req.params.id).get();
+    await Promise.all(vsnap.docs.map((d) => d.ref.delete()));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete project' }); }
 });
@@ -1958,11 +2530,49 @@ app.put('/api/calcsheet/quotations/:id', async (req, res) => {
     if (!user) return;
     const { id: _ignored, ...body } = req.body || {};
     const update = { ...body, updatedAt: new Date().toISOString() };
-    await db.collection('calcsheet_quotations').doc(req.params.id).update(update);
+    const ref = db.collection('calcsheet_quotations').doc(req.params.id);
+    // Snapshot the pre-save state into calcsheet_quotation_versions so edits
+    // can be looked back at later. Best-effort — a failed snapshot must never
+    // block the save itself.
+    try {
+      const prev = await ref.get();
+      if (prev.exists) {
+        const { id: _stored, ...prevData } = prev.data();
+        await db.collection('calcsheet_quotation_versions').add({
+          quotationId: req.params.id,
+          projectId: prevData.projectId || null,
+          savedAt: new Date().toISOString(),
+          savedBy: user.full_name || user.username || null,
+          data: prevData,
+        });
+      }
+    } catch (verErr) {
+      console.warn('[calcsheet] version snapshot failed (non-blocking):', verErr && verErr.message);
+    }
+    await ref.update(update);
     res.json({ success: true });
   } catch (err) {
     console.error('[calcsheet] update quotation failed:', { id: req.params.id, err: err && err.message });
     res.status(500).json({ error: 'Failed to update quotation' });
+  }
+});
+
+app.get('/api/calcsheet/quotations/:id/versions', async (req, res) => {
+  try {
+    // Single-field where + in-memory sort avoids needing a composite index.
+    const snap = await db.collection('calcsheet_quotation_versions')
+      .where('quotationId', '==', req.params.id)
+      .get();
+    const versions = snap.docs
+      .map((d) => {
+        const { id: _stored, ...data } = d.data();
+        return { ...data, id: d.id };
+      })
+      .sort((a, b) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')));
+    res.json({ success: true, versions });
+  } catch (err) {
+    console.error('[calcsheet] get quotation versions failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to get quotation versions' });
   }
 });
 
@@ -1971,6 +2581,9 @@ app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
     const user = await requireActiveUser(req, res);
     if (!user) return;
     await db.collection('calcsheet_quotations').doc(req.params.id).delete();
+    // Remove version snapshots belonging to the deleted quotation.
+    const vsnap = await db.collection('calcsheet_quotation_versions').where('quotationId', '==', req.params.id).get();
+    await Promise.all(vsnap.docs.map((d) => d.ref.delete()));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete quotation' }); }
 });
@@ -2391,6 +3004,1247 @@ app.delete('/api/service-reports/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete service report' });
   }
 });
+
+// ========== PROGRESS REPORTS (saved WBS snapshots) ==========
+// Filter by project_id with an in-memory sort (no composite index required —
+// same pattern as calcsheet_quotation_versions).
+app.get('/api/progress-reports', async (req, res) => {
+  const { project_id } = req.query;
+  try {
+    let snap;
+    if (project_id) {
+      snap = await db.collection('progress_reports')
+        .where('project_id', '==', String(project_id))
+        .limit(200)
+        .get();
+    } else {
+      snap = await db.collection('progress_reports').orderBy('created_at', 'desc').limit(200).get();
+    }
+    const rows = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+    rows.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching progress reports:', err);
+    res.status(500).json({ error: 'Failed to fetch progress reports' });
+  }
+});
+
+app.post('/api/progress-reports', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.created_at = data.created_at || new Date().toISOString();
+    data.updated_at = new Date().toISOString();
+    const ref = await db.collection('progress_reports').add(data);
+    res.json({ ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error creating progress report:', err);
+    res.status(500).json({ error: 'Failed to create progress report' });
+  }
+});
+
+app.put('/api/progress-reports/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.updated_at = new Date().toISOString();
+    const ref = db.collection('progress_reports').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Progress report not found' });
+    await ref.update(data);
+    res.json({ ...doc.data(), ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error updating progress report:', err);
+    res.status(500).json({ error: 'Failed to update progress report' });
+  }
+});
+
+app.delete('/api/progress-reports/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const ref = db.collection('progress_reports').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Progress report not found' });
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting progress report:', err);
+    res.status(500).json({ error: 'Failed to delete progress report' });
+  }
+});
+
+// ========== COMPLETION CERTIFICATES ==========
+// Filter by project_id with an in-memory sort (no composite index required).
+app.get('/api/completion-certificates', async (req, res) => {
+  const { project_id } = req.query;
+  try {
+    let snap;
+    if (project_id) {
+      snap = await db.collection('completion_certificates')
+        .where('project_id', '==', String(project_id))
+        .limit(200)
+        .get();
+    } else {
+      snap = await db.collection('completion_certificates').orderBy('created_at', 'desc').limit(200).get();
+    }
+    const rows = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+    rows.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching completion certificates:', err);
+    res.status(500).json({ error: 'Failed to fetch completion certificates' });
+  }
+});
+
+app.post('/api/completion-certificates', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.created_at = data.created_at || new Date().toISOString();
+    data.updated_at = new Date().toISOString();
+    const ref = await db.collection('completion_certificates').add(data);
+    res.json({ ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error creating completion certificate:', err);
+    res.status(500).json({ error: 'Failed to create completion certificate' });
+  }
+});
+
+app.put('/api/completion-certificates/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const data = stripUndefinedFields({ ...req.body });
+    delete data.id;
+    data.updated_at = new Date().toISOString();
+    const ref = db.collection('completion_certificates').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Completion certificate not found' });
+    await ref.update(data);
+    res.json({ ...doc.data(), ...data, id: ref.id });
+  } catch (err) {
+    console.error('Error updating completion certificate:', err);
+    res.status(500).json({ error: 'Failed to update completion certificate' });
+  }
+});
+
+app.delete('/api/completion-certificates/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const { id } = req.params;
+  try {
+    const ref = db.collection('completion_certificates').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Completion certificate not found' });
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting completion certificate:', err);
+    res.status(500).json({ error: 'Failed to delete completion certificate' });
+  }
+});
+
+// ─── DTR Entries ────────────────────────────────────────────────────────────
+app.get('/api/dtr', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
+  const { employeeId } = req.query;
+  if (!employeeId) return res.status(400).json({ error: 'employeeId query parameter required' });
+  // Non-admin users can only query their own entries
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  if (!isAdmin && String(employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const snap = await db.collection('dtr_entries').where('employeeId', '==', employeeId).get();
+    const entries = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+    res.json(entries);
+  } catch (e) {
+    console.error('GET /api/dtr error:', e);
+    res.status(500).json({ error: 'Failed to fetch DTR entries' });
+  }
+});
+
+app.post('/api/dtr', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
+  const { employeeId, entryDate, timeIn, timeOut, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks } = req.body;
+  if (!employeeId || !entryDate || !dayType) return res.status(400).json({ error: 'employeeId, entryDate, and dayType are required' });
+  // Non-admin users can only create entries for themselves
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  if (!isAdmin && String(employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+  // Duplicate check
+  const existing = await db.collection('dtr_entries')
+    .where('employeeId', '==', employeeId)
+    .where('entryDate', '==', entryDate)
+    .get();
+  if (!existing.empty) return res.status(409).json({ error: `DTR entry already exists for ${entryDate}. Load and edit it instead.` });
+  try {
+    const entry = {
+      employeeId,
+      entryDate,
+      timeIn: timeIn || '',
+      timeOut: timeOut || '',
+      dayType,
+      regularHours: Number(regularHours) || 0,
+      overtimeHours: Number(overtimeHours) || 0,
+      nightDiffHours: Number(nightDiffHours) || 0,
+      isAbsent: !!isAbsent,
+      tardinessMinutes: Number(tardinessMinutes) || 0,
+      remarks: remarks || '',
+      submittedAt: new Date().toISOString(),
+    };
+    const ref = await db.collection('dtr_entries').add(entry);
+    res.status(201).json({ ...entry, id: ref.id });
+  } catch (e) {
+    console.error('POST /api/dtr error:', e);
+    res.status(500).json({ error: 'Failed to create DTR entry' });
+  }
+});
+
+app.put('/api/dtr/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  try {
+    const docRef = db.collection('dtr_entries').doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return res.status(404).json({ error: 'DTR entry not found' });
+    const data = doc.data();
+    const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+    if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+    const { employeeId, id: _id, ...updates } = req.body;
+    updates.submittedAt = new Date().toISOString();
+    await docRef.update(updates);
+    const updated = await docRef.get();
+    res.json({ ...updated.data(), id: updated.id });
+  } catch (e) {
+    console.error('PUT /api/dtr/:id error:', e);
+    res.status(500).json({ error: 'Failed to update DTR entry' });
+  }
+});
+
+app.delete('/api/dtr/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  try {
+    const docRef = db.collection('dtr_entries').doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) return res.status(404).json({ error: 'DTR entry not found' });
+    const data = doc.data();
+    const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+    if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+    await docRef.delete();
+    res.json({ success: true });
+  } catch (e) {
+    console.error('DELETE /api/dtr/:id error:', e);
+    res.status(500).json({ error: 'Failed to delete DTR entry' });
+  }
+});
+
+// ========== ONEDRIVE / MICROSOFT GRAPH HEALTH ==========
+// Smoke test for server-side app-only Graph auth. Never exposes token/secret.
+app.get('/api/onedrive/health', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    res.json({ ok: true, owner: process.env.ONEDRIVE_DRIVE_OWNER, driveId, tokenCached: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ========== APP-ONLY ONEDRIVE FILE OPERATIONS (Phase A) ==========
+// Idempotently ensure a nested folder path exists under the drive root; returns the deepest folder's { id, webUrl, name }.
+async function ensureFolderByPath(token, driveId, folderPath) {
+  const segments = String(folderPath).split('/').map((s) => s.trim()).filter(Boolean);
+  let parentPath = '';
+  let current = null;
+  for (const name of segments) {
+    const fullPath = parentPath ? `${parentPath}/${name}` : name;
+    // lookup-first
+    const enc = fullPath.split('/').map(encodeURIComponent).join('/');
+    const lookup = await fetch(`https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}`, { headers: { Authorization: 'Bearer ' + token } });
+    if (lookup.ok) { current = await lookup.json(); parentPath = fullPath; continue; }
+    // create
+    const encParent = parentPath ? parentPath.split('/').map(encodeURIComponent).join('/') : '';
+    const createUrl = parentPath
+      ? `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${encParent}:/children`
+      : `https://graph.microsoft.com/v1.0/drives/${driveId}/root/children`;
+    const cr = await fetch(createUrl, { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) });
+    if (cr.status === 409) {
+      const again = await fetch(`https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}`, { headers: { Authorization: 'Bearer ' + token } });
+      current = await again.json();
+    } else if (cr.ok) {
+      current = await cr.json();
+    } else {
+      const t = await cr.text().catch(() => '');
+      throw new Error(`Folder create failed (${cr.status}) at "${fullPath}": ${t.slice(0, 300)}`);
+    }
+    parentPath = fullPath;
+  }
+  if (!current) throw new Error('Empty folder path');
+  return { id: current.id, webUrl: current.webUrl || '', name: current.name };
+}
+
+function contentTypeForFilename(filename) {
+  const ext = String(filename).toLowerCase().split('.').pop();
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'pdf') return 'application/pdf';
+  return 'application/octet-stream';
+}
+
+// 1. Upload a base64 file into a folder path (folder ensured idempotently).
+app.post('/api/onedrive/upload', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { folderPath, filename, contentBase64 } = req.body || {};
+  if (!folderPath || !filename || !contentBase64) {
+    return res.status(400).json({ error: 'folderPath, filename, and contentBase64 are required' });
+  }
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const folder = await ensureFolderByPath(token, driveId, folderPath);
+    const buf = Buffer.from(contentBase64, 'base64');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(folder.id)}:/${encodeURIComponent(filename)}:/content`,
+      { method: 'PUT', headers: { Authorization: 'Bearer ' + token, 'Content-Type': contentTypeForFilename(filename) }, body: buf }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Upload failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 2. Delete an item by id (404 treated as success — already gone).
+app.delete('/api/onedrive/item/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}`,
+      { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (!r.ok && r.status !== 404) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Delete failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 3. Medium thumbnail URL for an item.
+app.get('/api/onedrive/item/:id/thumbnail', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/thumbnails/0/medium`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.ok) {
+      const json = await r.json();
+      if (json && json.url) return res.json({ ok: true, url: json.url });
+    }
+    res.json({ ok: false });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 4. Stream an item's raw bytes (Graph redirects to content; fetch follows).
+app.get('/api/onedrive/item/:id/content', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/content`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Content fetch failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const ab = await r.arrayBuffer();
+    res.set('Content-Type', r.headers.get('content-type') || 'application/octet-stream');
+    res.send(Buffer.from(ab));
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 5. Ensure a folder path exists.
+app.post('/api/onedrive/ensure-folder', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { path: folderPath } = req.body || {};
+  if (!folderPath) return res.status(400).json({ error: 'path is required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const f = await ensureFolderByPath(token, driveId, folderPath);
+    res.json({ ok: true, id: f.id, webUrl: f.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 6. Move (and optionally rename) an item into a destination folder path.
+app.post('/api/onedrive/move', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { itemId, destPath, name } = req.body || {};
+  if (!itemId || !destPath) return res.status(400).json({ error: 'itemId and destPath are required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const dest = await ensureFolderByPath(token, driveId, destPath);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(itemId)}`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentReference: { id: dest.id }, ...(name ? { name } : {}) }),
+      }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Move failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Upload a file directly into a folder identified by its drive item id.
+app.post('/api/onedrive/upload-by-id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { folderId, filename, contentBase64 } = req.body || {};
+  if (!folderId || !filename || !contentBase64) {
+    return res.status(400).json({ error: 'folderId, filename and contentBase64 are required' });
+  }
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const buf = Buffer.from(contentBase64, 'base64');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(folderId)}:/${encodeURIComponent(filename)}:/content`,
+      { method: 'PUT', headers: { Authorization: 'Bearer ' + token, 'Content-Type': contentTypeForFilename(filename) }, body: buf }
+    );
+    if (!r.ok) throw new Error('upload-by-id failed ' + r.status + ' ' + (await r.text()).slice(0, 300));
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Metadata lookup by drive item id. Placed AFTER /item/:id/thumbnail and /item/:id/content.
+app.get('/api/onedrive/item/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}?$select=id,webUrl,name`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.status === 404 || r.status === 410) return res.json({ ok: false });
+    if (!r.ok) throw new Error('item meta failed ' + r.status);
+    const d = await r.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Resolve a drive item by its path under the corporate drive root.
+app.get('/api/onedrive/by-path', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!req.query.path) return res.status(400).json({ error: 'path is required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const enc = String(req.query.path).split('/').map(encodeURIComponent).join('/');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}?$select=id,webUrl,name`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.status === 404) return res.json({ ok: false });
+    if (!r.ok) throw new Error('by-path failed ' + r.status);
+    const d = await r.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// List children of a folder (by path; empty path = root) with optional name-prefix filter.
+app.get('/api/onedrive/children', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const path = req.query.path ? String(req.query.path) : '';
+    const prefix = req.query.prefix ? String(req.query.prefix).toLowerCase() : '';
+    const enc = path ? path.split('/').map(encodeURIComponent).join('/') : '';
+    const url = path
+      ? `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}:/children?$top=500&$select=id,webUrl,name,folder`
+      : `https://graph.microsoft.com/v1.0/drives/${driveId}/root/children?$top=500&$select=id,webUrl,name,folder`;
+    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+    if (r.status === 404) return res.json({ ok: true, items: [] });
+    if (!r.ok) throw new Error('children failed ' + r.status);
+    const d = await r.json();
+    let items = (d.value || []).map(x => ({ id: x.id, webUrl: x.webUrl, name: x.name, isFolder: !!x.folder }));
+    if (prefix) items = items.filter(x => (x.name || '').toLowerCase().startsWith(prefix));
+    res.json({ ok: true, items });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Get-or-create a child folder under a parent identified by its drive item id.
+app.post('/api/onedrive/child-folder', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { parentId, name } = req.body || {};
+  if (!parentId || !name) return res.status(400).json({ error: 'parentId and name are required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const cr = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(parentId)}/children`,
+      { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) }
+    );
+    if (cr.status === 409) {
+      // already exists — find it among children
+      const lr = await fetch(
+        `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(parentId)}/children?$top=500&$select=id,webUrl,name`,
+        { headers: { Authorization: 'Bearer ' + token } }
+      );
+      const ld = await lr.json();
+      const found = (ld.value || []).find(x => x.name === name);
+      if (found) return res.json({ ok: true, id: found.id, webUrl: found.webUrl, name: found.name });
+      throw new Error('child-folder 409 but not found');
+    }
+    if (!cr.ok) throw new Error('child-folder failed ' + cr.status + ' ' + (await cr.text()).slice(0, 200));
+    const d = await cr.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// Resolve a sharing URL to the underlying drive item.
+app.post('/api/onedrive/share', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { url } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'url is required' });
+  try {
+    const token = await getGraphAppToken();
+    const u = String(url);
+    const b64 = Buffer.from(u).toString('base64').replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/shares/u!${b64}/driveItem?$select=id,webUrl,name,folder`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (!r.ok) throw new Error('share resolve failed ' + r.status);
+    const d = await r.json();
+    res.json({ ok: true, id: d.id, webUrl: d.webUrl, name: d.name, isFolder: !!d.folder });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// ========== QR PHONE-PAIRING AUTH (Phase C) ==========
+// Desktop user starts a pairing — short-lived token encoded into a QR code.
+app.post('/api/auth/qr/start', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { context } = req.body || {};
+  try {
+    // Invalidate any prior unused pairings for this user (caps active codes; complements single-use).
+    const prior = await db.collection('qr_pairings').where('userId', '==', user.id).where('used', '==', false).get();
+    if (!prior.empty) { const b = db.batch(); prior.docs.forEach((d) => b.delete(d.ref)); await b.commit(); }
+    const pairingToken = crypto.randomBytes(24).toString('hex');
+    await db.collection('qr_pairings').doc(pairingToken).set({
+      token: pairingToken,
+      userId: user.id,
+      username: user.username,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 120000,
+      used: false,
+      ...(context && typeof context === 'object' ? { context } : {}),
+    });
+    if (context && typeof context === 'object') {
+      await db.collection('scan_jobs').doc(pairingToken).set({
+        jobId: pairingToken,
+        userId: user.id,
+        context,
+        results: [],
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 30 * 60000,
+      });
+    }
+    res.json({ ok: true, pairingToken, expiresInMs: 120000 });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to start pairing', detail: err.message });
+  }
+});
+
+// Phone scans the QR and exchanges the pairing token for a scanner session token. PUBLIC.
+app.post('/api/auth/qr/exchange', async (req, res) => {
+  const { pairingToken } = req.body || {};
+  if (!pairingToken) return res.status(400).json({ error: 'pairingToken is required' });
+  try {
+    const pairRef = db.collection('qr_pairings').doc(pairingToken);
+    // Atomically validate + mark used so a pairing token can never be exchanged twice (TOCTOU-safe).
+    let pairing;
+    try {
+      pairing = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(pairRef);
+        if (!snap.exists) { const e = new Error('Invalid code'); e.httpStatus = 404; throw e; }
+        const p = snap.data();
+        if (p.used === true) { const e = new Error('Code already used'); e.httpStatus = 410; throw e; }
+        if (Date.now() > p.expiresAt) { const e = new Error('Code expired'); e.httpStatus = 410; throw e; }
+        tx.update(pairRef, { used: true });
+        return p;
+      });
+    } catch (e) {
+      if (e.httpStatus) return res.status(e.httpStatus).json({ error: e.message });
+      throw e;
+    }
+    const userDoc = await db.collection('users').doc(pairing.userId).get();
+    if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+    const scannerToken = 'scan_' + crypto.randomBytes(24).toString('hex');
+    // Expire at the next midnight in PH time (UTC+8), independent of the server's timezone.
+    // Shift now into PH wall-clock, snap to next midnight, then shift back to real UTC.
+    const PH_OFFSET = 8 * 3600000;
+    const phMidnight = new Date(Date.now() + PH_OFFSET);
+    phMidnight.setUTCHours(24, 0, 0, 0);
+    const expiresAt = phMidnight.getTime() - PH_OFFSET;
+    await db.collection('scanner_sessions').doc(scannerToken).set({
+      token: scannerToken,
+      userId: pairing.userId,
+      username: pairing.username,
+      createdAt: Date.now(),
+      expiresAt,
+    });
+    res.json({ ok: true, token: scannerToken, user: userResponse(userDoc.id, userDoc.data()), expiresAt, context: pairing.context || null });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to exchange code', detail: err.message });
+  }
+});
+
+// Desktop polls whether the QR has been scanned/paired yet.
+app.get('/api/auth/qr/status', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { pairingToken } = req.query || {};
+  if (!pairingToken) return res.status(400).json({ error: 'pairingToken is required' });
+  try {
+    const pairSnap = await db.collection('qr_pairings').doc(String(pairingToken)).get();
+    const pairing = pairSnap.exists ? pairSnap.data() : null;
+    res.json({ ok: true, paired: !!(pairing && pairing.used) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to read pairing status', detail: err.message });
+  }
+});
+
+// Phone posts a captured-and-uploaded receipt back to the scan job channel.
+// Auth: scanner session (or login token) of the SAME user who started the job.
+app.post('/api/scan-jobs/:jobId/result', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { jobId } = req.params;
+  const { receipt } = req.body || {};
+  if (!receipt || typeof receipt !== 'object' || !receipt.oneDriveId) {
+    return res.status(400).json({ error: 'receipt with oneDriveId is required' });
+  }
+  // Bound the stored thumbnail so a doc can never blow the 1MB Firestore limit.
+  const clean = {
+    oneDriveId: String(receipt.oneDriveId),
+    webUrl: receipt.webUrl ? String(receipt.webUrl) : '',
+    filename: receipt.filename ? String(receipt.filename) : 'receipt.jpg',
+  };
+  if (typeof receipt.thumbnailDataUrl === 'string' && receipt.thumbnailDataUrl.length <= 18000) {
+    clean.thumbnailDataUrl = receipt.thumbnailDataUrl;
+  }
+  if (receipt.parsed && typeof receipt.parsed === 'object') {
+    const p = receipt.parsed;
+    clean.parsed = {
+      amount: typeof p.amount === 'number' ? p.amount : null,
+      date: p.date ? String(p.date) : null,
+      category: p.category ? String(p.category) : null,
+      particulars: p.particulars ? String(p.particulars) : null,
+      vendor: p.vendor ? String(p.vendor) : null,
+      invoiceNo: p.invoiceNo ? String(p.invoiceNo) : null,
+      deductible: typeof p.deductible === 'boolean' ? p.deductible : null,
+      deductibleReason: p.deductibleReason ? String(p.deductibleReason) : null,
+      customerInfoIssues: Array.isArray(p.customerInfoIssues)
+        ? p.customerInfoIssues.filter((x) => typeof x === 'string').slice(0, 10).map((x) => String(x).slice(0, 300))
+        : [],
+      confidence: typeof p.confidence === 'number' ? p.confidence : null,
+    };
+  }
+  try {
+    const ref = db.collection('scan_jobs').doc(jobId);
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) { const e = new Error('Scan job not found'); e.httpStatus = 404; throw e; }
+      const job = snap.data();
+      if (job.userId !== user.id) { const e = new Error('Forbidden'); e.httpStatus = 403; throw e; }
+      const results = Array.isArray(job.results) ? job.results : [];
+      if (results.length >= 50) { const e = new Error('Too many results'); e.httpStatus = 409; throw e; }
+      results.push(clean);
+      tx.update(ref, { results, updatedAt: Date.now() });
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to record scan result', detail: err.message });
+  }
+});
+
+// Desktop polls for new receipts on a scan job. Owner-only. `since` = count already seen.
+app.get('/api/scan-jobs/:jobId', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { jobId } = req.params;
+  try {
+    const snap = await db.collection('scan_jobs').doc(jobId).get();
+    if (!snap.exists) return res.status(404).json({ error: 'Scan job not found' });
+    const job = snap.data();
+    if (job.userId !== user.id) return res.status(403).json({ error: 'Forbidden' });
+    const all = Array.isArray(job.results) ? job.results : [];
+    const since = Math.max(0, Number(req.query.since) || 0);
+    res.json({ ok: true, results: all.slice(since), total: all.length });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to read scan job', detail: err.message });
+  }
+});
+
+// --- BEGIN RECEIPT PARSING BLOCK ---
+function extractJson(text) {
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) return fence[1].trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1) throw new Error('NO_JSON_IN_RESPONSE');
+  return text.slice(start, end + 1);
+}
+
+const IOCT_CUSTOMER = { name: 'IO Control Technologie OPC', tinDigits: '697029976' };
+
+// Levenshtein edit distance — tolerates OCR/typo wobble (e.g. "Techonologie"
+// for "Technologie", anglicized "Technology") when matching the customer name.
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+function validateCustomerInfo(name, tin, address) {
+  const norm = (s) => (typeof s === 'string' ? s : '').toLowerCase().replace(/ñ/g, 'n').replace(/[^a-z0-9]/g, '');
+  const issues = [];
+  const nName = norm(name);
+  // Require the COMPLETE, correctly-spelled registered name. Allow only a single
+  // OCR/handwriting slip (e.g. "TECHONOLOGIE" = 1 edit → OK) but reject WRONG
+  // spellings like "Technology" (2 edits) and any abbreviation/incomplete name
+  // (e.g. just "IO Control", or missing "OPC" = 3+ edits).
+  const canonicalName = norm(IOCT_CUSTOMER.name); // "iocontroltechnologieopc"
+  const nameOk = nName.length > 0 && levenshtein(nName, canonicalName) <= 1;
+  if (!name || norm(name).length === 0) issues.push('Customer name is missing on the receipt');
+  else if (!nameOk) issues.push(`Customer name on receipt ("${String(name).trim()}") does not match "IO Control Technologie OPC"`);
+  const tinDigits = (typeof tin === 'string' ? tin : '').replace(/\D/g, '');
+  const tinOk = tinDigits.startsWith(IOCT_CUSTOMER.tinDigits);
+  if (!tin || tinDigits.length === 0) issues.push('Customer TIN is missing on the receipt');
+  else if (!tinOk) issues.push(`Customer TIN on receipt ("${String(tin).trim()}") does not match 697-029-976`);
+  const nAddr = norm(address);
+  const addressOk = nAddr.includes('binan');
+  if (!address || nAddr.length === 0) issues.push('Customer address is missing on the receipt');
+  else if (!addressOk) issues.push(`Customer address on receipt ("${String(address).trim()}") does not look like Biñan, Laguna`);
+  return { nameOk, tinOk, addressOk, issues };
+}
+
+function normalizeReceipt(raw) {
+  if (!raw || typeof raw !== 'object') throw new Error('INVALID_JSON_OBJECT');
+  const safeNum = (val) => {
+    if (typeof val !== 'number' && typeof val !== 'string') return null;
+    if (typeof val === 'string' && val.trim() === '') return null;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const allowedCategories = ['Tools / Direct', 'Gas', 'Materials', 'Transportation', 'Accommodation', '3rd Party Labor', 'Others'];
+  const dateMatch = (typeof raw.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.date)) ? raw.date : null;
+  const suggestedCategory = allowedCategories.includes(raw.suggestedCategory) ? raw.suggestedCategory : 'Others';
+
+  let confidence = Number(raw.confidence);
+  if (!Number.isFinite(confidence)) confidence = 0;
+  confidence = Math.max(0, Math.min(1, confidence));
+
+  const lineItems = Array.isArray(raw.lineItems) ? raw.lineItems.filter(item => item && typeof item === 'object').map(item => ({
+    description: typeof item.description === 'string' ? item.description : String(item.description || ''),
+    qty: safeNum(item.qty),
+    unitPrice: safeNum(item.unitPrice),
+    amount: safeNum(item.amount)
+  })) : [];
+
+  const allowedInvoiceTypes = ['Service Invoice', 'Sales Invoice', 'Official Receipt', 'Other'];
+  const invoiceType = allowedInvoiceTypes.includes(raw.invoiceType) ? raw.invoiceType : null;
+  const vatable = typeof raw.vatable === 'boolean' ? raw.vatable : null;
+  const deductible = typeof raw.deductible === 'boolean' ? raw.deductible : null;
+  const deductibleReason = (typeof raw.deductibleReason === 'string' && raw.deductibleReason.trim().length > 0) ? raw.deductibleReason.trim() : null;
+
+  const customerName = (typeof raw.customerName === 'string' && raw.customerName.trim().length > 0) ? raw.customerName.trim() : null;
+  const customerTin = (typeof raw.customerTin === 'string' && raw.customerTin.trim().length > 0) ? raw.customerTin.trim() : null;
+  const customerAddress = (typeof raw.customerAddress === 'string' && raw.customerAddress.trim().length > 0) ? raw.customerAddress.trim() : null;
+  const customerValidation = validateCustomerInfo(customerName, customerTin, customerAddress);
+
+  return {
+    vendor: typeof raw.vendor === 'string' ? raw.vendor : null,
+    description: (typeof raw.description === 'string' && raw.description.trim().length > 0) ? raw.description.trim() : null,
+    invoiceNumber: (typeof raw.invoiceNumber === 'string' && raw.invoiceNumber.trim().length > 0) ? raw.invoiceNumber.trim() : null,
+    invoiceType,
+    date: dateMatch,
+    currency: (typeof raw.currency === 'string' && raw.currency.trim().length > 0) ? raw.currency.trim() : 'PHP',
+    subtotal: safeNum(raw.subtotal),
+    tax: safeNum(raw.tax),
+    vatable,
+    total: safeNum(raw.total),
+    paymentMethod: typeof raw.paymentMethod === 'string' ? raw.paymentMethod : null,
+    suggestedCategory,
+    deductible,
+    deductibleReason,
+    customerName,
+    customerTin,
+    customerAddress,
+    customerValidation,
+    lineItems,
+    confidence
+  };
+}
+
+async function parseReceiptWithGemini(imageBase64, mimeType) {
+  const { GoogleGenerativeAI } = require('@google/generative-ai'); // Lazy require
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const modelName = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+  const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
+
+  const RECEIPT_PROMPT = `You are an expert AI data extraction assistant. Extract receipt data from the provided image/pdf into a strict JSON object.
+Do NOT wrap the output in markdown code blocks. Output ONLY valid, parsable JSON.
+If a value is not found or unreadable, use null.
+Remove all currency symbols (e.g., ', '₱', 'PHP') and commas from numeric values before outputting.
+
+The JSON MUST exactly match this structure:
+{
+  "vendor": "The SELLER's business / trade name — the main business name printed prominently at the TOP of the receipt (the letterhead/header), e.g. 'HOUSEOFCARDSPH DESKTOP PUBLISHING SERVICES'. Use this business/trade name. Do NOT use the proprietor's / owner's personal name even if present — ignore any name labeled 'Prop.', 'Proprietor', or 'Owner' (e.g. 'John Joebee W. Capino - Prop.' is the owner, NOT the vendor). Also prefer the registered business over a franchise/brand/logo (e.g. a Petron station's dealer 'Primera Una Gas Management Trading Inc.' rather than 'Petron'). String or null",
+  "customerName": "The CUSTOMER / buyer name written on the receipt — the 'Customer Name' / 'Sold To' / 'Registered Name' of the PURCHASER (NOT the seller). String or null",
+  "customerTin": "The CUSTOMER's TIN as written on the receipt (the buyer's TIN, NOT the seller's). String or null",
+  "customerAddress": "The CUSTOMER's address as written on the receipt (the buyer's address). String or null",
+  "description": "Short plain summary of the goods or services purchased (e.g. 'Business cards', 'Diesel fuel', 'Office supplies'). Read the 'description / nature of service / particulars' area and any line items. Do NOT just repeat the vendor name. String or null",
+  "invoiceNumber": "The receipt/invoice serial number exactly as printed (e.g. the 'No.' value, OR/SI number). String or null",
+  "invoiceType": "The document type from its title/header. One of: 'Service Invoice', 'Sales Invoice', 'Official Receipt', 'Other', or null",
+  "date": "YYYY-MM-DD string or null",
+  "currency": "String, use 'PHP' if not explicitly stated otherwise",
+  "subtotal": Number or null,
+  "tax": "The VAT / tax amount as a number, or null if none. Non-VAT receipts have null.",
+  "vatable": "Boolean: true if this is a VAT receipt (VAT-registered, shows a VAT amount or '12% VAT'); false if it is explicitly NON-VAT; null if unclear",
+  "total": Number or null,
+  "paymentMethod": "String or null",
+  "suggestedCategory": "Must be exactly one of: 'Tools / Direct', 'Gas', 'Materials', 'Transportation', 'Accommodation', '3rd Party Labor', 'Others'. Guess the best fit based on vendor and items.",
+  "deductible": "Boolean: true if this is a legitimate, substantiated BUSINESS expense that can be written off / claimed as an income-tax-deductible expense — i.e. it is an ordinary business purchase AND the document is a valid BIR receipt/invoice (shows the seller's registered name + VAT REG TIN, and a serial number). Set false for clearly personal/non-business items, or when the document is an informal/incomplete receipt that would not substantiate a deduction. null if unclear.",
+  "deductibleReason": "Short plain reason for the deductible value (e.g. 'Valid Sales Invoice with seller TIN — fuel for operations', or 'No seller TIN / informal receipt'). String or null",
+  "confidence": Number between 0.0 and 1.0 indicating extraction quality,
+  "lineItems": [
+    {
+      "description": "String",
+      "qty": Number or null,
+      "unitPrice": Number or null,
+      "amount": Number or null
+    }
+  ]
+}`;
+
+  const result = await model.generateContent([
+    { text: RECEIPT_PROMPT },
+    { inlineData: { mimeType, data: imageBase64.replace(/^data:.*?;base64,/, '') } }
+  ]);
+
+  const text = result.response.text();
+  const jsonStr = extractJson(text);
+  const parsed = JSON.parse(jsonStr);
+  return normalizeReceipt(parsed);
+}
+
+app.post('/api/receipts/parse', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+
+  const { imageBase64, mimeType } = req.body || {};
+  if (!imageBase64 || typeof imageBase64 !== 'string') {
+    return res.status(400).json({ ok: false, error: 'Missing or invalid imageBase64' });
+  }
+
+  const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'];
+  if (!mimeType || !allowedMimes.includes(mimeType)) {
+    return res.status(400).json({ ok: false, error: 'Unsupported mimeType. Allowed: jpeg, png, webp, heic, heif, pdf' });
+  }
+
+  try {
+    const receipt = await parseReceiptWithGemini(imageBase64, mimeType);
+    return res.json({ ok: true, receipt });
+  } catch (err) {
+    if (err.message === 'GEMINI_API_KEY not configured') {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+    console.error('[ReceiptParse Error]', err.message);
+    return res.status(502).json({ ok: false, error: err.message || 'Failed to parse receipt' });
+  }
+});
+async function detectCropWithGemini(imageBase64, mimeType) {
+  const { GoogleGenerativeAI } = require('@google/generative-ai');
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const modelName = process.env.GEMINI_CROP_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+  const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
+
+  const CROP_PROMPT = `Locate the document, receipt, or piece of paper in this photo and return the coordinates of its 4 corners.
+Output ONLY valid JSON — no markdown, no explanation.
+Coordinates are fractions from 0.0 to 1.0 relative to image size (0,0 = top-left corner, 1,1 = bottom-right corner).
+Return corners in this exact order: topLeft, topRight, bottomRight, bottomLeft.
+Example: {"topLeft":{"x":0.05,"y":0.1},"topRight":{"x":0.9,"y":0.08},"bottomRight":{"x":0.92,"y":0.95},"bottomLeft":{"x":0.04,"y":0.93}}
+If no document is visible, return: null`;
+
+  const result = await model.generateContent([
+    { text: CROP_PROMPT },
+    { inlineData: { mimeType, data: imageBase64.replace(/^data:.*?;base64,/, '') } },
+  ]);
+
+  const text = result.response.text();
+  const jsonStr = extractJson(text);
+  const parsed = JSON.parse(jsonStr);
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const clamp = (v) => Math.min(1, Math.max(0, Number(v) || 0));
+  const tl = parsed.topLeft || {};
+  const tr = parsed.topRight || {};
+  const br = parsed.bottomRight || {};
+  const bl = parsed.bottomLeft || {};
+
+  return [
+    { x: clamp(tl.x), y: clamp(tl.y) },
+    { x: clamp(tr.x), y: clamp(tr.y) },
+    { x: clamp(br.x), y: clamp(br.y) },
+    { x: clamp(bl.x), y: clamp(bl.y) },
+  ];
+}
+
+app.post('/api/receipts/detect-crop', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+
+  const { imageBase64, mimeType } = req.body || {};
+  if (!imageBase64 || typeof imageBase64 !== 'string') {
+    return res.status(400).json({ ok: false, error: 'Missing imageBase64' });
+  }
+
+  try {
+    const quad = await detectCropWithGemini(imageBase64, mimeType || 'image/jpeg');
+    return res.json({ ok: true, quad });
+  } catch (err) {
+    console.error('[CropDetect Error]', err.message);
+    return res.status(502).json({ ok: false, error: err.message });
+  }
+});
+// --- END RECEIPT PARSING BLOCK ---
+
+// ========== OVERHEAD EXPENSES ==========
+// Firestore collection: overhead_expenses
+// Company expenses NOT tied to any project (rent, utilities, supplies, subs).
+// Fields: description, amount, date (YYYY-MM-DD), category, createdAt (ISO),
+//   createdBy (userId), sourceType (manual|receipt_scan), optional updatedAt,
+//   optional receiptRef { oneDriveId, webUrl, filename }.
+// Queries are equality-only (where createdBy ==) + in-memory sort, so Firestore
+// automatic single-field indexes cover them — NO composite index needed.
+
+app.get('/api/overhead-expenses/summary', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { year } = req.query;
+    let query = db.collection('overhead_expenses');
+    if (!isAdmin) query = query.where('createdBy', '==', user.id);
+    const snap = await query.get();
+    let rows = snap.docs.map(doc => doc.data());
+    if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
+    const total = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    res.json({ success: true, total, count: rows.length, year: year || 'all' });
+  } catch (err) {
+    console.error('Error fetching overhead_expenses summary:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// GET /api/finance/pnl?year=YYYY — company-wide income statement (Profit & Loss).
+// Aggregates invoices (revenue, accrual), project_expenses (cost of services) and
+// overhead_expenses (operating expenses) for the given year. In-memory date-prefix
+// filtering mirrors the summary endpoints — NO composite index required.
+// COMPANY-WIDE for all authenticated users (management report; no per-user scoping).
+app.get('/api/finance/pnl', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  // P&L is a management report — superadmin only (no per-user/role separation yet).
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Forbidden' });
+  try {
+    const year = req.query.year ? String(req.query.year) : String(new Date().getFullYear());
+    const [invoicesSnap, projExpSnap, overExpSnap] = await Promise.all([
+      db.collection('invoices').get(),
+      db.collection('project_expenses').get(),
+      db.collection('overhead_expenses').get(),
+    ]);
+
+    let revenue = 0, revenueCollected = 0, invoiceCount = 0;
+    invoicesSnap.docs.forEach(doc => {
+      const d = doc.data();
+      if (d.invoice_date && String(d.invoice_date).startsWith(year)) {
+        revenue += Number(d.amount) || 0;
+        revenueCollected += Number(d.amount_collected) || 0;
+        invoiceCount++;
+      }
+    });
+
+    let costOfServices = 0;
+    projExpSnap.docs.forEach(doc => {
+      const d = doc.data();
+      if (d.date && String(d.date).startsWith(year)) {
+        costOfServices += Number(d.amount) || 0;
+      }
+    });
+
+    let operatingExpenses = 0;
+    const catMap = {};
+    overExpSnap.docs.forEach(doc => {
+      const d = doc.data();
+      if (d.date && String(d.date).startsWith(year)) {
+        const amt = Number(d.amount) || 0;
+        operatingExpenses += amt;
+        const cat = d.category || 'Uncategorized';
+        catMap[cat] = (catMap[cat] || 0) + amt;
+      }
+    });
+    const overheadByCategory = Object.entries(catMap)
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount);
+
+    const grossProfit = revenue - costOfServices;
+    const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
+    const operatingIncome = grossProfit - operatingExpenses;
+    const percentageTaxEstimate = revenueCollected * 0.03; // PH 2551Q: 3% on gross receipts (collected), not accrual
+    const netIncomeBeforeIncomeTax = operatingIncome - percentageTaxEstimate;
+
+    res.json({
+      success: true,
+      year,
+      generatedAt: new Date().toISOString(),
+      revenue,
+      revenueCollected,
+      invoiceCount,
+      costOfServices,
+      grossProfit,
+      grossMarginPct,
+      operatingExpenses,
+      overheadByCategory,
+      operatingIncome,
+      percentageTaxEstimate,
+      netIncomeBeforeIncomeTax,
+    });
+  } catch (err) {
+    console.error('Error computing finance P&L:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.get('/api/overhead-expenses', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { year, category } = req.query;
+    let query = db.collection('overhead_expenses');
+    if (!isAdmin) query = query.where('createdBy', '==', user.id);
+    if (category) query = query.where('category', '==', String(category));
+    const snap = await query.get();
+    let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    if (year) rows = rows.filter(r => r.date && String(r.date).startsWith(String(year)));
+    rows.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    res.json({ success: true, expenses: rows });
+  } catch (err) {
+    console.error('Error fetching overhead_expenses:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/overhead-expenses', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const body = req.body;
+    const now = new Date().toISOString();
+    if (Array.isArray(body.expenses)) {
+      const toInsert = body.expenses.filter(e => Number(e.amount) > 0);
+      if (toInsert.length === 0) return res.status(400).json({ success: false, error: 'No valid expenses in array' });
+      const inserted = [];
+      for (let i = 0; i < toInsert.length; i += 499) {
+        const chunk = toInsert.slice(i, i + 499);
+        const batch = db.batch();
+        for (const exp of chunk) {
+          const ref = db.collection('overhead_expenses').doc();
+          const doc = {
+            description: exp.description || '',
+            amount: Number(exp.amount),
+            date: exp.date || now.slice(0, 10),
+            category: exp.category || 'Others',
+            createdAt: exp.createdAt || now,
+            createdBy: user.id,
+            sourceType: exp.sourceType || 'manual',
+          };
+          if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
+          batch.set(ref, doc);
+          inserted.push({ id: ref.id, ...doc });
+        }
+        await batch.commit();
+      }
+      return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
+    }
+    const { description, amount, date, category, sourceType, receiptRef,
+            supplier, invoiceNo, invoiceType, vat, tin } = body;
+    if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
+    const doc = {
+      description: description || '',
+      amount: Number(amount),
+      date: date || now.slice(0, 10),
+      category: category || 'Others',
+      createdAt: now,
+      createdBy: user.id,
+      sourceType: sourceType || 'manual',
+    };
+    if (receiptRef) doc.receiptRef = receiptRef;
+    if (supplier) doc.supplier = String(supplier);
+    if (invoiceNo) doc.invoiceNo = String(invoiceNo);
+    if (invoiceType) doc.invoiceType = String(invoiceType);
+    if (tin) doc.tin = String(tin);
+    if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
+    const ref = await db.collection('overhead_expenses').add(doc);
+    res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
+  } catch (err) {
+    console.error('Error creating overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.patch('/api/overhead-expenses/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const ref = db.collection('overhead_expenses').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ success: false, error: 'Not found' });
+    if (!isAdmin && snap.data().createdBy !== user.id) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+    const allowed = {};
+    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin } = req.body;
+    if (description !== undefined) allowed.description = String(description);
+    if (amount !== undefined) allowed.amount = Number(amount);
+    if (date !== undefined) allowed.date = String(date);
+    if (category !== undefined) allowed.category = String(category);
+    if (receiptRef !== undefined) allowed.receiptRef = receiptRef;
+    if (supplier !== undefined) allowed.supplier = String(supplier);
+    if (invoiceNo !== undefined) allowed.invoiceNo = String(invoiceNo);
+    if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
+    if (vat !== undefined && Number.isFinite(Number(vat))) allowed.vat = Number(vat);
+    if (tin !== undefined) allowed.tin = String(tin);
+    allowed.updatedAt = new Date().toISOString();
+    await ref.update(allowed);
+    const updated = await ref.get();
+    res.json({ success: true, expense: { id: updated.id, ...updated.data() } });
+  } catch (err) {
+    console.error('Error updating overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.delete('/api/overhead-expenses/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const ref = db.collection('overhead_expenses').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Not found' });
+    if (!isAdmin && doc.data().createdBy !== user.id) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+// ========== END OVERHEAD EXPENSES ==========
 
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {

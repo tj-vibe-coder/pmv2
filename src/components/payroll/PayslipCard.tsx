@@ -134,6 +134,12 @@ const PayslipCard: React.FC<Props> = ({ payslip: s, onBack }) => {
             {s.adjustment !== 0 && <Row label="Adjustment" value={s.adjustment} />}
             <Divider sx={{ my: 1 }} />
             <Row label="Sub-Total" value={earningSubtotal} bold />
+            {s.thirteenthMonthAccrual > 0 && (
+              <>
+                <Divider sx={{ my: 1, borderStyle: 'dashed' }} />
+                <Row label="13th Mo. Accrual (this period · not paid out)" value={s.thirteenthMonthAccrual} indent />
+              </>
+            )}
           </Box>
 
           {/* Deductions */}

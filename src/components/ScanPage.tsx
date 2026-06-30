@@ -47,6 +47,15 @@ interface ReceiptRef {
   filename: string;
 }
 
+interface ScanContext {
+  kind: string;
+  formNo?: string;
+  year?: string;
+  folderPath?: string;
+  rowId?: string;
+  label?: string;
+}
+
 type ScanMode = 'project' | 'overhead';
 type Severity = 'success' | 'error' | 'warning' | 'info';
 
@@ -83,6 +92,11 @@ const ScanPage: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
   const [needsQr, setNeedsQr] = useState(false);
   const [exchanging, setExchanging] = useState(true);
+  const [pairingToken, setPairingToken] = useState<string | null>(null);
+  const [scanContext, setScanContext] = useState<ScanContext | null>(null);
+  const [deductible, setDeductible] = useState<boolean | null>(null);
+  const [deductibleReason, setDeductibleReason] = useState<string | null>(null);
+  const [customerIssues, setCustomerIssues] = useState<string[]>([]);
 
   const [mode, setMode] = useState<ScanMode>('project');
   const [projects, setProjects] = useState<ScanProject[]>([]);
@@ -136,6 +150,7 @@ const ScanPage: React.FC = () => {
     const run = async () => {
       const pairing = new URLSearchParams(window.location.search).get('token');
       if (pairing) {
+        setPairingToken(pairing);
         try {
           const res = await fetch(`${API_BASE}/api/auth/qr/exchange`, {
             method: 'POST',
@@ -146,6 +161,7 @@ const ScanPage: React.FC = () => {
           if (res.ok && data.ok && data.token) {
             localStorage.setItem('netpacific_token', data.token);
             setUser(data.user || null);
+            setScanContext(data.context || null);
             setAuthed(true);
             window.history.replaceState({}, '', '/scan');
           } else if ((localStorage.getItem('netpacific_token') || '').startsWith('scan_')) {
@@ -267,6 +283,9 @@ const ScanPage: React.FC = () => {
       setInvoiceNumber(parsed.invoiceNumber || '');
       setInvoiceType(parsed.invoiceType || '');
       setVat(typeof parsed.tax === 'number' && parsed.tax > 0 ? String(parsed.tax) : '');
+      setDeductible(typeof parsed.deductible === 'boolean' ? parsed.deductible : null);
+      setDeductibleReason(parsed.deductibleReason || null);
+      setCustomerIssues(parsed.customerValidation?.issues || []);
       setLowConf(typeof parsed.confidence === 'number' && parsed.confidence < 0.5);
       setEdit(null, null); // consume the editor
     } catch (err) {
@@ -358,6 +377,93 @@ const ScanPage: React.FC = () => {
     }
   };
 
+  const deliverToDesktop = scanContext?.kind === 'liquidation';
+
+  const makeThumb = async (file: File): Promise<string> => {
+    try {
+      return await new Promise<string>((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          const MAX = 240;
+          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) { reject(new Error('no ctx')); return; }
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', 0.6));
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('img load failed')); };
+        img.src = url;
+      });
+    } catch {
+      return '';
+    }
+  };
+
+  const handleSendToDesktop = async () => {
+    if (!pendingFile || !pairingToken || !scanContext?.folderPath) return;
+    setSaving(true);
+    try {
+      const blob = await compressForUpload(pendingFile);
+      const contentBase64 = await blobToBase64(blob);
+      const filename = `SCAN-${Date.now()}.jpg`;
+      const upRes = await fetch(`${API_BASE}/api/onedrive/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ folderPath: scanContext.folderPath, filename, contentBase64 }),
+      });
+      if (upRes.status === 401) { handleSessionExpired(); return; }
+      const upData = await upRes.json().catch(() => ({ ok: false }));
+      if (!upData.ok) {
+        showSnack('error', 'Could not upload receipt to OneDrive. Please try again.');
+        return;
+      }
+      const thumb = await makeThumb(pendingFile);
+      const jobRes = await fetch(`${API_BASE}/api/scan-jobs/${pairingToken}/result`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          receipt: {
+            oneDriveId: upData.id,
+            webUrl: upData.webUrl,
+            filename,
+            ...(thumb ? { thumbnailDataUrl: thumb } : {}),
+            parsed: {
+              amount: Number(amount) > 0 ? Number(amount) : null,
+              date: date || null,
+              category: category || null,
+              particulars: description || supplier || null,
+              vendor: supplier || null,
+              invoiceNo: invoiceNumber || null,
+              deductible,
+              deductibleReason,
+              customerInfoIssues: customerIssues,
+              confidence: lowConf ? 0.4 : 0.9,
+            },
+          },
+        }),
+      });
+      if (jobRes.status === 401) { handleSessionExpired(); return; }
+      const jobData = await jobRes.json().catch(() => ({ ok: false }));
+      if (jobData.ok) {
+        setSavedAmount('');
+        setSaved(true);
+      } else {
+        showSnack('error', 'Could not send receipt to desktop. Please try again.');
+      }
+    } catch {
+      showSnack('error', 'Could not send receipt to desktop. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const resetForm = () => {
     setAmount('');
     setDate('');
@@ -367,6 +473,9 @@ const ScanPage: React.FC = () => {
     setInvoiceNumber('');
     setInvoiceType('');
     setVat('');
+    setDeductible(null);
+    setDeductibleReason(null);
+    setCustomerIssues([]);
     setPendingFile(null);
     setLowConf(false);
     setParseError(null);
@@ -418,7 +527,9 @@ const ScanPage: React.FC = () => {
       <Shell>
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '70vh', gap: 2, textAlign: 'center' }}>
           <CheckCircleIcon sx={{ fontSize: 72, color: 'success.main' }} />
-          <Typography variant="h6" sx={{ fontWeight: 700 }}>Saved! ₱{savedAmount} recorded.</Typography>
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>
+            {deliverToDesktop ? 'Sent to desktop!' : `Saved! ₱${savedAmount} recorded.`}
+          </Typography>
           <Button variant="contained" size="large" fullWidth onClick={resetForm} sx={{ maxWidth: 320 }}>
             Scan another
           </Button>
@@ -434,22 +545,29 @@ const ScanPage: React.FC = () => {
         <Typography variant="caption" color="text.secondary">
           Signed in as {user?.full_name || user?.username || 'team member'}
         </Typography>
+        {deliverToDesktop && scanContext?.label && (
+          <Typography variant="caption" display="block" color="primary.main" sx={{ mt: 0.5 }}>
+            Scanning for: {scanContext.label}
+          </Typography>
+        )}
       </Box>
 
       <Paper sx={{ p: 2, borderRadius: 2 }}>
-        <ToggleButtonGroup
-          exclusive
-          fullWidth
-          color="primary"
-          value={mode}
-          onChange={(_e, val: ScanMode | null) => { if (val) setMode(val); }}
-          sx={{ mb: 2 }}
-        >
-          <ToggleButton value="project">Project</ToggleButton>
-          <ToggleButton value="overhead">Overhead</ToggleButton>
-        </ToggleButtonGroup>
+        {!deliverToDesktop && (
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            color="primary"
+            value={mode}
+            onChange={(_e, val: ScanMode | null) => { if (val) setMode(val); }}
+            sx={{ mb: 2 }}
+          >
+            <ToggleButton value="project">Project</ToggleButton>
+            <ToggleButton value="overhead">Overhead</ToggleButton>
+          </ToggleButtonGroup>
+        )}
 
-        {mode === 'project' && (
+        {!deliverToDesktop && mode === 'project' && (
           <Autocomplete
             options={projects}
             value={selectedProject}
@@ -501,6 +619,14 @@ const ScanPage: React.FC = () => {
         )}
         {parseError && (
           <Alert severity="error" sx={{ mb: 2 }}>{parseError}</Alert>
+        )}
+        {customerIssues.length > 0 && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Check the customer info written on the receipt — it should say IO Control Technologie OPC, TIN 697-029-976, Biñan, Laguna:
+            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+              {customerIssues.map((m, i) => (<li key={i}>{m}</li>))}
+            </ul>
+          </Alert>
         )}
 
         <TextField
@@ -571,18 +697,33 @@ const ScanPage: React.FC = () => {
           sx={{ mb: 2 }}
         />
 
-        <Button
-          variant="contained"
-          size="large"
-          fullWidth
-          color="success"
-          disabled={!canSave}
-          onClick={handleSave}
-          startIcon={saving ? <CircularProgress size={20} color="inherit" /> : undefined}
-          sx={{ py: 1.5 }}
-        >
-          {saving ? 'Saving…' : 'Save Expense'}
-        </Button>
+        {deliverToDesktop ? (
+          <Button
+            variant="contained"
+            size="large"
+            fullWidth
+            color="primary"
+            disabled={busy || saving || !pendingFile}
+            onClick={handleSendToDesktop}
+            startIcon={saving ? <CircularProgress size={20} color="inherit" /> : undefined}
+            sx={{ py: 1.5 }}
+          >
+            {saving ? 'Sending…' : 'Send to desktop'}
+          </Button>
+        ) : (
+          <Button
+            variant="contained"
+            size="large"
+            fullWidth
+            color="success"
+            disabled={!canSave}
+            onClick={handleSave}
+            startIcon={saving ? <CircularProgress size={20} color="inherit" /> : undefined}
+            sx={{ py: 1.5 }}
+          >
+            {saving ? 'Saving…' : 'Save Expense'}
+          </Button>
+        )}
       </Paper>
 
       <Snackbar

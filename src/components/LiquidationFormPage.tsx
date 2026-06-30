@@ -26,9 +26,10 @@ import {
   DialogActions,
   Snackbar,
   Tooltip,
+  Checkbox,
 } from '@mui/material';
 import { useLocation } from 'react-router-dom';
-import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon } from '@mui/icons-material';
+import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon, WarningAmber as WarningAmberIcon } from '@mui/icons-material';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import {
@@ -45,8 +46,7 @@ import dataService from '../services/dataService';
 import { Project } from '../types/Project';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
-import { fileToParseInput } from '../utils/receipts/imageCompress';
-import { parseReceipt } from '../services/receiptParseService';
+import ScanToPhoneDialog, { type DeliveredReceipt } from './ScanToPhoneDialog';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 import { LIQUIDATION_CATEGORIES } from '../data/financeCategories';
 
@@ -60,6 +60,13 @@ interface LiquidationRow {
   particulars: string;
   amount: number;
   remarks: string;
+  // Write-off (income-tax-deductible business expense). AI-suggested on scan,
+  // editable by accounting. Defaults to true for manually-added rows.
+  deductible: boolean;
+  deductibleReason?: string;
+  supplier?: string;
+  invoiceNo?: string;
+  customerInfoIssues?: string[];
 }
 
 // A scanned/photographed receipt attached to an expense row. Files live in
@@ -175,6 +182,9 @@ const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
   particulars: '',
   amount: 0,
   remarks: '',
+  deductible: true,
+  supplier: '',
+  invoiceNo: '',
 });
 
 async function addLiquidationRowsToProjectExpenses(
@@ -206,6 +216,11 @@ async function addLiquidationRowsToProjectExpenses(
         sourceLiquidationRowId: r.id,
       };
       if (sourceCaId) expense.sourceCaId = sourceCaId;
+      // Carry BIR substantiation captured on the row into the tax ledger.
+      if ((r.supplier || '').trim()) expense.supplier = (r.supplier || '').trim();
+      if ((r.invoiceNo || '').trim()) expense.invoiceNo = (r.invoiceNo || '').trim();
+      if (typeof r.deductible === 'boolean') expense.deductible = r.deductible;
+      if ((r.deductibleReason || '').trim()) expense.deductibleReason = (r.deductibleReason || '').trim();
       return expense;
     });
     await fetch(`${API_BASE}/api/project-expenses`, {
@@ -243,10 +258,8 @@ export default function LiquidationFormPage() {
   const [receipts, setReceipts] = useState<ReceiptAttachment[]>([]);
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const receiptRowIdRef = useRef<string | null>(null);
-  const scanInputRef = useRef<HTMLInputElement>(null);
-  const scanRowIdRef = useRef<string | null>(null);
-  const [scanningRowId, setScanningRowId] = useState<string | null>(null);
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
+  const [scanDialog, setScanDialog] = useState<{ open: boolean; rowId: string | null }>({ open: false, rowId: null });
   const receiptsFolderRef = useRef<{ key: string; driveId: string; folderId: string } | null>(null);
   const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken, login: oneDriveLogin } = useOneDriveAuth();
   const [saving, setSaving] = useState(false);
@@ -389,50 +402,98 @@ export default function LiquidationFormPage() {
 
   const removeReceipt = (id: string) => setReceipts((prev) => prev.filter((r) => r.id !== id));
 
-  const scanReceiptForRow = async (rowId: string, file: File) => {
-    if (!file) return;
-    setScanningRowId(rowId);
-    // Convert HEIC->JPEG once so attach and parse share one safe JPEG (avoids a
-    // duplicate heic2any pass and sending an unparseable HEIC to the parser).
-    const safeFile = await convertHeicToJpeg(file);
-    // Keep the photo even if AI parsing fails — attach via the existing flow.
-    try {
-      const dt = new DataTransfer();
-      dt.items.add(safeFile);
-      void attachReceipts(rowId, dt.files);
-    } catch {
-      void attachReceipts(rowId, [safeFile] as unknown as FileList);
+  const scanYear = String(new Date().getFullYear());
+  const scanFolderPath = `Liquidation Receipts/${scanYear}/${sanitizeForOneDrive((formNo || 'draft').trim() || 'draft')}`;
+
+  // The first receipt of a phone-scan session fills the row the QR was started
+  // from; each subsequent receipt auto-creates a NEW row, so the user can keep
+  // scanning on the phone without rescanning the QR.
+  const scanTargetRef = useRef<{ pairingToken: string; rowId: string; consumed: boolean } | null>(null);
+
+  const [activeScanJob, setActiveScanJob] = useState<{ pairingToken: string; received: number } | null>(null);
+  const scanJobInFlightRef = useRef(false);
+
+  const handlePhoneReceipt = (r: DeliveredReceipt, jobToken: string) => {
+    const p = r.parsed;
+    const applyParsed = (row: LiquidationRow): LiquidationRow => ({
+      ...row,
+      date: p?.date || row.date,
+      category: p?.category || row.category,
+      amount: (typeof p?.amount === 'number' && p.amount > 0) ? p.amount : row.amount,
+      particulars: (!row.particulars || row.particulars.trim() === '')
+        ? (p?.particulars || p?.vendor || row.particulars)
+        : row.particulars,
+      deductible: typeof p?.deductible === 'boolean' ? p.deductible : row.deductible,
+      deductibleReason: p?.deductibleReason || row.deductibleReason,
+      supplier: p?.vendor || row.supplier,
+      invoiceNo: p?.invoiceNo || row.invoiceNo,
+      customerInfoIssues: (p?.customerInfoIssues && p.customerInfoIssues.length) ? p.customerInfoIssues : row.customerInfoIssues,
+    });
+
+    // Route the FIRST receipt of a job to the row its QR was started from, but only
+    // if the target belongs to THIS job (guards against a newer scan clobbering it).
+    // `consumed` is a synchronous ref so a batch of receipts in one poll tick still
+    // routes only the first to the target row and appends the rest as new rows.
+    const t = scanTargetRef.current;
+    let targetId: string;
+    if (t && t.pairingToken === jobToken && !t.consumed && t.rowId) {
+      targetId = t.rowId;
+      t.consumed = true;
+      setRows((prev) => prev.map((row) => (row.id === targetId ? applyParsed(row) : row)));
+    } else {
+      const nr = applyParsed(newRow('', ''));
+      targetId = nr.id;
+      setRows((prev) => [...prev, nr]);
     }
-    try {
-      const { imageBase64, mimeType } = await fileToParseInput(safeFile);
-      const parsed = await parseReceipt(imageBase64, mimeType);
-      setRows((prev) => prev.map((r) => {
-        if (r.id !== rowId) return r;
-        const amt = parsed.total ?? parsed.subtotal;
-        return {
-          ...r,
-          date: parsed.date || r.date,
-          category: parsed.suggestedCategory || r.category,
-          amount: (typeof amt === 'number' && amt > 0) ? amt : r.amount,
-          particulars: (!r.particulars || r.particulars.trim() === '')
-            ? (parsed.vendor || parsed.lineItems?.[0]?.description || '')
-            : r.particulars,
-        };
-      }));
-      const shown = parsed.total ?? parsed.subtotal ?? 0;
-      const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
-      const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
-      if (lowConf) {
-        setScanSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category. Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(shown).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
-      } else {
-        setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(shown).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
-      }
-    } catch (e) {
-      setScanSnackbar({ open: true, severity: 'error', message: e instanceof Error ? e.message : 'Failed to parse receipt' });
-    } finally {
-      setScanningRowId(null);
-    }
+
+    const rec: ReceiptAttachment = {
+      id: `rcpt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      rowId: targetId,
+      filename: r.filename,
+      thumbnailDataUrl: r.thumbnailDataUrl || undefined,
+      oneDriveId: r.oneDriveId,
+      webUrl: r.webUrl,
+      uploadedAt: new Date().toISOString(),
+      uploadStatus: 'done',
+    };
+    setReceipts((prev) => [...prev, rec]);
+    const lowConf = typeof p?.confidence === 'number' && p.confidence < 0.5;
+    setScanSnackbar({
+      open: true,
+      severity: lowConf ? 'warning' : 'success',
+      message: lowConf
+        ? 'Receipt received — low confidence, please verify amount, date & category.'
+        : `Receipt received: ${r.filename}`,
+    });
   };
+
+  // Poll the active phone scan job for delivered receipts. Runs at the PAGE level
+  // (not in the QR dialog) so receipts keep arriving even after the dialog is closed,
+  // letting the user "scan another" on the phone without re-pairing.
+  useEffect(() => {
+    if (!activeScanJob || !token) return;
+    let cancelled = false;
+    scanJobInFlightRef.current = false;
+    const id = setInterval(async () => {
+      if (scanJobInFlightRef.current) return;
+      scanJobInFlightRef.current = true;
+      try {
+        const since = activeScanJob.received;
+        const res = await fetch(`${API_BASE}/api/scan-jobs/${activeScanJob.pairingToken}?since=${since}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json().catch(() => ({ ok: false, results: [], total: since }));
+        if (!cancelled && res.ok && data.ok && Array.isArray(data.results) && data.results.length > 0) {
+          (data.results as DeliveredReceipt[]).forEach((item) => handlePhoneReceipt(item, activeScanJob.pairingToken));
+          const newTotal = typeof data.total === 'number' ? data.total : since + data.results.length;
+          setActiveScanJob((prev) => (prev && prev.pairingToken === activeScanJob.pairingToken ? { ...prev, received: newTotal } : prev));
+        }
+      } catch { /* transient */ } finally {
+        scanJobInFlightRef.current = false;
+      }
+    }, 2500);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [activeScanJob, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const payload = () => ({
     form_no: formNo,
@@ -449,6 +510,11 @@ export default function LiquidationFormPage() {
       particulars: r.particulars,
       amount: r.amount,
       remarks: r.remarks,
+      deductible: r.deductible,
+      deductibleReason: r.deductibleReason ?? null,
+      supplier: r.supplier ?? '',
+      invoiceNo: r.invoiceNo ?? '',
+      customerInfoIssues: r.customerInfoIssues ?? [],
     })),
     total_amount: totalAmount,
     ca_id: caId || null,
@@ -542,6 +608,12 @@ export default function LiquidationFormPage() {
               particulars: String(r.particulars ?? ''),
               amount: Number(r.amount) || 0,
               remarks: String(r.remarks ?? ''),
+              // Older drafts have no deductible flag — default to true (deductible).
+              deductible: typeof r.deductible === 'boolean' ? r.deductible : true,
+              deductibleReason: typeof r.deductibleReason === 'string' ? r.deductibleReason : undefined,
+              supplier: String(r.supplier ?? ''),
+              invoiceNo: String(r.invoiceNo ?? ''),
+              customerInfoIssues: Array.isArray(r.customerInfoIssues) ? (r.customerInfoIssues as string[]) : undefined,
             };
           });
     setRows(loadedRows);
@@ -768,7 +840,7 @@ export default function LiquidationFormPage() {
     setReceipts((prev) => prev.filter((r) => r.rowId !== id));
   };
 
-  const updateRow = (id: string, field: keyof LiquidationRow, value: string | number) => {
+  const updateRow = (id: string, field: keyof LiquidationRow, value: string | number | boolean) => {
     setRows((prev) =>
       prev.map((r) => (r.id === id ? { ...r, [field]: value } : r))
     );
@@ -1432,6 +1504,15 @@ export default function LiquidationFormPage() {
           </Button>
         </Box>
 
+        {activeScanJob && (
+          <Alert
+            severity="info"
+            sx={{ mb: 2 }}
+            action={<Button color="inherit" size="small" onClick={() => setActiveScanJob(null)}>Stop</Button>}
+          >
+            Receiving receipts from phone… {activeScanJob.received} received. Scan more on your phone — rows are added automatically.
+          </Alert>
+        )}
         <TableContainer sx={{ border: `1px solid ${theme.border}`, borderRadius: 1, flex: 1, minHeight: 0, overflow: 'auto' }}>
           <Table size="small" stickyHeader>
             <TableHead>
@@ -1470,13 +1551,24 @@ export default function LiquidationFormPage() {
                 <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 100 }}>
                   Remarks
                 </TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 140 }}>
+                  Supplier
+                </TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 110 }}>
+                  Invoice No.
+                </TableCell>
+                <TableCell align="center" sx={{ fontWeight: 600, color: theme.primary, width: 90 }}>
+                  <Tooltip title="Deductible: tick if this is an allowable / tax-deductible business expense supported by a valid BIR receipt. AI suggests this on scan; accounting can override.">
+                    <span>Deductible</span>
+                  </Tooltip>
+                </TableCell>
                 <TableCell sx={{ width: 56 }} />
               </TableRow>
             </TableHead>
             <TableBody>
               {rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                  <TableCell colSpan={12} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                     Click "Add row" to add expense lines. Select a project per row from the list.
                   </TableCell>
                 </TableRow>
@@ -1587,22 +1679,58 @@ export default function LiquidationFormPage() {
                         sx={{ '& .MuiInputBase-input': { py: 0.75 } }}
                       />
                     </TableCell>
+                    <TableCell>
+                      <TextField
+                        size="small"
+                        value={row.supplier || ''}
+                        onChange={(e) => updateRow(row.id, 'supplier', e.target.value)}
+                        placeholder="Supplier"
+                        fullWidth
+                        sx={{ '& .MuiInputBase-input': { py: 0.75 } }}
+                        InputProps={row.customerInfoIssues && row.customerInfoIssues.length ? {
+                          endAdornment: (
+                            <Tooltip title={`Buyer details on this receipt don't match IOCT: ${row.customerInfoIssues.join('; ')}`}>
+                              <WarningAmberIcon fontSize="small" color="warning" />
+                            </Tooltip>
+                          ),
+                        } : undefined}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <TextField
+                        size="small"
+                        value={row.invoiceNo || ''}
+                        onChange={(e) => updateRow(row.id, 'invoiceNo', e.target.value)}
+                        placeholder="Invoice No."
+                        fullWidth
+                        sx={{ maxWidth: 120, '& .MuiInputBase-input': { py: 0.75 } }}
+                      />
+                    </TableCell>
+                    <TableCell align="center">
+                      <Tooltip title={row.deductibleReason || (row.deductible ? 'Marked deductible (allowable business expense)' : 'Not deductible')}>
+                        <span>
+                          <Checkbox
+                            size="small"
+                            checked={!!row.deductible}
+                            onChange={(e) => updateRow(row.id, 'deductible', e.target.checked)}
+                            disabled={isViewingSubmitted}
+                            sx={{ color: theme.primary, '&.Mui-checked': { color: theme.primary } }}
+                            inputProps={{ 'aria-label': 'Deductible' }}
+                          />
+                        </span>
+                      </Tooltip>
+                    </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                      <Tooltip title="Scan receipt with camera">
+                      <Tooltip title="Scan receipt with phone">
                         <span>
                           <IconButton
                             size="small"
-                            onClick={() => {
-                              scanRowIdRef.current = row.id;
-                              scanInputRef.current?.click();
-                            }}
-                            disabled={isViewingSubmitted || !!scanningRowId}
+                            onClick={() => setScanDialog({ open: true, rowId: row.id })}
+                            disabled={isViewingSubmitted}
                             sx={{ color: theme.primary }}
-                            aria-label="Scan receipt"
+                            aria-label="Scan receipt with phone"
                           >
-                            {scanningRowId === row.id
-                              ? <CircularProgress size={20} color="inherit" />
-                              : <PhotoCameraIcon fontSize="small" />}
+                            <PhotoCameraIcon fontSize="small" />
                           </IconButton>
                         </span>
                       </Tooltip>
@@ -1654,19 +1782,6 @@ export default function LiquidationFormPage() {
           onChange={(e) => {
             const rid = receiptRowIdRef.current;
             if (rid) attachReceipts(rid, e.target.files);
-            e.target.value = '';
-          }}
-        />
-        <input
-          type="file"
-          ref={scanInputRef}
-          accept="image/*"
-          capture="environment"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const rid = scanRowIdRef.current;
-            const file = e.target.files?.[0];
-            if (rid && file) scanReceiptForRow(rid, file);
             e.target.value = '';
           }}
         />
@@ -1763,6 +1878,26 @@ export default function LiquidationFormPage() {
           </Button>
         </DialogActions>
       </Dialog>
+      <ScanToPhoneDialog
+        open={scanDialog.open}
+        onClose={() => setScanDialog((p) => ({ ...p, open: false }))}
+        context={
+          scanDialog.rowId
+            ? {
+                kind: 'liquidation',
+                formNo: (formNo || 'draft').trim() || 'draft',
+                year: scanYear,
+                folderPath: scanFolderPath,
+                rowId: scanDialog.rowId,
+                label: `Form ${formNo || 'draft'} — Row ${rows.findIndex((x) => x.id === scanDialog.rowId) + 1}`,
+              }
+            : null
+        }
+        onPaired={(pairingToken) => {
+          scanTargetRef.current = { pairingToken, rowId: scanDialog.rowId || '', consumed: false };
+          setActiveScanJob({ pairingToken, received: 0 });
+        }}
+      />
       <Snackbar
         open={scanSnackbar.open}
         autoHideDuration={5000}

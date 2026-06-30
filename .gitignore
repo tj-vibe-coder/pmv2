@@ -68,3 +68,21 @@ yarn-error.log*
 
 # Stale Render deployment notes
 render-env.txt
+
+# Firebase/Firestore local debug logs
+firebase-debug.log
+firestore-debug.log
+*-debug.log
+
+# Scratch diff dumps
+uncommitted.diff
+
+# Local screenshots
+/screenshot/
+
+# Browser-tool (cui) local state
+/.cui/
+
+# Agent memory system (local-only tooling, not app code)
+/docs/agent/
+/scripts/atomize-memory.mjs

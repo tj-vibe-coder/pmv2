@@ -371,7 +371,7 @@ usersRouter.patch('/:id', async (req, res) => {
   if (full_name !== undefined) updates.full_name = full_name == null ? null : String(full_name).trim();
   if (designation !== undefined) updates.designation = designation == null ? null : String(designation).trim();
   if (contact_number !== undefined) updates.contact_number = contact_number == null ? null : String(contact_number).trim();
-  if (role !== undefined && ['superadmin', 'admin', 'user', 'viewer'].includes(role)) updates.role = role;
+  if (role !== undefined && ['superadmin', 'admin', 'user', 'viewer', 'tax_filer'].includes(role)) updates.role = role;
   if (approved !== undefined) updates.approved = approved ? 1 : 0;
   if (Object.keys(updates).length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update' });
   updates.updated_at = Math.floor(Date.now() / 1000);
@@ -1032,6 +1032,15 @@ app.post('/api/project-expenses', async (req, res) => {
           if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
           if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
           if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
+          // BIR substantiation passthrough — mirrors the single-insert path so
+          // liquidation/PO-synced rows carry supplier/invoice detail into the tax ledger.
+          if (exp.supplier) doc.supplier = String(exp.supplier);
+          if (exp.invoiceNo) doc.invoiceNo = String(exp.invoiceNo);
+          if (exp.invoiceType) doc.invoiceType = String(exp.invoiceType);
+          if (exp.tin) doc.tin = String(exp.tin);
+          if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
+          if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
+          if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
           batch.set(ref, doc);
           inserted.push({ id: ref.id, ...doc });
         }
@@ -1042,7 +1051,7 @@ app.post('/api/project-expenses', async (req, res) => {
     // Single insert
     const { projectId, projectName, description, amount, date, category, sourceType,
             sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin } = body;
+            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = body;
     if (!projectId || !amount) {
       return res.status(400).json({ success: false, error: 'projectId and amount are required' });
     }
@@ -1068,6 +1077,8 @@ app.post('/api/project-expenses', async (req, res) => {
     if (invoiceType) doc.invoiceType = String(invoiceType);
     if (tin) doc.tin = String(tin);
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
+    if (typeof deductible === 'boolean') doc.deductible = deductible;
+    if (deductibleReason) doc.deductibleReason = String(deductibleReason);
     const ref = await db.collection('project_expenses').add(doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
   } catch (err) {
@@ -3583,6 +3594,7 @@ app.post('/api/onedrive/share', async (req, res) => {
 app.post('/api/auth/qr/start', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { context } = req.body || {};
   try {
     // Invalidate any prior unused pairings for this user (caps active codes; complements single-use).
     const prior = await db.collection('qr_pairings').where('userId', '==', user.id).where('used', '==', false).get();
@@ -3595,7 +3607,18 @@ app.post('/api/auth/qr/start', async (req, res) => {
       createdAt: Date.now(),
       expiresAt: Date.now() + 120000,
       used: false,
+      ...(context && typeof context === 'object' ? { context } : {}),
     });
+    if (context && typeof context === 'object') {
+      await db.collection('scan_jobs').doc(pairingToken).set({
+        jobId: pairingToken,
+        userId: user.id,
+        context,
+        results: [],
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 30 * 60000,
+      });
+    }
     res.json({ ok: true, pairingToken, expiresInMs: 120000 });
   } catch (err) {
     res.status(500).json({ error: 'Failed to start pairing', detail: err.message });
@@ -3640,7 +3663,7 @@ app.post('/api/auth/qr/exchange', async (req, res) => {
       createdAt: Date.now(),
       expiresAt,
     });
-    res.json({ ok: true, token: scannerToken, user: userResponse(userDoc.id, userDoc.data()), expiresAt });
+    res.json({ ok: true, token: scannerToken, user: userResponse(userDoc.id, userDoc.data()), expiresAt, context: pairing.context || null });
   } catch (err) {
     res.status(500).json({ error: 'Failed to exchange code', detail: err.message });
   }
@@ -3661,6 +3684,79 @@ app.get('/api/auth/qr/status', async (req, res) => {
   }
 });
 
+// Phone posts a captured-and-uploaded receipt back to the scan job channel.
+// Auth: scanner session (or login token) of the SAME user who started the job.
+app.post('/api/scan-jobs/:jobId/result', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { jobId } = req.params;
+  const { receipt } = req.body || {};
+  if (!receipt || typeof receipt !== 'object' || !receipt.oneDriveId) {
+    return res.status(400).json({ error: 'receipt with oneDriveId is required' });
+  }
+  // Bound the stored thumbnail so a doc can never blow the 1MB Firestore limit.
+  const clean = {
+    oneDriveId: String(receipt.oneDriveId),
+    webUrl: receipt.webUrl ? String(receipt.webUrl) : '',
+    filename: receipt.filename ? String(receipt.filename) : 'receipt.jpg',
+  };
+  if (typeof receipt.thumbnailDataUrl === 'string' && receipt.thumbnailDataUrl.length <= 18000) {
+    clean.thumbnailDataUrl = receipt.thumbnailDataUrl;
+  }
+  if (receipt.parsed && typeof receipt.parsed === 'object') {
+    const p = receipt.parsed;
+    clean.parsed = {
+      amount: typeof p.amount === 'number' ? p.amount : null,
+      date: p.date ? String(p.date) : null,
+      category: p.category ? String(p.category) : null,
+      particulars: p.particulars ? String(p.particulars) : null,
+      vendor: p.vendor ? String(p.vendor) : null,
+      invoiceNo: p.invoiceNo ? String(p.invoiceNo) : null,
+      deductible: typeof p.deductible === 'boolean' ? p.deductible : null,
+      deductibleReason: p.deductibleReason ? String(p.deductibleReason) : null,
+      customerInfoIssues: Array.isArray(p.customerInfoIssues)
+        ? p.customerInfoIssues.filter((x) => typeof x === 'string').slice(0, 10).map((x) => String(x).slice(0, 300))
+        : [],
+      confidence: typeof p.confidence === 'number' ? p.confidence : null,
+    };
+  }
+  try {
+    const ref = db.collection('scan_jobs').doc(jobId);
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) { const e = new Error('Scan job not found'); e.httpStatus = 404; throw e; }
+      const job = snap.data();
+      if (job.userId !== user.id) { const e = new Error('Forbidden'); e.httpStatus = 403; throw e; }
+      const results = Array.isArray(job.results) ? job.results : [];
+      if (results.length >= 50) { const e = new Error('Too many results'); e.httpStatus = 409; throw e; }
+      results.push(clean);
+      tx.update(ref, { results, updatedAt: Date.now() });
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to record scan result', detail: err.message });
+  }
+});
+
+// Desktop polls for new receipts on a scan job. Owner-only. `since` = count already seen.
+app.get('/api/scan-jobs/:jobId', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { jobId } = req.params;
+  try {
+    const snap = await db.collection('scan_jobs').doc(jobId).get();
+    if (!snap.exists) return res.status(404).json({ error: 'Scan job not found' });
+    const job = snap.data();
+    if (job.userId !== user.id) return res.status(403).json({ error: 'Forbidden' });
+    const all = Array.isArray(job.results) ? job.results : [];
+    const since = Math.max(0, Number(req.query.since) || 0);
+    res.json({ ok: true, results: all.slice(since), total: all.length });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to read scan job', detail: err.message });
+  }
+});
+
 // --- BEGIN RECEIPT PARSING BLOCK ---
 function extractJson(text) {
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -3669,6 +3765,49 @@ function extractJson(text) {
   const end = text.lastIndexOf('}');
   if (start === -1 || end === -1) throw new Error('NO_JSON_IN_RESPONSE');
   return text.slice(start, end + 1);
+}
+
+const IOCT_CUSTOMER = { name: 'IO Control Technologie OPC', tinDigits: '697029976' };
+
+// Levenshtein edit distance — tolerates OCR/typo wobble (e.g. "Techonologie"
+// for "Technologie", anglicized "Technology") when matching the customer name.
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+function validateCustomerInfo(name, tin, address) {
+  const norm = (s) => (typeof s === 'string' ? s : '').toLowerCase().replace(/ñ/g, 'n').replace(/[^a-z0-9]/g, '');
+  const issues = [];
+  const nName = norm(name);
+  // Require the COMPLETE, correctly-spelled registered name. Allow only a single
+  // OCR/handwriting slip (e.g. "TECHONOLOGIE" = 1 edit → OK) but reject WRONG
+  // spellings like "Technology" (2 edits) and any abbreviation/incomplete name
+  // (e.g. just "IO Control", or missing "OPC" = 3+ edits).
+  const canonicalName = norm(IOCT_CUSTOMER.name); // "iocontroltechnologieopc"
+  const nameOk = nName.length > 0 && levenshtein(nName, canonicalName) <= 1;
+  if (!name || norm(name).length === 0) issues.push('Customer name is missing on the receipt');
+  else if (!nameOk) issues.push(`Customer name on receipt ("${String(name).trim()}") does not match "IO Control Technologie OPC"`);
+  const tinDigits = (typeof tin === 'string' ? tin : '').replace(/\D/g, '');
+  const tinOk = tinDigits.startsWith(IOCT_CUSTOMER.tinDigits);
+  if (!tin || tinDigits.length === 0) issues.push('Customer TIN is missing on the receipt');
+  else if (!tinOk) issues.push(`Customer TIN on receipt ("${String(tin).trim()}") does not match 697-029-976`);
+  const nAddr = norm(address);
+  const addressOk = nAddr.includes('binan');
+  if (!address || nAddr.length === 0) issues.push('Customer address is missing on the receipt');
+  else if (!addressOk) issues.push(`Customer address on receipt ("${String(address).trim()}") does not look like Biñan, Laguna`);
+  return { nameOk, tinOk, addressOk, issues };
 }
 
 function normalizeReceipt(raw) {
@@ -3698,6 +3837,13 @@ function normalizeReceipt(raw) {
   const allowedInvoiceTypes = ['Service Invoice', 'Sales Invoice', 'Official Receipt', 'Other'];
   const invoiceType = allowedInvoiceTypes.includes(raw.invoiceType) ? raw.invoiceType : null;
   const vatable = typeof raw.vatable === 'boolean' ? raw.vatable : null;
+  const deductible = typeof raw.deductible === 'boolean' ? raw.deductible : null;
+  const deductibleReason = (typeof raw.deductibleReason === 'string' && raw.deductibleReason.trim().length > 0) ? raw.deductibleReason.trim() : null;
+
+  const customerName = (typeof raw.customerName === 'string' && raw.customerName.trim().length > 0) ? raw.customerName.trim() : null;
+  const customerTin = (typeof raw.customerTin === 'string' && raw.customerTin.trim().length > 0) ? raw.customerTin.trim() : null;
+  const customerAddress = (typeof raw.customerAddress === 'string' && raw.customerAddress.trim().length > 0) ? raw.customerAddress.trim() : null;
+  const customerValidation = validateCustomerInfo(customerName, customerTin, customerAddress);
 
   return {
     vendor: typeof raw.vendor === 'string' ? raw.vendor : null,
@@ -3712,6 +3858,12 @@ function normalizeReceipt(raw) {
     total: safeNum(raw.total),
     paymentMethod: typeof raw.paymentMethod === 'string' ? raw.paymentMethod : null,
     suggestedCategory,
+    deductible,
+    deductibleReason,
+    customerName,
+    customerTin,
+    customerAddress,
+    customerValidation,
     lineItems,
     confidence
   };
@@ -3733,7 +3885,10 @@ Remove all currency symbols (e.g., ', '₱', 'PHP') and commas from numeric valu
 
 The JSON MUST exactly match this structure:
 {
-  "vendor": "Supplier / merchant business name as printed, or null",
+  "vendor": "The SELLER's business / trade name — the main business name printed prominently at the TOP of the receipt (the letterhead/header), e.g. 'HOUSEOFCARDSPH DESKTOP PUBLISHING SERVICES'. Use this business/trade name. Do NOT use the proprietor's / owner's personal name even if present — ignore any name labeled 'Prop.', 'Proprietor', or 'Owner' (e.g. 'John Joebee W. Capino - Prop.' is the owner, NOT the vendor). Also prefer the registered business over a franchise/brand/logo (e.g. a Petron station's dealer 'Primera Una Gas Management Trading Inc.' rather than 'Petron'). String or null",
+  "customerName": "The CUSTOMER / buyer name written on the receipt — the 'Customer Name' / 'Sold To' / 'Registered Name' of the PURCHASER (NOT the seller). String or null",
+  "customerTin": "The CUSTOMER's TIN as written on the receipt (the buyer's TIN, NOT the seller's). String or null",
+  "customerAddress": "The CUSTOMER's address as written on the receipt (the buyer's address). String or null",
   "description": "Short plain summary of the goods or services purchased (e.g. 'Business cards', 'Diesel fuel', 'Office supplies'). Read the 'description / nature of service / particulars' area and any line items. Do NOT just repeat the vendor name. String or null",
   "invoiceNumber": "The receipt/invoice serial number exactly as printed (e.g. the 'No.' value, OR/SI number). String or null",
   "invoiceType": "The document type from its title/header. One of: 'Service Invoice', 'Sales Invoice', 'Official Receipt', 'Other', or null",
@@ -3745,6 +3900,8 @@ The JSON MUST exactly match this structure:
   "total": Number or null,
   "paymentMethod": "String or null",
   "suggestedCategory": "Must be exactly one of: 'Tools / Direct', 'Gas', 'Materials', 'Transportation', 'Accommodation', '3rd Party Labor', 'Others'. Guess the best fit based on vendor and items.",
+  "deductible": "Boolean: true if this is a legitimate, substantiated BUSINESS expense that can be written off / claimed as an income-tax-deductible expense — i.e. it is an ordinary business purchase AND the document is a valid BIR receipt/invoice (shows the seller's registered name + VAT REG TIN, and a serial number). Set false for clearly personal/non-business items, or when the document is an informal/incomplete receipt that would not substantiate a deduction. null if unclear.",
+  "deductibleReason": "Short plain reason for the deductible value (e.g. 'Valid Sales Invoice with seller TIN — fuel for operations', or 'No seller TIN / informal receipt'). String or null",
   "confidence": Number between 0.0 and 1.0 indicating extraction quality,
   "lineItems": [
     {
