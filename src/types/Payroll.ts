@@ -5,6 +5,7 @@ export type PayFrequency = 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY';
 
 export interface Employee {
   id: string;
+  userId?: string;        // linked user account ID (from `users` collection)
   employeeNumber: string;
   name: string; // "LASTNAME, Firstname"
   designation: string;

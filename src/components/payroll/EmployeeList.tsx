@@ -7,9 +7,12 @@ import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import PersonOffIcon from '@mui/icons-material/PersonOff';
 import { Employee } from '../../types/Payroll';
+import type { User } from '../../types/User';
 import { getEmployees, createEmployee, updateEmployee, deactivateEmployee } from '../../utils/firebasePayroll';
 import { useAuth } from '../../contexts/AuthContext';
 import EmployeeForm from './EmployeeForm';
+
+const API_BASE = process.env.REACT_APP_API_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
 
 const fmt = (n?: number) =>
   n !== undefined
@@ -23,6 +26,18 @@ const EmployeeList: React.FC = () => {
   const [error, setError] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+
+  const loadUsers = async () => {
+    if (user?.role !== 'superadmin') return;
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/users`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) { const data = await res.json(); setAllUsers(Array.isArray(data) ? data : data.users || []); }
+    } catch { /* non-critical */ }
+  };
 
   const load = async () => {
     try {
@@ -35,7 +50,7 @@ const EmployeeList: React.FC = () => {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); loadUsers(); }, []);
 
   const handleSave = async (data: Omit<Employee, 'id' | 'createdAt'>) => {
     if (editing) {
@@ -126,6 +141,7 @@ const EmployeeList: React.FC = () => {
         onClose={() => setFormOpen(false)}
         onSave={handleSave}
         canEditRate={user?.role === 'superadmin'}
+        users={user?.role === 'superadmin' ? allUsers : []}
       />
     </Box>
   );

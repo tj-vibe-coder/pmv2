@@ -1972,10 +1972,22 @@ app.post('/api/payroll/runs/:runId/payslips', async (req, res) => {
   try {
     const col = db.collection('payroll_runs').doc(req.params.runId).collection('payslips');
     const batch = db.batch();
-    payslips.forEach(slip => {
-      const ref = slip.employeeId ? col.doc(slip.employeeId) : col.doc();
+    for (const slip of payslips) {
+      // Use the employee's linked userId as doc ID so my-payslips can look it up.
+      // Fall back to employeeId for employees without a linked user account.
+      let docId = slip.employeeId;
+      if (slip.employeeSnapshot?.userId) {
+        docId = slip.employeeSnapshot.userId;
+      } else if (slip.employeeId) {
+        // Check if this employee has a userId in Firestore
+        const empDoc = await db.collection('payroll_employees').doc(slip.employeeId).get();
+        if (empDoc.exists && empDoc.data().userId) {
+          docId = empDoc.data().userId;
+        }
+      }
+      const ref = docId ? col.doc(docId) : col.doc();
       batch.set(ref, slip, { merge: true });
-    });
+    }
     await batch.commit();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to save payslips' }); }

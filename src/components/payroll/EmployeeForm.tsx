@@ -4,6 +4,7 @@ import {
   Button, TextField, MenuItem, Grid, FormControlLabel, Switch,
 } from '@mui/material';
 import { Employee, EmployeeType, PayFrequency } from '../../types/Payroll';
+import type { User } from '../../types/User';
 
 const DESIGNATIONS = ['Helper', 'Skilled Worker', 'Foreman', 'Supervisor', 'Engineer', 'Engineering Manager', 'Project Manager', 'Admin', 'Accounting', 'Other'];
 
@@ -13,9 +14,11 @@ interface Props {
   onClose: () => void;
   onSave: (data: Omit<Employee, 'id' | 'createdAt'>) => Promise<void>;
   canEditRate?: boolean;
+  users?: User[];
 }
 
 const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
+  userId: '',
   employeeNumber: '',
   name: '',
   designation: '',
@@ -32,7 +35,7 @@ const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
   tinNumber: '',
 };
 
-const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEditRate = true }) => {
+const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEditRate = true, users = [] }) => {
   const [form, setForm] = useState<Omit<Employee, 'id' | 'createdAt'>>(EMPTY);
   const [saving, setSaving] = useState(false);
 
@@ -91,6 +94,16 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEdi
               <MenuItem value="MONTHLY">Monthly</MenuItem>
             </TextField>
           </Grid>
+
+          {users.length > 0 && (
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField fullWidth select label="Linked User Account" value={form.userId || ''}
+                onChange={(e) => setForm((f) => ({ ...f, userId: e.target.value || undefined }))}>
+                <MenuItem value="">— Not linked —</MenuItem>
+                {users.map((u) => <MenuItem key={String(u.id)} value={String(u.id)}>{u.full_name || u.username} ({u.role})</MenuItem>)}
+              </TextField>
+            </Grid>
+          )}
 
           {form.employeeType === 'FIELD' && canEditRate && (
             <Grid size={{ xs: 12, sm: 4 }}>
