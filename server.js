@@ -1770,15 +1770,25 @@ app.put('/api/investments/target', async (req, res) => {
 });
 
 // ========== PAYROLL ROUTES ==========
-// Restricted to TJC and RJR usernames only.
+// Restricted to superadmin and admin roles only.
 
-const PAYROLL_USERS = ['TJC', 'RJR'];
+const PAYROLL_ROLES = ['superadmin', 'admin'];
 
 async function requirePayrollAccess(req, res) {
   const user = await getCurrentUser(req);
   if (!user) { res.status(401).json({ error: 'Unauthorized' }); return null; }
-  if (!PAYROLL_USERS.includes(user.username)) { res.status(403).json({ error: 'Payroll access restricted' }); return null; }
+  if (!PAYROLL_ROLES.includes(user.role)) { res.status(403).json({ error: 'Payroll access restricted' }); return null; }
   return user;
+}
+
+function isSuperadmin(user) {
+  return user && user.role === 'superadmin';
+}
+
+function stripRates(obj) {
+  if (!obj) return obj;
+  const { dailyRate, monthlyRate, mealAllowance, ...rest } = obj;
+  return rest;
 }
 
 // ── Employees ──────────────────────────────────────────────────────────────
@@ -1786,7 +1796,8 @@ app.get('/api/payroll/employees', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   try {
     const snap = await db.collection('payroll_employees').orderBy('name').get();
-    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    const employees = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    res.json(isSuperadmin(user) ? employees : employees.map(e => stripRates(e)));
   } catch (err) { res.status(500).json({ error: 'Failed to fetch employees' }); }
 });
 
@@ -1943,7 +1954,14 @@ app.get('/api/payroll/runs/:runId/payslips', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   try {
     const snap = await db.collection('payroll_runs').doc(req.params.runId).collection('payslips').get();
-    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    let payslips = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (!isSuperadmin(user)) {
+      payslips = payslips.map(p => ({
+        ...p,
+        employeeSnapshot: p.employeeSnapshot ? stripRates(p.employeeSnapshot) : p.employeeSnapshot,
+      }));
+    }
+    res.json(payslips);
   } catch (err) { res.status(500).json({ error: 'Failed to fetch payslips' }); }
 });
 
