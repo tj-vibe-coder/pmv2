@@ -25,6 +25,7 @@ import {
   Tooltip,
   LinearProgress,
   Alert,
+  Snackbar,
 } from '@mui/material';
 import { FileDownload as FileDownloadIcon, ReceiptLong as ReceiptLongIcon } from '@mui/icons-material';
 import { API_BASE } from '../../config/api';
@@ -215,6 +216,10 @@ const TaxFilerLedgerPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; sev: 'success' | 'error' } | null>(null);
+  // tax_filer is read-only; everyone else (accounting/admin) can correct the flag inline.
+  const canEdit = !isTaxFiler;
 
   useEffect(() => {
     let cancelled = false;
@@ -396,6 +401,31 @@ const TaxFilerLedgerPage: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  // Inline-edit the deductible flag on a project/overhead row (accounting correction).
+  const setRowDeductible = async (row: LedgerRow, value: boolean | null) => {
+    if (row.source === 'payroll') return;
+    const endpoint = row.source === 'project' ? 'project-expenses' : 'overhead-expenses';
+    const prev = rows;
+    setSavingId(row.id);
+    // Optimistic update.
+    setRows((rs) => rs.map((r) => (r.id === row.id && r.source === row.source ? { ...r, deductible: value } : r)));
+    try {
+      const res = await fetch(`${API}/${endpoint}/${encodeURIComponent(row.id)}`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify({ deductible: value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Update failed');
+      setToast({ msg: 'Deductible flag updated', sev: 'success' });
+    } catch (err) {
+      setRows(prev); // revert
+      setToast({ msg: err instanceof Error ? err.message : 'Update failed', sev: 'error' });
+    } finally {
+      setSavingId(null);
+    }
+  };
+
   const years = Array.from({ length: 6 }, (_, i) => CURRENT_YEAR - i);
 
   const kpiCard = (label: string, value: string, gradient: string, sub?: string) => (
@@ -478,7 +508,8 @@ const TaxFilerLedgerPage: React.FC = () => {
         </Box>
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Consolidated BIR substantiation ledger: project costs, overhead, and payroll references for the selected year. Read-only.
+        Consolidated BIR substantiation ledger: project costs, overhead, and payroll references for the selected year.
+        {canEdit ? ' Use the Deductible column to correct a row’s tax classification.' : ' Read-only.'}
       </Typography>
 
       {loading ? (
@@ -542,6 +573,27 @@ const TaxFilerLedgerPage: React.FC = () => {
                         <TableCell>
                           {r.source === 'payroll' ? (
                             <Typography variant="caption" color="text.secondary">—</Typography>
+                          ) : canEdit && !r.isSyncedPayroll ? (
+                            <Tooltip title={r.deductibleReason || 'Set the BIR write-off classification'}>
+                              <FormControl size="small" variant="standard" sx={{ minWidth: 124 }}>
+                                <Select
+                                  value={r.deductible === true ? 'yes' : r.deductible === false ? 'no' : 'unmarked'}
+                                  disabled={savingId === r.id}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setRowDeductible(r, v === 'yes' ? true : v === 'no' ? false : null);
+                                  }}
+                                  sx={{
+                                    fontSize: '0.78rem',
+                                    color: r.deductible === true ? NET_PACIFIC_COLORS.success : r.deductible === false ? NET_PACIFIC_COLORS.error : 'text.secondary',
+                                  }}
+                                >
+                                  <MenuItem value="yes">Deductible</MenuItem>
+                                  <MenuItem value="no">Non-deductible</MenuItem>
+                                  <MenuItem value="unmarked">Unmarked</MenuItem>
+                                </Select>
+                              </FormControl>
+                            </Tooltip>
                           ) : r.deductible === null ? (
                             <Chip size="small" label="Unmarked" variant="outlined" sx={{ color: 'text.secondary' }} />
                           ) : (
@@ -568,6 +620,14 @@ const TaxFilerLedgerPage: React.FC = () => {
           </Typography>
         </>
       )}
+      <Snackbar
+        open={!!toast}
+        autoHideDuration={3000}
+        onClose={() => setToast(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {toast ? <Alert severity={toast.sev} onClose={() => setToast(null)} variant="filled">{toast.msg}</Alert> : undefined}
+      </Snackbar>
     </Box>
   );
 };
