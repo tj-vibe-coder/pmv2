@@ -293,7 +293,7 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
       </ListItem>
 
       {/* Payroll — only visible to authorized users */}
-      {isPayrollAuthorized(user?.username) && user?.role !== 'tax_filer' && (
+      {isPayrollAuthorized(user?.role) && (
         <ListItem disablePadding sx={{ mb: 0.5 }}>
           <Tooltip title={isExpanded ? '' : 'Payroll'} placement="right" arrow>
             <ListItemButton

@@ -1,17 +1,13 @@
 /**
- * Payroll access control.
- * Access is based on username from the custom auth system.
+ * Payroll access control — role-based.
  *
- * TEMPORARILY OPEN TO ALL USERS (Jun 2026, per RJ) — every logged-in user can
- * see and use the Payroll pane. To restore the allowlist, set
- * PAYROLL_OPEN_TO_ALL back to false (allowlist: TJC, RJR).
+ * superadmin: full access (create runs, view rates, edit rates)
+ * admin: payroll access without rate visibility
  */
-export const PAYROLL_OPEN_TO_ALL = true;
 
-export const PAYROLL_AUTHORIZED_USERNAMES: string[] = ['TJC', 'RJR'];
+const PAYROLL_ROLES = ['superadmin', 'admin'];
 
-export function isPayrollAuthorized(username: string | undefined): boolean {
-  if (PAYROLL_OPEN_TO_ALL) return true;
-  if (!username) return false;
-  return PAYROLL_AUTHORIZED_USERNAMES.includes(username);
+export function isPayrollAuthorized(role: string | undefined): boolean {
+  if (!role) return false;
+  return PAYROLL_ROLES.includes(role);
 }
