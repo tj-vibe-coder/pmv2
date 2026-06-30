@@ -216,6 +216,11 @@ async function addLiquidationRowsToProjectExpenses(
         sourceLiquidationRowId: r.id,
       };
       if (sourceCaId) expense.sourceCaId = sourceCaId;
+      // Carry BIR substantiation captured on the row into the tax ledger.
+      if ((r.supplier || '').trim()) expense.supplier = (r.supplier || '').trim();
+      if ((r.invoiceNo || '').trim()) expense.invoiceNo = (r.invoiceNo || '').trim();
+      if (typeof r.deductible === 'boolean') expense.deductible = r.deductible;
+      if ((r.deductibleReason || '').trim()) expense.deductibleReason = (r.deductibleReason || '').trim();
       return expense;
     });
     await fetch(`${API_BASE}/api/project-expenses`, {

@@ -1032,6 +1032,15 @@ app.post('/api/project-expenses', async (req, res) => {
           if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
           if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
           if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
+          // BIR substantiation passthrough — mirrors the single-insert path so
+          // liquidation/PO-synced rows carry supplier/invoice detail into the tax ledger.
+          if (exp.supplier) doc.supplier = String(exp.supplier);
+          if (exp.invoiceNo) doc.invoiceNo = String(exp.invoiceNo);
+          if (exp.invoiceType) doc.invoiceType = String(exp.invoiceType);
+          if (exp.tin) doc.tin = String(exp.tin);
+          if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
+          if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
+          if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
           batch.set(ref, doc);
           inserted.push({ id: ref.id, ...doc });
         }
@@ -1042,7 +1051,7 @@ app.post('/api/project-expenses', async (req, res) => {
     // Single insert
     const { projectId, projectName, description, amount, date, category, sourceType,
             sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin } = body;
+            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = body;
     if (!projectId || !amount) {
       return res.status(400).json({ success: false, error: 'projectId and amount are required' });
     }
@@ -1068,6 +1077,8 @@ app.post('/api/project-expenses', async (req, res) => {
     if (invoiceType) doc.invoiceType = String(invoiceType);
     if (tin) doc.tin = String(tin);
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
+    if (typeof deductible === 'boolean') doc.deductible = deductible;
+    if (deductibleReason) doc.deductibleReason = String(deductibleReason);
     const ref = await db.collection('project_expenses').add(doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
   } catch (err) {
