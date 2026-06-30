@@ -36,6 +36,7 @@ import ReimbursementDashboard from './components/ReimbursementDashboard';
 import ProjectExpenseReport from './components/finance/ProjectExpenseReport';
 import OverheadExpensesPage from './components/OverheadExpensesPage';
 import CompanyPnLPage from './components/finance/CompanyPnLPage';
+import TaxFilerLedgerPage from './components/finance/TaxFilerLedgerPage';
 import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
 import DTRPage from './components/employee/DTRPage';
@@ -161,6 +162,15 @@ const EmployeeGuard: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   return <>{children}</>;
 };
 
+// Tax Filer block: tax_filer role cannot reach payroll / liquidation / cash-advance surfaces; send them to their ledger
+const TaxFilerBlock: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
+  if (user?.role === 'tax_filer') {
+    return <Navigate to="/finance/tax-ledger" replace />;
+  }
+  return <>{children}</>;
+};
+
 // Redirect legacy /ehs and /ehs/:tab to /utilities/ehs and /utilities/ehs/:tab
 const RedirectEhsToUtilities: React.FC = () => {
   const { tab } = useParams<{ tab?: string }>();
@@ -245,20 +255,20 @@ function App() {
                 </ProtectedRoute>
               } 
             >
-              <Route 
-                path="liquidation-form" 
-                element={<LiquidationFormPage />}
+              <Route
+                path="liquidation-form"
+                element={<TaxFilerBlock><LiquidationFormPage /></TaxFilerBlock>}
               />
               <Route
                 path="ca-form"
-                element={<CAFormPage />}
+                element={<TaxFilerBlock><CAFormPage /></TaxFilerBlock>}
               />
               <Route
                 path="direct-labor"
                 element={<DirectLaborPage />}
               />
             </Route>
-            <Route 
+            <Route
               path="/clients" 
               element={
                 <ProtectedRoute>
@@ -428,9 +438,11 @@ function App() {
                 <ProtectedRoute>
                   <EmployeeGuard>
                     <AppLayout>
-                      <PayrollGuard>
-                        <PayrollDashboard />
-                      </PayrollGuard>
+                      <TaxFilerBlock>
+                        <PayrollGuard>
+                          <PayrollDashboard />
+                        </PayrollGuard>
+                      </TaxFilerBlock>
                     </AppLayout>
                   </EmployeeGuard>
                 </ProtectedRoute>
@@ -451,11 +463,11 @@ function App() {
             >
               <Route
                 path="liquidation-form"
-                element={<LiquidationFormPage />}
+                element={<TaxFilerBlock><LiquidationFormPage /></TaxFilerBlock>}
               />
               <Route
                 path="ca-form"
-                element={<CAFormPage />}
+                element={<TaxFilerBlock><CAFormPage /></TaxFilerBlock>}
               />
               <Route
                 path="direct-labor"
@@ -468,7 +480,9 @@ function App() {
                 <ProtectedRoute>
                   <EmployeeGuard>
                     <AppLayout>
-                      <ReimbursementDashboard />
+                      <TaxFilerBlock>
+                        <ReimbursementDashboard />
+                      </TaxFilerBlock>
                     </AppLayout>
                   </EmployeeGuard>
                 </ProtectedRoute>
@@ -507,6 +521,18 @@ function App() {
                       <CompanyPnLPage />
                     </AppLayout>
                   </SuperadminRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/tax-ledger"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <TaxFilerLedgerPage />
+                    </AppLayout>
+                  </EmployeeGuard>
                 </ProtectedRoute>
               }
             />
@@ -722,7 +748,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <AppLayout>
-                    <LiquidationFormPage />
+                    <TaxFilerBlock>
+                      <LiquidationFormPage />
+                    </TaxFilerBlock>
                   </AppLayout>
                 </ProtectedRoute>
               }
@@ -742,7 +770,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <AppLayout>
-                    <EmployeePayslipPage />
+                    <TaxFilerBlock>
+                      <EmployeePayslipPage />
+                    </TaxFilerBlock>
                   </AppLayout>
                 </ProtectedRoute>
               }

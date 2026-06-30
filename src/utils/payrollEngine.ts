@@ -85,6 +85,23 @@ export function computeSpecialHolidayPay(dailyRate: number, worked: boolean): nu
   return dailyRate * 1.30;
 }
 
+// ─── Holiday-on-Rest-Day Pay ──────────────────────────────────────────────────
+
+// DOLE holiday-on-rest-day day pay (worked): Regular Holiday on rest day = 260%, Special Non-Working Holiday on rest day = 150%
+export function computeRegularHolidayRestDayPay(dailyRate: number): number {
+  return dailyRate * 2.60;
+}
+export function computeSpecialHolidayRestDayPay(dailyRate: number): number {
+  return dailyRate * 1.50;
+}
+// OT on those days: OT premium (x1.30) applied on the higher base
+export function computeOTRegularHolidayRestDay(dailyRate: number, otHours: number): number {
+  return otHours * hourlyRate(dailyRate) * 2.60 * 1.30;
+}
+export function computeOTSpecialHolidayRestDay(dailyRate: number, otHours: number): number {
+  return otHours * hourlyRate(dailyRate) * 1.50 * 1.30;
+}
+
 // ─── Night Differential ───────────────────────────────────────────────────────
 
 /**
@@ -135,15 +152,23 @@ export function computePayslip(
 
   // OT pay
   const otPayRegular = isField ? computeOTRegular(dailyRate, dtr.overtimeHours) : 0;
-  const otPayRestDay = isField ? computeOTRestDay(dailyRate, dtr.restDayOTHours ?? 0) : 0;
-  const otPayRegularHoliday = isField ? computeOTRegularHoliday(dailyRate, dtr.regularHolidayOTHours ?? 0) : 0;
+  const otPayRestDay = isField
+    ? computeOTRestDay(dailyRate, dtr.restDayOTHours ?? 0)
+      + computeOTSpecialHolidayRestDay(dailyRate, dtr.specialHolidayRestDayOTHours ?? 0)
+    : 0;
+  const otPayRegularHoliday = isField
+    ? computeOTRegularHoliday(dailyRate, dtr.regularHolidayOTHours ?? 0)
+      + computeOTRegularHolidayRestDay(dailyRate, dtr.regularHolidayRestDayOTHours ?? 0)
+    : 0;
 
   // Holiday pay
   const regularHolidayPay = isField
     ? (dtr.regularHolidayDays ?? 0) * computeRegularHolidayPay(dailyRate, true)
+      + (dtr.regularHolidayRestDayDays ?? 0) * computeRegularHolidayRestDayPay(dailyRate)
     : 0;
   const specialHolidayPay = isField
     ? (dtr.specialHolidayDays ?? 0) * computeSpecialHolidayPay(dailyRate, true)
+      + (dtr.specialHolidayRestDayDays ?? 0) * computeSpecialHolidayRestDayPay(dailyRate)
     : 0;
 
   // Night differential
@@ -216,7 +241,7 @@ export function computePayslip(
     nightDifferential: round2(nightDifferential),
     deMinimisBenefits: 0,
     otherBenefitsNonTax: 0,
-    thirteenthMonthAccrual: 0,
+    thirteenthMonthAccrual: round2(basicPay / 12),
     adjustment: round2(manualAdjustment),
     commission: 0,
     empSSS,

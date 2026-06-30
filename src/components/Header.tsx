@@ -53,6 +53,7 @@ const Header: React.FC = () => {
       case 'admin': return '#e74c3c';
       case 'user': return '#3498db';
       case 'viewer': return '#95a5a6';
+      case 'tax_filer': return '#16a085';
       default: return '#95a5a6';
     }
   };

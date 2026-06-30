@@ -1,15 +1,16 @@
 /**
  * Philippine Government Mandatory Contributions
- * SSS: R.A. 11199 (2025 rates)
- * PhilHealth: Circular 2023-0014 (5% rate)
- * Pag-IBIG: HDMF circular
+ * SSS: R.A. 11199 — 15% rate (EE 5% / ER 10%), MSC ₱5,000–₱35,000, effective Jan 1, 2025
+ * PhilHealth: 5% premium, ₱10,000 floor / ₱100,000 ceiling (₱500–₱5,000), 50/50
+ * Pag-IBIG: HDMF Circular 460 — 2% EE / 2% ER, ₱10,000 max fund salary (₱200 cap), effective Feb 2024
+ *
+ * NOTE: rates used by a payroll run are snapshotted onto the run (PayrollRun.contribRates)
+ * so refreshing these defaults never recomputes already-saved runs at the new rates.
  */
 
 // SSS contribution table — salary ranges map to Monthly Salary Credit (MSC)
 const SSS_TABLE: { min: number; max: number; msc: number }[] = [
-  { min: 0,      max: 4249.99,  msc: 4000  },
-  { min: 4250,   max: 4749.99,  msc: 4500  },
-  { min: 4750,   max: 5249.99,  msc: 5000  },
+  { min: 0,      max: 5249.99,  msc: 5000  },
   { min: 5250,   max: 5749.99,  msc: 5500  },
   { min: 5750,   max: 6249.99,  msc: 6000  },
   { min: 6250,   max: 6749.99,  msc: 6500  },
@@ -59,7 +60,17 @@ const SSS_TABLE: { min: number; max: number; msc: number }[] = [
   { min: 28250,  max: 28749.99, msc: 28500 },
   { min: 28750,  max: 29249.99, msc: 29000 },
   { min: 29250,  max: 29749.99, msc: 29500 },
-  { min: 29750,  max: Infinity,  msc: 30000 },
+  { min: 29750,  max: 30249.99, msc: 30000 },
+  { min: 30250,  max: 30749.99, msc: 30500 },
+  { min: 30750,  max: 31249.99, msc: 31000 },
+  { min: 31250,  max: 31749.99, msc: 31500 },
+  { min: 31750,  max: 32249.99, msc: 32000 },
+  { min: 32250,  max: 32749.99, msc: 32500 },
+  { min: 32750,  max: 33249.99, msc: 33000 },
+  { min: 33250,  max: 33749.99, msc: 33500 },
+  { min: 33750,  max: 34249.99, msc: 34000 },
+  { min: 34250,  max: 34749.99, msc: 34500 },
+  { min: 34750,  max: Infinity,  msc: 35000 },
 ];
 
 export interface ContribRates {
@@ -75,9 +86,9 @@ export const CONTRIB_DEFAULTS: ContribRates = {
   philhealthRate: 0.05,
   philhealthMin: 500,
   philhealthMax: 5000,
-  pagibigCap: 100,
-  sssEmployeeRate: 0.045,
-  sssEmployerRate: 0.085,
+  pagibigCap: 200,
+  sssEmployeeRate: 0.05,
+  sssEmployerRate: 0.10,
 };
 
 /**
@@ -90,7 +101,7 @@ export function computeSSS(
   rates: ContribRates = CONTRIB_DEFAULTS
 ): { employee: number; employer: number } {
   const row = SSS_TABLE.find((r) => monthlyBasicPay >= r.min && monthlyBasicPay <= r.max);
-  const msc = row ? row.msc : 30000;
+  const msc = row ? row.msc : 35000;
   const ec = msc <= 14750 ? 10 : 30;
   return {
     employee: msc * rates.sssEmployeeRate,
