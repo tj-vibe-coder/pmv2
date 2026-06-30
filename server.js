@@ -3881,6 +3881,15 @@ function normalizeReceipt(raw) {
   const customerAddress = (typeof raw.customerAddress === 'string' && raw.customerAddress.trim().length > 0) ? raw.customerAddress.trim() : null;
   const customerValidation = validateCustomerInfo(customerName, customerTin, customerAddress);
 
+  const hasCustomerIssues = customerValidation.issues.length > 0;
+  const finalDeductible = hasCustomerIssues ? false : deductible;
+  const issuesPrefix = hasCustomerIssues
+    ? customerValidation.issues.join('; ')
+    : null;
+  const finalDeductibleReason = hasCustomerIssues
+    ? (deductibleReason ? `${issuesPrefix}. ${deductibleReason}` : issuesPrefix)
+    : deductibleReason;
+
   return {
     vendor: typeof raw.vendor === 'string' ? raw.vendor : null,
     description: (typeof raw.description === 'string' && raw.description.trim().length > 0) ? raw.description.trim() : null,
@@ -3894,8 +3903,8 @@ function normalizeReceipt(raw) {
     total: safeNum(raw.total),
     paymentMethod: typeof raw.paymentMethod === 'string' ? raw.paymentMethod : null,
     suggestedCategory,
-    deductible,
-    deductibleReason,
+    deductible: finalDeductible,
+    deductibleReason: finalDeductibleReason,
     customerName,
     customerTin,
     customerAddress,

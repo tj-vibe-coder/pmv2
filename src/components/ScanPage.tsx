@@ -374,6 +374,9 @@ const ScanPage: React.FC = () => {
           selectedProject={selectedProject}
           onCancel={() => setBatchMode(false)}
           onComplete={(n) => { setBatchMode(false); showSnack('success', `Saved ${n} receipt${n === 1 ? '' : 's'}.`); }}
+          deliverToDesktop={deliverToDesktop}
+          pairingToken={pairingToken}
+          scanContext={scanContext}
         />
         <Snackbar open={snackbar.open} autoHideDuration={5000} onClose={() => setSnackbar((p) => ({ ...p, open: false }))} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
           <Alert onClose={() => setSnackbar((p) => ({ ...p, open: false }))} severity={snackbar.severity} variant="filled" sx={{ width: '100%' }}>{snackbar.message}</Alert>
@@ -402,9 +405,7 @@ const ScanPage: React.FC = () => {
         {!editUrl && (
           <>
             <Button variant="contained" size="large" fullWidth startIcon={busy ? <CircularProgress size={20} color="inherit" /> : <CameraAltIcon />} disabled={busy} onClick={() => fileInputRef.current?.click()} sx={{ py: 1.5, mb: 2 }}>{busy ? 'Processing…' : 'Scan Receipt'}</Button>
-            {!deliverToDesktop && (
-              <Button variant="outlined" size="large" fullWidth startIcon={<PhotoLibraryIcon />} onClick={() => setBatchMode(true)} sx={{ py: 1.5, mb: 2 }}>Scan Multiple</Button>
-            )}
+            <Button variant="outlined" size="large" fullWidth startIcon={<PhotoLibraryIcon />} onClick={() => setBatchMode(true)} sx={{ py: 1.5, mb: 2 }}>Scan Multiple</Button>
           </>
         )}
         <input ref={fileInputRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleFileChange} />

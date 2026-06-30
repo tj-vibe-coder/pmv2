@@ -1276,6 +1276,15 @@ export default function LiquidationFormPage() {
           )}
           <Button
             variant="outlined"
+            startIcon={<PhotoCameraIcon />}
+            onClick={() => setScanDialog({ open: true, rowId: null })}
+            disabled={isViewingSubmitted}
+            sx={{ borderColor: theme.primary, color: theme.primary, '&:hover': { borderColor: theme.secondary, color: theme.secondary } }}
+          >
+            Scan Receipt
+          </Button>
+          <Button
+            variant="outlined"
             startIcon={<ImportIcon />}
             onClick={() => fileInputRef.current?.click()}
             sx={{ borderColor: theme.primary, color: theme.primary, '&:hover': { borderColor: theme.secondary, color: theme.secondary } }}
@@ -1721,19 +1730,21 @@ export default function LiquidationFormPage() {
                       </Tooltip>
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                      <Tooltip title="Scan receipt with phone">
-                        <span>
-                          <IconButton
-                            size="small"
-                            onClick={() => setScanDialog({ open: true, rowId: row.id })}
-                            disabled={isViewingSubmitted}
-                            sx={{ color: theme.primary }}
-                            aria-label="Scan receipt with phone"
-                          >
-                            <PhotoCameraIcon fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
+                      {receipts.filter((r) => r.rowId === row.id).length === 0 && (
+                        <Tooltip title="Scan receipt with phone">
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={() => setScanDialog({ open: true, rowId: row.id })}
+                              disabled={isViewingSubmitted}
+                              sx={{ color: theme.primary }}
+                              aria-label="Scan receipt with phone"
+                            >
+                              <PhotoCameraIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )}
                       <Tooltip title="Attach receipt (photo or PDF)">
                         <span>
                           <IconButton
@@ -1882,14 +1893,16 @@ export default function LiquidationFormPage() {
         open={scanDialog.open}
         onClose={() => setScanDialog((p) => ({ ...p, open: false }))}
         context={
-          scanDialog.rowId
+          scanDialog.open
             ? {
                 kind: 'liquidation',
                 formNo: (formNo || 'draft').trim() || 'draft',
                 year: scanYear,
                 folderPath: scanFolderPath,
-                rowId: scanDialog.rowId,
-                label: `Form ${formNo || 'draft'} — Row ${rows.findIndex((x) => x.id === scanDialog.rowId) + 1}`,
+                rowId: scanDialog.rowId || '',
+                label: scanDialog.rowId
+                  ? `Form ${formNo || 'draft'} — Row ${rows.findIndex((x) => x.id === scanDialog.rowId) + 1}`
+                  : `Form ${formNo || 'draft'}`,
               }
             : null
         }

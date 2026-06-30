@@ -91,6 +91,10 @@ interface ScanBatchProps {
   selectedProject: ScanProject | null;
   onCancel: () => void;
   onComplete: (savedCount: number) => void;
+  deliverToDesktop?: boolean;
+  pairingToken?: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  scanContext?: any;
 }
 
 const emptyFields = (): BatchItemFields => ({
@@ -99,7 +103,31 @@ const emptyFields = (): BatchItemFields => ({
   deductible: null, deductibleReason: null, customerIssues: [], lowConf: false,
 });
 
-const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, onComplete }) => {
+const makeThumb = async (blob: Blob | File): Promise<string> => {
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(blob);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const MAX = 240;
+        const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { reject(new Error('no ctx')); return; }
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.6));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('img load failed')); };
+      img.src = url;
+    });
+  } catch { return ''; }
+};
+
+const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, onComplete, deliverToDesktop, pairingToken, scanContext }) => {
   const [stage, setStage] = useState<BatchStage>(BatchStage.select);
   const [items, setItems] = useState<BatchItem[]>([]);
   const [cropIndex, setCropIndex] = useState(0);
@@ -283,8 +311,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   const deleteItem = (id: string) => setItems((prev) => prev.filter((it) => it.id !== id));
 
   const saveOne = async (item: BatchItem, idx: number): Promise<BatchItem> => {
-    // Defensive: never POST a project expense without a project (would 500 server-side).
-    if (mode === 'project' && !selectedProject) {
+    if (!deliverToDesktop && mode === 'project' && !selectedProject) {
       return { ...item, saveError: 'No project selected.' };
     }
     try {
@@ -292,6 +319,46 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
       const contentBase64 = await blobToBase64(compressed);
       const year = String(new Date().getFullYear());
       const filename = `SCAN-${Date.now()}-${idx}.jpg`;
+
+      if (deliverToDesktop) {
+        if (!pairingToken || !scanContext?.folderPath) {
+          return { ...item, saveError: 'Missing desktop context.' };
+        }
+        const r = await fetch(`${API_BASE}/api/onedrive/upload`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ folderPath: scanContext.folderPath, filename, contentBase64 }),
+        });
+        const d = await r.json().catch(() => ({ ok: false })) as { ok: boolean; id?: string; webUrl?: string };
+        if (!d.ok || !d.id || !d.webUrl) return { ...item, saveError: 'Could not upload to OneDrive.' };
+
+        const thumb = await makeThumb(item.croppedBlob ?? item.rawFile);
+        const f = item.fields;
+        const jobRes = await fetch(`${API_BASE}/api/scan-jobs/${pairingToken}/result`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            receipt: {
+              oneDriveId: d.id, webUrl: d.webUrl, filename,
+              ...(thumb ? { thumbnailDataUrl: thumb } : {}),
+              parsed: {
+                amount: Number(f.amount) > 0 ? Number(f.amount) : null,
+                date: f.date || null,
+                category: f.category || null,
+                particulars: f.description || f.supplier || null,
+                vendor: f.supplier || null,
+                invoiceNo: f.invoiceNumber || null,
+                deductible: f.deductible,
+                deductibleReason: f.deductibleReason,
+                customerInfoIssues: f.customerIssues,
+                confidence: f.lowConf ? 0.4 : 0.9,
+              },
+            },
+          }),
+        });
+        const jobData = await jobRes.json().catch(() => ({ ok: false })) as { ok: boolean };
+        if (jobData.ok) return { ...item, isSaved: true, saveError: undefined };
+        return { ...item, saveError: 'Could not send to desktop.' };
+      }
+
       const folderPath = mode === 'project' && selectedProject
         ? `Project Receipts/${selectedProject.project_no}/${year}`
         : `00 Overhead Receipts/${year}`;
@@ -423,7 +490,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   const hasSaveErrors = visibleItems.some((it) => it.saveError);
   const failedCount = visibleItems.filter((it) => it.saveError).length;
   const savableCount = visibleItems.filter((it) => Number(it.fields.amount) > 0).length;
-  const canSaveAll = !saving && savableCount > 0 && (mode === 'overhead' || !!selectedProject);
+  const canSaveAll = !saving && savableCount > 0 && (deliverToDesktop || mode === 'overhead' || !!selectedProject);
   const btnLabel = saving ? 'Saving…' : hasSaveErrors ? `Retry Failed (${failedCount})` : `Save All (${savableCount})`;
 
   return (
@@ -432,7 +499,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
           {visibleItems.length} receipt{visibleItems.length !== 1 ? 's' : ''} — Total ₱{totalAmt.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
         </Typography>
-        {mode === 'project' && !selectedProject && (
+        {!deliverToDesktop && mode === 'project' && !selectedProject && (
           <Alert severity="warning" sx={{ mt: 1 }}>No project selected — go back and select a project before saving.</Alert>
         )}
       </Box>
