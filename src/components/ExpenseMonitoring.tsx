@@ -32,6 +32,9 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
+  ToggleButtonGroup,
+  ToggleButton,
+  Link,
 } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import {
@@ -49,13 +52,13 @@ import {
   Area,
   AreaChart
 } from 'recharts';
-import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, ExpandMore as ExpandMoreIcon, SwapHoriz as PromoteIcon } from '@mui/icons-material';
+import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, ExpandMore as ExpandMoreIcon, SwapHoriz as PromoteIcon, AddAPhoto as AddAPhotoIcon, OpenInNew as OpenInNewIcon, Edit as EditIcon, DriveFileMove as MoveIcon, Close as CloseIcon, DragIndicator as DragIndicatorIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import { getBudgets } from '../utils/projectBudgetStorage';
 import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem } from './PurchaseOrderPage';
 import { API_BASE } from '../config/api';
-import { PROJECT_EXPENSE_CATEGORIES, INVOICE_TYPES, INVESTORS, type FundingSource } from '../data/financeCategories';
+import { PROJECT_EXPENSE_CATEGORIES, OVERHEAD_CATEGORIES, INVOICE_TYPES, INVESTORS, type FundingSource } from '../data/financeCategories';
 import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
 import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress';
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
@@ -64,6 +67,7 @@ import ReceiptCropper from './ReceiptCropper';
 import ScanBatch from './ScanBatch';
 import ScanWithPhoneButton from './ScanWithPhoneButton';
 import { useAuth } from '../contexts/AuthContext';
+import { getDriveItemThumbnailUrl, fetchDriveItemBlob, deleteDriveItem } from '../services/onedriveFolderService';
 
 const EXPENSES_KEY = 'projectExpenses';
 
@@ -81,15 +85,26 @@ async function convertHeicToJpeg(file: File): Promise<File> {
   }
 }
 
+export type ExpenseScope = 'project' | 'overhead';
+
+// Sentinel value for the Project filter/select so "Overhead" can live in the same
+// dropdown as real projects instead of a second control (roadmap §3).
+const OVERHEAD_SENTINEL = '__overhead__';
+
 export interface ProjectExpense {
   id: string;
-  projectId: string;
-  projectName: string;
+  /** Which Firestore collection this row actually lives in — project_expenses or overhead_expenses.
+   *  Client-side tag only, set when fetched; not a stored field. */
+  scope: ExpenseScope;
+  // Only present for scope === 'project' rows.
+  projectId?: string;
+  projectName?: string;
   description: string;
   amount: number;
   date: string;
   category: string;
   createdAt: string;
+  createdBy?: string;
   /** When synced from PO, avoid duplicate sync */
   sourcePoId?: string;
   sourcePoItemId?: string;
@@ -179,6 +194,7 @@ const ExpenseMonitoring: React.FC = () => {
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [expenses, setExpenses] = useState<ProjectExpense[]>([]);
   const [expensesLoading, setExpensesLoading] = useState(false);
+  const [expenseScope, setExpenseScope] = useState<ExpenseScope>('project');
   const [expenseProjectId, setExpenseProjectId] = useState<string | ''>('');
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -214,6 +230,28 @@ const ExpenseMonitoring: React.FC = () => {
   const pendingReceiptRef = useRef<File | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [savingExpense, setSavingExpense] = useState(false);
+  // Attach-receipt-later: retrofit a receipt photo onto an already-saved expense row
+  // (no re-parse — the row's fields are already set, this just needs the image).
+  const attachReceiptInputRef = useRef<HTMLInputElement>(null);
+  const attachReceiptTargetRef = useRef<ProjectExpense | null>(null);
+  const [attachingReceiptId, setAttachingReceiptId] = useState<string | null>(null);
+  // Lazy OneDrive receipt thumbnails, keyed by oneDriveId (ported from OverheadExpensesPage).
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
+  // Floating receipt viewer pane: full image fetched through the OneDrive proxy.
+  const [viewer, setViewer] = useState<{ expense: ProjectExpense; url: string | null } | null>(null);
+  const [viewerPos, setViewerPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const viewerDragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+  // Edit an existing row (scope-aware PATCH).
+  const [editExpense, setEditExpense] = useState<ProjectExpense | null>(null);
+  const [editFields, setEditFields] = useState({ description: '', amount: '', date: '', category: '', supplier: '', invoiceNo: '', invoiceType: '', vat: '', tin: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState('');
+  // Move a row between overhead and a project (server-side copy+delete).
+  const [moveExpense, setMoveExpense] = useState<ProjectExpense | null>(null);
+  const [moveProjectId, setMoveProjectId] = useState('');
+  const [moveCategory, setMoveCategory] = useState('');
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState('');
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; severity: 'success' | 'error' | 'warning'; message: string }>({ open: false, severity: 'success', message: '' });
   const [scanBatchOpen, setScanBatchOpen] = useState(false);
   const [expensesDialogProject, setExpensesDialogProject] = useState<Project | null>(null);
@@ -232,11 +270,17 @@ const ExpenseMonitoring: React.FC = () => {
     setExpensesLoading(true);
     try {
       const token = localStorage.getItem('netpacific_token');
-      const res = await fetch(`${API_BASE}/api/project-expenses`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      const data = await res.json().catch(() => ({ success: false, expenses: [] }));
-      setExpenses(data.expenses || []);
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+      const [projRes, overheadRes] = await Promise.all([
+        fetch(`${API_BASE}/api/project-expenses`, { headers }),
+        fetch(`${API_BASE}/api/overhead-expenses`, { headers }),
+      ]);
+      const projData = await projRes.json().catch(() => ({ success: false, expenses: [] }));
+      const overheadData = await overheadRes.json().catch(() => ({ success: false, expenses: [] }));
+      const projRows: ProjectExpense[] = (projData.expenses || []).map((e: Omit<ProjectExpense, 'scope'>) => ({ ...e, scope: 'project' as const }));
+      const overheadRows: ProjectExpense[] = (overheadData.expenses || []).map((e: Omit<ProjectExpense, 'scope'>) => ({ ...e, scope: 'overhead' as const }));
+      const merged = [...projRows, ...overheadRows].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      setExpenses(merged);
     } catch {
       setExpenses([]);
     } finally {
@@ -275,14 +319,19 @@ const ExpenseMonitoring: React.FC = () => {
     return expenses.filter((e) => e.date && e.date.startsWith(String(selectedYear)));
   }, [expenses, selectedYear]);
 
+  // The budget cards/charts below are project-budget concepts — overhead expenses have
+  // no project budget to track against, so they're excluded here (they still appear in
+  // the unified Recent Expenses table below via `tableRows`).
+  const projectExpensesInYear = useMemo(() => expensesInYear.filter((e) => e.scope === 'project'), [expensesInYear]);
+
   const spentByProject = useMemo(() => {
     const map: Record<string, number> = {};
-    expensesInYear.forEach((e) => {
+    projectExpensesInYear.forEach((e) => {
       const key = String(e.projectId);
       map[key] = (map[key] || 0) + e.amount;
     });
     return map;
-  }, [expensesInYear]);
+  }, [projectExpensesInYear]);
 
   const projectsForView = useMemo(() => {
     if (selectedProjectId === '') return allProjects;
@@ -305,8 +354,10 @@ const ExpenseMonitoring: React.FC = () => {
       ? Object.values(budgets).reduce((a, b) => a + b, 0)
       : (budgets[selectedProjectId] ?? 0);
     const totalSpent = selectedProjectId === ''
-      ? expensesInYear.reduce((sum, e) => sum + e.amount, 0)
-      : (spentByProject[selectedProjectId] ?? 0);
+      ? projectExpensesInYear.reduce((sum, e) => sum + e.amount, 0)
+      : selectedProjectId === OVERHEAD_SENTINEL
+        ? expensesInYear.reduce((sum, e) => sum + (e.scope === 'overhead' ? e.amount : 0), 0)
+        : (spentByProject[selectedProjectId] ?? 0);
     const totalRemaining = totalBudget - totalSpent;
     const spentPercentage = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
     const overBudgetCount = selectedProjectId === ''
@@ -322,7 +373,7 @@ const ExpenseMonitoring: React.FC = () => {
       overBudgetCategories: overBudgetCount,
       statusColor,
     };
-  }, [budgets, expensesInYear, spentByProject, allProjects, selectedProjectId]);
+  }, [budgets, expensesInYear, projectExpensesInYear, spentByProject, allProjects, selectedProjectId]);
 
   const pieChartData = expenseCategories.filter(cat => cat.spent > 0).map((cat, i) => ({
     name: cat.name.length > 12 ? cat.name.slice(0, 12) + '…' : cat.name,
@@ -342,7 +393,7 @@ const ExpenseMonitoring: React.FC = () => {
 
   const monthlyExpenseData = useMemo((): MonthlyExpense[] => {
     const byMonth: Record<string, number> = {};
-    expensesInYear.forEach((e) => {
+    projectExpensesInYear.forEach((e) => {
       if (selectedProjectId !== '' && String(e.projectId) !== selectedProjectId) return;
       const month = e.date ? e.date.slice(0, 7) : '';
       if (month) byMonth[month] = (byMonth[month] || 0) + e.amount;
@@ -350,9 +401,18 @@ const ExpenseMonitoring: React.FC = () => {
     return Object.entries(byMonth)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([month, total]) => ({ month, total, categories: {} }));
+  }, [projectExpensesInYear, selectedProjectId]);
+
+  // Unified table rows respecting the scope filter (roadmap §3): a specific project id
+  // shows only that project's expenses, OVERHEAD_SENTINEL shows only overhead rows, and
+  // '' (All) shows everything — both scopes, all projects.
+  const tableRows = useMemo(() => {
+    if (selectedProjectId === OVERHEAD_SENTINEL) return expensesInYear.filter((e) => e.scope === 'overhead');
+    if (selectedProjectId !== '') return expensesInYear.filter((e) => e.scope === 'project' && String(e.projectId) === selectedProjectId);
+    return expensesInYear;
   }, [expensesInYear, selectedProjectId]);
 
-  const expensesForProject = (projectId: string) => expenses.filter((e) => String(e.projectId) === projectId);
+  const expensesForProject = (projectId: string) => expenses.filter((e) => e.scope === 'project' && String(e.projectId) === projectId);
 
   const handleSyncFromPO = async () => {
     const pos = loadPOs();
@@ -385,6 +445,7 @@ const ExpenseMonitoring: React.FC = () => {
 
           newExpenses.push({
             id: `exp-po-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            scope: 'project',
             projectId: String(pid),
             projectName,
             description: `PO ${po.poNumber} · MRF ${mrfRequestNo}: ${desc}`,
@@ -404,6 +465,7 @@ const ExpenseMonitoring: React.FC = () => {
 
         newExpenses.push({
           id: `exp-po-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          scope: 'project',
           projectId: String(pid),
           projectName,
           description: `PO ${po.poNumber} (${po.supplierName || '—'})`,
@@ -483,6 +545,7 @@ const ExpenseMonitoring: React.FC = () => {
 
           newExpenses.push({
             id: `exp-liq-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            scope: 'project',
             projectId: pid,
             projectName,
             description: `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`,
@@ -559,20 +622,185 @@ const ExpenseMonitoring: React.FC = () => {
     }
   };
 
-  const handleDeleteExpense = async (id: string) => {
+  const handleDeleteExpense = async (expense: ProjectExpense) => {
     if (!window.confirm('Delete this expense? This cannot be undone.')) return;
     try {
       const token = localStorage.getItem('netpacific_token');
-      const res = await fetch(`${API_BASE}/api/project-expenses/${id}`, {
+      const endpoint = expense.scope === 'overhead' ? 'overhead-expenses' : 'project-expenses';
+      const res = await fetch(`${API_BASE}/api/${endpoint}/${expense.id}`, {
         method: 'DELETE',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const data = await res.json().catch(() => ({ success: false }));
       if (data.success) {
+        // Best-effort OneDrive cleanup of the orphaned receipt file — Firestore is
+        // the source of truth, so a failure here never blocks the delete.
+        if (expense.receiptRef?.oneDriveId) {
+          void deleteDriveItem('server', 'server', expense.receiptRef.oneDriveId);
+        }
         await fetchExpenses();
       }
     } catch {
       // silent — expense stays in list if request fails
+    }
+  };
+
+  // Sync-sourced rows are managed by their origin job (PO/liquidation/payroll sync) —
+  // editing or moving them here would be overwritten or double-counted on re-sync.
+  const isUserManagedRow = (e: ProjectExpense) =>
+    !e.sourceType || e.sourceType === 'manual' || e.sourceType === 'receipt_scan' || e.sourceType === 'migrated';
+
+  const openEditDialog = (expense: ProjectExpense) => {
+    setEditError('');
+    setEditFields({
+      description: expense.description || '',
+      amount: String(expense.amount ?? ''),
+      date: expense.date || '',
+      category: expense.category || '',
+      supplier: expense.supplier || '',
+      invoiceNo: expense.invoiceNo || '',
+      invoiceType: expense.invoiceType || '',
+      vat: expense.vat != null ? String(expense.vat) : '',
+      tin: expense.tin || '',
+    });
+    setEditExpense(expense);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editExpense) return;
+    const amount = Number(editFields.amount) || 0;
+    if (amount <= 0) { setEditError('Enter an amount greater than 0'); return; }
+    setSavingEdit(true);
+    setEditError('');
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const endpoint = editExpense.scope === 'overhead' ? 'overhead-expenses' : 'project-expenses';
+      const res = await fetch(`${API_BASE}/api/${endpoint}/${editExpense.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          description: editFields.description.trim() || '—',
+          amount,
+          date: editFields.date,
+          category: editFields.category.trim() || 'Others',
+          supplier: editFields.supplier.trim(),
+          invoiceNo: editFields.invoiceNo.trim(),
+          invoiceType: editFields.invoiceType,
+          tin: editFields.tin.trim(),
+          ...(editFields.vat !== '' && !isNaN(Number(editFields.vat)) ? { vat: Number(editFields.vat) } : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        setEditExpense(null);
+        await fetchExpenses();
+      } else {
+        setEditError(data.error || 'Failed to save changes');
+      }
+    } catch {
+      setEditError('Failed to save changes. Check your connection.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const openMoveDialog = (expense: ProjectExpense) => {
+    setMoveError('');
+    setMoveProjectId('');
+    // Preselect the category if it exists on the other side, otherwise force a re-pick.
+    const targetList: readonly string[] = expense.scope === 'overhead' ? PROJECT_EXPENSE_CATEGORIES : OVERHEAD_CATEGORIES;
+    setMoveCategory(targetList.includes(expense.category) ? expense.category : '');
+    setMoveExpense(expense);
+  };
+
+  const handleMove = async () => {
+    if (!moveExpense) return;
+    if (moveExpense.scope === 'overhead' && !moveProjectId) { setMoveError('Select a project'); return; }
+    setMoving(true);
+    setMoveError('');
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const project = allProjects.find((p) => String(p.id) === moveProjectId);
+      const url = moveExpense.scope === 'overhead'
+        ? `${API_BASE}/api/overhead-expenses/${moveExpense.id}/convert-to-project`
+        : `${API_BASE}/api/project-expenses/${moveExpense.id}/convert-to-overhead`;
+      const body = moveExpense.scope === 'overhead'
+        ? { projectId: moveProjectId, projectName: project?.project_name ?? '—', ...(moveCategory ? { category: moveCategory } : {}) }
+        : { ...(moveCategory ? { category: moveCategory } : {}) };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        setMoveExpense(null);
+        setScanSnackbar({ open: true, severity: 'success', message: moveExpense.scope === 'overhead' ? 'Moved to project expenses.' : 'Moved to overhead expenses.' });
+        await fetchExpenses();
+      } else {
+        setMoveError(data.error || 'Failed to move expense');
+      }
+    } catch {
+      setMoveError('Failed to move expense. Check your connection.');
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  // Attach-receipt-later: user picks a photo for an existing row; upload it to OneDrive
+  // (project folder for project rows, overhead folder otherwise) and PATCH the row's
+  // receiptRef on the matching collection's endpoint. No crop/AI parse — the expense's
+  // fields already exist; this only backfills the missing image.
+  const openAttachReceipt = (expense: ProjectExpense) => {
+    attachReceiptTargetRef.current = expense;
+    attachReceiptInputRef.current?.click();
+  };
+
+  const handleAttachReceiptInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const target = attachReceiptTargetRef.current;
+    attachReceiptTargetRef.current = null;
+    if (!file || !target) return;
+    setAttachingReceiptId(target.id);
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const safeFile = await convertHeicToJpeg(file);
+      const compressed = await compressForUpload(safeFile);
+      const contentBase64 = await blobToBase64(compressed);
+      const year = String((target.date || '').slice(0, 4) || new Date().getFullYear());
+      const filename = `SCAN-${Date.now()}.jpg`;
+      const project = target.scope === 'project' ? allProjects.find((p) => String(p.id) === String(target.projectId)) : undefined;
+      const folderPath = target.scope === 'project'
+        ? `Project Receipts/${project?.project_no || target.projectId}/${year}`
+        : `00 Overhead Receipts/${year}`;
+      const upRes = await fetch(`${API_BASE}/api/onedrive/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ folderPath, filename, contentBase64 }),
+      });
+      const upData = await upRes.json().catch(() => ({ ok: false })) as { ok: boolean; id?: string; webUrl?: string };
+      if (!upData.ok || !upData.id || !upData.webUrl) {
+        setScanSnackbar({ open: true, severity: 'error', message: 'Receipt upload to OneDrive failed. Try again.' });
+        return;
+      }
+      const endpoint = target.scope === 'overhead' ? 'overhead-expenses' : 'project-expenses';
+      const patchRes = await fetch(`${API_BASE}/api/${endpoint}/${target.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ receiptRef: { oneDriveId: upData.id, webUrl: upData.webUrl, filename } }),
+      });
+      const patchData = await patchRes.json().catch(() => ({ success: false }));
+      if (patchData.success) {
+        setScanSnackbar({ open: true, severity: 'success', message: 'Receipt attached.' });
+        await fetchExpenses();
+      } else {
+        setScanSnackbar({ open: true, severity: 'error', message: patchData.error || 'Failed to attach receipt to the expense.' });
+      }
+    } catch (err) {
+      setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Failed to attach receipt' });
+    } finally {
+      setAttachingReceiptId(null);
     }
   };
 
@@ -647,6 +875,73 @@ const ExpenseMonitoring: React.FC = () => {
 
   useEffect(() => { if (!addExpenseOpen) pendingReceiptRef.current = null; }, [addExpenseOpen]);
 
+  // `?scope=overhead` presets the filter — used by the old /finance/overhead-expenses
+  // route, which now redirects here. Run once on mount.
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('scope') === 'overhead') {
+      setSelectedProjectId(OVERHEAD_SENTINEL);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Best-effort lazy receipt thumbnails via the server-side OneDrive proxy
+  // (ported from OverheadExpensesPage). Never throws.
+  useEffect(() => {
+    let cancelled = false;
+    const loadThumbs = async () => {
+      const missing = expenses.filter((e) => e.receiptRef?.oneDriveId && !thumbs[e.receiptRef.oneDriveId]);
+      if (missing.length === 0) return;
+      try {
+        const entries: Array<[string, string]> = [];
+        for (const e of missing) {
+          const oneDriveId = e.receiptRef!.oneDriveId;
+          const url = await getDriveItemThumbnailUrl('server', 'server', oneDriveId);
+          if (url) entries.push([oneDriveId, url]);
+        }
+        if (!cancelled && entries.length > 0) {
+          setThumbs((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+        }
+      } catch (err) {
+        console.warn('[OneDrive] receipt thumbnail fetch failed:', err);
+      }
+    };
+    void loadThumbs();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expenses]);
+
+  // Revoke the viewer pane's object URL when it changes or the pane closes.
+  useEffect(() => () => { if (viewer?.url) URL.revokeObjectURL(viewer.url); }, [viewer]);
+
+  const openReceiptViewer = async (expense: ProjectExpense) => {
+    if (!expense.receiptRef?.oneDriveId) return;
+    setViewerPos({ x: 0, y: 0 });
+    setViewer({ expense, url: null });
+    try {
+      const blob = await fetchDriveItemBlob('server', 'server', expense.receiptRef.oneDriveId);
+      setViewer((prev) => (prev && prev.expense.id === expense.id ? { ...prev, url: URL.createObjectURL(blob) } : prev));
+    } catch (err) {
+      console.warn('[OneDrive] receipt image fetch failed:', err);
+      setScanSnackbar({ open: true, severity: 'error', message: 'Could not load the receipt image. Use "Open in OneDrive" instead.' });
+    }
+  };
+
+  const onViewerDragStart = (e: React.PointerEvent) => {
+    viewerDragRef.current = { startX: e.clientX, startY: e.clientY, baseX: viewerPos.x, baseY: viewerPos.y };
+    const onMove = (ev: PointerEvent) => {
+      const d = viewerDragRef.current;
+      if (!d) return;
+      setViewerPos({ x: d.baseX + ev.clientX - d.startX, y: d.baseY + ev.clientY - d.startY });
+    };
+    const onUp = () => {
+      viewerDragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
   // Phase 1: pick a photo, auto-detect its corners, and open the crop dialog.
   const handleScanInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -694,7 +989,8 @@ const ExpenseMonitoring: React.FC = () => {
       const amt = parsed.total ?? parsed.subtotal;
       if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
       if (parsed.date) setExpenseDate(parsed.date);
-      if (parsed.suggestedCategory && (PROJECT_EXPENSE_CATEGORIES as readonly string[]).includes(parsed.suggestedCategory)) {
+      const scanCategoryList: readonly string[] = expenseScope === 'overhead' ? OVERHEAD_CATEGORIES : PROJECT_EXPENSE_CATEGORIES;
+      if (parsed.suggestedCategory && scanCategoryList.includes(parsed.suggestedCategory)) {
         setExpenseCategory(parsed.suggestedCategory);
       }
       const desc = parsed.vendor || parsed.lineItems?.[0]?.description;
@@ -748,10 +1044,10 @@ const ExpenseMonitoring: React.FC = () => {
   const handleAddExpense = async () => {
     const pid = expenseProjectId === '' ? null : String(expenseProjectId);
     const amount = Number(expenseAmount) || 0;
-    if (pid == null) return;
+    if (expenseScope === 'project' && pid == null) return;
     if (amount <= 0) return;
     if (expenseFundingType === 'investor_outofpocket' && !expenseFundingInvestor) return;
-    const project = allProjects.find((p) => String(p.id) === pid);
+    const project = expenseScope === 'project' ? allProjects.find((p) => String(p.id) === pid) : undefined;
     setSavingExpense(true);
     try {
       const token = localStorage.getItem('netpacific_token');
@@ -763,7 +1059,9 @@ const ExpenseMonitoring: React.FC = () => {
           const contentBase64 = await blobToBase64(compressed);
           const year = String(new Date().getFullYear());
           const filename = `SCAN-${Date.now()}.jpg`;
-          const folderPath = `Project Receipts/${project?.project_no || pid}/${year}`;
+          const folderPath = expenseScope === 'project'
+            ? `Project Receipts/${project?.project_no || pid}/${year}`
+            : `00 Overhead Receipts/${year}`;
           const upRes = await fetch(`${API_BASE}/api/onedrive/upload`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -773,18 +1071,18 @@ const ExpenseMonitoring: React.FC = () => {
           if (upData.ok && upData.id && upData.webUrl) {
             receiptRef = { oneDriveId: upData.id, webUrl: upData.webUrl, filename };
           } else {
-            console.warn('[OneDrive] project expense receipt upload failed or returned not ok:', upData);
+            console.warn('[OneDrive] expense receipt upload failed or returned not ok:', upData);
           }
         } catch (err) {
-          console.warn('[OneDrive] project expense receipt upload failed (expense still saved):', err);
+          console.warn('[OneDrive] expense receipt upload failed (expense still saved):', err);
         }
       }
-      const res = await fetch(`${API_BASE}/api/project-expenses`, {
+      const endpoint = expenseScope === 'project' ? 'project-expenses' : 'overhead-expenses';
+      const res = await fetch(`${API_BASE}/api/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
-          projectId: pid,
-          projectName: project?.project_name ?? '—',
+          ...(expenseScope === 'project' ? { projectId: pid, projectName: project?.project_name ?? '—' } : {}),
           description: expenseDescription.trim() || '—',
           amount,
           date: expenseDate,
@@ -885,7 +1183,13 @@ const ExpenseMonitoring: React.FC = () => {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={() => { setExpenseSupplier(''); setExpenseInvoiceNo(''); setExpenseInvoiceType(''); setExpenseVat(''); setExpenseTin(''); pendingReceiptRef.current = null; setAddExpenseOpen(true); }}
+            onClick={() => {
+              setExpenseSupplier(''); setExpenseInvoiceNo(''); setExpenseInvoiceType(''); setExpenseVat(''); setExpenseTin(''); pendingReceiptRef.current = null;
+              // Default the dialog's scope/project to whatever the table is filtered to.
+              setExpenseScope(selectedProjectId === OVERHEAD_SENTINEL ? 'overhead' : 'project');
+              if (selectedProjectId !== '' && selectedProjectId !== OVERHEAD_SENTINEL) setExpenseProjectId(selectedProjectId);
+              setAddExpenseOpen(true);
+            }}
             sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
           >
             Add Expense
@@ -947,19 +1251,20 @@ const ExpenseMonitoring: React.FC = () => {
           </Select>
         </FormControl>
         <FormControl size="small" sx={{ minWidth: 200 }}>
-          <InputLabel>Project</InputLabel>
+          <InputLabel>Scope</InputLabel>
           <Select
             value={selectedProjectId === '' ? '' : selectedProjectId}
             onChange={(e) => { const v = String(e.target.value); setSelectedProjectId(v === '' ? '' : v); }}
-            label="Project"
+            label="Scope"
           >
-            <MenuItem value="">All projects</MenuItem>
+            <MenuItem value="">All (projects + overhead)</MenuItem>
+            <MenuItem value={OVERHEAD_SENTINEL}>Overhead (no project)</MenuItem>
             {allProjects.map((p) => (
               <MenuItem key={p.id} value={String(p.id)}>{p.project_name}</MenuItem>
             ))}
           </Select>
         </FormControl>
-        {selectedProjectId !== '' && (
+        {selectedProjectId !== '' && selectedProjectId !== OVERHEAD_SENTINEL && (
           <Button
             variant="outlined"
             size="small"
@@ -1226,42 +1531,66 @@ const ExpenseMonitoring: React.FC = () => {
                   <TableCell>Category</TableCell>
                   <TableCell>Description Part #</TableCell>
                   <TableCell align="right">Amount</TableCell>
+                  <TableCell>Receipt</TableCell>
                   <TableCell>Source</TableCell>
-                  <TableCell padding="none" align="center" width={48}>Actions</TableCell>
+                  <TableCell padding="none" align="center" width={140}>Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {expensesInYear.length === 0 ? (
+                {tableRows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                    <TableCell colSpan={10} align="center" sx={{ py: 3, color: 'text.secondary' }}>
                       {selectedYear === 0
                         ? 'No expenses yet. Use the Add Expense button to add an expense.'
                         : `No expenses in ${selectedYear}. Use the Add Expense button to add an expense.`}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  (selectedProjectId === '' ? expensesInYear : expensesInYear.filter((e) => String(e.projectId) === selectedProjectId))
+                  tableRows
                     .slice(0, 50)
                     .map((expense) => {
-                      const project = allProjects.find((p) => String(p.id) === String(expense.projectId));
+                      const project = expense.scope === 'project' ? allProjects.find((p) => String(p.id) === String(expense.projectId)) : undefined;
                       const projectNo = project?.project_no || String(project?.item_no ?? project?.id ?? '');
                       const poNumber = project?.po_number ?? '—';
                       return (
-                    <TableRow key={expense.id}>
+                    <TableRow key={`${expense.scope}-${expense.id}`}>
                       <TableCell>{expense.date}</TableCell>
-                      <TableCell>{expense.projectName}</TableCell>
-                      <TableCell>{projectNo || '—'}</TableCell>
-                      <TableCell>{poNumber}</TableCell>
+                      <TableCell>
+                        {expense.scope === 'overhead'
+                          ? <Chip size="small" label="Overhead" variant="outlined" color="secondary" />
+                          : expense.projectName}
+                      </TableCell>
+                      <TableCell>{expense.scope === 'overhead' ? '—' : (projectNo || '—')}</TableCell>
+                      <TableCell>{expense.scope === 'overhead' ? '—' : poNumber}</TableCell>
                       <TableCell>{expense.category}</TableCell>
                       <TableCell>{expense.description}</TableCell>
                       <TableCell align="right">{formatCurrency(expense.amount)}</TableCell>
+                      <TableCell>
+                        {expense.receiptRef?.oneDriveId && thumbs[expense.receiptRef.oneDriveId] ? (
+                          <Box
+                            component="img"
+                            src={thumbs[expense.receiptRef.oneDriveId]}
+                            alt="receipt"
+                            onClick={() => openReceiptViewer(expense)}
+                            onError={() => setThumbs((prev) => { const next = { ...prev }; delete next[expense.receiptRef!.oneDriveId]; return next; })}
+                            sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, border: '1px solid', borderColor: 'divider', cursor: 'pointer' }}
+                          />
+                        ) : expense.receiptRef?.webUrl ? (
+                          <Link component="button" type="button" onClick={() => openReceiptViewer(expense)} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, whiteSpace: 'nowrap' }}>
+                            <OpenInNewIcon fontSize="inherit" /> View
+                          </Link>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">—</Typography>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <Chip
                           size="small"
                           label={
                             expense.sourceType === 'po_sync' ? 'PO' :
                             expense.sourceType === 'liquidation_sync' ? 'Liquidation' :
-                            expense.sourceType === 'migrated' ? 'Migrated' : 'Manual'
+                            expense.sourceType === 'migrated' ? 'Migrated' :
+                            expense.sourceType === 'receipt_scan' ? 'Scan' : 'Manual'
                           }
                           color={
                             expense.sourceType === 'po_sync' ? 'primary' :
@@ -1269,13 +1598,28 @@ const ExpenseMonitoring: React.FC = () => {
                           }
                         />
                       </TableCell>
-                      <TableCell padding="none" align="center">
-                        {user?.role === 'superadmin' && (expense.sourceType === 'manual' || expense.sourceType === 'receipt_scan') && (
+                      <TableCell padding="none" align="center" sx={{ whiteSpace: 'nowrap' }}>
+                        {!expense.receiptRef?.webUrl && (
+                          <IconButton size="small" onClick={() => openAttachReceipt(expense)} title="Attach receipt photo" color="primary" disabled={attachingReceiptId === expense.id}>
+                            {attachingReceiptId === expense.id ? <CircularProgress size={16} /> : <AddAPhotoIcon fontSize="small" />}
+                          </IconButton>
+                        )}
+                        {isUserManagedRow(expense) && (
+                          <IconButton size="small" onClick={() => openEditDialog(expense)} title="Edit expense" color="primary">
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        )}
+                        {isUserManagedRow(expense) && (
+                          <IconButton size="small" onClick={() => openMoveDialog(expense)} title={expense.scope === 'overhead' ? 'Move to a project' : 'Move to overhead'} color="primary">
+                            <MoveIcon fontSize="small" />
+                          </IconButton>
+                        )}
+                        {user?.role === 'superadmin' && expense.scope === 'project' && (expense.sourceType === 'manual' || expense.sourceType === 'receipt_scan') && (
                           <IconButton size="small" onClick={() => openPromoteDialog(expense)} title="Promote to employee liquidation" color="primary">
                             <PromoteIcon fontSize="small" />
                           </IconButton>
                         )}
-                        <IconButton size="small" onClick={() => handleDeleteExpense(expense.id)} title="Delete expense" color="error">
+                        <IconButton size="small" onClick={() => handleDeleteExpense(expense)} title="Delete expense" color="error">
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </TableCell>
@@ -1295,6 +1639,27 @@ const ExpenseMonitoring: React.FC = () => {
           <Box sx={{ pt: 2 }}>
             <Grid container spacing={2}>
               <Grid size={{ xs: 12 }}>
+                <ToggleButtonGroup
+                  fullWidth
+                  exclusive
+                  size="small"
+                  color="primary"
+                  value={expenseScope}
+                  onChange={(_, v: ExpenseScope | null) => {
+                    if (!v || v === expenseScope) return;
+                    setExpenseScope(v);
+                    // The two scopes use different category lists (COGS vs OPEX) — drop a
+                    // selection that doesn't exist on the other side.
+                    const nextList: readonly string[] = v === 'overhead' ? OVERHEAD_CATEGORIES : PROJECT_EXPENSE_CATEGORIES;
+                    if (expenseCategory && !nextList.includes(expenseCategory)) setExpenseCategory('');
+                  }}
+                >
+                  <ToggleButton value="project">Project Expense</ToggleButton>
+                  <ToggleButton value="overhead">Overhead Expense</ToggleButton>
+                </ToggleButtonGroup>
+              </Grid>
+              {expenseScope === 'project' && (
+              <Grid size={{ xs: 12 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Project</InputLabel>
                   <Select
@@ -1311,6 +1676,7 @@ const ExpenseMonitoring: React.FC = () => {
                   </Select>
                 </FormControl>
               </Grid>
+              )}
               <Grid size={{ xs: 12 }}>
                 <TextField
                   fullWidth
@@ -1353,7 +1719,7 @@ const ExpenseMonitoring: React.FC = () => {
                     onChange={(e) => setExpenseCategory(e.target.value)}
                   >
                     <MenuItem value="">— Select category —</MenuItem>
-                    {PROJECT_EXPENSE_CATEGORIES.map((cat) => (
+                    {(expenseScope === 'overhead' ? OVERHEAD_CATEGORIES : PROJECT_EXPENSE_CATEGORIES).map((cat) => (
                       <MenuItem key={cat} value={cat}>{cat}</MenuItem>
                     ))}
                   </Select>
@@ -1608,6 +1974,7 @@ const ExpenseMonitoring: React.FC = () => {
               variant="outlined"
               startIcon={<AddIcon />}
               onClick={() => {
+                setExpenseScope('project');
                 setExpenseProjectId(String(expensesDialogProject.id));
                 setExpenseAmount('');
                 setExpenseDate(new Date().toISOString().slice(0, 10));
@@ -1627,6 +1994,208 @@ const ExpenseMonitoring: React.FC = () => {
           )}
         </DialogActions>
       </Dialog>
+
+      {/* Edit an existing expense row (scope-aware PATCH) */}
+      <Dialog open={!!editExpense} onClose={() => !savingEdit && setEditExpense(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Edit {editExpense?.scope === 'overhead' ? 'Overhead' : 'Project'} Expense
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Grid container spacing={2}>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField fullWidth size="small" label="Amount" type="number" value={editFields.amount}
+                  onChange={(e) => setEditFields((f) => ({ ...f, amount: e.target.value }))} inputProps={{ min: 0, step: 0.01 }} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField fullWidth size="small" label="Date" type="date" value={editFields.date}
+                  onChange={(e) => setEditFields((f) => ({ ...f, date: e.target.value }))} InputLabelProps={{ shrink: true }} />
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <TextField fullWidth size="small" label="Description" value={editFields.description}
+                  onChange={(e) => setEditFields((f) => ({ ...f, description: e.target.value }))} multiline rows={2} />
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Category</InputLabel>
+                  <Select label="Category" value={editFields.category} onChange={(e) => setEditFields((f) => ({ ...f, category: e.target.value }))}>
+                    <MenuItem value="">— Select category —</MenuItem>
+                    {(editExpense?.scope === 'overhead' ? OVERHEAD_CATEGORIES : PROJECT_EXPENSE_CATEGORIES).map((cat) => (
+                      <MenuItem key={cat} value={cat}>{cat}</MenuItem>
+                    ))}
+                    {/* Keep a legacy/free-text category selectable so opening the dialog doesn't silently drop it */}
+                    {editFields.category && !((editExpense?.scope === 'overhead' ? OVERHEAD_CATEGORIES : PROJECT_EXPENSE_CATEGORIES) as readonly string[]).includes(editFields.category) && (
+                      <MenuItem value={editFields.category}>{editFields.category}</MenuItem>
+                    )}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <Accordion variant="outlined" disableGutters sx={{ mt: 1 }}>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Typography variant="body2" color="text.secondary">BIR Substantiation Details (Optional)</Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <Grid container spacing={2}>
+                      <Grid size={{ xs: 12 }}>
+                        <TextField fullWidth size="small" label="Supplier / Vendor Name" value={editFields.supplier}
+                          onChange={(e) => setEditFields((f) => ({ ...f, supplier: e.target.value }))} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Supplier TIN" placeholder="000-000-000-00000" value={editFields.tin}
+                          onChange={(e) => setEditFields((f) => ({ ...f, tin: e.target.value }))} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel>Document Type</InputLabel>
+                          <Select label="Document Type" value={editFields.invoiceType} onChange={(e) => setEditFields((f) => ({ ...f, invoiceType: e.target.value }))}>
+                            <MenuItem value="">— None —</MenuItem>
+                            {INVOICE_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+                          </Select>
+                        </FormControl>
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Invoice / OR Number" value={editFields.invoiceNo}
+                          onChange={(e) => setEditFields((f) => ({ ...f, invoiceNo: e.target.value }))} />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField fullWidth size="small" label="Input VAT (supplier)" type="number" value={editFields.vat}
+                          onChange={(e) => setEditFields((f) => ({ ...f, vat: e.target.value }))} inputProps={{ min: 0, step: 0.01 }} />
+                      </Grid>
+                    </Grid>
+                  </AccordionDetails>
+                </Accordion>
+              </Grid>
+              {editError && (
+                <Grid size={{ xs: 12 }}>
+                  <Typography variant="caption" color="error">{editError}</Typography>
+                </Grid>
+              )}
+            </Grid>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setEditExpense(null)} disabled={savingEdit}>Cancel</Button>
+          <Button variant="contained" onClick={handleSaveEdit} disabled={savingEdit}
+            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}>
+            {savingEdit ? 'Saving…' : 'Save Changes'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Move a row between overhead and a project (server-side copy + delete) */}
+      <Dialog open={!!moveExpense} onClose={() => !moving && setMoveExpense(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {moveExpense?.scope === 'overhead' ? 'Move to Project Expenses' : 'Move to Overhead Expenses'}
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            {moveExpense && (
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                {moveExpense.description || moveExpense.category} — {formatCurrency(moveExpense.amount)} on {moveExpense.date}.
+                {moveExpense.scope === 'overhead'
+                  ? ' This will file it under the selected project (COGS) instead of company overhead.'
+                  : ' This will detach it from its project and file it as company overhead (OPEX).'}
+              </Typography>
+            )}
+            <Grid container spacing={2}>
+              {moveExpense?.scope === 'overhead' && (
+                <Grid size={{ xs: 12 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Project</InputLabel>
+                    <Select label="Project" value={moveProjectId} onChange={(e) => setMoveProjectId(String(e.target.value))}>
+                      <MenuItem value="">— Select project —</MenuItem>
+                      {allProjects.map((p) => (
+                        <MenuItem key={p.id} value={String(p.id)}>{p.project_name}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+              )}
+              <Grid size={{ xs: 12 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Category (target)</InputLabel>
+                  <Select label="Category (target)" value={moveCategory} onChange={(e) => setMoveCategory(e.target.value)}>
+                    <MenuItem value="">— Keep as "{moveExpense?.category || 'Others'}" —</MenuItem>
+                    {(moveExpense?.scope === 'overhead' ? PROJECT_EXPENSE_CATEGORIES : OVERHEAD_CATEGORIES).map((cat) => (
+                      <MenuItem key={cat} value={cat}>{cat}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              {moveError && (
+                <Grid size={{ xs: 12 }}>
+                  <Typography variant="caption" color="error">{moveError}</Typography>
+                </Grid>
+              )}
+            </Grid>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setMoveExpense(null)} disabled={moving}>Cancel</Button>
+          <Button variant="contained" onClick={handleMove} disabled={moving || (moveExpense?.scope === 'overhead' && !moveProjectId)}>
+            {moving ? 'Moving…' : 'Move'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Floating draggable receipt viewer pane */}
+      {viewer && (
+        <Paper
+          elevation={8}
+          sx={{
+            position: 'fixed',
+            top: `calc(15% + ${viewerPos.y}px)`,
+            left: `calc(50% + ${viewerPos.x}px)`,
+            transform: 'translateX(-50%)',
+            zIndex: (theme) => theme.zIndex.modal + 1,
+            width: 380,
+            maxWidth: '92vw',
+            borderRadius: 2,
+            overflow: 'hidden',
+          }}
+        >
+          <Box
+            onPointerDown={onViewerDragStart}
+            sx={{
+              display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
+              bgcolor: NET_PACIFIC_COLORS.primary, color: 'white',
+              cursor: 'move', userSelect: 'none', touchAction: 'none',
+            }}
+          >
+            <DragIndicatorIcon fontSize="small" sx={{ opacity: 0.7 }} />
+            <Typography variant="subtitle2" sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {viewer.expense.description || viewer.expense.category} — {formatCurrency(viewer.expense.amount)}
+            </Typography>
+            <IconButton size="small" onClick={() => setViewer(null)} sx={{ color: 'white' }} title="Close">
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Box>
+          <Box sx={{ p: 1.5, maxHeight: '60vh', overflow: 'auto', textAlign: 'center', bgcolor: '#f8fafc' }}>
+            {viewer.url ? (
+              <Box component="img" src={viewer.url} alt="receipt" sx={{ maxWidth: '100%', borderRadius: 1 }} />
+            ) : (
+              <Box sx={{ py: 6 }}><CircularProgress size={28} /></Box>
+            )}
+          </Box>
+          {viewer.expense.receiptRef?.webUrl && (
+            <Box sx={{ px: 1.5, py: 1, borderTop: '1px solid #e2e8f0', textAlign: 'right' }}>
+              <Link href={viewer.expense.receiptRef.webUrl} target="_blank" rel="noopener" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                <OpenInNewIcon fontSize="inherit" /> Open in OneDrive
+              </Link>
+            </Box>
+          )}
+        </Paper>
+      )}
+
+      {/* Hidden picker for attach-receipt-later on existing table rows */}
+      <input
+        type="file"
+        ref={attachReceiptInputRef}
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={handleAttachReceiptInputChange}
+      />
 
       <Snackbar
         open={scanSnackbar.open}

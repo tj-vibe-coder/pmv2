@@ -1221,11 +1221,12 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
+    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
     if (category !== undefined) allowed.category = String(category);
+    if (receiptRef !== undefined) allowed.receiptRef = receiptRef;
     if (supplier !== undefined) allowed.supplier = String(supplier);
     if (invoiceNo !== undefined) allowed.invoiceNo = String(invoiceNo);
     if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
@@ -4504,6 +4505,107 @@ app.delete('/api/overhead-expenses/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Error deleting overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Overhead <-> project expense transfer. Since the two collections stay separate
+// (unification is UI-layer only), "move this expense" is a copy-into-target +
+// delete-original, done in one Firestore batch so the cost can never exist in
+// both (or neither) collection. Sync-sourced rows are refused: their origin job
+// (PO/liquidation/payroll re-sync) would recreate the original and double-count.
+// ---------------------------------------------------------------------------
+const SYNC_SOURCE_TYPES_NO_CONVERT = new Set(['po_sync', 'liquidation_sync', 'payroll_sync']);
+
+function convertibleExpenseOrError(docSnap, user, isAdmin) {
+  if (!docSnap.exists) return { error: { status: 404, message: 'Not found' } };
+  const data = docSnap.data();
+  if (!isAdmin && data.createdBy !== user.id) return { error: { status: 403, message: 'Forbidden' } };
+  if (SYNC_SOURCE_TYPES_NO_CONVERT.has(data.sourceType) || docSnap.id.startsWith('payroll_sync_')) {
+    return { error: { status: 400, message: 'System-synced expenses cannot be moved — the source sync would recreate them.' } };
+  }
+  return { data };
+}
+
+// Fields shared by both collections that survive a move unchanged.
+function portableExpenseFields(data) {
+  const out = {
+    description: data.description || '',
+    amount: Number(data.amount) || 0,
+    date: data.date,
+    category: data.category || 'Others',
+    createdAt: data.createdAt,
+    createdBy: data.createdBy,
+    sourceType: data.sourceType || 'manual',
+  };
+  for (const k of ['receiptRef', 'supplier', 'invoiceNo', 'invoiceType', 'vat', 'tin', 'deductible', 'deductibleReason', 'fundingSource']) {
+    if (data[k] !== undefined) out[k] = data[k];
+  }
+  return out;
+}
+
+app.post('/api/overhead-expenses/:id/convert-to-project', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { projectId, projectName, category } = req.body;
+    if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
+    const oldRef = db.collection('overhead_expenses').doc(req.params.id);
+    const snap = await oldRef.get();
+    const { data, error } = convertibleExpenseOrError(snap, user, isAdmin);
+    if (error) return res.status(error.status).json({ success: false, error: error.message });
+    const newDoc = {
+      ...portableExpenseFields(data),
+      projectId: String(projectId),
+      projectName: projectName || '',
+      updatedAt: new Date().toISOString(),
+    };
+    if (category) newDoc.category = String(category);
+    const newRef = db.collection('project_expenses').doc();
+    const batch = db.batch();
+    batch.set(newRef, newDoc);
+    batch.delete(oldRef);
+    await batch.commit();
+    // The old id no longer exists — clear any investments row linked to it, then
+    // re-link under the new id/collection.
+    await syncExpenseFundingInvestment(req.params.id, 'overhead_expenses', {});
+    await syncExpenseFundingInvestment(newRef.id, 'project_expenses', newDoc);
+    res.json({ success: true, expense: { ...newDoc, id: newRef.id } });
+  } catch (err) {
+    console.error('Error converting overhead_expense to project:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/project-expenses/:id/convert-to-overhead', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { category } = req.body || {};
+    const oldRef = db.collection('project_expenses').doc(req.params.id);
+    const snap = await oldRef.get();
+    const { data, error } = convertibleExpenseOrError(snap, user, isAdmin);
+    if (error) return res.status(error.status).json({ success: false, error: error.message });
+    // projectId/projectName and PO/liquidation/CA linkage fields are meaningless on
+    // an overhead row — portableExpenseFields already excludes them.
+    const newDoc = {
+      ...portableExpenseFields(data),
+      updatedAt: new Date().toISOString(),
+    };
+    if (category) newDoc.category = String(category);
+    const newRef = db.collection('overhead_expenses').doc();
+    const batch = db.batch();
+    batch.set(newRef, newDoc);
+    batch.delete(oldRef);
+    await batch.commit();
+    await syncExpenseFundingInvestment(req.params.id, 'project_expenses', {});
+    await syncExpenseFundingInvestment(newRef.id, 'overhead_expenses', newDoc);
+    res.json({ success: true, expense: { ...newDoc, id: newRef.id } });
+  } catch (err) {
+    console.error('Error converting project_expense to overhead:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
