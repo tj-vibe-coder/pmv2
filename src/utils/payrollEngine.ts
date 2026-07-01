@@ -143,6 +143,9 @@ export function computePayslip(
   const emp = dtr.employee;
   const dailyRate = emp.dailyRate ?? 0;
   const isField = emp.employeeType === 'FIELD';
+  // Per-employee toggles (absent = enabled, preserving legacy behavior).
+  const payOvertime = emp.applyOvertimePay !== false;
+  const applyDeductions = emp.applyDeductions !== false;
 
   // Basic pay
   const basicPay = computeBasicPay(emp, dtr.workingDays);
@@ -150,13 +153,13 @@ export function computePayslip(
   // Meal allowance
   const mealAllowance = computeMealAllowance(emp, dtr.workingDays);
 
-  // OT pay
-  const otPayRegular = isField ? computeOTRegular(dailyRate, dtr.overtimeHours) : 0;
-  const otPayRestDay = isField
+  // OT pay (zeroed when the employee's contract has no OT; hours stay recorded)
+  const otPayRegular = isField && payOvertime ? computeOTRegular(dailyRate, dtr.overtimeHours) : 0;
+  const otPayRestDay = isField && payOvertime
     ? computeOTRestDay(dailyRate, dtr.restDayOTHours ?? 0)
       + computeOTSpecialHolidayRestDay(dailyRate, dtr.specialHolidayRestDayOTHours ?? 0)
     : 0;
-  const otPayRegularHoliday = isField
+  const otPayRegularHoliday = isField && payOvertime
     ? computeOTRegularHoliday(dailyRate, dtr.regularHolidayOTHours ?? 0)
       + computeOTRegularHolidayRestDay(dailyRate, dtr.regularHolidayRestDayOTHours ?? 0)
     : 0;
@@ -174,8 +177,8 @@ export function computePayslip(
   // Night differential
   const nightDifferential = isField ? computeNightDiff(dailyRate, dtr.nightDiffHours) : 0;
 
-  // Tardiness
-  const tardinessDeduction = isField
+  // Tardiness (skipped when the employee opts out of deductions)
+  const tardinessDeduction = applyDeductions && isField
     ? computeTardinessDeduction(dailyRate, dtr.tardinessMinutes)
     : 0;
 
@@ -189,9 +192,10 @@ export function computePayslip(
   const pagibig = computePagibig(monthlyBasic, rates);
 
   const freq = emp.payFrequency;
-  const empSSS = round2(toPerPeriod(sss.employee, freq));
-  const empPH = round2(toPerPeriod(ph.employee, freq));
-  const empPI = round2(toPerPeriod(pagibig.employee, freq));
+  // Employee share zeroed when deductions are off; employer share always computed.
+  const empSSS = applyDeductions ? round2(toPerPeriod(sss.employee, freq)) : 0;
+  const empPH = applyDeductions ? round2(toPerPeriod(ph.employee, freq)) : 0;
+  const empPI = applyDeductions ? round2(toPerPeriod(pagibig.employee, freq)) : 0;
   const erSSS = round2(toPerPeriod(sss.employer, freq));
   const erPH = round2(toPerPeriod(ph.employer, freq));
   const erPI = round2(toPerPeriod(pagibig.employer, freq));
@@ -214,7 +218,7 @@ export function computePayslip(
     grossEarnings - empSSS - empPH - empPI - mealAllowance
   );
   const annualTaxable = annualize(taxablePerPeriod, freq);
-  const withholdingTax = round2(computePerPeriodTax(annualTaxable, freq));
+  const withholdingTax = applyDeductions ? round2(computePerPeriodTax(annualTaxable, freq)) : 0;
 
   const totalDeductions = round2(
     empSSS + empPH + empPI + withholdingTax + tardinessDeduction

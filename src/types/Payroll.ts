@@ -21,6 +21,10 @@ export interface Employee {
   philhealthNumber?: string;
   pagibigNumber?: string;
   tinNumber?: string;
+  /** When false, government + tardiness deductions are skipped (net pay = gross). Absent/true = deductions apply. Employer share is unaffected. */
+  applyDeductions?: boolean;
+  /** When false, overtime pay is ₱0 (OT hours are still recorded). Absent/true = OT is paid. */
+  applyOvertimePay?: boolean;
   createdAt?: string;
 }
 

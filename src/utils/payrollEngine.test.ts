@@ -118,4 +118,71 @@ describe('Payroll Engine Unit Tests', () => {
     const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
     expect(payslip.regularHolidayPay).toBeCloseTo(0.00, 2);
   });
+
+  // ── Per-employee toggles: applyOvertimePay / applyDeductions ──────────────
+
+  test('8. applyOvertimePay=false zeroes OT pay but keeps OT hours', () => {
+    const noOtEmp = { ...fieldEmp, applyOvertimePay: false };
+    const dtr: DTRInput = {
+      ...baseDtr,
+      employee: noOtEmp,
+      workingDays: 10,
+      overtimeHours: 8,
+      restDayOTHours: 4,
+      regularHolidayOTHours: 4,
+      specialHolidayRestDayOTHours: 4,
+      regularHolidayRestDayOTHours: 4,
+    };
+    const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
+    // All OT pay components zeroed
+    expect(payslip.otPayRegular).toBeCloseTo(0.00, 2);
+    expect(payslip.otPayRestDay).toBeCloseTo(0.00, 2);
+    expect(payslip.otPayRegularHoliday).toBeCloseTo(0.00, 2);
+    // Hours still recorded/visible
+    expect(payslip.overtimeHours).toBe(8);
+    // Basic pay unaffected
+    expect(payslip.basicPay).toBeCloseTo(10000.00, 2);
+  });
+
+  test('9. applyOvertimePay!==false still pays OT (backward compatible)', () => {
+    const dtr: DTRInput = { ...baseDtr, workingDays: 1, overtimeHours: 1 };
+    const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
+    // 1000/8 * 1.25 = 156.25
+    expect(payslip.otPayRegular).toBeCloseTo(156.25, 2);
+  });
+
+  test('10. applyDeductions=false zeroes all employee deductions, net==gross', () => {
+    const noDeductEmp = { ...fieldEmp, applyDeductions: false };
+    const dtr: DTRInput = {
+      ...baseDtr,
+      employee: noDeductEmp,
+      workingDays: 10,
+      tardinessMinutes: 60,
+    };
+    const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
+    expect(payslip.empSSS).toBeCloseTo(0.00, 2);
+    expect(payslip.empPhilhealth).toBeCloseTo(0.00, 2);
+    expect(payslip.empPagibig).toBeCloseTo(0.00, 2);
+    expect(payslip.withholdingTax).toBeCloseTo(0.00, 2);
+    expect(payslip.tardinessDeduction).toBeCloseTo(0.00, 2);
+    expect(payslip.totalDeductions).toBeCloseTo(0.00, 2);
+    expect(payslip.netPay).toBeCloseTo(payslip.grossPay, 2);
+  });
+
+  test('11. applyDeductions=false keeps employer share (per RJ decision)', () => {
+    const noDeductEmp = { ...fieldEmp, applyDeductions: false };
+    const dtr: DTRInput = { ...baseDtr, employee: noDeductEmp, workingDays: 10 };
+    const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
+    // Employer contributions are NOT zeroed
+    expect(payslip.erSSS).toBeGreaterThan(0);
+    expect(payslip.erPhilhealth).toBeGreaterThan(0);
+    expect(payslip.erPagibig).toBeGreaterThan(0);
+  });
+
+  test('12. default employee (no flags) unchanged — deductions applied', () => {
+    const dtr: DTRInput = { ...baseDtr, workingDays: 10 };
+    const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
+    expect(payslip.totalDeductions).toBeGreaterThan(0);
+    expect(payslip.netPay).toBeLessThan(payslip.grossPay);
+  });
 });

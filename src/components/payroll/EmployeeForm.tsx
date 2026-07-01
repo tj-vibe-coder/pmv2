@@ -29,6 +29,8 @@ const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
   mealAllowance: 0,
   dateHired: new Date().toISOString().split('T')[0],
   isActive: true,
+  applyDeductions: true,
+  applyOvertimePay: true,
   sssNumber: '',
   philhealthNumber: '',
   pagibigNumber: '',
@@ -136,6 +138,20 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEdi
           </Grid>
           <Grid size={{ xs: 12, sm: 3 }}>
             <TextField fullWidth label="TIN No." value={form.tinNumber} onChange={set('tinNumber')} />
+          </Grid>
+
+          <Grid size={12}><strong>Payroll Options</strong></Grid>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <FormControlLabel
+              control={<Switch checked={form.applyDeductions !== false} onChange={(e) => setForm((f) => ({ ...f, applyDeductions: e.target.checked }))} />}
+              label="Apply government deductions"
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <FormControlLabel
+              control={<Switch checked={form.applyOvertimePay !== false} onChange={(e) => setForm((f) => ({ ...f, applyOvertimePay: e.target.checked }))} />}
+              label="Pay overtime"
+            />
           </Grid>
 
           <Grid size={12}>
