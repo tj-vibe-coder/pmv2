@@ -25,6 +25,7 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import type { DTREntry, DayType } from '../../types/Payroll';
+import { needsTimeInput } from '../../utils/dtr';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 
@@ -138,7 +139,7 @@ const DTRPage: React.FC = () => {
         timeIn: existing?.timeIn || '',
         timeOut: existing?.timeOut || '',
         dayType: existing?.dayType || (isWeekend ? 'REST_DAY' : 'REGULAR'),
-        regularHours: existing?.regularHours ?? (isWeekend ? 0 : 8),
+        regularHours: existing?.regularHours ?? 0,
         overtimeHours: existing?.overtimeHours ?? 0,
         isAbsent: existing?.isAbsent ?? false,
         remarks: existing?.remarks || '',
@@ -345,7 +346,18 @@ const DTRPage: React.FC = () => {
                       fullWidth
                     />
                   </TableCell>
-                  <TableCell sx={{ ...cellSx, width: 60, textAlign: 'right', fontWeight: 600 }}>
+                  <TableCell
+                    sx={{
+                      ...cellSx,
+                      width: 60,
+                      textAlign: 'right',
+                      fontWeight: 600,
+                      ...(needsTimeInput(row)
+                        ? { bgcolor: '#ffcdd2', color: '#c62828' }
+                        : {}),
+                    }}
+                    title={needsTimeInput(row) ? 'No time entered' : undefined}
+                  >
                     {row.regularHours}
                   </TableCell>
                   <TableCell sx={{ ...cellSx, width: 55 }}>
