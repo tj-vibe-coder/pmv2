@@ -11,10 +11,17 @@ const fmt = (n: number) =>
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
 
-interface RowProps { label: string; value: number; bold?: boolean; indent?: boolean }
-const Row: React.FC<RowProps> = ({ label, value, bold, indent }) => (
+interface RowProps { label: string; value: number; bold?: boolean; indent?: boolean; sub?: string }
+const Row: React.FC<RowProps> = ({ label, value, bold, indent, sub }) => (
   <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.25, pl: indent ? 2 : 0 }}>
-    <Typography variant="body2" sx={{ fontWeight: bold ? 700 : 400 }}>{label}</Typography>
+    <Box>
+      <Typography variant="body2" sx={{ fontWeight: bold ? 700 : 400 }}>{label}</Typography>
+      {sub && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
+          {sub}
+        </Typography>
+      )}
+    </Box>
     <Typography variant="body2" sx={{ fontWeight: bold ? 700 : 400 }}>{fmt(value)}</Typography>
   </Box>
 );
@@ -27,9 +34,17 @@ interface Props {
 
 const PayslipCard: React.FC<Props> = ({ payslip: s, onBack, canSeeRate = true }) => {
   const emp = s.employeeSnapshot;
-  const rate = resolveRateType(emp) === 'DAILY'
+  const isDaily = resolveRateType(emp) === 'DAILY';
+  const rate = isDaily
     ? `₱${fmt(emp.dailyRate ?? 0)}/day`
     : `₱${fmt(emp.monthlyRate ?? 0)}/mo`;
+
+  const dayWord = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
+  // Show the day / hour basis behind each earning so the figures are auditable.
+  const basicSub = isDaily
+    ? `${dayWord(s.workingDays)} · ${s.regularHours} hrs${canSeeRate ? ` × ₱${fmt(emp.dailyRate ?? 0)}/day` : ''}`
+    : 'Semi-monthly';
+  const mealSub = `${dayWord(s.workingDays)}${canSeeRate ? ` × ₱${fmt(emp.mealAllowance ?? 0)}/day` : ''}`;
 
   const totalOT = s.otPayRegular + s.otPayRestDay + s.otPayRegularHoliday;
   const earningSubtotal = s.basicPay + s.mealAllowance + totalOT + s.nightDifferential +
@@ -129,8 +144,8 @@ const PayslipCard: React.FC<Props> = ({ payslip: s, onBack, canSeeRate = true })
           {/* Earnings */}
           <Box sx={{ flex: 1, p: 2, borderRight: '1px solid #ddd' }}>
             <Typography variant="subtitle2" fontWeight={700} color="#2853c0" mb={1}>EARNINGS</Typography>
-            <Row label="Basic Pay" value={s.basicPay} />
-            <Row label="Meal Allowance" value={s.mealAllowance} />
+            <Row label="Basic Pay" value={s.basicPay} sub={basicSub} />
+            <Row label="Meal Allowance" value={s.mealAllowance} sub={mealSub} />
             {s.otPayRegular > 0 && <Row label="OT (Regular)" value={s.otPayRegular} indent />}
             {s.otPayRestDay > 0 && <Row label="OT (Rest Day / SNWH)" value={s.otPayRestDay} indent />}
             {s.otPayRegularHoliday > 0 && <Row label="OT (Regular Holiday)" value={s.otPayRegularHoliday} indent />}
