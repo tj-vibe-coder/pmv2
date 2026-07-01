@@ -15,6 +15,13 @@ const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 const clampQuad = (q: Quad): Quad =>
   q.map((p) => ({ x: clamp01(p.x), y: clamp01(p.y) })) as unknown as Quad;
 
+// Edge index -> the two corner indices it connects (quad is [TL, TR, BR, BL]).
+const EDGES: Array<[number, number]> = [[0, 1], [1, 2], [2, 3], [3, 0]];
+
+type DragState =
+  | { kind: 'corner'; index: number }
+  | { kind: 'edge'; a: number; b: number; startQuad: Quad; startPt: Pt };
+
 export default function ReceiptCropper(props: ReceiptCropperProps): React.ReactElement {
   const { imageUrl, initialQuad, busy, onConfirm, onRetake } = props;
 
@@ -22,44 +29,76 @@ export default function ReceiptCropper(props: ReceiptCropperProps): React.ReactE
   const [imgReady, setImgReady] = useState<boolean>(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const activeRef = useRef<number | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const quadRef = useRef<Quad>(quad);
+
+  useEffect(() => { quadRef.current = quad; }, [quad]);
 
   // Resync when a new photo (new initialQuad identity) arrives.
   useEffect(() => {
     setQuad(clampQuad(initialQuad));
   }, [initialQuad]);
 
-  const handlePointerDown = useCallback(
-    (index: number) => (e: React.PointerEvent<HTMLDivElement>) => {
-      activeRef.current = index;
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId);
-      } catch {
-        /* setPointerCapture can throw on some browsers — safe to ignore */
-      }
-      e.preventDefault();
+  const pointFromEvent = useCallback((e: React.PointerEvent<HTMLDivElement>): Pt | null => {
+    const el = containerRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    return { x: clamp01((e.clientX - rect.left) / rect.width), y: clamp01((e.clientY - rect.top) / rect.height) };
+  }, []);
+
+  const beginDrag = useCallback((state: DragState, e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = state;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* setPointerCapture can throw on some browsers — safe to ignore */
+    }
+    e.preventDefault();
+  }, []);
+
+  // Corners drag absolutely (the handle snaps to the pointer).
+  const handleCornerDown = useCallback(
+    (index: number) => (e: React.PointerEvent<HTMLDivElement>) => beginDrag({ kind: 'corner', index }, e),
+    [beginDrag],
+  );
+
+  // Edges drag by delta (both corners of that edge translate together), so the
+  // side moves without collapsing into a single point.
+  const handleEdgeDown = useCallback(
+    (a: number, b: number) => (e: React.PointerEvent<HTMLDivElement>) => {
+      const pt = pointFromEvent(e);
+      if (!pt) return;
+      beginDrag({ kind: 'edge', a, b, startQuad: quadRef.current, startPt: pt }, e);
     },
-    [],
+    [beginDrag, pointFromEvent],
   );
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const active = activeRef.current;
-    if (active === null) return;
-    const el = containerRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-    const fx = clamp01((e.clientX - rect.left) / rect.width);
-    const fy = clamp01((e.clientY - rect.top) / rect.height);
-    setQuad((prev) => {
-      const next = prev.slice() as Quad;
-      next[active] = { x: fx, y: fy };
-      return next;
-    });
-  }, []);
+    const active = dragRef.current;
+    if (!active) return;
+    const pt = pointFromEvent(e);
+    if (!pt) return;
+    if (active.kind === 'corner') {
+      setQuad((prev) => {
+        const next = prev.slice() as Quad;
+        next[active.index] = pt;
+        return next;
+      });
+    } else {
+      const dx = pt.x - active.startPt.x;
+      const dy = pt.y - active.startPt.y;
+      setQuad((prev) => {
+        const next = prev.slice() as Quad;
+        next[active.a] = { x: clamp01(active.startQuad[active.a].x + dx), y: clamp01(active.startQuad[active.a].y + dy) };
+        next[active.b] = { x: clamp01(active.startQuad[active.b].x + dx), y: clamp01(active.startQuad[active.b].y + dy) };
+        return next;
+      });
+    }
+  }, [pointFromEvent]);
 
   const endDrag = useCallback(() => {
-    activeRef.current = null;
+    dragRef.current = null;
   }, []);
 
   const ptStr = (p: Pt): string => `${p.x} ${p.y}`;
@@ -118,10 +157,35 @@ export default function ReceiptCropper(props: ReceiptCropperProps): React.ReactE
               />
             </Box>
 
+            {EDGES.map(([a, b], edgeIndex) => {
+              const mx = (quad[a].x + quad[b].x) / 2;
+              const my = (quad[a].y + quad[b].y) / 2;
+              return (
+                <Box
+                  key={`edge-${edgeIndex}`}
+                  onPointerDown={handleEdgeDown(a, b)}
+                  style={{ left: `${mx * 100}%`, top: `${my * 100}%` }}
+                  sx={{
+                    position: 'absolute',
+                    width: 20,
+                    height: 20,
+                    mt: '-10px',
+                    ml: '-10px',
+                    borderRadius: '50%',
+                    bgcolor: 'rgba(25,118,210,0.85)',
+                    border: '2px solid #fff',
+                    boxShadow: 1,
+                    touchAction: 'none',
+                    cursor: 'grab',
+                  }}
+                />
+              );
+            })}
+
             {quad.map((corner, index) => (
               <Box
                 key={index}
-                onPointerDown={handlePointerDown(index)}
+                onPointerDown={handleCornerDown(index)}
                 style={{ left: `${corner.x * 100}%`, top: `${corner.y * 100}%` }}
                 sx={{
                   position: 'absolute',
@@ -143,7 +207,7 @@ export default function ReceiptCropper(props: ReceiptCropperProps): React.ReactE
       </Box>
 
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-        Drag the 4 corners onto the receipt, then tap Use photo.
+        Drag the corners or the edges onto the receipt, then tap Use photo.
       </Typography>
 
       <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>

@@ -8,12 +8,14 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
-import { convertHeicToJpeg } from '../utils/receipts/imageUtils';
+import CameraAltIcon from '@mui/icons-material/CameraAlt';
+import { convertHeicToJpeg, makeThumb } from '../utils/receipts/imageUtils';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { compressForUpload, blobToBase64 } from '../utils/receipts/imageCompress';
 import { parseReceipt } from '../services/receiptParseService';
 import ReceiptCropper from './ReceiptCropper';
+import LiveCameraCapture from './LiveCameraCapture';
 import { EXPENSE_CATEGORIES } from '../data/financeCategories';
 import { API_BASE } from '../config/api';
 
@@ -40,6 +42,7 @@ const authHeaders = (): Record<string, string> => {
 };
 
 const todayStr = (): string => new Date().toISOString().slice(0, 10);
+
 
 const DEFAULT_QUAD: Quad = [
   { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 },
@@ -103,32 +106,9 @@ const emptyFields = (): BatchItemFields => ({
   deductible: null, deductibleReason: null, customerIssues: [], lowConf: false,
 });
 
-const makeThumb = async (blob: Blob | File): Promise<string> => {
-  try {
-    return await new Promise<string>((resolve, reject) => {
-      const img = new Image();
-      const url = URL.createObjectURL(blob);
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        const MAX = 240;
-        const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-        const w = Math.round(img.width * scale);
-        const h = Math.round(img.height * scale);
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) { reject(new Error('no ctx')); return; }
-        ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/jpeg', 0.6));
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('img load failed')); };
-      img.src = url;
-    });
-  } catch { return ''; }
-};
-
 const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, onComplete, deliverToDesktop, pairingToken, scanContext }) => {
   const [stage, setStage] = useState<BatchStage>(BatchStage.select);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [items, setItems] = useState<BatchItem[]>([]);
   const [cropIndex, setCropIndex] = useState(0);
   const [cropUrl, setCropUrl] = useState<string | null>(null);
@@ -190,9 +170,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
     }
   }, [revokeCurrentUrl]);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = '';
+  const processFiles = async (files: File[]) => {
     if (!files.length) return;
     const tooMany = files.length > 25;
     setTooManyWarn(tooMany);
@@ -214,6 +192,12 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
     } catch (err) {
       setSnack({ open: true, severity: 'error', msg: err instanceof Error ? err.message : 'Could not load the selected photos.' });
     }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    void processFiles(files);
   };
 
   const startParsing = async (itemList: BatchItem[]) => {
@@ -431,12 +415,23 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
     return (
       <Box>
         {tooManyWarn && <Alert severity="warning" sx={{ mb: 2 }}>Only the first 25 photos were selected.</Alert>}
-        <Button variant="contained" size="large" fullWidth startIcon={<PhotoLibraryIcon />}
+        <Button variant="contained" size="large" fullWidth startIcon={<CameraAltIcon />}
+          onClick={() => setCameraOpen(true)} sx={{ py: 1.5, mb: 2 }}>
+          Take Photos
+        </Button>
+        <Button variant="outlined" size="large" fullWidth startIcon={<PhotoLibraryIcon />}
           onClick={() => fileInputRef.current?.click()} sx={{ py: 1.5, mb: 2 }}>
-          Select receipt photos
+          Choose from Library
         </Button>
         <Button variant="outlined" fullWidth onClick={onCancel}>Cancel</Button>
         <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handleFileChange} />
+        {cameraOpen && (
+          <LiveCameraCapture
+            onDone={(files) => { setCameraOpen(false); void processFiles(files); }}
+            onCancel={() => setCameraOpen(false)}
+            onFallbackToPicker={() => { setCameraOpen(false); fileInputRef.current?.click(); }}
+          />
+        )}
       </Box>
     );
   }
@@ -503,15 +498,15 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
           <Alert severity="warning" sx={{ mt: 1 }}>No project selected — go back and select a project before saving.</Alert>
         )}
       </Box>
-      <Box sx={{ maxHeight: '55vh', overflowY: 'auto', mb: 2 }}>
+      <Box sx={{ maxHeight: '55vh', overflowY: 'auto', overflowX: 'hidden', mb: 2 }}>
         {visibleItems.map((item) => (
-          <Accordion key={item.id} disableGutters sx={{ mb: 1 }}>
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', pr: 1 }}>
-                <Typography variant="body2" noWrap sx={{ maxWidth: '60%' }}>
+          <Accordion key={item.id} disableGutters sx={{ mb: 1, maxWidth: '100%' }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ '& .MuiAccordionSummary-content': { minWidth: 0, overflow: 'hidden' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', minWidth: 0, pr: 1 }}>
+                <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: '1 1 auto', mr: 1 }}>
                   {item.fields.supplier || item.fields.description || item.rawFile.name}
                 </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>
                     {item.fields.amount ? `₱${Number(item.fields.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}` : '—'}
                   </Typography>
