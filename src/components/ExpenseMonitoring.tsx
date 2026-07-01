@@ -49,16 +49,20 @@ import {
   Area,
   AreaChart
 } from 'recharts';
-import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
+import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, ExpandMore as ExpandMoreIcon, SwapHoriz as PromoteIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import { getBudgets } from '../utils/projectBudgetStorage';
 import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem } from './PurchaseOrderPage';
 import { API_BASE } from '../config/api';
-import { PROJECT_EXPENSE_CATEGORIES, INVOICE_TYPES } from '../data/financeCategories';
-import { parseReceipt } from '../services/receiptParseService';
-import { fileToParseInput } from '../utils/receipts/imageCompress';
+import { PROJECT_EXPENSE_CATEGORIES, INVOICE_TYPES, INVESTORS, type FundingSource } from '../data/financeCategories';
+import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
+import { blobToBase64 } from '../utils/receipts/imageCompress';
+import { detectReceiptQuad } from '../utils/receipts/autoCrop';
+import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
+import ReceiptCropper from './ReceiptCropper';
 import ScanWithPhoneButton from './ScanWithPhoneButton';
+import { useAuth } from '../contexts/AuthContext';
 
 const EXPENSES_KEY = 'projectExpenses';
 
@@ -91,13 +95,14 @@ export interface ProjectExpense {
   /** When synced from Liquidation, avoid duplicate sync */
   sourceLiquidationId?: string;
   sourceLiquidationRowId?: string;
-  sourceType?: 'manual' | 'po_sync' | 'liquidation_sync' | 'migrated';
+  sourceType?: 'manual' | 'receipt_scan' | 'po_sync' | 'liquidation_sync' | 'migrated';
   sourceCaId?: string;
   supplier?: string;
   invoiceNo?: string;
   invoiceType?: string;
   vat?: number;
   tin?: string;
+  fundingSource?: FundingSource;
 }
 
 const loadExpenses = (): ProjectExpense[] => {
@@ -158,6 +163,7 @@ const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR + 2 - 2025 }, (_, i) => 2025 + i);
 
 const ExpenseMonitoring: React.FC = () => {
+  const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   // Mounted under both /expense-monitoring and /finance/expense-monitoring — match by suffix
@@ -181,6 +187,27 @@ const ExpenseMonitoring: React.FC = () => {
   const [expenseInvoiceType, setExpenseInvoiceType] = useState('');
   const [expenseVat, setExpenseVat] = useState('');
   const [expenseTin, setExpenseTin] = useState('');
+  const [expenseFundingType, setExpenseFundingType] = useState<'corporate_bank' | 'investor_outofpocket'>('corporate_bank');
+  const [expenseFundingInvestor, setExpenseFundingInvestor] = useState('');
+  const [expenseLinkedInvestments, setExpenseLinkedInvestments] = useState<{ id: string; date: string; category: string; description: string; amount: number }[]>([]);
+  const [expenseLinkedInvestmentId, setExpenseLinkedInvestmentId] = useState('');
+  // AI-suggested on scan (mirrors LiquidationFormPage); reviewed/corrected later in the Tax Ledger.
+  const [expenseDeductible, setExpenseDeductible] = useState<boolean | null>(null);
+  const [expenseDeductibleReason, setExpenseDeductibleReason] = useState<string | null>(null);
+
+  // Receipt crop step (mirrors ScanPage.tsx) before the AI parse.
+  const [editUrl, setEditUrl] = useState<string | null>(null);
+  const [editBlob, setEditBlob] = useState<Blob | null>(null);
+  const [editQuad, setEditQuad] = useState<Quad | null>(null);
+
+  // Superadmin: promote a manual/scanned expense to an employee's liquidation claim.
+  const [promoteExpense, setPromoteExpense] = useState<ProjectExpense | null>(null);
+  const [promoteUsers, setPromoteUsers] = useState<{ id: string; full_name: string | null; username: string }[]>([]);
+  const [promoteUserId, setPromoteUserId] = useState('');
+  const [promoteCAs, setPromoteCAs] = useState<{ id: string; ca_no: string; balance_remaining: number }[]>([]);
+  const [promoteCaId, setPromoteCaId] = useState('');
+  const [promoting, setPromoting] = useState(false);
+  const [promoteError, setPromoteError] = useState('');
   const scanInputRef = useRef<HTMLInputElement>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; severity: 'success' | 'error' | 'warning'; message: string }>({ open: false, severity: 'success', message: '' });
@@ -544,15 +571,116 @@ const ExpenseMonitoring: React.FC = () => {
     }
   };
 
+  const openPromoteDialog = async (expense: ProjectExpense) => {
+    setPromoteExpense(expense);
+    setPromoteUserId('');
+    setPromoteCaId('');
+    setPromoteCAs([]);
+    setPromoteError('');
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/users`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) setPromoteUsers(data.users);
+    } catch {
+      // silent — dialog still opens, employee list just stays empty
+    }
+  };
+
+  const handlePromoteUserChange = async (userId: string) => {
+    setPromoteUserId(userId);
+    setPromoteCaId('');
+    setPromoteCAs([]);
+    if (!userId) return;
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/cash-advances`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        const eligible = (data.cash_advances || []).filter((ca: { user_id: string; status: string; balance_remaining: number }) =>
+          String(ca.user_id) === userId && ca.status === 'approved' && (Number(ca.balance_remaining) || 0) > 0
+        );
+        setPromoteCAs(eligible.map((ca: { id: string; ca_no: string; balance_remaining: number }) => ({ id: ca.id, ca_no: ca.ca_no, balance_remaining: Number(ca.balance_remaining) || 0 })));
+      }
+    } catch {
+      // silent — falls back to standalone out-of-pocket
+    }
+  };
+
+  const handlePromote = async () => {
+    if (!promoteExpense || !promoteUserId) return;
+    setPromoting(true);
+    setPromoteError('');
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/project-expenses/${promoteExpense.id}/promote-to-liquidation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ userId: promoteUserId, ...(promoteCaId ? { caId: promoteCaId } : {}) }),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        setPromoteExpense(null);
+        await fetchExpenses();
+      } else {
+        setPromoteError(data.error || 'Failed to promote expense');
+      }
+    } catch {
+      setPromoteError('Failed to promote expense. Check your connection.');
+    } finally {
+      setPromoting(false);
+    }
+  };
+
+  const setEdit = useCallback((blob: Blob | null, quad: Quad | null) => {
+    setEditUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return blob ? URL.createObjectURL(blob) : null; });
+    setEditBlob(blob);
+    setEditQuad(quad);
+  }, []);
+
+  useEffect(() => () => { if (editUrl) URL.revokeObjectURL(editUrl); }, [editUrl]);
+
+  // Phase 1: pick a photo, auto-detect its corners, and open the crop dialog.
   const handleScanInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
     setIsScanning(true);
-    const safeFile = await convertHeicToJpeg(file);
     try {
-      const { imageBase64, mimeType } = await fileToParseInput(safeFile);
-      const parsed = await parseReceipt(imageBase64, mimeType);
+      const safeFile = await convertHeicToJpeg(file);
+      let detected = await detectReceiptQuad(safeFile);
+      if (!detected) {
+        try {
+          const imageBase64 = await blobToBase64(safeFile);
+          detected = await detectCropFromServer(imageBase64, safeFile.type || 'image/jpeg');
+        } catch {
+          // best-effort — fall through to the default quad
+        }
+      }
+      const quad: Quad = detected ?? [
+        { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 }, { x: 0.88, y: 0.86 }, { x: 0.12, y: 0.86 },
+      ];
+      setEdit(safeFile, quad);
+    } catch (err) {
+      setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Could not process photo' });
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const retakeScan = () => {
+    setEdit(null, null);
+    scanInputRef.current?.click();
+  };
+
+  // Phase 2: user confirms the crop — flatten the quad, then parse with Gemini.
+  const confirmScanCrop = async (quad: Quad) => {
+    if (!editBlob) return;
+    setIsScanning(true);
+    try {
+      const flattened = await perspectiveCropToBlob(editBlob, quad);
+      const imageBase64 = await blobToBase64(flattened);
+      const parsed = await parseReceipt(imageBase64, 'image/jpeg');
       const amt = parsed.total ?? parsed.subtotal;
       if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
       if (parsed.date) setExpenseDate(parsed.date);
@@ -568,6 +696,8 @@ const ExpenseMonitoring: React.FC = () => {
         setExpenseInvoiceType(matched || '');
       }
       if (parsed.tax !== null && parsed.tax !== undefined) setExpenseVat(String(parsed.tax));
+      if (typeof parsed.deductible === 'boolean') setExpenseDeductible(parsed.deductible);
+      if (parsed.deductibleReason) setExpenseDeductibleReason(parsed.deductibleReason);
       const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
       const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
       if (lowConf) {
@@ -575,10 +705,33 @@ const ExpenseMonitoring: React.FC = () => {
       } else {
         setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
       }
+      setEdit(null, null);
     } catch (err) {
       setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Failed to parse receipt' });
     } finally {
       setIsScanning(false);
+    }
+  };
+
+  const handleExpenseInvestorChange = async (investor: string) => {
+    setExpenseFundingInvestor(investor);
+    setExpenseLinkedInvestmentId('');
+    setExpenseLinkedInvestments([]);
+    if (!investor) return;
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/investments`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        const eligible = (data.investments || []).filter((inv: { investor: string; sourceType?: string }) =>
+          inv.investor === investor && inv.sourceType !== 'expense_sync'
+        );
+        setExpenseLinkedInvestments(eligible.map((inv: { id: string; date: string; category: string; description: string; amount: number }) => ({
+          id: inv.id, date: inv.date, category: inv.category, description: inv.description, amount: Number(inv.amount) || 0,
+        })));
+      }
+    } catch {
+      // silent — admin-only endpoint; non-admins just won't see linkable investments
     }
   };
 
@@ -587,6 +740,7 @@ const ExpenseMonitoring: React.FC = () => {
     const amount = Number(expenseAmount) || 0;
     if (pid == null) return;
     if (amount <= 0) return;
+    if (expenseFundingType === 'investor_outofpocket' && !expenseFundingInvestor) return;
     const project = allProjects.find((p) => String(p.id) === pid);
     try {
       const token = localStorage.getItem('netpacific_token');
@@ -606,6 +760,11 @@ const ExpenseMonitoring: React.FC = () => {
           ...(expenseInvoiceType ? { invoiceType: expenseInvoiceType } : {}),
           ...(expenseVat && !isNaN(Number(expenseVat)) ? { vat: Number(expenseVat) } : {}),
           ...(expenseTin.trim() ? { tin: expenseTin.trim() } : {}),
+          ...(expenseFundingType === 'investor_outofpocket' && expenseFundingInvestor
+            ? { fundingSource: { type: 'investor_outofpocket', investor: expenseFundingInvestor, ...(expenseLinkedInvestmentId ? { linkedInvestmentId: expenseLinkedInvestmentId } : {}) } }
+            : {}),
+          ...(typeof expenseDeductible === 'boolean' ? { deductible: expenseDeductible } : {}),
+          ...(expenseDeductibleReason ? { deductibleReason: expenseDeductibleReason } : {}),
         }),
       });
       const data = await res.json().catch(() => ({ success: false }));
@@ -621,6 +780,12 @@ const ExpenseMonitoring: React.FC = () => {
         setExpenseInvoiceType('');
         setExpenseVat('');
         setExpenseTin('');
+        setExpenseFundingType('corporate_bank');
+        setExpenseFundingInvestor('');
+        setExpenseLinkedInvestments([]);
+        setExpenseLinkedInvestmentId('');
+        setExpenseDeductible(null);
+        setExpenseDeductibleReason(null);
         await fetchExpenses();
       }
     } catch {
@@ -1066,6 +1231,11 @@ const ExpenseMonitoring: React.FC = () => {
                         />
                       </TableCell>
                       <TableCell padding="none" align="center">
+                        {user?.role === 'superadmin' && (expense.sourceType === 'manual' || expense.sourceType === 'receipt_scan') && (
+                          <IconButton size="small" onClick={() => openPromoteDialog(expense)} title="Promote to employee liquidation" color="primary">
+                            <PromoteIcon fontSize="small" />
+                          </IconButton>
+                        )}
                         <IconButton size="small" onClick={() => handleDeleteExpense(expense.id)} title="Delete expense" color="error">
                           <DeleteIcon fontSize="small" />
                         </IconButton>
@@ -1150,6 +1320,45 @@ const ExpenseMonitoring: React.FC = () => {
                   </Select>
                 </FormControl>
               </Grid>
+              <Grid size={{ xs: expenseFundingType === 'investor_outofpocket' ? 6 : 12 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Paid From</InputLabel>
+                  <Select
+                    label="Paid From"
+                    value={expenseFundingType}
+                    onChange={(e) => { setExpenseFundingType(e.target.value as 'corporate_bank' | 'investor_outofpocket'); if (e.target.value !== 'investor_outofpocket') setExpenseFundingInvestor(''); }}
+                  >
+                    <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
+                    <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              {expenseFundingType === 'investor_outofpocket' && (
+                <Grid size={{ xs: 6 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Investor</InputLabel>
+                    <Select label="Investor" value={expenseFundingInvestor} onChange={(e) => handleExpenseInvestorChange(e.target.value)}>
+                      <MenuItem value="">— Select investor —</MenuItem>
+                      {INVESTORS.map((inv) => <MenuItem key={inv} value={inv}>{inv}</MenuItem>)}
+                    </Select>
+                  </FormControl>
+                </Grid>
+              )}
+              {expenseFundingType === 'investor_outofpocket' && expenseFundingInvestor && expenseLinkedInvestments.length > 0 && (
+                <Grid size={{ xs: 12 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Link to Existing Investment (Optional)</InputLabel>
+                    <Select label="Link to Existing Investment (Optional)" value={expenseLinkedInvestmentId} onChange={(e) => setExpenseLinkedInvestmentId(e.target.value)}>
+                      <MenuItem value="">— New investment entry —</MenuItem>
+                      {expenseLinkedInvestments.map((inv) => (
+                        <MenuItem key={inv.id} value={inv.id}>
+                          {inv.date} · {inv.category} · {inv.description || '—'} · {formatCurrency(inv.amount)}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+              )}
               <Grid size={{ xs: 12 }}>
                 <Accordion variant="outlined" disableGutters sx={{ mt: 1 }}>
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -1214,6 +1423,66 @@ const ExpenseMonitoring: React.FC = () => {
           style={{ display: 'none' }}
           onChange={handleScanInputChange}
         />
+      </Dialog>
+
+      {/* Crop step between photo pick and AI parse (auto-detected corners, adjustable) */}
+      <Dialog open={!!editUrl} onClose={() => {}} maxWidth="xs" fullWidth>
+        <DialogTitle>Adjust Receipt Crop</DialogTitle>
+        <DialogContent>
+          {editUrl && editQuad && (
+            <ReceiptCropper imageUrl={editUrl} initialQuad={editQuad} busy={isScanning} onConfirm={confirmScanCrop} onRetake={retakeScan} />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Superadmin: promote a manual/scanned expense to an employee's liquidation claim */}
+      <Dialog open={!!promoteExpense} onClose={() => setPromoteExpense(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Promote to Liquidation</DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            {promoteExpense && (
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                {promoteExpense.description || promoteExpense.category} — {formatCurrency(promoteExpense.amount)} on {promoteExpense.date}.
+                This will remove it from Expense Monitoring and create a submitted liquidation for the employee below.
+              </Typography>
+            )}
+            <Grid container spacing={2}>
+              <Grid size={{ xs: 12 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Employee</InputLabel>
+                  <Select label="Employee" value={promoteUserId} onChange={(e) => handlePromoteUserChange(e.target.value)}>
+                    <MenuItem value="">— Select employee —</MenuItem>
+                    {promoteUsers.map((u) => (
+                      <MenuItem key={u.id} value={String(u.id)}>{u.full_name || u.username}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <FormControl fullWidth size="small" disabled={!promoteUserId}>
+                  <InputLabel>Cash Advance</InputLabel>
+                  <Select label="Cash Advance" value={promoteCaId} onChange={(e) => setPromoteCaId(e.target.value)}>
+                    <MenuItem value="">Standalone (Out-of-Pocket reimbursement)</MenuItem>
+                    {promoteCAs.map((ca) => (
+                      <MenuItem key={ca.id} value={ca.id}>{ca.ca_no} — balance {formatCurrency(ca.balance_remaining)}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              {promoteError && (
+                <Grid size={{ xs: 12 }}>
+                  <Typography variant="caption" color="error">{promoteError}</Typography>
+                </Grid>
+              )}
+            </Grid>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setPromoteExpense(null)} disabled={promoting}>Cancel</Button>
+          <Button variant="contained" onClick={handlePromote} disabled={promoting || !promoteUserId}>
+            {promoting ? 'Promoting…' : 'Promote'}
+          </Button>
+        </DialogActions>
       </Dialog>
 
       {/* View expenses per project dialog */}

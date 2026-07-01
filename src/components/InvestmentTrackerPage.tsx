@@ -7,6 +7,7 @@ import {
 } from '@mui/material';
 import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import { INVESTORS } from '../data/financeCategories';
 
 const API_BASE = '/api';
 
@@ -18,13 +19,6 @@ const NET_PACIFIC_COLORS = {
   warning: '#fdcb6e',
   info: '#74b9ff',
 };
-
-const INVESTORS = [
-  'TJ Caballero',
-  'RJ Rivera',
-  'Renzel Punongbayan',
-  'Nylle Harold Managa',
-];
 
 const INVESTOR_TARGET_PCT: Record<string, number> = {
   'TJ Caballero':        35,

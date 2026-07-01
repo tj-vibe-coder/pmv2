@@ -39,9 +39,12 @@ import {
   AccountBalanceWallet as WalletIcon,
   ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
-import { OVERHEAD_CATEGORIES, INVOICE_TYPES } from '../data/financeCategories';
-import { parseReceipt } from '../services/receiptParseService';
-import { fileToParseInput, compressForUpload } from '../utils/receipts/imageCompress';
+import { OVERHEAD_CATEGORIES, INVOICE_TYPES, INVESTORS } from '../data/financeCategories';
+import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
+import { compressForUpload, blobToBase64 } from '../utils/receipts/imageCompress';
+import { detectReceiptQuad } from '../utils/receipts/autoCrop';
+import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
+import ReceiptCropper from './ReceiptCropper';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { resolveCorporateDriveId, ensureFolder, uploadFileToFolderById, sanitizeForOneDrive, deleteDriveItem, getDriveItemThumbnailUrl } from '../services/onedriveFolderService';
@@ -94,11 +97,22 @@ const OverheadExpensesPage: React.FC = () => {
   const [invoiceType, setInvoiceType] = useState('');
   const [vat, setVat] = useState('');
   const [tin, setTin] = useState('');
+  const [fundingType, setFundingType] = useState<'corporate_bank' | 'investor_outofpocket'>('corporate_bank');
+  const [fundingInvestor, setFundingInvestor] = useState('');
+  const [linkedInvestments, setLinkedInvestments] = useState<{ id: string; date: string; category: string; description: string; amount: number }[]>([]);
+  const [linkedInvestmentId, setLinkedInvestmentId] = useState('');
+  // AI-suggested on scan (mirrors LiquidationFormPage); reviewed/corrected later in the Tax Ledger.
+  const [deductible, setDeductible] = useState<boolean | null>(null);
+  const [deductibleReason, setDeductibleReason] = useState<string | null>(null);
 
   const scanInputRef = React.useRef<HTMLInputElement>(null);
   const pendingReceiptRef = React.useRef<File | null>(null);
   const [receiptAttached, setReceiptAttached] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  // Receipt crop step (mirrors ScanPage.tsx) before the AI parse.
+  const [editUrl, setEditUrl] = useState<string | null>(null);
+  const [editBlob, setEditBlob] = useState<Blob | null>(null);
+  const [editQuad, setEditQuad] = useState<Quad | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; severity: 'success' | 'error' | 'warning'; message: string }>({ open: false, severity: 'success', message: '' });
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
@@ -158,21 +172,90 @@ const OverheadExpensesPage: React.FC = () => {
     setInvoiceType('');
     setVat('');
     setTin('');
+    setFundingType('corporate_bank');
+    setFundingInvestor('');
+    setLinkedInvestments([]);
+    setLinkedInvestmentId('');
+    setDeductible(null);
+    setDeductibleReason(null);
     pendingReceiptRef.current = null;
     setReceiptAttached(false);
   };
 
+  const handleInvestorChange = async (investor: string) => {
+    setFundingInvestor(investor);
+    setLinkedInvestmentId('');
+    setLinkedInvestments([]);
+    if (!investor) return;
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`/api/investments`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        const eligible = (data.investments || []).filter((inv: { investor: string; sourceType?: string }) =>
+          inv.investor === investor && inv.sourceType !== 'expense_sync'
+        );
+        setLinkedInvestments(eligible.map((inv: { id: string; date: string; category: string; description: string; amount: number }) => ({
+          id: inv.id, date: inv.date, category: inv.category, description: inv.description, amount: Number(inv.amount) || 0,
+        })));
+      }
+    } catch {
+      // silent — admin-only endpoint; non-admins just won't see linkable investments
+    }
+  };
+
+  const setEdit = useCallback((blob: Blob | null, quad: Quad | null) => {
+    setEditUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return blob ? URL.createObjectURL(blob) : null; });
+    setEditBlob(blob);
+    setEditQuad(quad);
+  }, []);
+
+  useEffect(() => () => { if (editUrl) URL.revokeObjectURL(editUrl); }, [editUrl]);
+
+  // Phase 1: pick a photo, auto-detect its corners, and open the crop dialog.
   const handleScanInputChange = async (ev: React.ChangeEvent<HTMLInputElement>) => {
     const file = ev.target.files?.[0];
     ev.target.value = '';
     if (!file) return;
     setIsScanning(true);
-    const safeFile = await convertHeicToJpeg(file);
-    pendingReceiptRef.current = safeFile;
-    setReceiptAttached(true);
     try {
-      const { imageBase64, mimeType } = await fileToParseInput(safeFile);
-      const parsed = await parseReceipt(imageBase64, mimeType);
+      const safeFile = await convertHeicToJpeg(file);
+      let detected = await detectReceiptQuad(safeFile);
+      if (!detected) {
+        try {
+          const imageBase64 = await blobToBase64(safeFile);
+          detected = await detectCropFromServer(imageBase64, safeFile.type || 'image/jpeg');
+        } catch {
+          // best-effort — fall through to the default quad
+        }
+      }
+      const quad: Quad = detected ?? [
+        { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 }, { x: 0.88, y: 0.86 }, { x: 0.12, y: 0.86 },
+      ];
+      setEdit(safeFile, quad);
+    } catch (e) {
+      setSnackbar({ open: true, severity: 'error', message: e instanceof Error ? e.message : 'Could not process photo' });
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const retakeScan = () => {
+    setEdit(null, null);
+    scanInputRef.current?.click();
+  };
+
+  // Phase 2: user confirms the crop — flatten the quad, attach it as the receipt, then parse.
+  const confirmScanCrop = async (quad: Quad) => {
+    if (!editBlob) return;
+    setIsScanning(true);
+    try {
+      const flattened = await perspectiveCropToBlob(editBlob, quad);
+      const croppedFile = new File([flattened], `receipt-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      pendingReceiptRef.current = croppedFile;
+      setReceiptAttached(true);
+      const imageBase64 = await blobToBase64(flattened);
+      const parsed = await parseReceipt(imageBase64, 'image/jpeg');
       const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
       const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
       const amt = parsed.total ?? parsed.subtotal;
@@ -190,11 +273,14 @@ const OverheadExpensesPage: React.FC = () => {
         setInvoiceType(matched || '');
       }
       if (parsed.tax !== null && parsed.tax !== undefined) setVat(String(parsed.tax));
+      if (typeof parsed.deductible === 'boolean') setDeductible(parsed.deductible);
+      if (parsed.deductibleReason) setDeductibleReason(parsed.deductibleReason);
       if (lowConf) {
         setSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category.` });
       } else {
         setSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
       }
+      setEdit(null, null);
     } catch (e) {
       setSnackbar({ open: true, severity: 'error', message: e instanceof Error ? e.message : 'Failed to parse receipt' });
     } finally {
@@ -229,6 +315,10 @@ const OverheadExpensesPage: React.FC = () => {
       setSnackbar({ open: true, severity: 'error', message: 'Enter an amount greater than 0' });
       return;
     }
+    if (fundingType === 'investor_outofpocket' && !fundingInvestor) {
+      setSnackbar({ open: true, severity: 'error', message: 'Select which investor paid this out of pocket' });
+      return;
+    }
     setSavingExpense(true);
     try {
       const created = await createOverheadExpense({
@@ -242,6 +332,11 @@ const OverheadExpensesPage: React.FC = () => {
         ...(invoiceType ? { invoiceType } : {}),
         ...(vat && !isNaN(Number(vat)) ? { vat: Number(vat) } : {}),
         ...(tin.trim() ? { tin: tin.trim() } : {}),
+        ...(fundingType === 'investor_outofpocket' && fundingInvestor
+          ? { fundingSource: { type: 'investor_outofpocket' as const, investor: fundingInvestor, ...(linkedInvestmentId ? { linkedInvestmentId } : {}) } }
+          : {}),
+        ...(typeof deductible === 'boolean' ? { deductible } : {}),
+        ...(deductibleReason ? { deductibleReason } : {}),
       });
       const file = pendingReceiptRef.current;
       setAddOpen(false);
@@ -420,6 +515,45 @@ const OverheadExpensesPage: React.FC = () => {
                   </Select>
                 </FormControl>
               </Grid>
+              <Grid size={{ xs: fundingType === 'investor_outofpocket' ? 6 : 12 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Paid From</InputLabel>
+                  <Select
+                    label="Paid From"
+                    value={fundingType}
+                    onChange={(e) => { setFundingType(e.target.value as 'corporate_bank' | 'investor_outofpocket'); if (e.target.value !== 'investor_outofpocket') setFundingInvestor(''); }}
+                  >
+                    <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
+                    <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              {fundingType === 'investor_outofpocket' && (
+                <Grid size={{ xs: 6 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Investor</InputLabel>
+                    <Select label="Investor" value={fundingInvestor} onChange={(e) => handleInvestorChange(e.target.value)}>
+                      <MenuItem value="">— Select investor —</MenuItem>
+                      {INVESTORS.map((inv) => <MenuItem key={inv} value={inv}>{inv}</MenuItem>)}
+                    </Select>
+                  </FormControl>
+                </Grid>
+              )}
+              {fundingType === 'investor_outofpocket' && fundingInvestor && linkedInvestments.length > 0 && (
+                <Grid size={{ xs: 12 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Link to Existing Investment (Optional)</InputLabel>
+                    <Select label="Link to Existing Investment (Optional)" value={linkedInvestmentId} onChange={(e) => setLinkedInvestmentId(e.target.value)}>
+                      <MenuItem value="">— New investment entry —</MenuItem>
+                      {linkedInvestments.map((inv) => (
+                        <MenuItem key={inv.id} value={inv.id}>
+                          {inv.date} · {inv.category} · {inv.description || '—'} · {formatCurrency(inv.amount)}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+              )}
               <Grid size={{ xs: 12 }}>
                 <Accordion variant="outlined" disableGutters sx={{ mt: 1 }}>
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -476,6 +610,16 @@ const OverheadExpensesPage: React.FC = () => {
           </Box>
         </DialogActions>
         <input type="file" ref={scanInputRef} accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleScanInputChange} />
+      </Dialog>
+
+      {/* Crop step between photo pick and AI parse (auto-detected corners, adjustable) */}
+      <Dialog open={!!editUrl} onClose={() => {}} maxWidth="xs" fullWidth>
+        <DialogTitle>Adjust Receipt Crop</DialogTitle>
+        <DialogContent>
+          {editUrl && editQuad && (
+            <ReceiptCropper imageUrl={editUrl} initialQuad={editQuad} busy={isScanning} onConfirm={confirmScanCrop} onRetake={retakeScan} />
+          )}
+        </DialogContent>
       </Dialog>
 
       <Snackbar open={snackbar.open} autoHideDuration={5000} onClose={() => setSnackbar((p) => ({ ...p, open: false }))} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>

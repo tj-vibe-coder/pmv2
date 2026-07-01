@@ -1,4 +1,5 @@
 import { API_BASE } from '../config/api';
+import type { FundingSource } from '../data/financeCategories';
 
 export interface OverheadReceiptRef {
   oneDriveId?: string;
@@ -24,6 +25,7 @@ export interface OverheadExpense {
   tin?: string;
   deductible?: boolean | null;
   deductibleReason?: string;
+  fundingSource?: FundingSource;
 }
 
 function authHeaders(): Record<string, string> {
