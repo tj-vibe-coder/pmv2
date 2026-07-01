@@ -4,22 +4,32 @@
  * SSS Circular 2023-002, PhilHealth Circular 2023-0014, TRAIN Law (R.A. 10963)
  */
 
-import { Employee, DTRInput, Payslip } from '../types/Payroll';
+import { Employee, DTRInput, Payslip, RateType } from '../types/Payroll';
 import { computeSSS, computePhilhealth, computePagibig, toPerPeriod, ContribRates, CONTRIB_DEFAULTS } from './governmentContrib';
 import { annualize, computePerPeriodTax } from './taxTable';
+
+// ─── Rate Basis ────────────────────────────────────────────────────────────
+
+/**
+ * Resolve an employee's rate basis. When unset it falls back to the historical
+ * convention (FIELD→DAILY, OFFICE→MONTHLY) so existing records are unchanged.
+ */
+export function resolveRateType(emp: Pick<Employee, 'rateType' | 'employeeType'>): RateType {
+  return emp.rateType ?? (emp.employeeType === 'FIELD' ? 'DAILY' : 'MONTHLY');
+}
 
 // ─── Basic Pay ───────────────────────────────────────────────────────────────
 
 /**
  * Compute basic pay.
- * FIELD: dailyRate × workingDays
- * OFFICE: monthlyRate ÷ 2 (semi-monthly cut-off)
+ * DAILY basis: dailyRate × workingDays
+ * MONTHLY basis: monthlyRate ÷ 2 (semi-monthly cut-off)
  */
 export function computeBasicPay(employee: Employee, workingDays: number): number {
-  if (employee.employeeType === 'FIELD') {
+  if (resolveRateType(employee) === 'DAILY') {
     return (employee.dailyRate ?? 0) * workingDays;
   }
-  // OFFICE — semi-monthly
+  // MONTHLY — semi-monthly split
   return (employee.monthlyRate ?? 0) / 2;
 }
 
@@ -142,7 +152,10 @@ export function computePayslip(
 ): Payslip {
   const emp = dtr.employee;
   const dailyRate = emp.dailyRate ?? 0;
-  const isField = emp.employeeType === 'FIELD';
+  // Premiums (OT / holiday / night-diff / tardiness) apply only to a DAILY rate
+  // basis; a monthly salary is treated as all-inclusive. Rate basis, not the
+  // FIELD/OFFICE classification, drives this.
+  const isDaily = resolveRateType(emp) === 'DAILY';
   // Per-employee toggles (absent = enabled, preserving legacy behavior).
   const payOvertime = emp.applyOvertimePay !== false;
   const applyDeductions = emp.applyDeductions !== false;
@@ -154,36 +167,36 @@ export function computePayslip(
   const mealAllowance = computeMealAllowance(emp, dtr.workingDays);
 
   // OT pay (zeroed when the employee's contract has no OT; hours stay recorded)
-  const otPayRegular = isField && payOvertime ? computeOTRegular(dailyRate, dtr.overtimeHours) : 0;
-  const otPayRestDay = isField && payOvertime
+  const otPayRegular = isDaily && payOvertime ? computeOTRegular(dailyRate, dtr.overtimeHours) : 0;
+  const otPayRestDay = isDaily && payOvertime
     ? computeOTRestDay(dailyRate, dtr.restDayOTHours ?? 0)
       + computeOTSpecialHolidayRestDay(dailyRate, dtr.specialHolidayRestDayOTHours ?? 0)
     : 0;
-  const otPayRegularHoliday = isField && payOvertime
+  const otPayRegularHoliday = isDaily && payOvertime
     ? computeOTRegularHoliday(dailyRate, dtr.regularHolidayOTHours ?? 0)
       + computeOTRegularHolidayRestDay(dailyRate, dtr.regularHolidayRestDayOTHours ?? 0)
     : 0;
 
   // Holiday pay
-  const regularHolidayPay = isField
+  const regularHolidayPay = isDaily
     ? (dtr.regularHolidayDays ?? 0) * computeRegularHolidayPay(dailyRate, true)
       + (dtr.regularHolidayRestDayDays ?? 0) * computeRegularHolidayRestDayPay(dailyRate)
     : 0;
-  const specialHolidayPay = isField
+  const specialHolidayPay = isDaily
     ? (dtr.specialHolidayDays ?? 0) * computeSpecialHolidayPay(dailyRate, true)
       + (dtr.specialHolidayRestDayDays ?? 0) * computeSpecialHolidayRestDayPay(dailyRate)
     : 0;
 
   // Night differential
-  const nightDifferential = isField ? computeNightDiff(dailyRate, dtr.nightDiffHours) : 0;
+  const nightDifferential = isDaily ? computeNightDiff(dailyRate, dtr.nightDiffHours) : 0;
 
   // Tardiness (skipped when the employee opts out of deductions)
-  const tardinessDeduction = applyDeductions && isField
+  const tardinessDeduction = applyDeductions && isDaily
     ? computeTardinessDeduction(dailyRate, dtr.tardinessMinutes)
     : 0;
 
   // Monthly basis for government contributions
-  const monthlyBasic = isField
+  const monthlyBasic = isDaily
     ? dailyRate * 26 // standard 26 working days/month
     : emp.monthlyRate ?? 0;
 

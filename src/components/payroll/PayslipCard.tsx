@@ -3,6 +3,7 @@ import { Box, Button, Divider, GlobalStyles, Typography } from '@mui/material';
 import PrintIcon from '@mui/icons-material/Print';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { Payslip } from '../../types/Payroll';
+import { resolveRateType } from '../../utils/payrollEngine';
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
@@ -26,7 +27,7 @@ interface Props {
 
 const PayslipCard: React.FC<Props> = ({ payslip: s, onBack, canSeeRate = true }) => {
   const emp = s.employeeSnapshot;
-  const rate = emp.employeeType === 'FIELD'
+  const rate = resolveRateType(emp) === 'DAILY'
     ? `₱${fmt(emp.dailyRate ?? 0)}/day`
     : `₱${fmt(emp.monthlyRate ?? 0)}/mo`;
 

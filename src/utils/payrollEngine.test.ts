@@ -1,4 +1,4 @@
-import { computePayslip } from './payrollEngine';
+import { computePayslip, resolveRateType } from './payrollEngine';
 import { DTRInput } from '../types/Payroll';
 import { CONTRIB_DEFAULTS } from './governmentContrib';
 
@@ -184,5 +184,59 @@ describe('Payroll Engine Unit Tests', () => {
     const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
     expect(payslip.totalDeductions).toBeGreaterThan(0);
     expect(payslip.netPay).toBeLessThan(payslip.grossPay);
+  });
+
+  // ── Rate basis: DAILY vs MONTHLY, independent of Field/Office ──────────────
+
+  test('13. resolveRateType defaults from employeeType, explicit wins', () => {
+    expect(resolveRateType({ employeeType: 'FIELD' })).toBe('DAILY');
+    expect(resolveRateType({ employeeType: 'OFFICE' })).toBe('MONTHLY');
+    expect(resolveRateType({ employeeType: 'OFFICE', rateType: 'DAILY' })).toBe('DAILY');
+    expect(resolveRateType({ employeeType: 'FIELD', rateType: 'MONTHLY' })).toBe('MONTHLY');
+  });
+
+  test('14. monthly-rate FIELD employee: pay = monthly/2, no premiums', () => {
+    const monthlyFieldEmp = {
+      ...fieldEmp,
+      rateType: 'MONTHLY' as const,
+      monthlyRate: 26000,
+      dailyRate: 1000, // present but ignored for a monthly basis
+      applyOvertimePay: true,
+    };
+    const dtr: DTRInput = {
+      ...baseDtr,
+      employee: monthlyFieldEmp,
+      workingDays: 10,
+      overtimeHours: 8,
+      regularHolidayDays: 1,
+      nightDiffHours: 4,
+    };
+    const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
+    expect(payslip.basicPay).toBeCloseTo(13000.00, 2); // 26000 / 2
+    // No daily premiums for a monthly basis, even with hours and OT enabled
+    expect(payslip.otPayRegular).toBeCloseTo(0.00, 2);
+    expect(payslip.regularHolidayPay).toBeCloseTo(0.00, 2);
+    expect(payslip.nightDifferential).toBeCloseTo(0.00, 2);
+    // Government contributions based on the monthly salary, still deducted
+    expect(payslip.empSSS).toBeGreaterThan(0);
+  });
+
+  test('15. daily-rate OFFICE employee: pay = daily×days, premiums apply', () => {
+    const dailyOfficeEmp = {
+      ...fieldEmp,
+      employeeType: 'OFFICE' as const,
+      rateType: 'DAILY' as const,
+      dailyRate: 1000,
+      monthlyRate: 26000,
+    };
+    const dtr: DTRInput = {
+      ...baseDtr,
+      employee: dailyOfficeEmp,
+      workingDays: 10,
+      overtimeHours: 1,
+    };
+    const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
+    expect(payslip.basicPay).toBeCloseTo(10000.00, 2); // 1000 × 10
+    expect(payslip.otPayRegular).toBeCloseTo(156.25, 2); // 1000/8 × 1.25
   });
 });

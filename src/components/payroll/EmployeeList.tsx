@@ -9,6 +9,7 @@ import PersonOffIcon from '@mui/icons-material/PersonOff';
 import { Employee } from '../../types/Payroll';
 import type { User } from '../../types/User';
 import { getEmployees, createEmployee, updateEmployee, deactivateEmployee } from '../../utils/firebasePayroll';
+import { resolveRateType } from '../../utils/payrollEngine';
 import { useAuth } from '../../contexts/AuthContext';
 import EmployeeForm from './EmployeeForm';
 
@@ -110,7 +111,7 @@ const EmployeeList: React.FC = () => {
                       color={emp.employeeType === 'FIELD' ? 'warning' : 'info'} />
                   </TableCell>
                   <TableCell>
-                    {emp.employeeType === 'FIELD' ? fmt(emp.dailyRate) + '/day' : fmt(emp.monthlyRate) + '/mo'}
+                    {resolveRateType(emp) === 'DAILY' ? fmt(emp.dailyRate) + '/day' : fmt(emp.monthlyRate) + '/mo'}
                   </TableCell>
                   <TableCell>{fmt(emp.mealAllowance)}/day</TableCell>
                   <TableCell>{emp.payFrequency.replace('_', '-')}</TableCell>

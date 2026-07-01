@@ -3,7 +3,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField, MenuItem, Grid, FormControlLabel, Switch,
 } from '@mui/material';
-import { Employee, EmployeeType, PayFrequency } from '../../types/Payroll';
+import { Employee, EmployeeType, PayFrequency, RateType } from '../../types/Payroll';
 import type { User } from '../../types/User';
 
 const DESIGNATIONS = ['Helper', 'Skilled Worker', 'Foreman', 'Supervisor', 'Engineer', 'Engineering Manager', 'Project Manager', 'Admin', 'Accounting', 'Other'];
@@ -24,6 +24,7 @@ const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
   designation: '',
   employeeType: 'FIELD',
   payFrequency: 'WEEKLY',
+  rateType: 'DAILY',
   dailyRate: 0,
   monthlyRate: 0,
   mealAllowance: 0,
@@ -56,6 +57,10 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEdi
     setForm((f) => ({ ...f, [field]: val }));
   };
 
+  // Resolved rate basis (falls back to the FIELD→DAILY / OFFICE→MONTHLY default
+  // for older records that predate the explicit rateType field).
+  const rateType: RateType = form.rateType ?? (form.employeeType === 'FIELD' ? 'DAILY' : 'MONTHLY');
+
   const handleSave = async () => {
     if (!form.name || !form.employeeNumber || !form.designation) return;
     setSaving(true);
@@ -83,9 +88,20 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEdi
           </Grid>
           <Grid size={{ xs: 12, sm: 3 }}>
             <TextField fullWidth select label="Type" value={form.employeeType}
-              onChange={(e) => setForm((f) => ({ ...f, employeeType: e.target.value as EmployeeType }))}>
+              onChange={(e) => {
+                const employeeType = e.target.value as EmployeeType;
+                // Default the rate basis to the type's convention; still overridable below.
+                setForm((f) => ({ ...f, employeeType, rateType: employeeType === 'FIELD' ? 'DAILY' : 'MONTHLY' }));
+              }}>
               <MenuItem value="FIELD">Field</MenuItem>
               <MenuItem value="OFFICE">Office</MenuItem>
+            </TextField>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 3 }}>
+            <TextField fullWidth select label="Rate Basis" value={rateType}
+              onChange={(e) => setForm((f) => ({ ...f, rateType: e.target.value as RateType }))}>
+              <MenuItem value="DAILY">Daily</MenuItem>
+              <MenuItem value="MONTHLY">Monthly</MenuItem>
             </TextField>
           </Grid>
           <Grid size={{ xs: 12, sm: 3 }}>
@@ -107,12 +123,12 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEdi
             </Grid>
           )}
 
-          {form.employeeType === 'FIELD' && canEditRate && (
+          {rateType === 'DAILY' && canEditRate && (
             <Grid size={{ xs: 12, sm: 4 }}>
               <TextField fullWidth label="Daily Rate (₱)" type="number" value={form.dailyRate} onChange={set('dailyRate')} inputProps={{ min: 0 }} />
             </Grid>
           )}
-          {form.employeeType === 'OFFICE' && canEditRate && (
+          {rateType === 'MONTHLY' && canEditRate && (
             <Grid size={{ xs: 12, sm: 4 }}>
               <TextField fullWidth label="Monthly Rate (₱)" type="number" value={form.monthlyRate} onChange={set('monthlyRate')} inputProps={{ min: 0 }} />
             </Grid>
