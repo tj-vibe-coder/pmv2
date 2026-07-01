@@ -22,10 +22,11 @@ import {
 import {
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
+  ArrowBack as ArrowBackIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import type { DTREntry, DayType } from '../../types/Payroll';
-import { needsTimeInput, isPaidDate, type PaidPeriod } from '../../utils/dtr';
+import { isPaidDate, type PaidPeriod } from '../../utils/dtr';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 
@@ -87,9 +88,19 @@ interface DayRow {
   dirty: boolean; // changed since load
 }
 
-const DTRPage: React.FC = () => {
+interface DTRPageProps {
+  /** Admin view: the linked user-account id of the employee whose DTR to show/edit. Defaults to the logged-in user. */
+  employeeId?: string;
+  /** Admin view: display name shown in the header. */
+  employeeName?: string;
+  /** Admin view: back handler to return to the employee list. */
+  onBack?: () => void;
+}
+
+const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeName, onBack }) => {
   const { user } = useAuth();
-  const employeeId = user?.id != null ? String(user.id) : '';
+  const isAdminView = propEmployeeId != null;
+  const employeeId = propEmployeeId ?? (user?.id != null ? String(user.id) : '');
 
   const [viewMonth, setViewMonth] = useState(() => new Date().getMonth());
   const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
@@ -124,6 +135,9 @@ const DTRPage: React.FC = () => {
   // Fetch the employee's own payslips to know which dates are already paid.
   // Best-effort: a failure just means no paid-date highlighting.
   const fetchPaidPeriods = useCallback(async () => {
+    // my-payslips is self-only; skip in admin view so we don't overlay the
+    // admin's own paid periods onto another employee's DTR.
+    if (isAdminView) { setPaidPeriods([]); return; }
     try {
       const token = localStorage.getItem('netpacific_token');
       const res = await fetch(`${API_BASE}/api/payroll/my-payslips`, {
@@ -139,7 +153,7 @@ const DTRPage: React.FC = () => {
     } catch {
       /* ignore — highlighting is non-critical */
     }
-  }, []);
+  }, [isAdminView]);
 
   useEffect(() => { fetchPaidPeriods(); }, [fetchPaidPeriods]);
 
@@ -273,6 +287,18 @@ const DTRPage: React.FC = () => {
 
   return (
     <Box>
+      {/* Admin view header */}
+      {isAdminView && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+          <Button startIcon={<ArrowBackIcon />} onClick={onBack} sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}>
+            Employees
+          </Button>
+          <Typography sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary, fontSize: { xs: '1rem', sm: '1.25rem' } }}>
+            {employeeName || 'Employee'} — DTR
+          </Typography>
+        </Box>
+      )}
+
       {feedback && (
         <Alert severity={feedback.severity} onClose={() => setFeedback(null)} sx={{ mb: 1.5 }}>
           {feedback.message}
@@ -373,18 +399,7 @@ const DTRPage: React.FC = () => {
                       fullWidth
                     />
                   </TableCell>
-                  <TableCell
-                    sx={{
-                      ...cellSx,
-                      width: 60,
-                      textAlign: 'right',
-                      fontWeight: 600,
-                      ...(!paid && needsTimeInput(row)
-                        ? { bgcolor: '#ffcdd2', color: '#c62828' }
-                        : {}),
-                    }}
-                    title={!paid && needsTimeInput(row) ? 'No time entered' : undefined}
-                  >
+                  <TableCell sx={{ ...cellSx, width: 60, textAlign: 'right', fontWeight: 600 }}>
                     {row.regularHours}
                   </TableCell>
                   <TableCell sx={{ ...cellSx, width: 55 }}>

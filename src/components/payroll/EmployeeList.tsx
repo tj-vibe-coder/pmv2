@@ -6,6 +6,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import PersonOffIcon from '@mui/icons-material/PersonOff';
+import EventNoteIcon from '@mui/icons-material/EventNote';
 import { Employee } from '../../types/Payroll';
 import type { User } from '../../types/User';
 import { getEmployees, createEmployee, updateEmployee, deactivateEmployee } from '../../utils/firebasePayroll';
@@ -20,7 +21,12 @@ const fmt = (n?: number) =>
     ? new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n)
     : '—';
 
-const EmployeeList: React.FC = () => {
+interface EmployeeListProps {
+  /** When provided, shows a "View DTR" action per employee (admin/superadmin only). */
+  onViewDTR?: (emp: Employee) => void;
+}
+
+const EmployeeList: React.FC<EmployeeListProps> = ({ onViewDTR }) => {
   const { user } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -120,6 +126,11 @@ const EmployeeList: React.FC = () => {
                       color={emp.isActive ? 'success' : 'default'} />
                   </TableCell>
                   <TableCell>
+                    {onViewDTR && emp.userId && (
+                      <IconButton size="small" title="View DTR" onClick={() => onViewDTR(emp)}>
+                        <EventNoteIcon fontSize="small" />
+                      </IconButton>
+                    )}
                     <IconButton size="small" onClick={() => { setEditing(emp); setFormOpen(true); }}>
                       <EditIcon fontSize="small" />
                     </IconButton>
