@@ -171,7 +171,7 @@ const ReimbursementDashboard: React.FC = () => {
                     <Checkbox checked={selectedIds.includes(r.id)} onChange={() => toggleOne(r.id)} />
                   </TableCell>
                   <TableCell>{r.form_no || '—'}</TableCell>
-                  <TableCell>{r.full_name || r.employee_name || r.username || '—'}</TableCell>
+                  <TableCell>{r.employee_name || r.full_name || r.username || '—'}</TableCell>
                   <TableCell>{r.date_of_submission ? formatDate(r.date_of_submission) : formatDate(r.created_at)}</TableCell>
                   <TableCell align="right">{formatPHP(Number(r.total_amount) || 0)}</TableCell>
                 </TableRow>

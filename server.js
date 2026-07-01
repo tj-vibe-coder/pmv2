@@ -984,12 +984,45 @@ async function syncExpenseFundingInvestment(id, collection, doc) {
   try {
     const fs = doc && doc.fundingSource;
     const isOutOfPocket = fs && fs.type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim();
-    if (isOutOfPocket && typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()) {
+    const linkedId = isOutOfPocket && typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()
+      ? fs.linkedInvestmentId.trim() : null;
+
+    // Clear the back-reference off any investment row this expense used to point at, if it no
+    // longer does (funding source edited away/removed/re-linked elsewhere). Both fields are
+    // plain equality filters, so this is served by automatic single-field indexes (no composite
+    // index needed) — same idiom as the project_expenses equality-only queries elsewhere.
+    const staleLinked = await db.collection('investments')
+      .where('linkedExpenseId', '==', id)
+      .where('linkedExpenseCollection', '==', collection)
+      .get();
+    await Promise.all(staleLinked.docs
+      .filter(d => d.id !== linkedId)
+      .map(d => d.ref.update({
+        linkedExpenseId: FieldValue.delete(),
+        linkedExpenseCollection: FieldValue.delete(),
+        linkedExpenseProjectId: FieldValue.delete(),
+      })));
+
+    if (linkedId) {
       // Linked to an EXISTING investments row (e.g. a lump-sum capital contribution) instead
-      // of a one-off auto-created one — nothing to write here beyond what's already on the
-      // expense doc itself. Still clean up any stale auto-created row from a prior state
-      // (e.g. the expense used to be a standalone out-of-pocket entry before it was linked).
+      // of a one-off auto-created one. Those rows are usually pencil-booked before the real
+      // receipt exists — no firm date/description — so once an actual expense is linked back,
+      // treat the expense as authoritative for date/description and store the back-reference
+      // so the ledger can link to the source expense. Still clean up any stale auto-created
+      // row from a prior state (e.g. the expense used to be a standalone out-of-pocket entry).
       await invRef.delete();
+      const linkedRef = db.collection('investments').doc(linkedId);
+      const linkedSnap = await linkedRef.get();
+      if (linkedSnap.exists) {
+        await linkedRef.update({
+          date: doc.date,
+          description: doc.description || linkedSnap.data().description || '',
+          linkedExpenseId: id,
+          linkedExpenseCollection: collection,
+          linkedExpenseProjectId: collection === 'project_expenses' ? (doc.projectId || null) : null,
+          updated_at: new Date().toISOString(),
+        });
+      }
     } else if (isOutOfPocket) {
       await invRef.set({
         date: doc.date,
@@ -1000,6 +1033,7 @@ async function syncExpenseFundingInvestment(id, collection, doc) {
         sourceType: 'expense_sync',
         sourceExpenseId: id,
         sourceCollection: collection,
+        sourceExpenseProjectId: collection === 'project_expenses' ? (doc.projectId || null) : null,
         // Anchor to the expense's own createdAt (stable across edits, no extra read)
         // rather than re-stamping "now" on every upsert.
         created_at: doc.createdAt || new Date().toISOString(),

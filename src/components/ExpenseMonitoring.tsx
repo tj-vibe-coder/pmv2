@@ -49,7 +49,7 @@ import {
   Area,
   AreaChart
 } from 'recharts';
-import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, ExpandMore as ExpandMoreIcon, SwapHoriz as PromoteIcon } from '@mui/icons-material';
+import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, ExpandMore as ExpandMoreIcon, SwapHoriz as PromoteIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import { getBudgets } from '../utils/projectBudgetStorage';
@@ -61,6 +61,7 @@ import { blobToBase64 } from '../utils/receipts/imageCompress';
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import ReceiptCropper from './ReceiptCropper';
+import ScanBatch from './ScanBatch';
 import ScanWithPhoneButton from './ScanWithPhoneButton';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -211,6 +212,7 @@ const ExpenseMonitoring: React.FC = () => {
   const scanInputRef = useRef<HTMLInputElement>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; severity: 'success' | 'error' | 'warning'; message: string }>({ open: false, severity: 'success', message: '' });
+  const [scanBatchOpen, setScanBatchOpen] = useState(false);
   const [expensesDialogProject, setExpensesDialogProject] = useState<Project | null>(null);
   const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
   const [migrating, setMigrating] = useState(false);
@@ -1395,14 +1397,24 @@ const ExpenseMonitoring: React.FC = () => {
           </Box>
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
-          <IconButton
-            color="primary"
-            onClick={() => scanInputRef.current?.click()}
-            disabled={isScanning}
-            title="Scan receipt with AI"
-          >
-            {isScanning ? <CircularProgress size={24} /> : <PhotoCameraIcon />}
-          </IconButton>
+          <Box>
+            <IconButton
+              color="primary"
+              onClick={() => scanInputRef.current?.click()}
+              disabled={isScanning}
+              title="Scan receipt with AI"
+            >
+              {isScanning ? <CircularProgress size={24} /> : <PhotoCameraIcon />}
+            </IconButton>
+            <IconButton
+              color="primary"
+              onClick={() => setScanBatchOpen(true)}
+              disabled={!expenseProjectId}
+              title={expenseProjectId ? 'Scan multiple receipts' : 'Select a project first'}
+            >
+              <PhotoLibraryIcon />
+            </IconButton>
+          </Box>
           <Box>
             <Button onClick={() => setAddExpenseOpen(false)}>Cancel</Button>
             <Button
@@ -1432,6 +1444,31 @@ const ExpenseMonitoring: React.FC = () => {
           {editUrl && editQuad && (
             <ReceiptCropper imageUrl={editUrl} initialQuad={editQuad} busy={isScanning} onConfirm={confirmScanCrop} onRetake={retakeScan} />
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Multi-upload: pick several receipt photos, crop/parse each, save all at once */}
+      <Dialog open={scanBatchOpen} onClose={() => setScanBatchOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Scan Multiple Receipts</DialogTitle>
+        <DialogContent>
+          {scanBatchOpen && (() => {
+            const project = allProjects.find((p) => String(p.id) === expenseProjectId);
+            if (!project) return <Alert severity="warning">Select a project before scanning receipts.</Alert>;
+            return (
+              <ScanBatch
+                mode="project"
+                selectedProject={{ id: String(project.id), project_no: project.project_no || String(project.id), project_name: project.project_name, account_name: project.account_name }}
+                categories={PROJECT_EXPENSE_CATEGORIES}
+                onCancel={() => setScanBatchOpen(false)}
+                onComplete={(n) => {
+                  setScanBatchOpen(false);
+                  setAddExpenseOpen(false);
+                  setScanSnackbar({ open: true, severity: 'success', message: `Saved ${n} receipt${n === 1 ? '' : 's'}.` });
+                  fetchExpenses();
+                }}
+              />
+            );
+          })()}
         </DialogContent>
       </Dialog>
 

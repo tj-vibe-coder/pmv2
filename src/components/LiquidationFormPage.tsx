@@ -29,7 +29,7 @@ import {
   Checkbox,
 } from '@mui/material';
 import { useLocation } from 'react-router-dom';
-import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon, WarningAmber as WarningAmberIcon } from '@mui/icons-material';
+import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, WarningAmber as WarningAmberIcon } from '@mui/icons-material';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import {
@@ -47,6 +47,7 @@ import { Project } from '../types/Project';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
 import ScanToPhoneDialog, { type DeliveredReceipt } from './ScanToPhoneDialog';
+import ScanBatch, { type LiquidationScanItem } from './ScanBatch';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 import { LIQUIDATION_CATEGORIES } from '../data/financeCategories';
 
@@ -260,6 +261,7 @@ export default function LiquidationFormPage() {
   const receiptRowIdRef = useRef<string | null>(null);
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
   const [scanDialog, setScanDialog] = useState<{ open: boolean; rowId: string | null }>({ open: false, rowId: null });
+  const [scanBatchOpen, setScanBatchOpen] = useState(false);
   const receiptsFolderRef = useRef<{ key: string; driveId: string; folderId: string } | null>(null);
   const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken, login: oneDriveLogin } = useOneDriveAuth();
   const [saving, setSaving] = useState(false);
@@ -295,12 +297,18 @@ export default function LiquidationFormPage() {
     });
   }, [rows, sortConfig]);
 
+  // Default the Name field to the logged-in user only when it's still empty
+  // (fresh form). Must NOT depend on `employeeName` itself — a preparer typing
+  // someone else's name (or a loaded draft's employee_name) would otherwise be
+  // stomped back to the logged-in user's name on every keystroke/load.
   useEffect(() => {
+    if (employeeName) return;
     const fullName = user?.full_name?.trim();
     const fallback = user?.username;
     if (fullName) setEmployeeName(fullName);
-    else if (fallback && !employeeName) setEmployeeName(fallback);
-  }, [employeeName, user?.full_name, user?.username]);
+    else if (fallback) setEmployeeName(fallback);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.full_name, user?.username]);
 
   useEffect(() => {
     dataService.getProjects().then(setProjects);
@@ -368,36 +376,64 @@ export default function LiquidationFormPage() {
     return receiptsFolderRef.current;
   };
 
+  const attachReceiptFile = async (rowId: string, raw: File) => {
+    const file = await convertHeicToJpeg(raw);
+    const thumbnailDataUrl = file.type.startsWith('image/') ? await generateThumbnail(file) : '';
+    const rec: ReceiptAttachment = {
+      id: `rcpt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      rowId,
+      filename: file.name,
+      thumbnailDataUrl: thumbnailDataUrl || undefined,
+      uploadStatus: 'uploading',
+      file,
+    };
+    setReceipts((prev) => [...prev, rec]);
+    try {
+      const folder = await ensureReceiptsFolder();
+      const odToken = folder ? await getOneDriveToken() : null;
+      if (!folder || !odToken) throw new Error('OneDrive not connected');
+      // Short unique prefix avoids two same-named phone photos overwriting
+      // each other (Graph default conflict behavior is replace).
+      const uploadName = `${rec.id.slice(-6)}_${sanitizeForOneDrive(file.name)}`;
+      const item = await uploadFileToFolderById(odToken, folder.driveId, folder.folderId, uploadName, file);
+      setReceipts((prev) => prev.map((r) => r.id === rec.id
+        ? { ...r, uploadStatus: 'done', oneDriveId: item.id, webUrl: item.webUrl, uploadedAt: new Date().toISOString() }
+        : r));
+    } catch {
+      // Kept in memory — still embeds in the PDF, but won't survive reload.
+      setReceipts((prev) => prev.map((r) => (r.id === rec.id ? { ...r, uploadStatus: 'error' } : r)));
+    }
+  };
+
   const attachReceipts = async (rowId: string, files: FileList | null) => {
     if (!rowId || !files || files.length === 0) return;
     for (const raw of Array.from(files)) {
-      const file = await convertHeicToJpeg(raw);
-      const thumbnailDataUrl = file.type.startsWith('image/') ? await generateThumbnail(file) : '';
-      const rec: ReceiptAttachment = {
-        id: `rcpt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        rowId,
-        filename: file.name,
-        thumbnailDataUrl: thumbnailDataUrl || undefined,
-        uploadStatus: 'uploading',
-        file,
-      };
-      setReceipts((prev) => [...prev, rec]);
-      try {
-        const folder = await ensureReceiptsFolder();
-        const odToken = folder ? await getOneDriveToken() : null;
-        if (!folder || !odToken) throw new Error('OneDrive not connected');
-        // Short unique prefix avoids two same-named phone photos overwriting
-        // each other (Graph default conflict behavior is replace).
-        const uploadName = `${rec.id.slice(-6)}_${sanitizeForOneDrive(file.name)}`;
-        const item = await uploadFileToFolderById(odToken, folder.driveId, folder.folderId, uploadName, file);
-        setReceipts((prev) => prev.map((r) => r.id === rec.id
-          ? { ...r, uploadStatus: 'done', oneDriveId: item.id, webUrl: item.webUrl, uploadedAt: new Date().toISOString() }
-          : r));
-      } catch {
-        // Kept in memory — still embeds in the PDF, but won't survive reload.
-        setReceipts((prev) => prev.map((r) => (r.id === rec.id ? { ...r, uploadStatus: 'error' } : r)));
-      }
+      await attachReceiptFile(rowId, raw);
     }
+  };
+
+  // Each receipt scanned via the desktop multi-upload batch becomes its own new
+  // row (pre-filled from the AI parse) plus an attached receipt — mirroring how
+  // `handlePhoneReceipt` below treats receipts delivered from a phone.
+  const handleScanBatchItem = async (item: LiquidationScanItem): Promise<boolean> => {
+    const f = item.fields;
+    const nr: LiquidationRow = {
+      ...newRow('', ''),
+      date: f.date || new Date().toISOString().slice(0, 10),
+      category: f.category || '',
+      amount: Number(f.amount) > 0 ? Number(f.amount) : 0,
+      particulars: f.description || f.supplier || '',
+      deductible: typeof f.deductible === 'boolean' ? f.deductible : true,
+      deductibleReason: f.deductibleReason || undefined,
+      supplier: f.supplier || '',
+      invoiceNo: f.invoiceNumber || '',
+      customerInfoIssues: f.customerIssues.length ? f.customerIssues : undefined,
+    };
+    setRows((prev) => [...prev, nr]);
+    const blob = item.croppedBlob ?? item.rawFile;
+    const file = blob instanceof File ? blob : new File([blob], item.rawFile.name || `receipt-${Date.now()}.jpg`, { type: 'image/jpeg' });
+    await attachReceiptFile(nr.id, file);
+    return true;
   };
 
   const removeReceipt = (id: string) => setReceipts((prev) => prev.filter((r) => r.id !== id));
@@ -1285,6 +1321,15 @@ export default function LiquidationFormPage() {
           </Button>
           <Button
             variant="outlined"
+            startIcon={<PhotoLibraryIcon />}
+            onClick={() => setScanBatchOpen(true)}
+            disabled={isViewingSubmitted}
+            sx={{ borderColor: theme.primary, color: theme.primary, '&:hover': { borderColor: theme.secondary, color: theme.secondary } }}
+          >
+            Scan Multiple
+          </Button>
+          <Button
+            variant="outlined"
             startIcon={<ImportIcon />}
             onClick={() => fileInputRef.current?.click()}
             sx={{ borderColor: theme.primary, color: theme.primary, '&:hover': { borderColor: theme.secondary, color: theme.secondary } }}
@@ -1911,6 +1956,24 @@ export default function LiquidationFormPage() {
           setActiveScanJob({ pairingToken, received: 0 });
         }}
       />
+      <Dialog open={scanBatchOpen} onClose={() => setScanBatchOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Scan Multiple Receipts</DialogTitle>
+        <DialogContent>
+          {scanBatchOpen && (
+            <ScanBatch
+              mode="liquidation"
+              selectedProject={null}
+              categories={LIQUIDATION_CATEGORIES}
+              onLiquidationItem={(item: LiquidationScanItem) => handleScanBatchItem(item)}
+              onCancel={() => setScanBatchOpen(false)}
+              onComplete={(n) => {
+                setScanBatchOpen(false);
+                setScanSnackbar({ open: true, severity: 'success', message: `Added ${n} receipt${n === 1 ? '' : 's'} as new row${n === 1 ? '' : 's'}.` });
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
       <Snackbar
         open={scanSnackbar.open}
         autoHideDuration={5000}

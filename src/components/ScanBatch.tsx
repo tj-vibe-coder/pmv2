@@ -57,7 +57,7 @@ enum BatchStage {
   done = 'done',
 }
 
-interface BatchItemFields {
+export interface BatchItemFields {
   amount: string;
   date: string;
   category: string;
@@ -89,8 +89,17 @@ interface ScanProject {
   account_name?: string;
 }
 
+// A batch item handed to a caller-supplied save handler when mode === 'liquidation'
+// (liquidation rows live in the form's local state, not a REST resource, so there's
+// no fixed endpoint to POST to like the project/overhead modes have).
+export interface LiquidationScanItem {
+  rawFile: File;
+  croppedBlob?: Blob;
+  fields: BatchItemFields;
+}
+
 interface ScanBatchProps {
-  mode: 'project' | 'overhead';
+  mode: 'project' | 'overhead' | 'liquidation';
   selectedProject: ScanProject | null;
   onCancel: () => void;
   onComplete: (savedCount: number) => void;
@@ -98,6 +107,12 @@ interface ScanBatchProps {
   pairingToken?: string | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   scanContext?: any;
+  // Category list to validate the AI's suggested category against and to offer in
+  // the review step's dropdown. Defaults to the full EXPENSE_CATEGORIES union.
+  categories?: readonly string[];
+  // Required when mode === 'liquidation': receives each item once cropped/parsed and
+  // returns whether it was successfully added to the liquidation (e.g. as a new row).
+  onLiquidationItem?: (item: LiquidationScanItem) => Promise<boolean>;
 }
 
 const emptyFields = (): BatchItemFields => ({
@@ -106,7 +121,8 @@ const emptyFields = (): BatchItemFields => ({
   deductible: null, deductibleReason: null, customerIssues: [], lowConf: false,
 });
 
-const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, onComplete, deliverToDesktop, pairingToken, scanContext }) => {
+const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, onComplete, deliverToDesktop, pairingToken, scanContext, categories, onLiquidationItem }) => {
+  const categoryList = categories ?? EXPENSE_CATEGORIES;
   const [stage, setStage] = useState<BatchStage>(BatchStage.select);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [items, setItems] = useState<BatchItem[]>([]);
@@ -213,7 +229,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
         const fields: BatchItemFields = {
           amount: typeof amt === 'number' ? String(amt) : '',
           date: pr.date || '',
-          category: (EXPENSE_CATEGORIES as readonly string[]).includes(sugCat) ? sugCat : '',
+          category: categoryList.includes(sugCat) ? sugCat : '',
           description: pr.description || pr.vendor || '',
           supplier: pr.vendor || '',
           invoiceNumber: pr.invoiceNumber || '',
@@ -295,6 +311,15 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   const deleteItem = (id: string) => setItems((prev) => prev.filter((it) => it.id !== id));
 
   const saveOne = async (item: BatchItem, idx: number): Promise<BatchItem> => {
+    if (mode === 'liquidation') {
+      if (!onLiquidationItem) return { ...item, saveError: 'Liquidation handler not configured.' };
+      try {
+        const ok = await onLiquidationItem({ rawFile: item.rawFile, croppedBlob: item.croppedBlob, fields: item.fields });
+        return ok ? { ...item, isSaved: true, saveError: undefined } : { ...item, saveError: 'Could not add to liquidation.' };
+      } catch (err) {
+        return { ...item, saveError: err instanceof Error ? err.message : 'Save failed' };
+      }
+    }
     if (!deliverToDesktop && mode === 'project' && !selectedProject) {
       return { ...item, saveError: 'No project selected.' };
     }
@@ -485,7 +510,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   const hasSaveErrors = visibleItems.some((it) => it.saveError);
   const failedCount = visibleItems.filter((it) => it.saveError).length;
   const savableCount = visibleItems.filter((it) => Number(it.fields.amount) > 0).length;
-  const canSaveAll = !saving && savableCount > 0 && (deliverToDesktop || mode === 'overhead' || !!selectedProject);
+  const canSaveAll = !saving && savableCount > 0 && (deliverToDesktop || mode === 'overhead' || mode === 'liquidation' || !!selectedProject);
   const btnLabel = saving ? 'Saving…' : hasSaveErrors ? `Retry Failed (${failedCount})` : `Save All (${savableCount})`;
 
   return (
@@ -543,7 +568,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
               <TextField fullWidth size="small" select label="Category" value={item.fields.category}
                 onChange={(e) => updateField(item.id, { category: e.target.value })} sx={{ mb: 1.5 }}>
                 <MenuItem value="">— Select category —</MenuItem>
-                {EXPENSE_CATEGORIES.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+                {categoryList.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
               </TextField>
               <TextField fullWidth size="small" label="Description" value={item.fields.description}
                 onChange={(e) => updateField(item.id, { description: e.target.value })}

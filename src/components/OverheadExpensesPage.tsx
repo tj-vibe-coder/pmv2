@@ -35,6 +35,7 @@ import {
   Add as AddIcon,
   Delete as DeleteIcon,
   PhotoCamera as PhotoCameraIcon,
+  PhotoLibrary as PhotoLibraryIcon,
   OpenInNew as OpenInNewIcon,
   AccountBalanceWallet as WalletIcon,
   ExpandMore as ExpandMoreIcon,
@@ -45,6 +46,7 @@ import { compressForUpload, blobToBase64 } from '../utils/receipts/imageCompress
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import ReceiptCropper from './ReceiptCropper';
+import ScanBatch from './ScanBatch';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { resolveCorporateDriveId, ensureFolder, uploadFileToFolderById, sanitizeForOneDrive, deleteDriveItem, getDriveItemThumbnailUrl } from '../services/onedriveFolderService';
@@ -114,6 +116,7 @@ const OverheadExpensesPage: React.FC = () => {
   const [editBlob, setEditBlob] = useState<Blob | null>(null);
   const [editQuad, setEditQuad] = useState<Quad | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; severity: 'success' | 'error' | 'warning'; message: string }>({ open: false, severity: 'success', message: '' });
+  const [scanBatchOpen, setScanBatchOpen] = useState(false);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
@@ -595,13 +598,20 @@ const OverheadExpensesPage: React.FC = () => {
           </Box>
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
-          <Tooltip title="Scan receipt with AI">
-            <span>
-              <IconButton color="primary" onClick={() => scanInputRef.current?.click()} disabled={isScanning}>
-                {isScanning ? <CircularProgress size={24} /> : <PhotoCameraIcon />}
+          <Box>
+            <Tooltip title="Scan receipt with AI">
+              <span>
+                <IconButton color="primary" onClick={() => scanInputRef.current?.click()} disabled={isScanning}>
+                  {isScanning ? <CircularProgress size={24} /> : <PhotoCameraIcon />}
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Scan multiple receipts">
+              <IconButton color="primary" onClick={() => setScanBatchOpen(true)}>
+                <PhotoLibraryIcon />
               </IconButton>
-            </span>
-          </Tooltip>
+            </Tooltip>
+          </Box>
           <Box>
             <Button onClick={() => setAddOpen(false)} disabled={savingExpense}>Cancel</Button>
             <Button variant="contained" onClick={handleAdd} disabled={savingExpense || isScanning} sx={{ ml: 1, backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}>
@@ -618,6 +628,27 @@ const OverheadExpensesPage: React.FC = () => {
         <DialogContent>
           {editUrl && editQuad && (
             <ReceiptCropper imageUrl={editUrl} initialQuad={editQuad} busy={isScanning} onConfirm={confirmScanCrop} onRetake={retakeScan} />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Multi-upload: pick several receipt photos, crop/parse each, save all at once */}
+      <Dialog open={scanBatchOpen} onClose={() => setScanBatchOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Scan Multiple Receipts</DialogTitle>
+        <DialogContent>
+          {scanBatchOpen && (
+            <ScanBatch
+              mode="overhead"
+              selectedProject={null}
+              categories={OVERHEAD_CATEGORIES}
+              onCancel={() => setScanBatchOpen(false)}
+              onComplete={(n) => {
+                setScanBatchOpen(false);
+                setAddOpen(false);
+                setSnackbar({ open: true, severity: 'success', message: `Saved ${n} receipt${n === 1 ? '' : 's'}.` });
+                load();
+              }}
+            />
           )}
         </DialogContent>
       </Dialog>
