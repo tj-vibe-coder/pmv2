@@ -3257,8 +3257,11 @@ app.get('/api/dtr/aggregate', async (req, res) => {
       }
       const agg = byEmployee[eid];
       if (!entry.isAbsent) {
-        // Count working days for non-absent entries
-        if (entry.dayType === 'REGULAR') agg.workingDays++;
+        // No inputted hours = no pay. A REGULAR day only counts as a working day
+        // when hours were actually recorded (computed from time-in/out on save, or
+        // entered manually for paid leave). A blank day earns nothing.
+        const hasHours = (Number(entry.regularHours) || 0) > 0;
+        if (entry.dayType === 'REGULAR') { if (hasHours) agg.workingDays++; }
         else if (entry.dayType === 'REST_DAY') { /* rest day doesn't count as working day unless OT */ }
         else if (entry.dayType === 'REGULAR_HOLIDAY') agg.regularHolidayDays++;
         else if (entry.dayType === 'SPECIAL_HOLIDAY') agg.specialHolidayDays++;
