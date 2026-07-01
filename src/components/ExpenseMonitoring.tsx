@@ -57,7 +57,7 @@ import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem
 import { API_BASE } from '../config/api';
 import { PROJECT_EXPENSE_CATEGORIES, INVOICE_TYPES, INVESTORS, type FundingSource } from '../data/financeCategories';
 import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
-import { blobToBase64 } from '../utils/receipts/imageCompress';
+import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress';
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import ReceiptCropper from './ReceiptCropper';
@@ -104,6 +104,7 @@ export interface ProjectExpense {
   vat?: number;
   tin?: string;
   fundingSource?: FundingSource;
+  receiptRef?: { oneDriveId: string; webUrl: string; filename: string };
 }
 
 const loadExpenses = (): ProjectExpense[] => {
@@ -210,7 +211,9 @@ const ExpenseMonitoring: React.FC = () => {
   const [promoting, setPromoting] = useState(false);
   const [promoteError, setPromoteError] = useState('');
   const scanInputRef = useRef<HTMLInputElement>(null);
+  const pendingReceiptRef = useRef<File | null>(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [savingExpense, setSavingExpense] = useState(false);
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; severity: 'success' | 'error' | 'warning'; message: string }>({ open: false, severity: 'success', message: '' });
   const [scanBatchOpen, setScanBatchOpen] = useState(false);
   const [expensesDialogProject, setExpensesDialogProject] = useState<Project | null>(null);
@@ -642,6 +645,8 @@ const ExpenseMonitoring: React.FC = () => {
 
   useEffect(() => () => { if (editUrl) URL.revokeObjectURL(editUrl); }, [editUrl]);
 
+  useEffect(() => { if (!addExpenseOpen) pendingReceiptRef.current = null; }, [addExpenseOpen]);
+
   // Phase 1: pick a photo, auto-detect its corners, and open the crop dialog.
   const handleScanInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -672,6 +677,7 @@ const ExpenseMonitoring: React.FC = () => {
 
   const retakeScan = () => {
     setEdit(null, null);
+    pendingReceiptRef.current = null;
     scanInputRef.current?.click();
   };
 
@@ -681,6 +687,8 @@ const ExpenseMonitoring: React.FC = () => {
     setIsScanning(true);
     try {
       const flattened = await perspectiveCropToBlob(editBlob, quad);
+      const croppedFile = new File([flattened], `receipt-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      pendingReceiptRef.current = croppedFile;
       const imageBase64 = await blobToBase64(flattened);
       const parsed = await parseReceipt(imageBase64, 'image/jpeg');
       const amt = parsed.total ?? parsed.subtotal;
@@ -744,8 +752,33 @@ const ExpenseMonitoring: React.FC = () => {
     if (amount <= 0) return;
     if (expenseFundingType === 'investor_outofpocket' && !expenseFundingInvestor) return;
     const project = allProjects.find((p) => String(p.id) === pid);
+    setSavingExpense(true);
     try {
       const token = localStorage.getItem('netpacific_token');
+      let receiptRef: { oneDriveId: string; webUrl: string; filename: string } | undefined;
+      const pendingFile = pendingReceiptRef.current;
+      if (pendingFile) {
+        try {
+          const compressed = await compressForUpload(pendingFile);
+          const contentBase64 = await blobToBase64(compressed);
+          const year = String(new Date().getFullYear());
+          const filename = `SCAN-${Date.now()}.jpg`;
+          const folderPath = `Project Receipts/${project?.project_no || pid}/${year}`;
+          const upRes = await fetch(`${API_BASE}/api/onedrive/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: JSON.stringify({ folderPath, filename, contentBase64 }),
+          });
+          const upData = await upRes.json().catch(() => ({ ok: false })) as { ok: boolean; id?: string; webUrl?: string };
+          if (upData.ok && upData.id && upData.webUrl) {
+            receiptRef = { oneDriveId: upData.id, webUrl: upData.webUrl, filename };
+          } else {
+            console.warn('[OneDrive] project expense receipt upload failed or returned not ok:', upData);
+          }
+        } catch (err) {
+          console.warn('[OneDrive] project expense receipt upload failed (expense still saved):', err);
+        }
+      }
       const res = await fetch(`${API_BASE}/api/project-expenses`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -756,7 +789,7 @@ const ExpenseMonitoring: React.FC = () => {
           amount,
           date: expenseDate,
           category: expenseCategory.trim() || '—',
-          sourceType: 'manual',
+          sourceType: pendingFile ? 'receipt_scan' : 'manual',
           ...(expenseSupplier.trim() ? { supplier: expenseSupplier.trim() } : {}),
           ...(expenseInvoiceNo.trim() ? { invoiceNo: expenseInvoiceNo.trim() } : {}),
           ...(expenseInvoiceType ? { invoiceType: expenseInvoiceType } : {}),
@@ -767,6 +800,7 @@ const ExpenseMonitoring: React.FC = () => {
             : {}),
           ...(typeof expenseDeductible === 'boolean' ? { deductible: expenseDeductible } : {}),
           ...(expenseDeductibleReason ? { deductibleReason: expenseDeductibleReason } : {}),
+          ...(receiptRef ? { receiptRef } : {}),
         }),
       });
       const data = await res.json().catch(() => ({ success: false }));
@@ -788,10 +822,13 @@ const ExpenseMonitoring: React.FC = () => {
         setExpenseLinkedInvestmentId('');
         setExpenseDeductible(null);
         setExpenseDeductibleReason(null);
+        pendingReceiptRef.current = null;
         await fetchExpenses();
       }
     } catch {
       // silent
+    } finally {
+      setSavingExpense(false);
     }
   };
 
@@ -848,7 +885,7 @@ const ExpenseMonitoring: React.FC = () => {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={() => { setExpenseSupplier(''); setExpenseInvoiceNo(''); setExpenseInvoiceType(''); setExpenseVat(''); setExpenseTin(''); setAddExpenseOpen(true); }}
+            onClick={() => { setExpenseSupplier(''); setExpenseInvoiceNo(''); setExpenseInvoiceType(''); setExpenseVat(''); setExpenseTin(''); pendingReceiptRef.current = null; setAddExpenseOpen(true); }}
             sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
           >
             Add Expense
@@ -1397,30 +1434,31 @@ const ExpenseMonitoring: React.FC = () => {
           </Box>
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
-          <Box>
-            <IconButton
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button
+              size="small"
               color="primary"
+              startIcon={isScanning ? <CircularProgress size={18} /> : <PhotoCameraIcon />}
               onClick={() => scanInputRef.current?.click()}
               disabled={isScanning}
-              title="Scan receipt with AI"
             >
-              {isScanning ? <CircularProgress size={24} /> : <PhotoCameraIcon />}
-            </IconButton>
-            <IconButton
+              Scan One
+            </Button>
+            <Button
+              size="small"
               color="primary"
+              startIcon={<PhotoLibraryIcon />}
               onClick={() => setScanBatchOpen(true)}
-              disabled={!expenseProjectId}
-              title={expenseProjectId ? 'Scan multiple receipts' : 'Select a project first'}
             >
-              <PhotoLibraryIcon />
-            </IconButton>
+              Scan Multiple
+            </Button>
           </Box>
           <Box>
             <Button onClick={() => setAddExpenseOpen(false)}>Cancel</Button>
             <Button
               variant="contained"
               onClick={handleAddExpense}
-              disabled={isScanning}
+              disabled={isScanning || savingExpense}
               sx={{ ml: 1, backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
             >
               Add Expense
@@ -1447,17 +1485,21 @@ const ExpenseMonitoring: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Multi-upload: pick several receipt photos, crop/parse each, save all at once */}
+      {/* Multi-upload: pick several receipt photos, crop/parse each, save all at once.
+          Each receipt gets its own Project picker in review, so one batch can mix
+          receipts from different projects — it defaults to whatever project (if any)
+          is already selected in the Add Expense dialog above. */}
       <Dialog open={scanBatchOpen} onClose={() => setScanBatchOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Scan Multiple Receipts</DialogTitle>
         <DialogContent>
           {scanBatchOpen && (() => {
             const project = allProjects.find((p) => String(p.id) === expenseProjectId);
-            if (!project) return <Alert severity="warning">Select a project before scanning receipts.</Alert>;
+            const scanProjects = allProjects.map((p) => ({ id: String(p.id), project_no: p.project_no || String(p.id), project_name: p.project_name, account_name: p.account_name }));
             return (
               <ScanBatch
                 mode="project"
-                selectedProject={{ id: String(project.id), project_no: project.project_no || String(project.id), project_name: project.project_name, account_name: project.account_name }}
+                selectedProject={project ? { id: String(project.id), project_no: project.project_no || String(project.id), project_name: project.project_name, account_name: project.account_name } : null}
+                projects={scanProjects}
                 categories={PROJECT_EXPENSE_CATEGORIES}
                 onCancel={() => setScanBatchOpen(false)}
                 onComplete={(n) => {

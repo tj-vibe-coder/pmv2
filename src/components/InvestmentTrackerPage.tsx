@@ -4,7 +4,7 @@ import {
   Box, Grid, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, MenuItem, Alert, Chip, CircularProgress,
-  Card, CardContent, Tooltip,
+  Card, CardContent, Tooltip, Link,
 } from '@mui/material';
 import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, ReceiptLong as ReceiptLongIcon } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
@@ -370,16 +370,20 @@ const InvestmentTrackerPage: React.FC = () => {
                     />
                   </TableCell>
                   <TableCell sx={{ fontSize: '0.8rem', fontStyle: 'italic', color: 'text.secondary' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                      <span>{row.description}</span>
-                      {expenseLinkTarget(row) && (
-                        <Tooltip title="View linked expense">
-                          <IconButton size="small" onClick={() => navigate(expenseLinkTarget(row) as string)} sx={{ p: 0.25 }}>
-                            <ReceiptLongIcon sx={{ fontSize: '1rem' }} />
-                          </IconButton>
-                        </Tooltip>
-                      )}
-                    </Box>
+                    {expenseLinkTarget(row) ? (
+                      <Tooltip title="View linked expense">
+                        <Link
+                          component="button"
+                          type="button"
+                          underline="hover"
+                          onClick={() => navigate(expenseLinkTarget(row) as string)}
+                          sx={{ fontSize: 'inherit', fontStyle: 'inherit', textAlign: 'left', display: 'inline-flex', alignItems: 'center', gap: 0.5 }}
+                        >
+                          <ReceiptLongIcon sx={{ fontSize: '0.9rem' }} />
+                          {row.description}
+                        </Link>
+                      </Tooltip>
+                    ) : row.description}
                   </TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.8rem', fontWeight: 600 }}>{row.runningTotal.toLocaleString()}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.8rem', color: row.balanceVsTarget < 0 ? 'error.main' : 'text.primary' }}>

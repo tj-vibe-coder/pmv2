@@ -23,7 +23,6 @@ import {
   CircularProgress,
   Snackbar,
   Alert,
-  Tooltip,
   Link,
   LinearProgress,
   Accordion,
@@ -598,19 +597,24 @@ const OverheadExpensesPage: React.FC = () => {
           </Box>
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
-          <Box>
-            <Tooltip title="Scan receipt with AI">
-              <span>
-                <IconButton color="primary" onClick={() => scanInputRef.current?.click()} disabled={isScanning}>
-                  {isScanning ? <CircularProgress size={24} /> : <PhotoCameraIcon />}
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Tooltip title="Scan multiple receipts">
-              <IconButton color="primary" onClick={() => setScanBatchOpen(true)}>
-                <PhotoLibraryIcon />
-              </IconButton>
-            </Tooltip>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button
+              size="small"
+              color="primary"
+              startIcon={isScanning ? <CircularProgress size={18} /> : <PhotoCameraIcon />}
+              onClick={() => scanInputRef.current?.click()}
+              disabled={isScanning}
+            >
+              Scan One
+            </Button>
+            <Button
+              size="small"
+              color="primary"
+              startIcon={<PhotoLibraryIcon />}
+              onClick={() => setScanBatchOpen(true)}
+            >
+              Scan Multiple
+            </Button>
           </Box>
           <Box>
             <Button onClick={() => setAddOpen(false)} disabled={savingExpense}>Cancel</Button>

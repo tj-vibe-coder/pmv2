@@ -70,6 +70,10 @@ export interface BatchItemFields {
   deductibleReason: string | null;
   customerIssues: string[];
   lowConf: boolean;
+  // Only used in mode === 'project' when a `projects` list is supplied — lets each
+  // receipt in the batch be filed under a different project instead of forcing the
+  // whole batch under one `selectedProject`.
+  projectId: string;
 }
 
 interface BatchItem {
@@ -82,7 +86,7 @@ interface BatchItem {
   isSaved: boolean;
 }
 
-interface ScanProject {
+export interface ScanProject {
   id: string;
   project_no: string;
   project_name: string;
@@ -113,16 +117,23 @@ interface ScanBatchProps {
   // Required when mode === 'liquidation': receives each item once cropped/parsed and
   // returns whether it was successfully added to the liquidation (e.g. as a new row).
   onLiquidationItem?: (item: LiquidationScanItem) => Promise<boolean>;
+  // Only meaningful in mode === 'project'. When provided, the review step offers a
+  // per-receipt Project picker (defaulting to `selectedProject`, if any) instead of
+  // forcing every receipt in the batch under a single project — lets one upload mix
+  // receipts from different projects.
+  projects?: ScanProject[];
 }
 
-const emptyFields = (): BatchItemFields => ({
+const emptyFields = (defaultProjectId = ''): BatchItemFields => ({
   amount: '', date: '', category: '', description: '',
   supplier: '', invoiceNumber: '', invoiceType: '', vat: '',
   deductible: null, deductibleReason: null, customerIssues: [], lowConf: false,
+  projectId: defaultProjectId,
 });
 
-const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, onComplete, deliverToDesktop, pairingToken, scanContext, categories, onLiquidationItem }) => {
+const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, onComplete, deliverToDesktop, pairingToken, scanContext, categories, onLiquidationItem, projects }) => {
   const categoryList = categories ?? EXPENSE_CATEGORIES;
+  const perItemProject = mode === 'project' && !!projects;
   const [stage, setStage] = useState<BatchStage>(BatchStage.select);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [items, setItems] = useState<BatchItem[]>([]);
@@ -188,9 +199,11 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
 
   const processFiles = async (files: File[]) => {
     if (!files.length) return;
-    const tooMany = files.length > 25;
+    // Gemini's rate limit is 15 requests/minute; cap the batch at 10 to leave a buffer
+    // (parsing runs at concurrency 3, so 10 items comfortably stays under the limit).
+    const tooMany = files.length > 10;
     setTooManyWarn(tooMany);
-    const sliced = tooMany ? files.slice(0, 25) : files;
+    const sliced = tooMany ? files.slice(0, 10) : files;
     try {
       // convertHeicToJpeg already swallows its own errors and returns the original
       // file on failure, but guard the whole batch so one bad file can't strand the UI.
@@ -198,7 +211,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
       const newItems: BatchItem[] = converted.map((f, i) => ({
         id: `bi-${Date.now()}-${i}`,
         rawFile: f,
-        fields: emptyFields(),
+        fields: emptyFields(selectedProject?.id ?? ''),
         isSaved: false,
       }));
       setItems(newItems);
@@ -239,6 +252,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
           deductibleReason: pr.deductibleReason || null,
           customerIssues: pr.customerValidation?.issues ?? [],
           lowConf: typeof pr.confidence === 'number' && pr.confidence < 0.5,
+          projectId: item.fields.projectId,
         };
         setParsedCount((c) => c + 1);
         return { ...item, fields };
@@ -320,8 +334,13 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
         return { ...item, saveError: err instanceof Error ? err.message : 'Save failed' };
       }
     }
-    if (!deliverToDesktop && mode === 'project' && !selectedProject) {
-      return { ...item, saveError: 'No project selected.' };
+    const targetProject = perItemProject
+      ? (projects || []).find((p) => p.id === item.fields.projectId) || null
+      : selectedProject;
+    // In per-item mode a receipt with no project assigned isn't an error — it just
+    // falls back to an overhead expense instead of a project one (see url/body below).
+    if (!deliverToDesktop && mode === 'project' && !targetProject && !perItemProject) {
+      return { ...item, saveError: 'No project selected for this receipt.' };
     }
     try {
       const compressed = await compressForUpload(item.croppedBlob ?? item.rawFile);
@@ -368,8 +387,8 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
         return { ...item, saveError: 'Could not send to desktop.' };
       }
 
-      const folderPath = mode === 'project' && selectedProject
-        ? `Project Receipts/${selectedProject.project_no}/${year}`
+      const folderPath = mode === 'project' && targetProject
+        ? `Project Receipts/${targetProject.project_no}/${year}`
         : `00 Overhead Receipts/${year}`;
 
       let receiptRef: { oneDriveId: string; webUrl: string; filename: string } | undefined;
@@ -392,9 +411,11 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
       if (typeof f.deductible === 'boolean') meta.deductible = f.deductible;
       if (f.deductibleReason?.trim()) meta.deductibleReason = f.deductibleReason.trim();
 
-      const url = mode === 'project' ? `${API_BASE}/api/project-expenses` : `${API_BASE}/api/overhead-expenses`;
-      const body = mode === 'project' && selectedProject
-        ? { projectId: selectedProject.id, projectName: selectedProject.project_name, description: f.description, amount: Number(f.amount), date: f.date || todayStr(), category: f.category || 'Others', sourceType: 'receipt_scan', receiptRef, ...meta }
+      // A per-item batch with no project assigned on this receipt falls back to
+      // overhead — same endpoint/shape as mode === 'overhead' uses.
+      const url = (mode === 'project' && targetProject) ? `${API_BASE}/api/project-expenses` : `${API_BASE}/api/overhead-expenses`;
+      const body = (mode === 'project' && targetProject)
+        ? { projectId: targetProject.id, projectName: targetProject.project_name, description: f.description, amount: Number(f.amount), date: f.date || todayStr(), category: f.category || 'Others', sourceType: 'receipt_scan', receiptRef, ...meta }
         : { description: f.description, amount: Number(f.amount), date: f.date || todayStr(), category: f.category || 'Others', sourceType: 'receipt_scan', receiptRef, ...meta };
 
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
@@ -439,7 +460,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   if (stage === BatchStage.select) {
     return (
       <Box>
-        {tooManyWarn && <Alert severity="warning" sx={{ mb: 2 }}>Only the first 25 photos were selected.</Alert>}
+        {tooManyWarn && <Alert severity="warning" sx={{ mb: 2 }}>Only the first 10 photos were selected (batch limit, to stay within the AI parser's rate limit).</Alert>}
         <Button variant="contained" size="large" fullWidth startIcon={<CameraAltIcon />}
           onClick={() => setCameraOpen(true)} sx={{ py: 1.5, mb: 2 }}>
           Take Photos
@@ -509,8 +530,13 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   const totalAmt = visibleItems.reduce((s, it) => s + (Number(it.fields.amount) || 0), 0);
   const hasSaveErrors = visibleItems.some((it) => it.saveError);
   const failedCount = visibleItems.filter((it) => it.saveError).length;
-  const savableCount = visibleItems.filter((it) => Number(it.fields.amount) > 0).length;
-  const canSaveAll = !saving && savableCount > 0 && (deliverToDesktop || mode === 'overhead' || mode === 'liquidation' || !!selectedProject);
+  // In per-item mode a missing project isn't blocking — it just saves as overhead —
+  // so only the classic single-project mode needs a `selectedProject` to be savable.
+  const hasValidTarget = (it: BatchItem) =>
+    mode !== 'project' || deliverToDesktop || perItemProject || !!selectedProject;
+  const savableCount = visibleItems.filter((it) => Number(it.fields.amount) > 0 && hasValidTarget(it)).length;
+  const canSaveAll = !saving && savableCount > 0;
+  const missingProjectCount = perItemProject ? visibleItems.filter((it) => !it.fields.projectId).length : 0;
   const btnLabel = saving ? 'Saving…' : hasSaveErrors ? `Retry Failed (${failedCount})` : `Save All (${savableCount})`;
 
   return (
@@ -519,8 +545,13 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
           {visibleItems.length} receipt{visibleItems.length !== 1 ? 's' : ''} — Total ₱{totalAmt.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
         </Typography>
-        {!deliverToDesktop && mode === 'project' && !selectedProject && (
+        {!deliverToDesktop && mode === 'project' && !perItemProject && !selectedProject && (
           <Alert severity="warning" sx={{ mt: 1 }}>No project selected — go back and select a project before saving.</Alert>
+        )}
+        {!deliverToDesktop && perItemProject && missingProjectCount > 0 && (
+          <Alert severity="info" sx={{ mt: 1 }}>
+            {missingProjectCount} receipt{missingProjectCount === 1 ? '' : 's'} with no project assigned will be saved as Overhead Expense{missingProjectCount === 1 ? '' : 's'} instead.
+          </Alert>
         )}
       </Box>
       <Box sx={{ maxHeight: '55vh', overflowY: 'auto', overflowX: 'hidden', mb: 2 }}>
@@ -548,6 +579,15 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
                 <Alert severity="warning" sx={{ mb: 1.5 }}>
                   {item.parseError ? `Parse error: ${item.parseError}` : 'Low confidence — verify the values.'}
                 </Alert>
+              )}
+              {perItemProject && (
+                <TextField fullWidth size="small" select label="Project" value={item.fields.projectId}
+                  onChange={(e) => updateField(item.id, { projectId: e.target.value })}
+                  helperText={!item.fields.projectId ? 'No project — will save as Overhead Expense' : undefined}
+                  sx={{ mb: 1.5 }}>
+                  <MenuItem value="">— No project (Overhead) —</MenuItem>
+                  {(projects || []).map((p) => <MenuItem key={p.id} value={p.id}>{p.project_no} — {p.project_name}</MenuItem>)}
+                </TextField>
               )}
               {item.fields.customerIssues.length > 0 && (
                 <Alert severity="warning" sx={{ mb: 1.5 }}>
