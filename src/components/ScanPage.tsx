@@ -1,21 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Box,
-  Typography,
-  Button,
-  TextField,
-  MenuItem,
-  Autocomplete,
-  ToggleButton,
-  ToggleButtonGroup,
-  Alert,
-  CircularProgress,
-  Snackbar,
-  Paper,
-  InputAdornment,
+  Box, Typography, Button, TextField, MenuItem, Autocomplete, ToggleButton, ToggleButtonGroup,
+  Alert, CircularProgress, Snackbar, Paper, InputAdornment,
 } from '@mui/material';
 import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import { API_BASE } from '../config/api';
 import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
 import { compressForUpload, blobToBase64 } from '../utils/receipts/imageCompress';
@@ -23,63 +13,24 @@ import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import ReceiptCropper from './ReceiptCropper';
 import { EXPENSE_CATEGORIES } from '../data/financeCategories';
+import { convertHeicToJpeg } from '../utils/receipts/imageUtils';
+import ScanBatch from './ScanBatch';
 
 const authHeaders = (): Record<string, string> => {
   const t = localStorage.getItem('netpacific_token');
   return t ? { Authorization: `Bearer ${t}` } : {};
 };
 
-interface ScanUser {
-  username?: string;
-  full_name?: string;
-}
-
-interface ScanProject {
-  id: string;
-  project_no: string;
-  project_name: string;
-  account_name?: string;
-}
-
-interface ReceiptRef {
-  oneDriveId: string;
-  webUrl: string;
-  filename: string;
-}
-
-interface ScanContext {
-  kind: string;
-  formNo?: string;
-  year?: string;
-  folderPath?: string;
-  rowId?: string;
-  label?: string;
-}
+interface ScanUser { username?: string; full_name?: string; }
+interface ScanProject { id: string; project_no: string; project_name: string; account_name?: string; }
+interface ReceiptRef { oneDriveId: string; webUrl: string; filename: string; }
+interface ScanContext { kind: string; formNo?: string; year?: string; folderPath?: string; rowId?: string; label?: string; }
 
 type ScanMode = 'project' | 'overhead';
 type Severity = 'success' | 'error' | 'warning' | 'info';
 
 const todayStr = (): string => new Date().toISOString().slice(0, 10);
 
-// iOS photos are frequently HEIC, which the canvas-based compressor can't decode and
-// Gemini won't parse. Convert to JPEG first (same approach as the other scan surfaces).
-async function convertHeicToJpeg(file: File): Promise<File> {
-  const name = file.name.toLowerCase();
-  const isHeic = name.endsWith('.heic') || name.endsWith('.heif')
-    || file.type === 'image/heic' || file.type === 'image/heif' || file.type === '';
-  if (!isHeic) return file;
-  try {
-    const heic2any = (await import('heic2any')).default;
-    const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
-    const blob = Array.isArray(result) ? result[0] : result;
-    return new File([blob], (file.name || 'receipt').replace(/\.(heic|heif)$/i, '') + '.jpg', { type: 'image/jpeg' });
-  } catch {
-    return file;
-  }
-}
-
-// Module-level so its identity is stable across renders (an inline component
-// would remount the whole subtree each render and drop input focus).
 const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <Box sx={{ minHeight: '100dvh', bgcolor: '#f5f5f5', p: 2 }}>
     <Box sx={{ maxWidth: 480, mx: 'auto' }}>{children}</Box>
@@ -116,20 +67,18 @@ const ScanPage: React.FC = () => {
   const [parseError, setParseError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // 4-corner crop editor (shown after capture, before the photo is sent to Gemini).
   const [editBlob, setEditBlob] = useState<Blob | null>(null);
   const [editUrl, setEditUrl] = useState<string | null>(null);
   const [editQuad, setEditQuad] = useState<Quad | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [savedAmount, setSavedAmount] = useState('');
+  const [batchMode, setBatchMode] = useState(false);
 
   const [snackbar, setSnackbar] = useState<{ open: boolean; severity: Severity; message: string }>(
     { open: false, severity: 'success', message: '' },
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Guards the single-use pairing exchange against React StrictMode's double-invoke
-  // (two calls would consume the one-time token, failing the second and the UI).
   const exchangeStartedRef = useRef(false);
 
   const showSnack = useCallback((severity: Severity, message: string) => {
@@ -141,10 +90,7 @@ const ScanPage: React.FC = () => {
     setAuthError('Session expired — re-scan the QR from desktop.');
   }, []);
 
-  // --- Step 1: self-authenticate from the pairing token in the URL ---
   useEffect(() => {
-    // Run exactly once. The pairing token is single-use; a second exchange (StrictMode
-    // double-invoke, or a stale closure) would consume it and fail.
     if (exchangeStartedRef.current) return;
     exchangeStartedRef.current = true;
     const run = async () => {
@@ -165,7 +111,6 @@ const ScanPage: React.FC = () => {
             setAuthed(true);
             window.history.replaceState({}, '', '/scan');
           } else if ((localStorage.getItem('netpacific_token') || '').startsWith('scan_')) {
-            // The token was already exchanged into a live session — recover instead of erroring.
             setAuthed(true);
             window.history.replaceState({}, '', '/scan');
           } else {
@@ -175,8 +120,6 @@ const ScanPage: React.FC = () => {
           setAuthError('This code is invalid or expired. Re-scan the QR from the desktop app.');
         }
       } else if ((localStorage.getItem('netpacific_token') || '').startsWith('scan_')) {
-        // Resume an existing scanner session only. A plain desktop login token is NOT
-        // treated as a scanner session (avoids a confusing scanner UI on desktop).
         setAuthed(true);
       } else {
         setNeedsQr(true);
@@ -186,7 +129,6 @@ const ScanPage: React.FC = () => {
     void run();
   }, []);
 
-  // --- Step 2: load projects once authed ---
   useEffect(() => {
     if (!authed) return;
     let cancelled = false;
@@ -198,10 +140,7 @@ const ScanPage: React.FC = () => {
         const list: ScanProject[] = Array.isArray(data) ? data : (data.projects || []);
         if (!cancelled) {
           setProjects(list.map((p) => ({
-            id: String(p.id),
-            project_no: p.project_no,
-            project_name: p.project_name,
-            account_name: p.account_name,
+            id: String(p.id), project_no: p.project_no, project_name: p.project_name, account_name: p.account_name,
           })));
         }
       } catch {
@@ -212,17 +151,14 @@ const ScanPage: React.FC = () => {
     return () => { cancelled = true; };
   }, [authed, handleSessionExpired, showSnack]);
 
-  // Replace the edit image, revoking any previous object URL.
   const setEdit = useCallback((blob: Blob | null, quad: Quad | null) => {
     setEditUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return blob ? URL.createObjectURL(blob) : null; });
     setEditBlob(blob);
     setEditQuad(quad);
   }, []);
 
-  // Revoke the edit URL on unmount.
   useEffect(() => () => { if (editUrl) URL.revokeObjectURL(editUrl); }, [editUrl]);
 
-  // --- Step 1: capture, then open the 4-corner crop editor (no Gemini call yet) ---
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawFile = e.target.files?.[0];
     e.target.value = '';
@@ -232,20 +168,15 @@ const ScanPage: React.FC = () => {
     setLowConf(false);
     try {
       const file = await convertHeicToJpeg(rawFile);
-      // Pass 1-2: fast local detection (no network, <100ms).
       let detected = await detectReceiptQuad(file);
-      // Gemini fallback: only fires when local detection gives up (white background, etc.).
       if (!detected) {
         try {
           const imageBase64 = await blobToBase64(file);
           detected = await detectCropFromServer(imageBase64, file.type || 'image/jpeg');
-        } catch { /* best-effort — fall through to default inset */ }
+        } catch { /* best-effort */ }
       }
       const quad: Quad = detected ?? [
-        { x: 0.12, y: 0.14 },
-        { x: 0.88, y: 0.14 },
-        { x: 0.88, y: 0.86 },
-        { x: 0.12, y: 0.86 },
+        { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 }, { x: 0.88, y: 0.86 }, { x: 0.12, y: 0.86 },
       ];
       setEdit(file, quad);
     } catch (err) {
@@ -262,7 +193,6 @@ const ScanPage: React.FC = () => {
     fileInputRef.current?.click();
   };
 
-  // --- Step 2: user adjusted the corners — flatten, then send to Gemini ---
   const confirmCrop = async (quad: Quad) => {
     if (!editBlob) return;
     setBusy(true);
@@ -287,7 +217,7 @@ const ScanPage: React.FC = () => {
       setDeductibleReason(parsed.deductibleReason || null);
       setCustomerIssues(parsed.customerValidation?.issues || []);
       setLowConf(typeof parsed.confidence === 'number' && parsed.confidence < 0.5);
-      setEdit(null, null); // consume the editor
+      setEdit(null, null);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       setParseError(`Could not read receipt: ${detail}`);
@@ -296,14 +226,11 @@ const ScanPage: React.FC = () => {
     }
   };
 
-  // --- Save the expense ---
   const handleSave = async () => {
     const numericAmount = Number(amount);
     if (!(numericAmount > 0)) return;
     if (mode === 'project' && !selectedProject) return;
     setSaving(true);
-
-    // Best-effort receipt upload first — never blocks the save.
     let receiptRef: ReceiptRef | undefined;
     if (pendingFile) {
       try {
@@ -323,53 +250,24 @@ const ScanPage: React.FC = () => {
         if (d.ok) receiptRef = { oneDriveId: d.id, webUrl: d.webUrl, filename };
       } catch { /* best-effort */ }
     }
-
-    // Optional receipt metadata captured by the scanner (omit empties).
-    const meta: Record<string, string | number> = {};
+    const meta: Record<string, string | number | boolean> = {};
     if (supplier.trim()) meta.supplier = supplier.trim();
     if (invoiceNumber.trim()) meta.invoiceNo = invoiceNumber.trim();
     if (invoiceType.trim()) meta.invoiceType = invoiceType.trim();
     const vatNum = Number(vat);
     if (vat.trim() && Number.isFinite(vatNum) && vatNum > 0) meta.vat = vatNum;
-
+    if (typeof deductible === 'boolean') meta.deductible = deductible;
+    if (deductibleReason && deductibleReason.trim()) meta.deductibleReason = deductibleReason.trim();
     try {
-      const url = mode === 'project'
-        ? `${API_BASE}/api/project-expenses`
-        : `${API_BASE}/api/overhead-expenses`;
+      const url = mode === 'project' ? `${API_BASE}/api/project-expenses` : `${API_BASE}/api/overhead-expenses`;
       const body = mode === 'project' && selectedProject
-        ? {
-            projectId: selectedProject.id,
-            projectName: selectedProject.project_name,
-            description,
-            amount: numericAmount,
-            date: date || todayStr(),
-            category: category || 'Others',
-            sourceType: 'receipt_scan',
-            receiptRef,
-            ...meta,
-          }
-        : {
-            description,
-            amount: numericAmount,
-            date: date || todayStr(),
-            category: category || 'Others',
-            sourceType: 'receipt_scan',
-            receiptRef,
-            ...meta,
-          };
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(body),
-      });
+        ? { projectId: selectedProject.id, projectName: selectedProject.project_name, description, amount: numericAmount, date: date || todayStr(), category: category || 'Others', sourceType: 'receipt_scan', receiptRef, ...meta }
+        : { description, amount: numericAmount, date: date || todayStr(), category: category || 'Others', sourceType: 'receipt_scan', receiptRef, ...meta };
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
       if (res.status === 401) { handleSessionExpired(); return; }
       const data = await res.json().catch(() => ({ success: false }));
-      if (data.success) {
-        setSavedAmount(numericAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 }));
-        setSaved(true);
-      } else {
-        showSnack('error', 'Could not save the expense. Please try again.');
-      }
+      if (data.success) { setSavedAmount(numericAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })); setSaved(true); }
+      else { showSnack('error', 'Could not save the expense. Please try again.'); }
     } catch {
       showSnack('error', 'Could not save the expense. Please try again.');
     } finally {
@@ -391,8 +289,7 @@ const ScanPage: React.FC = () => {
           const w = Math.round(img.width * scale);
           const h = Math.round(img.height * scale);
           const canvas = document.createElement('canvas');
-          canvas.width = w;
-          canvas.height = h;
+          canvas.width = w; canvas.height = h;
           const ctx = canvas.getContext('2d');
           if (!ctx) { reject(new Error('no ctx')); return; }
           ctx.drawImage(img, 0, 0, w, h);
@@ -401,9 +298,7 @@ const ScanPage: React.FC = () => {
         img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('img load failed')); };
         img.src = url;
       });
-    } catch {
-      return '';
-    }
+    } catch { return ''; }
   };
 
   const handleSendToDesktop = async () => {
@@ -414,49 +309,31 @@ const ScanPage: React.FC = () => {
       const contentBase64 = await blobToBase64(blob);
       const filename = `SCAN-${Date.now()}.jpg`;
       const upRes = await fetch(`${API_BASE}/api/onedrive/upload`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ folderPath: scanContext.folderPath, filename, contentBase64 }),
       });
       if (upRes.status === 401) { handleSessionExpired(); return; }
       const upData = await upRes.json().catch(() => ({ ok: false }));
-      if (!upData.ok) {
-        showSnack('error', 'Could not upload receipt to OneDrive. Please try again.');
-        return;
-      }
+      if (!upData.ok) { showSnack('error', 'Could not upload receipt to OneDrive. Please try again.'); return; }
       const thumb = await makeThumb(pendingFile);
       const jobRes = await fetch(`${API_BASE}/api/scan-jobs/${pairingToken}/result`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           receipt: {
-            oneDriveId: upData.id,
-            webUrl: upData.webUrl,
-            filename,
+            oneDriveId: upData.id, webUrl: upData.webUrl, filename,
             ...(thumb ? { thumbnailDataUrl: thumb } : {}),
             parsed: {
-              amount: Number(amount) > 0 ? Number(amount) : null,
-              date: date || null,
-              category: category || null,
-              particulars: description || supplier || null,
-              vendor: supplier || null,
-              invoiceNo: invoiceNumber || null,
-              deductible,
-              deductibleReason,
-              customerInfoIssues: customerIssues,
-              confidence: lowConf ? 0.4 : 0.9,
+              amount: Number(amount) > 0 ? Number(amount) : null, date: date || null, category: category || null,
+              particulars: description || supplier || null, vendor: supplier || null, invoiceNo: invoiceNumber || null,
+              deductible, deductibleReason, customerInfoIssues: customerIssues, confidence: lowConf ? 0.4 : 0.9,
             },
           },
         }),
       });
       if (jobRes.status === 401) { handleSessionExpired(); return; }
       const jobData = await jobRes.json().catch(() => ({ ok: false }));
-      if (jobData.ok) {
-        setSavedAmount('');
-        setSaved(true);
-      } else {
-        showSnack('error', 'Could not send receipt to desktop. Please try again.');
-      }
+      if (jobData.ok) { setSavedAmount(''); setSaved(true); }
+      else { showSnack('error', 'Could not send receipt to desktop. Please try again.'); }
     } catch {
       showSnack('error', 'Could not send receipt to desktop. Please try again.');
     } finally {
@@ -465,75 +342,45 @@ const ScanPage: React.FC = () => {
   };
 
   const resetForm = () => {
-    setAmount('');
-    setDate('');
-    setCategory('');
-    setDescription('');
-    setSupplier('');
-    setInvoiceNumber('');
-    setInvoiceType('');
-    setVat('');
-    setDeductible(null);
-    setDeductibleReason(null);
-    setCustomerIssues([]);
-    setPendingFile(null);
-    setLowConf(false);
-    setParseError(null);
-    setSaved(false);
-    setSavedAmount('');
-    setEdit(null, null);
+    setAmount(''); setDate(''); setCategory(''); setDescription(''); setSupplier(''); setInvoiceNumber('');
+    setInvoiceType(''); setVat(''); setDeductible(null); setDeductibleReason(null); setCustomerIssues([]);
+    setPendingFile(null); setLowConf(false); setParseError(null); setSaved(false); setSavedAmount(''); setEdit(null, null);
   };
 
   const canSave = !busy && !saving && Number(amount) > 0 && (mode === 'overhead' || !!selectedProject);
 
-  // --- Render states ---
   if (exchanging) {
-    return (
-      <Shell>
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 2 }}>
-          <CircularProgress />
-          <Typography variant="body2" color="text.secondary">Connecting…</Typography>
-        </Box>
-      </Shell>
-    );
+    return (<Shell><Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 2 }}><CircularProgress /><Typography variant="body2" color="text.secondary">Connecting…</Typography></Box></Shell>);
   }
-
   if (needsQr) {
-    return (
-      <Shell>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '70vh', textAlign: 'center' }}>
-          <Typography variant="body1" color="text.secondary">
-            Open this page by scanning the QR code in the desktop app (Expense Monitoring → Scan with phone).
-          </Typography>
-        </Box>
-      </Shell>
-    );
+    return (<Shell><Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '70vh', textAlign: 'center' }}><Typography variant="body1" color="text.secondary">Open this page by scanning the QR code in the desktop app (Expense Monitoring → Scan with phone).</Typography></Box></Shell>);
   }
-
   if (!authed) {
-    return (
-      <Shell>
-        <Box sx={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Alert severity="error" sx={{ width: '100%' }}>
-            {authError || 'This code is invalid or expired. Re-scan the QR from the desktop app.'}
-          </Alert>
-        </Box>
-      </Shell>
-    );
+    return (<Shell><Box sx={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Alert severity="error" sx={{ width: '100%' }}>{authError || 'This code is invalid or expired. Re-scan the QR from the desktop app.'}</Alert></Box></Shell>);
+  }
+  if (saved) {
+    return (<Shell><Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '70vh', gap: 2, textAlign: 'center' }}><CheckCircleIcon sx={{ fontSize: 72, color: 'success.main' }} /><Typography variant="h6" sx={{ fontWeight: 700 }}>{deliverToDesktop ? 'Sent to desktop!' : `Saved! ₱${savedAmount} recorded.`}</Typography><Button variant="contained" size="large" fullWidth onClick={resetForm} sx={{ maxWidth: 320 }}>Scan another</Button></Box></Shell>);
   }
 
-  if (saved) {
+  if (batchMode) {
     return (
       <Shell>
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '70vh', gap: 2, textAlign: 'center' }}>
-          <CheckCircleIcon sx={{ fontSize: 72, color: 'success.main' }} />
-          <Typography variant="h6" sx={{ fontWeight: 700 }}>
-            {deliverToDesktop ? 'Sent to desktop!' : `Saved! ₱${savedAmount} recorded.`}
-          </Typography>
-          <Button variant="contained" size="large" fullWidth onClick={resetForm} sx={{ maxWidth: 320 }}>
-            Scan another
-          </Button>
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>Photo Receipt Scanner</Typography>
+          <Typography variant="caption" color="text.secondary">Signed in as {user?.full_name || user?.username || 'team member'}</Typography>
         </Box>
+        <ScanBatch
+          mode={mode}
+          selectedProject={selectedProject}
+          onCancel={() => setBatchMode(false)}
+          onComplete={(n) => { setBatchMode(false); showSnack('success', `Saved ${n} receipt${n === 1 ? '' : 's'}.`); }}
+          deliverToDesktop={deliverToDesktop}
+          pairingToken={pairingToken}
+          scanContext={scanContext}
+        />
+        <Snackbar open={snackbar.open} autoHideDuration={5000} onClose={() => setSnackbar((p) => ({ ...p, open: false }))} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+          <Alert onClose={() => setSnackbar((p) => ({ ...p, open: false }))} severity={snackbar.severity} variant="filled" sx={{ width: '100%' }}>{snackbar.message}</Alert>
+        </Snackbar>
       </Shell>
     );
   }
@@ -542,248 +389,64 @@ const ScanPage: React.FC = () => {
     <Shell>
       <Box sx={{ mb: 2 }}>
         <Typography variant="h6" sx={{ fontWeight: 700 }}>Photo Receipt Scanner</Typography>
-        <Typography variant="caption" color="text.secondary">
-          Signed in as {user?.full_name || user?.username || 'team member'}
-        </Typography>
-        {deliverToDesktop && scanContext?.label && (
-          <Typography variant="caption" display="block" color="primary.main" sx={{ mt: 0.5 }}>
-            Scanning for: {scanContext.label}
-          </Typography>
-        )}
+        <Typography variant="caption" color="text.secondary">Signed in as {user?.full_name || user?.username || 'team member'}</Typography>
+        {deliverToDesktop && scanContext?.label && (<Typography variant="caption" display="block" color="primary.main" sx={{ mt: 0.5 }}>Scanning for: {scanContext.label}</Typography>)}
       </Box>
-
       <Paper sx={{ p: 2, borderRadius: 2 }}>
         {!deliverToDesktop && (
-          <ToggleButtonGroup
-            exclusive
-            fullWidth
-            color="primary"
-            value={mode}
-            onChange={(_e, val: ScanMode | null) => { if (val) setMode(val); }}
-            sx={{ mb: 2 }}
-          >
+          <ToggleButtonGroup exclusive fullWidth color="primary" value={mode} onChange={(_e, val: ScanMode | null) => { if (val) setMode(val); }} sx={{ mb: 2 }}>
             <ToggleButton value="project">Project</ToggleButton>
             <ToggleButton value="overhead">Overhead</ToggleButton>
           </ToggleButtonGroup>
         )}
-
         {!deliverToDesktop && mode === 'project' && (
-          <Autocomplete
-            options={projects}
-            value={selectedProject}
-            onChange={(_e, val) => setSelectedProject(val)}
-            getOptionLabel={(p) => `${p.project_no} — ${p.project_name}`}
-            isOptionEqualToValue={(a, b) => a.id === b.id}
-            renderInput={(params) => (
-              <TextField {...params} label="Project" size="small" required sx={{ mb: 2 }} />
-            )}
-          />
+          <Autocomplete options={projects} value={selectedProject} onChange={(_e, val) => setSelectedProject(val)} getOptionLabel={(p) => `${p.project_no} — ${p.project_name}`} isOptionEqualToValue={(a, b) => a.id === b.id} renderInput={(params) => (<TextField {...params} label="Project" size="small" required sx={{ mb: 2 }} />)} />
         )}
-
         {!editUrl && (
-          <Button
-            variant="contained"
-            size="large"
-            fullWidth
-            startIcon={busy ? <CircularProgress size={20} color="inherit" /> : <CameraAltIcon />}
-            disabled={busy}
-            onClick={() => fileInputRef.current?.click()}
-            sx={{ py: 1.5, mb: 2 }}
-          >
-            {busy ? 'Processing…' : 'Scan Receipt'}
-          </Button>
+          <>
+            <Button variant="contained" size="large" fullWidth startIcon={busy ? <CircularProgress size={20} color="inherit" /> : <CameraAltIcon />} disabled={busy} onClick={() => fileInputRef.current?.click()} sx={{ py: 1.5, mb: 2 }}>{busy ? 'Processing…' : 'Scan Receipt'}</Button>
+            <Button variant="outlined" size="large" fullWidth startIcon={<PhotoLibraryIcon />} onClick={() => setBatchMode(true)} sx={{ py: 1.5, mb: 2 }}>Scan Multiple</Button>
+          </>
         )}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          style={{ display: 'none' }}
-          onChange={handleFileChange}
-        />
-
+        <input ref={fileInputRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleFileChange} />
         {editUrl && editQuad && (
-          <Box sx={{ mb: 2 }}>
-            <ReceiptCropper
-              imageUrl={editUrl}
-              initialQuad={editQuad}
-              busy={busy}
-              onConfirm={confirmCrop}
-              onRetake={retakePhoto}
-            />
-          </Box>
+          <Box sx={{ mb: 2 }}><ReceiptCropper imageUrl={editUrl} initialQuad={editQuad} busy={busy} onConfirm={confirmCrop} onRetake={retakePhoto} /></Box>
         )}
-
-        {lowConf && (
-          <Alert severity="warning" sx={{ mb: 2 }}>Low confidence — please verify the values.</Alert>
-        )}
-        {parseError && (
-          <Alert severity="error" sx={{ mb: 2 }}>{parseError}</Alert>
-        )}
+        {lowConf && (<Alert severity="warning" sx={{ mb: 2 }}>Low confidence — please verify the values.</Alert>)}
+        {parseError && (<Alert severity="error" sx={{ mb: 2 }}>{parseError}</Alert>)}
         {customerIssues.length > 0 && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            Check the customer info written on the receipt — it should say IO Control Technologie OPC, TIN 697-029-976, Biñan, Laguna:
-            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-              {customerIssues.map((m, i) => (<li key={i}>{m}</li>))}
-            </ul>
-          </Alert>
+          <Alert severity="warning" sx={{ mb: 2 }}>Check the customer info written on the receipt — it should say IO Control Technologie OPC, TIN 697-029-976, Biñan, Laguna:<ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{customerIssues.map((m, i) => (<li key={i}>{m}</li>))}</ul></Alert>
         )}
-
-        <TextField
-          fullWidth
-          label="Amount"
-          type="number"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          inputProps={{ min: 0, step: 0.01 }}
-          InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
-          sx={{ mb: 2 }}
-        />
-        <TextField
-          fullWidth
-          label="Date"
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          InputLabelProps={{ shrink: true }}
-          sx={{ mb: 2 }}
-        />
-        <TextField
-          fullWidth
-          select
-          label="Category"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          sx={{ mb: 2 }}
-        >
-          <MenuItem value="">— Select category —</MenuItem>
-          {EXPENSE_CATEGORIES.map((c) => (
-            <MenuItem key={c} value={c}>{c}</MenuItem>
-          ))}
-        </TextField>
-        <TextField
-          fullWidth
-          label="Description"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          multiline
-          rows={2}
-          sx={{ mb: 2 }}
-        />
-        <TextField
-          fullWidth
-          label="Supplier"
-          value={supplier}
-          onChange={(e) => setSupplier(e.target.value)}
-          sx={{ mb: 2 }}
-        />
-        <TextField
-          fullWidth
-          label="Invoice No."
-          value={invoiceNumber}
-          onChange={(e) => setInvoiceNumber(e.target.value)}
-          helperText={invoiceType || undefined}
-          sx={{ mb: 2 }}
-        />
-        <TextField
-          fullWidth
-          label="VAT"
-          type="number"
-          value={vat}
-          onChange={(e) => setVat(e.target.value)}
-          inputProps={{ min: 0, step: 0.01 }}
-          InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
-          helperText="Leave blank for non-VAT receipts"
-          sx={{ mb: 2 }}
-        />
-
+        <TextField fullWidth label="Amount" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} inputProps={{ min: 0, step: 0.01 }} InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }} sx={{ mb: 2 }} />
+        <TextField fullWidth label="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} InputLabelProps={{ shrink: true }} sx={{ mb: 2 }} />
+        <TextField fullWidth select label="Category" value={category} onChange={(e) => setCategory(e.target.value)} sx={{ mb: 2 }}><MenuItem value="">— Select category —</MenuItem>{EXPENSE_CATEGORIES.map((c) => (<MenuItem key={c} value={c}>{c}</MenuItem>))}</TextField>
+        <TextField fullWidth label="Description" value={description} onChange={(e) => setDescription(e.target.value)} multiline rows={2} sx={{ mb: 2 }} />
+        <TextField fullWidth label="Supplier" value={supplier} onChange={(e) => setSupplier(e.target.value)} sx={{ mb: 2 }} />
+        <TextField fullWidth label="Invoice No." value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} helperText={invoiceType || undefined} sx={{ mb: 2 }} />
+        <TextField fullWidth label="VAT" type="number" value={vat} onChange={(e) => setVat(e.target.value)} inputProps={{ min: 0, step: 0.01 }} InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }} helperText="Leave blank for non-VAT receipts" sx={{ mb: 2 }} />
         {deliverToDesktop ? (
-          <Button
-            variant="contained"
-            size="large"
-            fullWidth
-            color="primary"
-            disabled={busy || saving || !pendingFile}
-            onClick={handleSendToDesktop}
-            startIcon={saving ? <CircularProgress size={20} color="inherit" /> : undefined}
-            sx={{ py: 1.5 }}
-          >
-            {saving ? 'Sending…' : 'Send to desktop'}
-          </Button>
+          <Button variant="contained" size="large" fullWidth color="primary" disabled={busy || saving || !pendingFile} onClick={handleSendToDesktop} startIcon={saving ? <CircularProgress size={20} color="inherit" /> : undefined} sx={{ py: 1.5 }}>{saving ? 'Sending…' : 'Send to desktop'}</Button>
         ) : (
-          <Button
-            variant="contained"
-            size="large"
-            fullWidth
-            color="success"
-            disabled={!canSave}
-            onClick={handleSave}
-            startIcon={saving ? <CircularProgress size={20} color="inherit" /> : undefined}
-            sx={{ py: 1.5 }}
-          >
-            {saving ? 'Saving…' : 'Save Expense'}
-          </Button>
+          <Button variant="contained" size="large" fullWidth color="success" disabled={!canSave} onClick={handleSave} startIcon={saving ? <CircularProgress size={20} color="inherit" /> : undefined} sx={{ py: 1.5 }}>{saving ? 'Saving…' : 'Save Expense'}</Button>
         )}
       </Paper>
-
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={5000}
-        onClose={() => setSnackbar((p) => ({ ...p, open: false }))}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert
-          onClose={() => setSnackbar((p) => ({ ...p, open: false }))}
-          severity={snackbar.severity}
-          variant="filled"
-          sx={{ width: '100%' }}
-        >
-          {snackbar.message}
-        </Alert>
+      <Snackbar open={snackbar.open} autoHideDuration={5000} onClose={() => setSnackbar((p) => ({ ...p, open: false }))} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        <Alert onClose={() => setSnackbar((p) => ({ ...p, open: false }))} severity={snackbar.severity} variant="filled" sx={{ width: '100%' }}>{snackbar.message}</Alert>
       </Snackbar>
     </Shell>
   );
 };
 
-// On a phone a runtime crash would otherwise show a blank white page with no way to
-// see the error. This boundary surfaces the message on-screen so it's debuggable.
-class ScanErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { error: Error | null }
-> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props);
-    this.state = { error: null };
-  }
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
+class ScanErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error: Error) { return { error }; }
   render() {
     if (this.state.error) {
-      return (
-        <Box sx={{ minHeight: '100dvh', bgcolor: '#f5f5f5', p: 2 }}>
-          <Box sx={{ maxWidth: 480, mx: 'auto' }}>
-            <Alert severity="error" sx={{ mb: 2 }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Scanner error</Typography>
-              <Typography variant="caption" sx={{ wordBreak: 'break-word' }}>
-                {this.state.error.message || String(this.state.error)}
-              </Typography>
-            </Alert>
-            <Button variant="contained" fullWidth onClick={() => window.location.reload()}>
-              Reload
-            </Button>
-          </Box>
-        </Box>
-      );
+      return (<Box sx={{ minHeight: '100dvh', bgcolor: '#f5f5f5', p: 2 }}><Box sx={{ maxWidth: 480, mx: 'auto' }}><Alert severity="error" sx={{ mb: 2 }}><Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Scanner error</Typography><Typography variant="caption" sx={{ wordBreak: 'break-word' }}>{this.state.error.message || String(this.state.error)}</Typography></Alert><Button variant="contained" fullWidth onClick={() => window.location.reload()}>Reload</Button></Box></Box>);
     }
     return this.props.children;
   }
 }
 
-const ScanPageWithBoundary: React.FC = () => (
-  <ScanErrorBoundary>
-    <ScanPage />
-  </ScanErrorBoundary>
-);
-
+const ScanPageWithBoundary: React.FC = () => (<ScanErrorBoundary><ScanPage /></ScanErrorBoundary>);
 export default ScanPageWithBoundary;

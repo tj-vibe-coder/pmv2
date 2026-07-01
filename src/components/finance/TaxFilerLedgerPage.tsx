@@ -17,6 +17,7 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  ListSubheader,
   TextField,
   Button,
   Chip,
@@ -24,6 +25,7 @@ import {
   Tooltip,
   LinearProgress,
   Alert,
+  Snackbar,
 } from '@mui/material';
 import { FileDownload as FileDownloadIcon, ReceiptLong as ReceiptLongIcon } from '@mui/icons-material';
 import { API_BASE } from '../../config/api';
@@ -70,6 +72,8 @@ interface ProjectExpenseRow {
   invoiceType?: string;
   vat?: number;
   tin?: string;
+  deductible?: boolean | null;
+  deductibleReason?: string;
 }
 
 // Raw shape of a /api/payroll/runs row (only the fields we read).
@@ -97,6 +101,8 @@ interface LedgerRow {
   vat: number;
   tin: string;
   amount: number;
+  deductible: boolean | null; // tax write-off flag from the receipt scan; null = unmarked / N/A
+  deductibleReason: string;
   countInTotal: boolean; // payroll runs are informational (already synced into overhead)
   isSyncedPayroll?: boolean; // overhead rows posted by the payroll-approval sync
   projectId?: string;
@@ -115,6 +121,27 @@ const CURRENT_YEAR = new Date().getFullYear();
 function yearOf(iso: string | undefined): string {
   if (!iso) return '';
   return String(iso).slice(0, 4);
+}
+
+// Month index 1..12 from an ISO date, or 0 if unparseable.
+function monthOf(iso: string | undefined): number {
+  if (!iso) return 0;
+  const m = Number(String(iso).slice(5, 7));
+  return m >= 1 && m <= 12 ? m : 0;
+}
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// Period filter value: 'all' | 'q1'..'q4' | 'm1'..'m12'
+type PeriodFilter = string;
+function monthInPeriod(month: number, period: PeriodFilter): boolean {
+  if (period === 'all') return true;
+  if (month === 0) return false; // undated rows only show under "All year"
+  if (period.startsWith('q')) {
+    const q = Number(period.slice(1));
+    return Math.ceil(month / 3) === q;
+  }
+  if (period.startsWith('m')) return Number(period.slice(1)) === month;
+  return true;
 }
 
 // --- Lazy receipt thumbnail / link cell ---------------------------------
@@ -180,13 +207,19 @@ const TaxFilerLedgerPage: React.FC = () => {
   const { user } = useAuth();
   const isTaxFiler = user?.role === 'tax_filer';
   const [year, setYear] = useState<string>(String(CURRENT_YEAR));
+  const [period, setPeriod] = useState<PeriodFilter>('all');
   const [sourceFilter, setSourceFilter] = useState<'all' | LedgerSource>('all');
+  const [deductibleFilter, setDeductibleFilter] = useState<'all' | 'yes' | 'no' | 'unmarked'>('all');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState<LedgerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; sev: 'success' | 'error' } | null>(null);
+  // tax_filer is read-only; everyone else (accounting/admin) can correct the flag inline.
+  const canEdit = !isTaxFiler;
 
   useEffect(() => {
     let cancelled = false;
@@ -226,6 +259,8 @@ const TaxFilerLedgerPage: React.FC = () => {
             vat: Number(e.vat) || 0,
             tin: e.tin || '',
             amount: Number(e.amount) || 0,
+            deductible: typeof e.deductible === 'boolean' ? e.deductible : null,
+            deductibleReason: e.deductibleReason || '',
             countInTotal: true,
             projectId: e.projectId,
             receiptRef: e.receiptRef,
@@ -251,6 +286,8 @@ const TaxFilerLedgerPage: React.FC = () => {
             vat: Number(e.vat) || 0,
             tin: e.tin || '',
             amount: Number(e.amount) || 0,
+            deductible: typeof e.deductible === 'boolean' ? e.deductible : null,
+            deductibleReason: e.deductibleReason || '',
             countInTotal: true,
             isSyncedPayroll,
             receiptRef: e.receiptRef,
@@ -273,6 +310,8 @@ const TaxFilerLedgerPage: React.FC = () => {
               vat: 0,
               tin: '',
               amount: 0, // office payroll is already posted into overhead_expenses; shown here only as a reference to avoid double counting
+              deductible: null,
+              deductibleReason: '',
               countInTotal: false,
               runStatus: run.status,
             });
@@ -293,6 +332,10 @@ const TaxFilerLedgerPage: React.FC = () => {
     const q = search.trim().toLowerCase();
     const subset = rows.filter((r) => {
       if (sourceFilter !== 'all' && r.source !== sourceFilter) return false;
+      if (!monthInPeriod(monthOf(r.date), period)) return false;
+      if (deductibleFilter === 'yes' && r.deductible !== true) return false;
+      if (deductibleFilter === 'no' && r.deductible !== false) return false;
+      if (deductibleFilter === 'unmarked' && r.deductible !== null) return false;
       if (!q) return true;
       return [r.description, r.supplier, r.invoiceNo, r.category, r.tin, r.accountCode]
         .some((v) => (v || '').toLowerCase().includes(q));
@@ -310,10 +353,11 @@ const TaxFilerLedgerPage: React.FC = () => {
       }
       return cmp * dir;
     });
-  }, [rows, sourceFilter, search, sortKey, sortDir]);
+  }, [rows, sourceFilter, period, deductibleFilter, search, sortKey, sortDir]);
 
   const totals = useMemo(() => {
     let cogs = 0, opex = 0, vat = 0, withReceipt = 0, missingReceipt = 0;
+    let deductible = 0, nonDeductible = 0, unmarked = 0;
     filtered.forEach((r) => {
       if (r.countInTotal) {
         if (r.source === 'project') cogs += r.amount;
@@ -321,9 +365,12 @@ const TaxFilerLedgerPage: React.FC = () => {
         vat += r.vat;
         if (r.receiptRef?.oneDriveId || r.receiptRef?.webUrl) withReceipt += 1;
         else missingReceipt += 1;
+        if (r.deductible === true) deductible += r.amount;
+        else if (r.deductible === false) nonDeductible += r.amount;
+        else unmarked += r.amount;
       }
     });
-    return { cogs, opex, grand: cogs + opex, vat, withReceipt, missingReceipt };
+    return { cogs, opex, grand: cogs + opex, vat, withReceipt, missingReceipt, deductible, nonDeductible, unmarked };
   }, [filtered]);
 
   const handleSort = (key: SortKey) => {
@@ -332,24 +379,51 @@ const TaxFilerLedgerPage: React.FC = () => {
   };
 
   const exportCsv = () => {
-    const headers = ['Source', 'Date', 'Description', 'Supplier', 'Invoice No', 'Invoice Type', 'Category', 'Account', 'VAT', 'TIN', 'Amount', 'Receipt', 'Status'];
+    const headers = ['Source', 'Date', 'Description', 'Supplier', 'Invoice No', 'Invoice Type', 'Category', 'Account', 'VAT', 'TIN', 'Amount', 'Deductible', 'Deductible Reason', 'Receipt', 'Status'];
     const esc = (v: string | number) => {
       const s = String(v ?? '');
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
+    const dedLabel = (d: boolean | null) => (d === true ? 'Yes' : d === false ? 'No' : '');
     const lines = filtered.map((r) => [
       SOURCE_LABEL[r.source], r.date, r.description, r.supplier, r.invoiceNo, r.invoiceType,
       r.category, r.accountCode, r.vat || '', r.tin, r.countInTotal ? r.amount : '',
+      dedLabel(r.deductible), r.deductibleReason,
       r.receiptRef?.webUrl || r.receiptRef?.oneDriveId || '', r.runStatus || '',
     ].map(esc).join(','));
     const csv = [headers.join(','), ...lines].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `tax-ledger-${year}.csv`;
+    const periodTag = period === 'all' ? year : `${year}-${period}`;
+    a.download = `tax-ledger-${periodTag}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Inline-edit the deductible flag on a project/overhead row (accounting correction).
+  const setRowDeductible = async (row: LedgerRow, value: boolean | null) => {
+    if (row.source === 'payroll') return;
+    const endpoint = row.source === 'project' ? 'project-expenses' : 'overhead-expenses';
+    const prev = rows;
+    setSavingId(row.id);
+    // Optimistic update.
+    setRows((rs) => rs.map((r) => (r.id === row.id && r.source === row.source ? { ...r, deductible: value } : r)));
+    try {
+      const res = await fetch(`${API}/${endpoint}/${encodeURIComponent(row.id)}`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify({ deductible: value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Update failed');
+      setToast({ msg: 'Deductible flag updated', sev: 'success' });
+    } catch (err) {
+      setRows(prev); // revert
+      setToast({ msg: err instanceof Error ? err.message : 'Update failed', sev: 'error' });
+    } finally {
+      setSavingId(null);
+    }
   };
 
   const years = Array.from({ length: 6 }, (_, i) => CURRENT_YEAR - i);
@@ -400,6 +474,28 @@ const TaxFilerLedgerPage: React.FC = () => {
               {!isTaxFiler && <MenuItem value="payroll">Payroll</MenuItem>}
             </Select>
           </FormControl>
+          <FormControl size="small" sx={{ minWidth: 140 }}>
+            <InputLabel>Deductible</InputLabel>
+            <Select label="Deductible" value={deductibleFilter} onChange={(e) => setDeductibleFilter(e.target.value as 'all' | 'yes' | 'no' | 'unmarked')}>
+              <MenuItem value="all">All</MenuItem>
+              <MenuItem value="yes">Deductible only</MenuItem>
+              <MenuItem value="no">Non-deductible</MenuItem>
+              <MenuItem value="unmarked">Unmarked</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 130 }}>
+            <InputLabel>Period</InputLabel>
+            <Select label="Period" value={period} onChange={(e) => setPeriod(String(e.target.value))}>
+              <MenuItem value="all">Full year</MenuItem>
+              <ListSubheader>Quarter</ListSubheader>
+              <MenuItem value="q1">Q1 (Jan–Mar)</MenuItem>
+              <MenuItem value="q2">Q2 (Apr–Jun)</MenuItem>
+              <MenuItem value="q3">Q3 (Jul–Sep)</MenuItem>
+              <MenuItem value="q4">Q4 (Oct–Dec)</MenuItem>
+              <ListSubheader>Month</ListSubheader>
+              {MONTH_NAMES.map((m, i) => <MenuItem key={m} value={`m${i + 1}`}>{m}</MenuItem>)}
+            </Select>
+          </FormControl>
           <FormControl size="small" sx={{ minWidth: 110 }}>
             <InputLabel>Year</InputLabel>
             <Select label="Year" value={year} onChange={(e) => setYear(String(e.target.value))}>
@@ -412,7 +508,8 @@ const TaxFilerLedgerPage: React.FC = () => {
         </Box>
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Consolidated BIR substantiation ledger: project costs, overhead, and payroll references for the selected year. Read-only.
+        Consolidated BIR substantiation ledger: project costs, overhead, and payroll references for the selected year.
+        {canEdit ? ' Use the Deductible column to correct a row’s tax classification.' : ' Read-only.'}
       </Typography>
 
       {loading ? (
@@ -425,7 +522,8 @@ const TaxFilerLedgerPage: React.FC = () => {
             {kpiCard('Cost of Services', formatPHP(totals.cogs), `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, 'Project expenses (5xxx)')}
             {kpiCard('Overhead / OPEX', formatPHP(totals.opex), `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent2} 0%, ${NET_PACIFIC_COLORS.secondary} 100%)`, 'Operating expenses (6xxx)')}
             {kpiCard('Total Substantiated', formatPHP(totals.grand), `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, ${NET_PACIFIC_COLORS.primary} 100%)`, `Input VAT ${formatPHP(totals.vat)}`)}
-            {kpiCard('Receipts Attached', String(totals.withReceipt), `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, `${totals.missingReceipt} missing receipt`)}
+            {kpiCard('Tax-Deductible', formatPHP(totals.deductible), `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, `Non-deductible ${formatPHP(totals.nonDeductible)}${totals.unmarked ? ` · Unmarked ${formatPHP(totals.unmarked)}` : ''}`)}
+            {kpiCard('Receipts Attached', String(totals.withReceipt), `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent1} 0%, ${NET_PACIFIC_COLORS.accent2} 100%)`, `${totals.missingReceipt} missing receipt`)}
           </Grid>
 
           <Paper sx={{ borderRadius: 2 }}>
@@ -444,12 +542,13 @@ const TaxFilerLedgerPage: React.FC = () => {
                     <TableCell align="right">VAT</TableCell>
                     <TableCell>TIN</TableCell>
                     <TableCell align="right">{sortLabel('amount', 'Amount', 'right')}</TableCell>
+                    <TableCell>Deductible</TableCell>
                     <TableCell>Receipt</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {!filtered.length ? (
-                    <TableRow><TableCell colSpan={12} align="center" sx={{ color: 'text.secondary', py: 4 }}>No records for {year}.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={13} align="center" sx={{ color: 'text.secondary', py: 4 }}>No records for {period === 'all' ? year : `${year} ${period.toUpperCase()}`}.</TableCell></TableRow>
                   ) : (
                     filtered.map((r) => (
                       <TableRow key={`${r.source}-${r.id}`} hover>
@@ -471,6 +570,43 @@ const TaxFilerLedgerPage: React.FC = () => {
                         <TableCell align="right">{r.vat ? formatPHP(r.vat) : '-'}</TableCell>
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>{r.tin || '-'}</TableCell>
                         <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{r.countInTotal ? formatPHP(r.amount) : '-'}</TableCell>
+                        <TableCell>
+                          {r.source === 'payroll' ? (
+                            <Typography variant="caption" color="text.secondary">—</Typography>
+                          ) : canEdit && !r.isSyncedPayroll ? (
+                            <Tooltip title={r.deductibleReason || 'Set the BIR write-off classification'}>
+                              <FormControl size="small" variant="standard" sx={{ minWidth: 124 }}>
+                                <Select
+                                  value={r.deductible === true ? 'yes' : r.deductible === false ? 'no' : 'unmarked'}
+                                  disabled={savingId === r.id}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setRowDeductible(r, v === 'yes' ? true : v === 'no' ? false : null);
+                                  }}
+                                  sx={{
+                                    fontSize: '0.78rem',
+                                    color: r.deductible === true ? NET_PACIFIC_COLORS.success : r.deductible === false ? NET_PACIFIC_COLORS.error : 'text.secondary',
+                                  }}
+                                >
+                                  <MenuItem value="yes">Deductible</MenuItem>
+                                  <MenuItem value="no">Non-deductible</MenuItem>
+                                  <MenuItem value="unmarked">Unmarked</MenuItem>
+                                </Select>
+                              </FormControl>
+                            </Tooltip>
+                          ) : r.deductible === null ? (
+                            <Chip size="small" label="Unmarked" variant="outlined" sx={{ color: 'text.secondary' }} />
+                          ) : (
+                            <Tooltip title={r.deductibleReason || (r.deductible ? 'Marked tax-deductible' : 'Not tax-deductible')}>
+                              <Chip
+                                size="small"
+                                label={r.deductible ? 'Deductible' : 'Non-deductible'}
+                                color={r.deductible ? 'success' : 'error'}
+                                variant={r.deductible ? 'filled' : 'outlined'}
+                              />
+                            </Tooltip>
+                          )}
+                        </TableCell>
                         <TableCell><ReceiptCell row={r} /></TableCell>
                       </TableRow>
                     ))
@@ -484,6 +620,14 @@ const TaxFilerLedgerPage: React.FC = () => {
           </Typography>
         </>
       )}
+      <Snackbar
+        open={!!toast}
+        autoHideDuration={3000}
+        onClose={() => setToast(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {toast ? <Alert severity={toast.sev} onClose={() => setToast(null)} variant="filled">{toast.msg}</Alert> : undefined}
+      </Snackbar>
     </Box>
   );
 };

@@ -1106,6 +1106,42 @@ app.delete('/api/project-expenses/:id', async (req, res) => {
   }
 });
 
+app.patch('/api/project-expenses/:id', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const ref = db.collection('project_expenses').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ success: false, error: 'Not found' });
+    if (!isAdmin && snap.data().createdBy !== user.id) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+    const allowed = {};
+    const { description, amount, date, category, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = req.body;
+    if (description !== undefined) allowed.description = String(description);
+    if (amount !== undefined) allowed.amount = Number(amount);
+    if (date !== undefined) allowed.date = String(date);
+    if (category !== undefined) allowed.category = String(category);
+    if (supplier !== undefined) allowed.supplier = String(supplier);
+    if (invoiceNo !== undefined) allowed.invoiceNo = String(invoiceNo);
+    if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
+    if (vat !== undefined && Number.isFinite(Number(vat))) allowed.vat = Number(vat);
+    if (tin !== undefined) allowed.tin = String(tin);
+    if (typeof deductible === 'boolean') allowed.deductible = deductible;
+    else if (deductible === null) allowed.deductible = null;
+    if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
+    if (Object.keys(allowed).length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update' });
+    allowed.updatedAt = new Date().toISOString();
+    await ref.update(allowed);
+    const updated = await ref.get();
+    res.json({ success: true, expense: { id: updated.id, ...updated.data() } });
+  } catch (err) {
+    console.error('Error updating project_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 // ========== CASH ADVANCES ==========
 
 function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -3947,6 +3983,15 @@ function normalizeReceipt(raw) {
   const customerAddress = (typeof raw.customerAddress === 'string' && raw.customerAddress.trim().length > 0) ? raw.customerAddress.trim() : null;
   const customerValidation = validateCustomerInfo(customerName, customerTin, customerAddress);
 
+  const hasCustomerIssues = customerValidation.issues.length > 0;
+  const finalDeductible = hasCustomerIssues ? false : deductible;
+  const issuesPrefix = hasCustomerIssues
+    ? customerValidation.issues.join('; ')
+    : null;
+  const finalDeductibleReason = hasCustomerIssues
+    ? (deductibleReason ? `${issuesPrefix}. ${deductibleReason}` : issuesPrefix)
+    : deductibleReason;
+
   return {
     vendor: typeof raw.vendor === 'string' ? raw.vendor : null,
     description: (typeof raw.description === 'string' && raw.description.trim().length > 0) ? raw.description.trim() : null,
@@ -3960,8 +4005,8 @@ function normalizeReceipt(raw) {
     total: safeNum(raw.total),
     paymentMethod: typeof raw.paymentMethod === 'string' ? raw.paymentMethod : null,
     suggestedCategory,
-    deductible,
-    deductibleReason,
+    deductible: finalDeductible,
+    deductibleReason: finalDeductibleReason,
     customerName,
     customerTin,
     customerAddress,
@@ -4262,6 +4307,13 @@ app.post('/api/overhead-expenses', async (req, res) => {
             sourceType: exp.sourceType || 'manual',
           };
           if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
+          if (exp.supplier) doc.supplier = String(exp.supplier);
+          if (exp.invoiceNo) doc.invoiceNo = String(exp.invoiceNo);
+          if (exp.invoiceType) doc.invoiceType = String(exp.invoiceType);
+          if (exp.tin) doc.tin = String(exp.tin);
+          if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
+          if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
+          if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
           batch.set(ref, doc);
           inserted.push({ id: ref.id, ...doc });
         }
@@ -4270,7 +4322,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     const { description, amount, date, category, sourceType, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin } = body;
+            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
       description: description || '',
@@ -4287,6 +4339,8 @@ app.post('/api/overhead-expenses', async (req, res) => {
     if (invoiceType) doc.invoiceType = String(invoiceType);
     if (tin) doc.tin = String(tin);
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
+    if (typeof deductible === 'boolean') doc.deductible = deductible;
+    if (deductibleReason) doc.deductibleReason = String(deductibleReason);
     const ref = await db.collection('overhead_expenses').add(doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
   } catch (err) {
@@ -4307,7 +4361,7 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin } = req.body;
+    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = req.body;
     if (description !== undefined) allowed.description = String(description);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
@@ -4318,6 +4372,9 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
     if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
     if (vat !== undefined && Number.isFinite(Number(vat))) allowed.vat = Number(vat);
     if (tin !== undefined) allowed.tin = String(tin);
+    if (typeof deductible === 'boolean') allowed.deductible = deductible;
+    else if (deductible === null) allowed.deductible = null;
+    if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
     allowed.updatedAt = new Date().toISOString();
     await ref.update(allowed);
     const updated = await ref.get();
