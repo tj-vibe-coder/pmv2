@@ -19,7 +19,6 @@ import {
   Payments as PaymentsIcon,
   Paid as PaidIcon,
   Build as BuildIcon,
-  RequestQuote as OverheadIcon,
   Summarize as PnLIcon,
   ReceiptLong as TaxLedgerIcon,
 } from '@mui/icons-material';
@@ -213,29 +212,6 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
               <ListItemText
                 primary="Investment Tracker"
                 secondary="Capital and contributions"
-                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                sx={{ color: 'white' }}
-              />
-            )}
-          </ListItemButton>
-        </Tooltip>
-      </ListItem>
-
-      {/* Overhead Expenses */}
-      <ListItem disablePadding sx={{ mb: 0.5 }}>
-        <Tooltip title={isExpanded ? '' : 'Overhead Expenses'} placement="right" arrow>
-          <ListItemButton
-            selected={location.pathname === '/finance/overhead-expenses'}
-            onClick={() => navigate('/finance/overhead-expenses')}
-            sx={navBtnSx(location.pathname === '/finance/overhead-expenses')}
-          >
-            <ListItemIcon sx={iconSx()}>
-              <OverheadIcon />
-            </ListItemIcon>
-            {isExpanded && (
-              <ListItemText
-                primary="Overhead Expenses"
-                secondary="Non-project company expenses"
                 secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                 sx={{ color: 'white' }}
               />

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Typography,
@@ -26,12 +26,21 @@ import {
   LinearProgress,
   Alert,
   Snackbar,
+  IconButton,
+  CircularProgress,
 } from '@mui/material';
-import { FileDownload as FileDownloadIcon, ReceiptLong as ReceiptLongIcon } from '@mui/icons-material';
+import {
+  FileDownload as FileDownloadIcon,
+  ReceiptLong as ReceiptLongIcon,
+  OpenInNew as OpenInNewIcon,
+  Close as CloseIcon,
+  DragIndicator as DragIndicatorIcon,
+} from '@mui/icons-material';
 import { API_BASE } from '../../config/api';
 import { accountFor } from '../../data/financeCategories';
 import { fetchOverheadExpenses, OverheadExpense } from '../../services/overheadExpenseService';
 import { useAuth } from '../../contexts/AuthContext';
+import { fetchDriveItemBlob } from '../../services/onedriveFolderService';
 
 const NET_PACIFIC_COLORS = {
   primary:   '#2c5aa0',
@@ -145,7 +154,9 @@ function monthInPeriod(month: number, period: PeriodFilter): boolean {
 }
 
 // --- Lazy receipt thumbnail / link cell ---------------------------------
-const ReceiptCell: React.FC<{ row: LedgerRow }> = ({ row }) => {
+// Click opens the floating receipt viewer pane (same pattern as Expense Monitoring)
+// instead of a new tab, so the tax filer can review a receipt without losing the ledger.
+const ReceiptCell: React.FC<{ row: LedgerRow; onOpen: (row: LedgerRow) => void }> = ({ row, onOpen }) => {
   const [thumb, setThumb] = useState<string | null>(null);
   const oneDriveId = row.receiptRef?.oneDriveId;
   const webUrl = row.receiptRef?.webUrl;
@@ -177,24 +188,21 @@ const ReceiptCell: React.FC<{ row: LedgerRow }> = ({ row }) => {
     return <Chip size="small" label="No receipt" variant="outlined" sx={{ color: 'text.secondary' }} />;
   }
 
-  const openHref = webUrl || `${API}/onedrive/item/${encodeURIComponent(oneDriveId || '')}/content`;
-
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
       {thumb ? (
         <Tooltip title={row.receiptRef?.filename || 'Open receipt'}>
-          <a href={openHref} target="_blank" rel="noopener noreferrer">
-            <Box
-              component="img"
-              src={thumb}
-              alt="receipt"
-              sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, border: '1px solid', borderColor: 'divider', display: 'block' }}
-            />
-          </a>
+          <Box
+            component="img"
+            src={thumb}
+            alt="receipt"
+            onClick={() => onOpen(row)}
+            sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, border: '1px solid', borderColor: 'divider', cursor: 'pointer' }}
+          />
         </Tooltip>
       ) : (
-        <Link href={openHref} target="_blank" rel="noopener noreferrer" underline="hover" sx={{ fontSize: '0.8rem' }}>
-          View
+        <Link component="button" type="button" onClick={() => onOpen(row)} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, fontSize: '0.8rem' }}>
+          <OpenInNewIcon fontSize="inherit" /> View
         </Link>
       )}
     </Box>
@@ -220,6 +228,41 @@ const TaxFilerLedgerPage: React.FC = () => {
   const [toast, setToast] = useState<{ msg: string; sev: 'success' | 'error' } | null>(null);
   // tax_filer is read-only; everyone else (accounting/admin) can correct the flag inline.
   const canEdit = !isTaxFiler;
+
+  // Floating draggable receipt viewer pane (ported from Expense Monitoring).
+  const [viewer, setViewer] = useState<{ row: LedgerRow; url: string | null } | null>(null);
+  const [viewerPos, setViewerPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const viewerDragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+
+  useEffect(() => () => { if (viewer?.url) URL.revokeObjectURL(viewer.url); }, [viewer]);
+
+  const openReceiptViewer = async (row: LedgerRow) => {
+    if (!row.receiptRef?.oneDriveId) return;
+    setViewerPos({ x: 0, y: 0 });
+    setViewer({ row, url: null });
+    try {
+      const blob = await fetchDriveItemBlob('server', 'server', row.receiptRef.oneDriveId);
+      setViewer((prev) => (prev && prev.row.id === row.id ? { ...prev, url: URL.createObjectURL(blob) } : prev));
+    } catch {
+      setToast({ msg: 'Could not load the receipt image. Use "Open in OneDrive" instead.', sev: 'error' });
+    }
+  };
+
+  const onViewerDragStart = (e: React.PointerEvent) => {
+    viewerDragRef.current = { startX: e.clientX, startY: e.clientY, baseX: viewerPos.x, baseY: viewerPos.y };
+    const onMove = (ev: PointerEvent) => {
+      const d = viewerDragRef.current;
+      if (!d) return;
+      setViewerPos({ x: d.baseX + ev.clientX - d.startX, y: d.baseY + ev.clientY - d.startY });
+    };
+    const onUp = () => {
+      viewerDragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -607,7 +650,7 @@ const TaxFilerLedgerPage: React.FC = () => {
                             </Tooltip>
                           )}
                         </TableCell>
-                        <TableCell><ReceiptCell row={r} /></TableCell>
+                        <TableCell><ReceiptCell row={r} onOpen={openReceiptViewer} /></TableCell>
                       </TableRow>
                     ))
                   )}
@@ -619,6 +662,54 @@ const TaxFilerLedgerPage: React.FC = () => {
             Payroll runs are listed for reference only and are not added to the totals: office payroll is already posted into Overhead (Salaries &amp; Wages / Government Contributions) by the payroll-approval sync, so counting it here would double it. Overhead rows tagged "Overhead (Payroll)" are that synced labor.
           </Typography>
         </>
+      )}
+      {/* Floating draggable receipt viewer pane (ported from Expense Monitoring) */}
+      {viewer && (
+        <Paper
+          elevation={8}
+          sx={{
+            position: 'fixed',
+            top: `calc(15% + ${viewerPos.y}px)`,
+            left: `calc(50% + ${viewerPos.x}px)`,
+            transform: 'translateX(-50%)',
+            zIndex: (theme) => theme.zIndex.modal + 1,
+            width: 380,
+            maxWidth: '92vw',
+            borderRadius: 2,
+            overflow: 'hidden',
+          }}
+        >
+          <Box
+            onPointerDown={onViewerDragStart}
+            sx={{
+              display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
+              bgcolor: NET_PACIFIC_COLORS.primary, color: 'white',
+              cursor: 'move', userSelect: 'none', touchAction: 'none',
+            }}
+          >
+            <DragIndicatorIcon fontSize="small" sx={{ opacity: 0.7 }} />
+            <Typography variant="subtitle2" sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {viewer.row.description || viewer.row.category} — {formatPHP(viewer.row.amount)}
+            </Typography>
+            <IconButton size="small" onClick={() => setViewer(null)} sx={{ color: 'white' }} title="Close">
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Box>
+          <Box sx={{ p: 1.5, maxHeight: '60vh', overflow: 'auto', textAlign: 'center', bgcolor: '#f8fafc' }}>
+            {viewer.url ? (
+              <Box component="img" src={viewer.url} alt="receipt" sx={{ maxWidth: '100%', borderRadius: 1 }} />
+            ) : (
+              <Box sx={{ py: 6 }}><CircularProgress size={28} /></Box>
+            )}
+          </Box>
+          {viewer.row.receiptRef?.webUrl && (
+            <Box sx={{ px: 1.5, py: 1, borderTop: '1px solid #e2e8f0', textAlign: 'right' }}>
+              <Link href={viewer.row.receiptRef.webUrl} target="_blank" rel="noopener" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                <OpenInNewIcon fontSize="inherit" /> Open in OneDrive
+              </Link>
+            </Box>
+          )}
+        </Paper>
       )}
       <Snackbar
         open={!!toast}

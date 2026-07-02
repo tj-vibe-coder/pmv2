@@ -305,6 +305,53 @@ async function listAllUsers(req, res) {
 app.get('/api/users', listAllUsers);
 usersRouter.get('/', listAllUsers);
 
+// Superadmin-only direct create — unlike /api/auth/register (self-service,
+// role limited to user/viewer, always starts unapproved), this can set any
+// role and is approved=1 immediately so the account is usable right away.
+usersRouter.post('/', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { username, email, password, full_name, designation, contact_number, role = 'user', approved = 1 } = req.body;
+  const nextUsername = String(username || '').trim();
+  const nextEmail = String(email || '').trim();
+  const nextPassword = String(password || '');
+  if (!nextUsername) return res.status(400).json({ success: false, error: 'Username is required' });
+  if (!nextEmail) return res.status(400).json({ success: false, error: 'Email is required' });
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(nextEmail)) return res.status(400).json({ success: false, error: 'Please enter a valid email address' });
+  if (nextPassword.length < 6) return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long' });
+  if (!['superadmin', 'admin', 'user', 'viewer', 'tax_filer'].includes(role)) return res.status(400).json({ success: false, error: 'Invalid role specified' });
+  try {
+    const [uSnap, eSnap] = await Promise.all([
+      db.collection('users').where('username', '==', nextUsername).limit(1).get(),
+      db.collection('users').where('email', '==', nextEmail).limit(1).get(),
+    ]);
+    if (!uSnap.empty) return res.status(409).json({ success: false, error: 'Username already exists' });
+    if (!eSnap.empty) return res.status(409).json({ success: false, error: 'Email already exists' });
+    const passwordHash = Buffer.from(nextPassword).toString('base64');
+    const now = Math.floor(Date.now() / 1000);
+    const ref = await db.collection('users').add({
+      username: nextUsername,
+      email: nextEmail,
+      password_hash: passwordHash,
+      role,
+      approved: approved ? 1 : 0,
+      full_name: full_name ? String(full_name).trim() : null,
+      designation: designation ? String(designation).trim() : null,
+      contact_number: contact_number ? String(contact_number).trim() : null,
+      created_at: now,
+      updated_at: now,
+    });
+    console.log(`User ${nextUsername} created by superadmin ${user.username} with role: ${role}`);
+    const doc = await ref.get();
+    res.status(201).json({ success: true, message: 'User created', user: userResponse(doc.id, doc.data()) });
+  } catch (err) {
+    console.error('Error creating user:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 usersRouter.get('/staff-contacts', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -1256,14 +1303,16 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
 // employee out-of-pocket claim instead of a company-paid one. Creates a submitted liquidation
 // for the chosen employee (optionally against one of their approved CAs) and removes the
 // original project_expense in one batch, so the cost is never counted twice.
-app.post('/api/project-expenses/:id/promote-to-liquidation', async (req, res) => {
+// Shared by project_expenses and overhead_expenses — an overhead receipt an
+// employee paid out-of-pocket is just as promotable as a project one.
+const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
   const { userId, caId } = req.body || {};
   if (!userId) return res.status(400).json({ success: false, error: 'userId is required' });
   try {
-    const expenseRef = db.collection('project_expenses').doc(req.params.id);
+    const expenseRef = db.collection(collectionName).doc(req.params.id);
     const expenseSnap = await expenseRef.get();
     if (!expenseSnap.exists) return res.status(404).json({ success: false, error: 'Expense not found' });
     const expense = expenseSnap.data();
@@ -1331,10 +1380,13 @@ app.post('/api/project-expenses/:id/promote-to-liquidation', async (req, res) =>
 
     res.json({ success: true, liquidationId: liquidationRef.id, formNo });
   } catch (err) {
-    console.error('Error promoting project_expense to liquidation:', err);
+    console.error(`Error promoting ${collectionName} row to liquidation:`, err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
-});
+};
+
+app.post('/api/project-expenses/:id/promote-to-liquidation', promoteExpenseToLiquidation('project_expenses'));
+app.post('/api/overhead-expenses/:id/promote-to-liquidation', promoteExpenseToLiquidation('overhead_expenses'));
 
 // ========== CASH ADVANCES ==========
 
@@ -1738,6 +1790,216 @@ app.delete('/api/liquidations/:id', async (req, res) => {
   }
 });
 
+// ── Submitted-liquidation edit workflow ──────────────────────────────────────
+// Submitted liquidations stay closed to direct PUTs, but the filing owner (or
+// an admin) can propose an edit that a superadmin approves; a superadmin's own
+// edit applies immediately. Applying a revision reconciles the side effects of
+// the original submission — the linked CA balance delta and the
+// project_expenses rows synced from this liquidation — and snapshots the
+// before/after state to liquidation_revision_audit.
+
+function parseLiqRows(rowsJson) {
+  if (Array.isArray(rowsJson)) return rowsJson;
+  if (typeof rowsJson !== 'string') return [];
+  try { const p = JSON.parse(rowsJson || '[]'); return Array.isArray(p) ? p : []; } catch { return []; }
+}
+
+async function applyLiquidationRevision(liqId, liq, revision, approver) {
+  const now = Math.floor(Date.now() / 1000);
+  const oldRows = parseLiqRows(liq.rows_json);
+  const newRows = parseLiqRows(revision.rows_json);
+  const oldTotal = parseFloat(liq.total_amount) || 0;
+  const newTotal = parseFloat(revision.total_amount) || 0;
+
+  // CA reconciliation: the original submission already deducted oldTotal, so
+  // only the delta moves, and the revision may not overdraw the CA.
+  if (liq.ca_id) {
+    const caRef = db.collection('cash_advances').doc(String(liq.ca_id));
+    const caDoc = await caRef.get();
+    if (caDoc.exists) {
+      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
+      const delta = newTotal - oldTotal;
+      if (delta > bal) throw Object.assign(new Error(`Revised total (₱${newTotal.toFixed(2)}) exceeds the CA's available balance (₱${(bal + oldTotal).toFixed(2)})`), { status: 400 });
+      if (delta !== 0) await caRef.update({ balance_remaining: FieldValue.increment(-delta), updated_at: now });
+    }
+  }
+
+  // project_expenses re-sync: update/delete docs previously synced from this
+  // liquidation, and create docs only for rows that are new in the revision.
+  // Rows that were never synced (older filings predate the client-side sync)
+  // stay unsynced so applying a fix doesn't retroactively inject historical
+  // costs into the P&L.
+  const liqDescription = (row) => liq.form_no
+    ? `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`
+    : ((row.particulars || '').trim() || 'Liquidation');
+  const expSnap = await db.collection('project_expenses').where('sourceLiquidationId', '==', liqId).get();
+  const expByRowId = new Map();
+  expSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) expByRowId.set(rid, d); });
+  const oldRowIds = new Set(oldRows.map(r => r.id));
+  const newById = new Map(newRows.map(r => [r.id, r]));
+  const batch = db.batch();
+  for (const [rowId, expDoc] of expByRowId) {
+    const row = newById.get(rowId);
+    if (!row || !row.projectId || !(Number(row.amount) > 0)) { batch.delete(expDoc.ref); continue; }
+    batch.update(expDoc.ref, {
+      projectId: String(row.projectId),
+      projectName: (row.projectName || '').trim() || '—',
+      description: liqDescription(row),
+      amount: Number(row.amount) || 0,
+      date: row.date || expDoc.data().date || null,
+      category: (row.category || '').trim() || 'Others',
+    });
+  }
+  for (const row of newRows) {
+    if (oldRowIds.has(row.id) || expByRowId.has(row.id)) continue;
+    if (!row.projectId || !(Number(row.amount) > 0)) continue;
+    const doc = {
+      projectId: String(row.projectId),
+      projectName: (row.projectName || '').trim() || '—',
+      description: liqDescription(row),
+      amount: Number(row.amount) || 0,
+      date: row.date || new Date().toISOString().slice(0, 10),
+      category: (row.category || '').trim() || 'Others',
+      createdAt: new Date().toISOString(),
+      createdBy: revision.proposed_by || approver.id,
+      sourceType: 'liquidation_sync',
+      sourceLiquidationId: liqId,
+      sourceLiquidationRowId: row.id,
+    };
+    if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
+    if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
+    if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
+    if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+    batch.set(db.collection('project_expenses').doc(), doc);
+  }
+  await batch.commit();
+
+  await db.collection('liquidation_revision_audit').add({
+    liquidation_id: liqId,
+    form_no: liq.form_no || null,
+    action: 'applied',
+    before: { rows_json: liq.rows_json, total_amount: oldTotal, employee_name: liq.employee_name || null, date_of_submission: liq.date_of_submission || null },
+    after: { rows_json: JSON.stringify(newRows), total_amount: newTotal, employee_name: revision.employee_name ?? liq.employee_name ?? null, date_of_submission: revision.date_of_submission ?? liq.date_of_submission ?? null },
+    proposed_by: revision.proposed_by || approver.id,
+    proposed_by_name: revision.proposed_by_name || null,
+    approved_by: approver.id,
+    note: revision.note || null,
+    created_at: now,
+  });
+
+  const update = { rows_json: JSON.stringify(newRows), total_amount: newTotal, updated_at: now, pending_revision: FieldValue.delete() };
+  if (revision.employee_name != null) update.employee_name = revision.employee_name;
+  if (revision.date_of_submission != null) update.date_of_submission = revision.date_of_submission;
+  if (revision.receipts_json != null) update.receipts_json = revision.receipts_json;
+  await db.collection('liquidations').doc(liqId).update(update);
+}
+
+// Owner or admin proposes an edit to a submitted liquidation; superadmin's own
+// proposal applies immediately (no self-approval round-trip).
+app.post('/api/liquidations/:id/propose-edit', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role === 'viewer') return res.status(403).json({ success: false, error: 'Forbidden' });
+  const { id } = req.params;
+  try {
+    const ref = db.collection('liquidations').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+    if (!isAdmin && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
+    if (liq.status !== 'submitted') return res.status(400).json({ success: false, error: 'Only submitted liquidations use the edit-approval flow — edit the draft directly' });
+    const { rows_json, receipts_json, total_amount, employee_name, date_of_submission, note } = req.body;
+    const rows = parseLiqRows(rows_json);
+    if (rows.length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
+    const total = parseFloat(total_amount) || 0;
+    // Early CA check for fast feedback; approval re-validates against the live balance.
+    if (liq.ca_id) {
+      const caDoc = await db.collection('cash_advances').doc(String(liq.ca_id)).get();
+      if (caDoc.exists) {
+        const available = (parseFloat(caDoc.data().balance_remaining) || 0) + (parseFloat(liq.total_amount) || 0);
+        if (total > available) return res.status(400).json({ success: false, error: `Revised total (₱${total.toFixed(2)}) exceeds the CA's available balance (₱${available.toFixed(2)})` });
+      }
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const revision = {
+      rows_json: JSON.stringify(rows),
+      receipts_json: receipts_json != null ? (typeof receipts_json === 'string' ? receipts_json : JSON.stringify(receipts_json)) : null,
+      total_amount: total,
+      employee_name: employee_name ?? null,
+      date_of_submission: date_of_submission ?? null,
+      note: (note || '').trim() || null,
+      proposed_by: user.id,
+      proposed_by_name: user.full_name || user.username || null,
+      proposed_at: now,
+    };
+    if (user.role === 'superadmin') {
+      await applyLiquidationRevision(id, liq, revision, user);
+      return res.json({ success: true, applied: true, message: 'Edit applied' });
+    }
+    if (liq.pending_revision && liq.pending_revision.proposed_by !== user.id) {
+      return res.status(409).json({ success: false, error: `An edit by ${liq.pending_revision.proposed_by_name || 'another user'} is already pending approval` });
+    }
+    await ref.update({ pending_revision: revision, updated_at: now });
+    res.json({ success: true, applied: false, message: 'Edit submitted for superadmin approval' });
+  } catch (err) {
+    if (err && err.status === 400) return res.status(400).json({ success: false, error: err.message });
+    console.error('Error proposing liquidation edit:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/liquidations/:id/revision/approve', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { id } = req.params;
+  try {
+    const doc = await db.collection('liquidations').doc(id).get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    if (!liq.pending_revision) return res.status(400).json({ success: false, error: 'No pending edit on this liquidation' });
+    await applyLiquidationRevision(id, liq, liq.pending_revision, user);
+    res.json({ success: true, message: 'Edit approved and applied' });
+  } catch (err) {
+    if (err && err.status === 400) return res.status(400).json({ success: false, error: err.message });
+    console.error('Error approving liquidation revision:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/liquidations/:id/revision/reject', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { id } = req.params;
+  const { reason } = req.body || {};
+  try {
+    const ref = db.collection('liquidations').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    if (!liq.pending_revision) return res.status(400).json({ success: false, error: 'No pending edit on this liquidation' });
+    const now = Math.floor(Date.now() / 1000);
+    await db.collection('liquidation_revision_audit').add({
+      liquidation_id: id,
+      form_no: liq.form_no || null,
+      action: 'rejected',
+      proposed_revision: liq.pending_revision,
+      proposed_by: liq.pending_revision.proposed_by || null,
+      proposed_by_name: liq.pending_revision.proposed_by_name || null,
+      rejected_by: user.id,
+      reason: (reason || '').trim() || null,
+      created_at: now,
+    });
+    await ref.update({ pending_revision: FieldValue.delete(), updated_at: now });
+    res.json({ success: true, message: 'Edit rejected' });
+  } catch (err) {
+    console.error('Error rejecting liquidation revision:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 // ========== FORECASTING (static data) ==========
 app.get('/api/forecasting/revenue', (req, res) => {
   res.json([
@@ -2011,6 +2273,95 @@ async function requirePayrollAccess(req, res) {
   return user;
 }
 
+// Editing/deleting an already-created run rewrites figures that have already flowed into the
+// company P&L (overhead sync) — restricted to superadmin on top of the normal payroll whitelist.
+async function requireSuperadminPayrollAccess(req, res) {
+  const user = await requirePayrollAccess(req, res);
+  if (!user) return null;
+  if (user.role !== 'superadmin') { res.status(403).json({ error: 'Superadmin only' }); return null; }
+  return user;
+}
+
+// Posts/updates/removes the OFFICE-staff payroll cost rows in overhead_expenses for a run,
+// keyed on deterministic ids so recompute always overwrites (never duplicates) them — same
+// idempotent idiom used on approve. Also mirrors the funding source onto (or off of) an
+// Investment Tracker entry. Best-effort by design; caller decides whether a failure here
+// should block its own response.
+async function syncPayrollOverheadExpenses(runId, runData, user) {
+  const ref = db.collection('payroll_runs').doc(runId);
+  const payslipsSnap = await ref.collection('payslips').get();
+  let totalOfficeGross = 0;
+  let totalOfficeERGovt = 0;
+  payslipsSnap.forEach((pSnap) => {
+    const p = pSnap.data();
+    if (p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE') {
+      totalOfficeGross += Number(p.grossPay || 0);
+      totalOfficeERGovt += Number(p.erSSS || 0) + Number(p.erPhilhealth || 0) + Number(p.erPagibig || 0);
+    }
+  });
+
+  const expenseDate = runData.payDate || runData.periodEnd || new Date().toISOString().slice(0, 10);
+  const fundingSource = normalizeFundingSource(runData.fundingSource);
+  const baseDoc = {
+    date: expenseDate,
+    sourceType: 'payroll_sync',
+    sourceRunId: runId,
+    createdAt: new Date().toISOString(),
+    createdBy: user.id || user.username,
+    ...(fundingSource ? { fundingSource } : {}),
+  };
+
+  const batch = db.batch();
+  const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
+  const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
+  let salariesDoc = null;
+  let govtDoc = null;
+  if (totalOfficeGross > 0) {
+    salariesDoc = {
+      ...baseDoc,
+      description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Office salaries`,
+      amount: totalOfficeGross,
+      category: 'Salaries & Wages',
+    };
+    batch.set(salariesRef, salariesDoc);
+  } else {
+    batch.delete(salariesRef);
+  }
+  if (totalOfficeERGovt > 0) {
+    govtDoc = {
+      ...baseDoc,
+      description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Employer gov't contributions`,
+      amount: totalOfficeERGovt,
+      category: 'Government Contributions',
+    };
+    batch.set(govtRef, govtDoc);
+  } else {
+    batch.delete(govtRef);
+  }
+  await batch.commit();
+
+  await Promise.all([
+    syncExpenseFundingInvestment(salariesRef.id, 'overhead_expenses', salariesDoc || {}),
+    syncExpenseFundingInvestment(govtRef.id, 'overhead_expenses', govtDoc || {}),
+  ]);
+}
+
+// Removes any overhead_expenses rows (and their linked Investment Tracker entries) previously
+// posted for a run — used when deleting a run outright, or editing an APPROVED/PAID run back
+// down to DRAFT, so a payroll run that's no longer "live" doesn't leave phantom OPEX behind.
+async function reversePayrollOverheadExpenses(runId) {
+  const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
+  const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
+  const batch = db.batch();
+  batch.delete(salariesRef);
+  batch.delete(govtRef);
+  await batch.commit();
+  await Promise.all([
+    syncExpenseFundingInvestment(salariesRef.id, 'overhead_expenses', {}),
+    syncExpenseFundingInvestment(govtRef.id, 'overhead_expenses', {}),
+  ]);
+}
+
 // ── Employees ──────────────────────────────────────────────────────────────
 app.get('/api/payroll/employees', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
@@ -2053,6 +2404,8 @@ app.post('/api/payroll/runs', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   try {
     const data = { ...req.body, status: 'DRAFT', createdBy: user.username, createdAt: new Date().toISOString() };
+    const normalizedFunding = normalizeFundingSource(data.fundingSource);
+    if (normalizedFunding) data.fundingSource = normalizedFunding; else delete data.fundingSource;
     const ref = await db.collection('payroll_runs').add(data);
     res.status(201).json({ id: ref.id, ...data });
   } catch (err) { res.status(500).json({ error: 'Failed to create payroll run' }); }
@@ -2071,65 +2424,107 @@ app.post('/api/payroll/runs/:id/approve', async (req, res) => {
     const nextStatus = runData.status === 'PAID' ? 'PAID' : 'APPROVED';
     await ref.update({ status: nextStatus, approvedBy: user.username, approvedAt: new Date().toISOString() });
 
-    // --- Overhead sync (best-effort; must never fail the approval) ---
-    // Posts OFFICE-staff payroll cost into overhead_expenses so it flows into the company P&L OPEX.
-    // Uses DETERMINISTIC doc ids keyed on the run, so re-approving overwrites (never duplicates) the
-    // rows and stays correct even under concurrent approve calls — no read-then-write race, no index.
+    // Overhead sync is best-effort and must never fail the approval itself.
     let overheadSynced = false;
     try {
-      const payslipsSnap = await ref.collection('payslips').get();
-      let totalOfficeGross = 0;
-      let totalOfficeERGovt = 0;
-      payslipsSnap.forEach((pSnap) => {
-        const p = pSnap.data();
-        if (p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE') {
-          totalOfficeGross += Number(p.grossPay || 0);
-          totalOfficeERGovt += Number(p.erSSS || 0) + Number(p.erPhilhealth || 0) + Number(p.erPagibig || 0);
-        }
-      });
-
-      const expenseDate = runData.payDate || runData.periodEnd || new Date().toISOString().slice(0, 10);
-      const baseDoc = {
-        date: expenseDate,
-        sourceType: 'payroll_sync',
-        sourceRunId: runId,
-        createdAt: new Date().toISOString(),
-        createdBy: user.id || user.username,
-      };
-
-      const batch = db.batch();
-      const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
-      const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
-      // set when > 0, otherwise delete any stale row from a prior approve (delete of a missing doc is a no-op).
-      if (totalOfficeGross > 0) {
-        batch.set(salariesRef, {
-          ...baseDoc,
-          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Office salaries`,
-          amount: totalOfficeGross,
-          category: 'Salaries & Wages',
-        });
-      } else {
-        batch.delete(salariesRef);
-      }
-      if (totalOfficeERGovt > 0) {
-        batch.set(govtRef, {
-          ...baseDoc,
-          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Employer gov't contributions`,
-          amount: totalOfficeERGovt,
-          category: 'Government Contributions',
-        });
-      } else {
-        batch.delete(govtRef);
-      }
-      await batch.commit();
+      await syncPayrollOverheadExpenses(runId, runData, user);
       overheadSynced = true;
     } catch (syncErr) {
       console.error('Payroll overhead sync failed for run', runId, syncErr);
     }
-    // --- end overhead sync ---
 
     res.json({ success: true, overheadSynced });
   } catch (err) { res.status(500).json({ error: 'Failed to approve run' }); }
+});
+
+// Superadmin-only: rewrite an existing run's period/funding/payslips and, if its target status
+// changes, reconcile the overhead_expenses sync accordingly (post it if now APPROVED/PAID, pull
+// it back out if downgraded to DRAFT). Existing payslip docs not present in the new set are
+// deleted so removing an employee from the run actually removes their entry, not just leaves it
+// stale.
+app.put('/api/payroll/runs/:id', async (req, res) => {
+  const user = await requireSuperadminPayrollAccess(req, res); if (!user) return;
+  try {
+    const runId = req.params.id;
+    const ref = db.collection('payroll_runs').doc(runId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
+    const existing = doc.data();
+
+    const { payslips, status, id, createdAt, createdBy, ...runFields } = req.body;
+    if (!Array.isArray(payslips)) return res.status(400).json({ error: 'payslips must be an array' });
+    const nextStatus = ['DRAFT', 'APPROVED', 'PAID'].includes(status) ? status : existing.status;
+
+    const normalizedFunding = normalizeFundingSource(runFields.fundingSource);
+    const updates = { ...runFields, status: nextStatus, updatedBy: user.username, updatedAt: new Date().toISOString() };
+    // Unlike the create endpoint's `.add()`, this is an `.update()` on an existing doc — simply
+    // omitting the key would leave a stale fundingSource in place, so an explicit FieldValue.delete()
+    // is required to actually clear it when funding is switched back to corporate_bank.
+    updates.fundingSource = normalizedFunding || FieldValue.delete();
+    if (nextStatus === 'APPROVED' && existing.status !== 'APPROVED') { updates.approvedBy = user.username; updates.approvedAt = new Date().toISOString(); }
+    if (nextStatus === 'PAID' && existing.status !== 'PAID') { updates.paidAt = new Date().toISOString(); }
+    await ref.update(updates);
+
+    // Replace the payslip set: drop rows for employees no longer included, overwrite the rest.
+    const payslipsCol = ref.collection('payslips');
+    const existingSlipsSnap = await payslipsCol.get();
+    const nextIds = new Set(payslips.map((p) => p.employeeId));
+    const batch = db.batch();
+    existingSlipsSnap.forEach((d) => { if (!nextIds.has(d.id)) batch.delete(d.ref); });
+    payslips.forEach((slip) => {
+      const slipRef = slip.employeeId ? payslipsCol.doc(slip.employeeId) : payslipsCol.doc();
+      batch.set(slipRef, slip);
+    });
+    await batch.commit();
+
+    let overheadSynced = false;
+    try {
+      if (nextStatus === 'APPROVED' || nextStatus === 'PAID') {
+        // Re-fetch rather than reuse the local `updates` object — it may still hold an unresolved
+        // FieldValue.delete() sentinel for fundingSource, which the sync helper can't interpret.
+        const freshData = (await ref.get()).data();
+        await syncPayrollOverheadExpenses(runId, freshData, user);
+        overheadSynced = true;
+      } else {
+        await reversePayrollOverheadExpenses(runId);
+      }
+    } catch (syncErr) {
+      console.error('Payroll overhead sync failed while editing run', runId, syncErr);
+    }
+
+    res.json({ success: true, overheadSynced });
+  } catch (err) { res.status(500).json({ error: 'Failed to update payroll run' }); }
+});
+
+// Superadmin-only: delete a run outright, cascading to its payslips/DTR subcollections and
+// reversing any overhead_expenses rows (and linked Investment Tracker entries) it had posted —
+// so a deleted run doesn't leave phantom OPEX behind in the company P&L.
+app.delete('/api/payroll/runs/:id', async (req, res) => {
+  const user = await requireSuperadminPayrollAccess(req, res); if (!user) return;
+  try {
+    const runId = req.params.id;
+    const ref = db.collection('payroll_runs').doc(runId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
+
+    try {
+      await reversePayrollOverheadExpenses(runId);
+    } catch (syncErr) {
+      console.error('Overhead reversal failed for deleted run', runId, syncErr);
+    }
+
+    const [payslipsSnap, dtrSnap] = await Promise.all([
+      ref.collection('payslips').get(),
+      ref.collection('dtrEntries').get(),
+    ]);
+    const batch = db.batch();
+    payslipsSnap.forEach((d) => batch.delete(d.ref));
+    dtrSnap.forEach((d) => batch.delete(d.ref));
+    batch.delete(ref);
+    await batch.commit();
+
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete payroll run' }); }
 });
 
 app.post('/api/payroll/runs/:id/pay', async (req, res) => {

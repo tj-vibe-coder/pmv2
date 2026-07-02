@@ -90,6 +90,8 @@ export type ExpenseScope = 'project' | 'overhead';
 // Sentinel value for the Project filter/select so "Overhead" can live in the same
 // dropdown as real projects instead of a second control (roadmap §3).
 const OVERHEAD_SENTINEL = '__overhead__';
+// Every project expense, no overhead rows — the complement of OVERHEAD_SENTINEL.
+const ALL_PROJECTS_SENTINEL = '__all_projects__';
 
 export interface ProjectExpense {
   id: string;
@@ -188,6 +190,9 @@ const ExpenseMonitoring: React.FC = () => {
   
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [selectedYear, setSelectedYear] = useState<number>(0);
+  // Month (1-12) and quarter (1-4) are mutually exclusive; 0 = no filter.
+  const [selectedMonth, setSelectedMonth] = useState<number>(0);
+  const [selectedQuarter, setSelectedQuarter] = useState<number>(0);
   const [selectedProjectId, setSelectedProjectId] = useState<string | ''>('');
   const [loading, setLoading] = useState(true);
   const [addExpenseOpen, setAddExpenseOpen] = useState(false);
@@ -315,9 +320,16 @@ const ExpenseMonitoring: React.FC = () => {
   }, [location.pathname, fetchExpenses]);
 
   const expensesInYear = useMemo(() => {
-    if (selectedYear === 0) return expenses;
-    return expenses.filter((e) => e.date && e.date.startsWith(String(selectedYear)));
-  }, [expenses, selectedYear]);
+    if (selectedYear === 0 && selectedMonth === 0 && selectedQuarter === 0) return expenses;
+    return expenses.filter((e) => {
+      if (!e.date) return false;
+      if (selectedYear !== 0 && !e.date.startsWith(String(selectedYear))) return false;
+      const month = Number(e.date.slice(5, 7));
+      if (selectedMonth !== 0 && month !== selectedMonth) return false;
+      if (selectedQuarter !== 0 && Math.ceil(month / 3) !== selectedQuarter) return false;
+      return true;
+    });
+  }, [expenses, selectedYear, selectedMonth, selectedQuarter]);
 
   // The budget cards/charts below are project-budget concepts — overhead expenses have
   // no project budget to track against, so they're excluded here (they still appear in
@@ -334,7 +346,7 @@ const ExpenseMonitoring: React.FC = () => {
   }, [projectExpensesInYear]);
 
   const projectsForView = useMemo(() => {
-    if (selectedProjectId === '') return allProjects;
+    if (selectedProjectId === '' || selectedProjectId === ALL_PROJECTS_SENTINEL) return allProjects;
     const p = allProjects.find((x) => String(x.id) === selectedProjectId);
     return p ? [p] : [];
   }, [allProjects, selectedProjectId]);
@@ -350,17 +362,20 @@ const ExpenseMonitoring: React.FC = () => {
   }, [projectsForView, budgets, spentByProject]);
 
   const expenseMetrics = useMemo(() => {
-    const totalBudget = selectedProjectId === ''
+    // The all-projects sentinel behaves exactly like '' for the budget cards —
+    // budgets are a project-only concept, so both aggregate every project.
+    const isAggregate = selectedProjectId === '' || selectedProjectId === ALL_PROJECTS_SENTINEL;
+    const totalBudget = isAggregate
       ? Object.values(budgets).reduce((a, b) => a + b, 0)
       : (budgets[selectedProjectId] ?? 0);
-    const totalSpent = selectedProjectId === ''
+    const totalSpent = isAggregate
       ? projectExpensesInYear.reduce((sum, e) => sum + e.amount, 0)
       : selectedProjectId === OVERHEAD_SENTINEL
         ? expensesInYear.reduce((sum, e) => sum + (e.scope === 'overhead' ? e.amount : 0), 0)
         : (spentByProject[selectedProjectId] ?? 0);
     const totalRemaining = totalBudget - totalSpent;
     const spentPercentage = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
-    const overBudgetCount = selectedProjectId === ''
+    const overBudgetCount = isAggregate
       ? allProjects.filter((p) => (budgets[String(p.id)] ?? 0) > 0 && (spentByProject[String(p.id)] ?? 0) > (budgets[String(p.id)] ?? 0)).length
       : (totalBudget > 0 && totalSpent > totalBudget ? 1 : 0);
     const remainingPct = totalBudget > 0 ? (totalRemaining / totalBudget) * 100 : 100;
@@ -394,7 +409,7 @@ const ExpenseMonitoring: React.FC = () => {
   const monthlyExpenseData = useMemo((): MonthlyExpense[] => {
     const byMonth: Record<string, number> = {};
     projectExpensesInYear.forEach((e) => {
-      if (selectedProjectId !== '' && String(e.projectId) !== selectedProjectId) return;
+      if (selectedProjectId !== '' && selectedProjectId !== ALL_PROJECTS_SENTINEL && String(e.projectId) !== selectedProjectId) return;
       const month = e.date ? e.date.slice(0, 7) : '';
       if (month) byMonth[month] = (byMonth[month] || 0) + e.amount;
     });
@@ -408,6 +423,7 @@ const ExpenseMonitoring: React.FC = () => {
   // '' (All) shows everything — both scopes, all projects.
   const tableRows = useMemo(() => {
     if (selectedProjectId === OVERHEAD_SENTINEL) return expensesInYear.filter((e) => e.scope === 'overhead');
+    if (selectedProjectId === ALL_PROJECTS_SENTINEL) return expensesInYear.filter((e) => e.scope === 'project');
     if (selectedProjectId !== '') return expensesInYear.filter((e) => e.scope === 'project' && String(e.projectId) === selectedProjectId);
     return expensesInYear;
   }, [expensesInYear, selectedProjectId]);
@@ -846,7 +862,8 @@ const ExpenseMonitoring: React.FC = () => {
     setPromoteError('');
     try {
       const token = localStorage.getItem('netpacific_token');
-      const res = await fetch(`${API_BASE}/api/project-expenses/${promoteExpense.id}/promote-to-liquidation`, {
+      const endpoint = promoteExpense.scope === 'overhead' ? 'overhead-expenses' : 'project-expenses';
+      const res = await fetch(`${API_BASE}/api/${endpoint}/${promoteExpense.id}/promote-to-liquidation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ userId: promoteUserId, ...(promoteCaId ? { caId: promoteCaId } : {}) }),
@@ -1187,7 +1204,7 @@ const ExpenseMonitoring: React.FC = () => {
               setExpenseSupplier(''); setExpenseInvoiceNo(''); setExpenseInvoiceType(''); setExpenseVat(''); setExpenseTin(''); pendingReceiptRef.current = null;
               // Default the dialog's scope/project to whatever the table is filtered to.
               setExpenseScope(selectedProjectId === OVERHEAD_SENTINEL ? 'overhead' : 'project');
-              if (selectedProjectId !== '' && selectedProjectId !== OVERHEAD_SENTINEL) setExpenseProjectId(selectedProjectId);
+              if (selectedProjectId !== '' && selectedProjectId !== OVERHEAD_SENTINEL && selectedProjectId !== ALL_PROJECTS_SENTINEL) setExpenseProjectId(selectedProjectId);
               setAddExpenseOpen(true);
             }}
             sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
@@ -1250,6 +1267,34 @@ const ExpenseMonitoring: React.FC = () => {
             ))}
           </Select>
         </FormControl>
+        <FormControl size="small" sx={{ minWidth: 140 }}>
+          <InputLabel>Month</InputLabel>
+          <Select
+            value={selectedMonth}
+            onChange={(e) => { setSelectedMonth(Number(e.target.value)); setSelectedQuarter(0); }}
+            label="Month"
+          >
+            <MenuItem value={0}>All months</MenuItem>
+            {Array.from({ length: 12 }, (_, i) => (
+              <MenuItem key={i + 1} value={i + 1}>
+                {new Date(2000, i, 1).toLocaleString('en-US', { month: 'long' })}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <FormControl size="small" sx={{ minWidth: 120 }}>
+          <InputLabel>Quarter</InputLabel>
+          <Select
+            value={selectedQuarter}
+            onChange={(e) => { setSelectedQuarter(Number(e.target.value)); setSelectedMonth(0); }}
+            label="Quarter"
+          >
+            <MenuItem value={0}>All quarters</MenuItem>
+            {[1, 2, 3, 4].map((q) => (
+              <MenuItem key={q} value={q}>Q{q}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
         <FormControl size="small" sx={{ minWidth: 200 }}>
           <InputLabel>Scope</InputLabel>
           <Select
@@ -1258,13 +1303,14 @@ const ExpenseMonitoring: React.FC = () => {
             label="Scope"
           >
             <MenuItem value="">All (projects + overhead)</MenuItem>
+            <MenuItem value={ALL_PROJECTS_SENTINEL}>All projects (no overhead)</MenuItem>
             <MenuItem value={OVERHEAD_SENTINEL}>Overhead (no project)</MenuItem>
             {allProjects.map((p) => (
               <MenuItem key={p.id} value={String(p.id)}>{p.project_name}</MenuItem>
             ))}
           </Select>
         </FormControl>
-        {selectedProjectId !== '' && selectedProjectId !== OVERHEAD_SENTINEL && (
+        {selectedProjectId !== '' && selectedProjectId !== OVERHEAD_SENTINEL && selectedProjectId !== ALL_PROJECTS_SENTINEL && (
           <Button
             variant="outlined"
             size="small"
@@ -1328,7 +1374,7 @@ const ExpenseMonitoring: React.FC = () => {
           }}>
             <CardContent sx={{ p: 2 }}>
               <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>
-                {selectedProjectId === '' ? 'Over Budget Projects' : 'Over Budget'}
+                {selectedProjectId === '' || selectedProjectId === ALL_PROJECTS_SENTINEL ? 'Over Budget Projects' : 'Over Budget'}
               </Typography>
               <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {expenseMetrics.overBudgetCategories}
@@ -1533,7 +1579,7 @@ const ExpenseMonitoring: React.FC = () => {
                   <TableCell align="right">Amount</TableCell>
                   <TableCell>Receipt</TableCell>
                   <TableCell>Source</TableCell>
-                  <TableCell padding="none" align="center" width={140}>Actions</TableCell>
+                  <TableCell padding="none" align="center" width={170}>Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -1599,29 +1645,41 @@ const ExpenseMonitoring: React.FC = () => {
                         />
                       </TableCell>
                       <TableCell padding="none" align="center" sx={{ whiteSpace: 'nowrap' }}>
-                        {!expense.receiptRef?.webUrl && (
-                          <IconButton size="small" onClick={() => openAttachReceipt(expense)} title="Attach receipt photo" color="primary" disabled={attachingReceiptId === expense.id}>
-                            {attachingReceiptId === expense.id ? <CircularProgress size={16} /> : <AddAPhotoIcon fontSize="small" />}
+                        {/* Fixed-width slot per action (rendered empty when not applicable to this row)
+                            so icons line up in columns instead of packing left and shifting per-row. */}
+                        <Box sx={{ display: 'inline-flex', width: 34, justifyContent: 'center' }}>
+                          {!expense.receiptRef?.webUrl && (
+                            <IconButton size="small" onClick={() => openAttachReceipt(expense)} title="Attach receipt photo" color="primary" disabled={attachingReceiptId === expense.id}>
+                              {attachingReceiptId === expense.id ? <CircularProgress size={16} /> : <AddAPhotoIcon fontSize="small" />}
+                            </IconButton>
+                          )}
+                        </Box>
+                        <Box sx={{ display: 'inline-flex', width: 34, justifyContent: 'center' }}>
+                          {isUserManagedRow(expense) && (
+                            <IconButton size="small" onClick={() => openEditDialog(expense)} title="Edit expense" color="primary">
+                              <EditIcon fontSize="small" />
+                            </IconButton>
+                          )}
+                        </Box>
+                        <Box sx={{ display: 'inline-flex', width: 34, justifyContent: 'center' }}>
+                          {isUserManagedRow(expense) && (
+                            <IconButton size="small" onClick={() => openMoveDialog(expense)} title={expense.scope === 'overhead' ? 'Move to a project' : 'Move to overhead'} color="primary">
+                              <MoveIcon fontSize="small" />
+                            </IconButton>
+                          )}
+                        </Box>
+                        <Box sx={{ display: 'inline-flex', width: 34, justifyContent: 'center' }}>
+                          {user?.role === 'superadmin' && (expense.sourceType === 'manual' || expense.sourceType === 'receipt_scan') && (
+                            <IconButton size="small" onClick={() => openPromoteDialog(expense)} title="Promote to employee liquidation" color="primary">
+                              <PromoteIcon fontSize="small" />
+                            </IconButton>
+                          )}
+                        </Box>
+                        <Box sx={{ display: 'inline-flex', width: 34, justifyContent: 'center' }}>
+                          <IconButton size="small" onClick={() => handleDeleteExpense(expense)} title="Delete expense" color="error">
+                            <DeleteIcon fontSize="small" />
                           </IconButton>
-                        )}
-                        {isUserManagedRow(expense) && (
-                          <IconButton size="small" onClick={() => openEditDialog(expense)} title="Edit expense" color="primary">
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                        )}
-                        {isUserManagedRow(expense) && (
-                          <IconButton size="small" onClick={() => openMoveDialog(expense)} title={expense.scope === 'overhead' ? 'Move to a project' : 'Move to overhead'} color="primary">
-                            <MoveIcon fontSize="small" />
-                          </IconButton>
-                        )}
-                        {user?.role === 'superadmin' && expense.scope === 'project' && (expense.sourceType === 'manual' || expense.sourceType === 'receipt_scan') && (
-                          <IconButton size="small" onClick={() => openPromoteDialog(expense)} title="Promote to employee liquidation" color="primary">
-                            <PromoteIcon fontSize="small" />
-                          </IconButton>
-                        )}
-                        <IconButton size="small" onClick={() => handleDeleteExpense(expense)} title="Delete expense" color="error">
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
+                        </Box>
                       </TableCell>
                     </TableRow>
                   ); })

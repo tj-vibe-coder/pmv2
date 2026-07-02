@@ -29,7 +29,7 @@ import {
   Checkbox,
 } from '@mui/material';
 import { useLocation } from 'react-router-dom';
-import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, WarningAmber as WarningAmberIcon } from '@mui/icons-material';
+import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, Edit as EditIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, WarningAmber as WarningAmberIcon } from '@mui/icons-material';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import {
@@ -171,6 +171,17 @@ interface LoadedLiquidationOption {
   total_amount: number;
   ca_id?: string | null;
   reimbursement_status?: string | null;
+  pending_revision?: unknown;
+}
+
+// A proposed edit to a submitted liquidation, awaiting superadmin approval.
+interface PendingRevisionInfo {
+  rows: LiquidationRow[];
+  totalAmount: number;
+  proposedBy: string;
+  proposedByName: string | null;
+  proposedAt: number;
+  note: string | null;
 }
 
 const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
@@ -251,6 +262,11 @@ export default function LiquidationFormPage() {
   const [drafts, setDrafts] = useState<LoadedLiquidationOption[]>([]);
   const [submittedLiquidations, setSubmittedLiquidations] = useState<LoadedLiquidationOption[]>([]);
   const [isViewingSubmitted, setIsViewingSubmitted] = useState(false);
+  // Editing a submitted liquidation in place: changes go through the
+  // propose-edit endpoint (pending superadmin approval; superadmin applies
+  // immediately) instead of creating a new document.
+  const [revisionMode, setRevisionMode] = useState(false);
+  const [pendingRevision, setPendingRevision] = useState<PendingRevisionInfo | null>(null);
   const [loadedOptionValue, setLoadedOptionValue] = useState<string>('');
   const [cashAdvances, setCashAdvances] = useState<CaOption[]>([]);
   // Reimbursement tracking of the currently loaded submitted no-CA liquidation.
@@ -685,6 +701,38 @@ export default function LiquidationFormPage() {
         ? { id: l.id, status: l.reimbursement_status || 'pending', at: l.reimbursed_at || null }
         : null
     );
+    setRevisionMode(false);
+    const pr = l.pending_revision;
+    if (submitted && pr && typeof pr === 'object') {
+      let prRows: LiquidationRow[] = [];
+      try {
+        const rawPr = typeof pr.rows_json === 'string' ? JSON.parse(pr.rows_json || '[]') : pr.rows_json;
+        if (Array.isArray(rawPr)) {
+          prRows = rawPr.map((r: Record<string, unknown>) => ({
+            ...newRow(String(r.projectName ?? ''), String(r.projectNo ?? '')),
+            id: typeof r.id === 'string' && r.id ? r.id : `row-${Math.random().toString(36).slice(2)}`,
+            date: String(r.date ?? ''),
+            category: String(r.category ?? ''),
+            projectId: r.projectId != null && r.projectId !== '' ? String(r.projectId) : '',
+            particulars: String(r.particulars ?? ''),
+            amount: Number(r.amount) || 0,
+            remarks: String(r.remarks ?? ''),
+          }));
+        }
+      } catch {
+        prRows = [];
+      }
+      setPendingRevision({
+        rows: prRows,
+        totalAmount: Number(pr.total_amount) || 0,
+        proposedBy: String(pr.proposed_by ?? ''),
+        proposedByName: pr.proposed_by_name ? String(pr.proposed_by_name) : null,
+        proposedAt: Number(pr.proposed_at) || 0,
+        note: pr.note ? String(pr.note) : null,
+      });
+    } else {
+      setPendingRevision(null);
+    }
     setSubmitSuccess(null);
   };
 
@@ -709,6 +757,112 @@ export default function LiquidationFormPage() {
       setSubmitSuccess(e instanceof Error ? e.message : 'Network error');
     }
   };
+
+  // The submitted liquidation being revised in place (revision mode keeps
+  // loadedOptionValue pointing at it while the form unlocks).
+  const revisionTargetId = loadedOptionValue.startsWith('submitted:') ? loadedOptionValue.slice('submitted:'.length) : null;
+
+  const refreshCashAdvances = () => {
+    if (!token) return;
+    fetch(`${API_BASE}/api/cash-advances`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => d.success && d.cash_advances && setCashAdvances(d.cash_advances))
+      .catch(() => {});
+  };
+
+  const enterRevisionMode = () => {
+    setRevisionMode(true);
+    setIsViewingSubmitted(false);
+    setSubmitSuccess(null);
+  };
+
+  const cancelRevision = () => {
+    if (revisionTargetId) loadDraft(revisionTargetId, true);
+  };
+
+  // Submit the current form state as a proposed edit to the loaded submitted
+  // liquidation. Superadmins get it applied immediately (server decides).
+  const submitRevision = async () => {
+    if (!token || !revisionTargetId) return;
+    if (rows.length === 0) {
+      setSubmitSuccess('Add at least one row.');
+      return;
+    }
+    setSaving(true);
+    setSubmitSuccess(null);
+    try {
+      const p = payload();
+      const res = await fetch(`${API_BASE}/api/liquidations/${revisionTargetId}/propose-edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          rows_json: p.rows_json,
+          receipts_json: p.receipts_json,
+          total_amount: p.total_amount,
+          employee_name: p.employee_name,
+          date_of_submission: p.date_of_submission,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        await loadDraft(revisionTargetId, true);
+        refreshLiquidationsList();
+        refreshCashAdvances();
+        setSubmitSuccess(data.applied ? 'Edit applied to the submitted liquidation.' : 'Edit submitted for superadmin approval.');
+      } else {
+        setSubmitSuccess(data.error || 'Failed to submit edit');
+      }
+    } catch (e) {
+      setSubmitSuccess(e instanceof Error ? e.message : 'Network error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resolveRevision = async (action: 'approve' | 'reject') => {
+    if (!token || !revisionTargetId) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/liquidations/${revisionTargetId}/revision/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        await loadDraft(revisionTargetId, true);
+        refreshLiquidationsList();
+        refreshCashAdvances();
+        setSubmitSuccess(action === 'approve' ? 'Edit approved and applied.' : 'Edit rejected.');
+      } else {
+        setSubmitSuccess(data.error || `Failed to ${action} edit`);
+      }
+    } catch (e) {
+      setSubmitSuccess(e instanceof Error ? e.message : 'Network error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Row-level summary of what a pending revision changes, for the approval banner.
+  const revisionDiff = React.useMemo(() => {
+    if (!pendingRevision) return null;
+    const curById = new Map(rows.map((r) => [r.id, r]));
+    const propById = new Map(pendingRevision.rows.map((r) => [r.id, r]));
+    const added = pendingRevision.rows.filter((r) => !curById.has(r.id));
+    const removed = rows.filter((r) => !propById.has(r.id));
+    const changed = pendingRevision.rows
+      .map((prop) => ({ prop, cur: curById.get(prop.id) }))
+      .filter((x): x is { prop: LiquidationRow; cur: LiquidationRow } =>
+        !!x.cur && (
+          Number(x.cur.amount) !== Number(x.prop.amount) ||
+          x.cur.particulars !== x.prop.particulars ||
+          x.cur.date !== x.prop.date ||
+          x.cur.category !== x.prop.category ||
+          String(x.cur.projectId) !== String(x.prop.projectId)
+        ));
+    return { added, removed, changed };
+  }, [pendingRevision, rows]);
 
   const refreshLiquidationsList = () => {
     if (!token) return;
@@ -747,6 +901,8 @@ export default function LiquidationFormPage() {
         setDraftId(null);
         setLoadedOptionValue('');
         setIsViewingSubmitted(false);
+        setRevisionMode(false);
+        setPendingRevision(null);
         setRows([newRow('', '')]);
         setFormNo('');
         setEmployeeName(user?.full_name?.trim() || user?.username || '');
@@ -771,6 +927,8 @@ export default function LiquidationFormPage() {
         setDraftId(null);
         setLoadedOptionValue('');
         setIsViewingSubmitted(false);
+        setRevisionMode(false);
+        setPendingRevision(null);
         setRows([newRow('', '')]);
         setFormNo('');
         setEmployeeName(user?.full_name?.trim() || user?.username || '');
@@ -915,7 +1073,10 @@ export default function LiquidationFormPage() {
   );
   const caLabel = (c: CaOption) =>
     `${c.ca_no || `CA #${c.id}`}${c.project_name ? ` — ${c.project_name}` : c.purpose ? ` — ${c.purpose}` : ''}`;
-  const overBalance = !isViewingSubmitted && !!selectedCa && totalAmount > Number(selectedCa.balance_remaining);
+  // In revision mode the original total is already deducted from the CA, so
+  // the plain balance check would false-positive — the server validates the
+  // delta against the live balance instead.
+  const overBalance = !isViewingSubmitted && !revisionMode && !!selectedCa && totalAmount > Number(selectedCa.balance_remaining);
 
   const exportToPDF = async () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -1225,7 +1386,7 @@ export default function LiquidationFormPage() {
             size="small"
             startIcon={<SaveIcon />}
             onClick={saveDraft}
-            disabled={saving || isViewingSubmitted}
+            disabled={saving || isViewingSubmitted || revisionMode}
             sx={{ borderColor: theme.primary, color: theme.primary }}
           >
             Save draft
@@ -1251,6 +1412,8 @@ export default function LiquidationFormPage() {
                 const raw = e.target.value as string;
                 if (raw === '') {
                   setIsViewingSubmitted(false);
+                  setRevisionMode(false);
+                  setPendingRevision(null);
                   setDraftId(null);
                   setLoadedOptionValue('');
                   setRows([newRow('', '')]);
@@ -1297,6 +1460,9 @@ export default function LiquidationFormPage() {
                 ...submittedLiquidations.map((d) => (
                   <MenuItem key={`submitted-${d.id}`} value={`submitted:${d.id}`}>
                     {d.form_no || `#${d.id}`} – {d.date_of_submission || 'no date'} (₱{Number(d.total_amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })})
+                    {!!d.pending_revision && (
+                      <Chip size="small" label="Edit pending" color="warning" sx={{ ml: 1, height: 18, fontSize: '0.65rem' }} />
+                    )}
                     {!d.ca_id && d.reimbursement_status && (
                       <Chip
                         size="small"
@@ -1483,7 +1649,7 @@ export default function LiquidationFormPage() {
           <Box sx={{ mb: 2, p: 1.5, bgcolor: 'info.light', borderRadius: 1, border: '1px solid', borderColor: 'info.main', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
               <Typography variant="body2" sx={{ color: 'info.dark', fontWeight: 500 }}>
-                Viewing submitted liquidation (read-only). To edit, create an editable copy below.
+                Viewing submitted liquidation (read-only). Use “Propose edit” to change it in place.
               </Typography>
               {loadedReimb && (
                 <Chip
@@ -1507,12 +1673,22 @@ export default function LiquidationFormPage() {
                 </Button>
               )}
               <Button
+                variant="contained"
+                size="small"
+                startIcon={<EditIcon />}
+                onClick={enterRevisionMode}
+                sx={{ bgcolor: theme.primary, '&:hover': { bgcolor: theme.secondary } }}
+              >
+                {user?.role === 'superadmin' ? 'Edit (applies immediately)' : 'Propose edit'}
+              </Button>
+              <Button
                 variant="outlined"
                 size="small"
                 onClick={() => {
                   setDraftId(null);
                   setLoadedOptionValue('');
                   setIsViewingSubmitted(false);
+                  setPendingRevision(null);
                   setLoadedReimb(null);
                   setSubmitSuccess(null);
                 }}
@@ -1520,6 +1696,66 @@ export default function LiquidationFormPage() {
               >
                 Create editable copy
               </Button>
+            </Box>
+          </Box>
+        )}
+
+        {revisionMode && (
+          <Box sx={{ mb: 2, p: 1.5, bgcolor: 'warning.light', borderRadius: 1, border: '1px solid', borderColor: 'warning.main', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              Editing submitted liquidation {formNo || ''} in place.{' '}
+              {user?.role === 'superadmin'
+                ? 'Your changes apply immediately on submit.'
+                : 'Your changes take effect only after a superadmin approves them.'}
+            </Typography>
+            <Button variant="outlined" size="small" color="inherit" onClick={cancelRevision}>
+              Cancel edit
+            </Button>
+          </Box>
+        )}
+
+        {isViewingSubmitted && pendingRevision && revisionDiff && (
+          <Box sx={{ mb: 2, p: 1.5, bgcolor: 'warning.light', borderRadius: 1, border: '1px solid', borderColor: 'warning.main' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                Edit pending approval — proposed by {pendingRevision.proposedByName || 'unknown'}
+                {pendingRevision.proposedAt ? ` on ${new Date(pendingRevision.proposedAt * 1000).toLocaleDateString()}` : ''}:
+                {' '}total ₱{totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} → ₱{pendingRevision.totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+              </Typography>
+              {user?.role === 'superadmin' && (
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button variant="contained" size="small" color="success" disabled={saving} onClick={() => resolveRevision('approve')}>
+                    Approve
+                  </Button>
+                  <Button variant="outlined" size="small" color="error" disabled={saving} onClick={() => resolveRevision('reject')}>
+                    Reject
+                  </Button>
+                </Box>
+              )}
+            </Box>
+            {pendingRevision.note && (
+              <Typography variant="body2" sx={{ mt: 0.5 }}>Note: {pendingRevision.note}</Typography>
+            )}
+            <Box component="ul" sx={{ m: 0, mt: 0.5, pl: 2.5 }}>
+              {revisionDiff.changed.map(({ cur, prop }) => (
+                <Typography key={`chg-${prop.id}`} component="li" variant="body2">
+                  “{prop.particulars || cur.particulars || '(no particulars)'}”: ₱{Number(cur.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })} → ₱{Number(prop.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                  {cur.date !== prop.date ? ` · date ${cur.date} → ${prop.date}` : ''}
+                </Typography>
+              ))}
+              {revisionDiff.added.map((r) => (
+                <Typography key={`add-${r.id}`} component="li" variant="body2">
+                  Added: “{r.particulars || '(no particulars)'}” ₱{Number(r.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                </Typography>
+              ))}
+              {revisionDiff.removed.map((r) => (
+                <Typography key={`rem-${r.id}`} component="li" variant="body2">
+                  Removed: “{r.particulars || '(no particulars)'}” ₱{Number(r.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                </Typography>
+              ))}
+              {revisionDiff.changed.length === 0 && revisionDiff.added.length === 0 && revisionDiff.removed.length === 0 && (
+                <Typography component="li" variant="body2">Header-only changes (name/date/receipts).</Typography>
+              )}
             </Box>
           </Box>
         )}
@@ -1906,12 +2142,14 @@ export default function LiquidationFormPage() {
             <Button
               variant="contained"
               startIcon={<SendIcon />}
-              onClick={submitLiquidation}
+              onClick={revisionMode ? submitRevision : submitLiquidation}
               disabled={saving || isViewingSubmitted || overBalance}
               title={overBalance ? 'Total exceeds the selected CA balance' : undefined}
               sx={{ bgcolor: theme.secondary, '&:hover': { bgcolor: theme.primary } }}
             >
-              Submit liquidation
+              {revisionMode
+                ? (user?.role === 'superadmin' ? 'Apply edit' : 'Submit edit for approval')
+                : 'Submit liquidation'}
             </Button>
           </Box>
         )}

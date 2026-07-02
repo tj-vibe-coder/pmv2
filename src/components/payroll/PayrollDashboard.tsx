@@ -9,7 +9,7 @@ import PaymentsIcon from '@mui/icons-material/Payments';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { getEmployees, getPayrollRuns, getPayslipsForRun } from '../../utils/firebasePayroll';
-import { Payslip } from '../../types/Payroll';
+import { Payslip, PayrollRun } from '../../types/Payroll';
 import PayrollRegister from './PayrollRegister';
 import EmployeeList from './EmployeeList';
 import PayrollRunForm from './PayrollRunForm';
@@ -39,12 +39,13 @@ const KPICard: React.FC<KPICardProps> = ({ icon, label, value, color }) => (
   </Paper>
 );
 
-type TabView = 'register' | 'employees' | 'new_run' | 'view_run' | 'gov_contrib' | 'holidays' | 'settings';
+type TabView = 'register' | 'employees' | 'new_run' | 'edit_run' | 'view_run' | 'gov_contrib' | 'holidays' | 'settings';
 
 const PayrollDashboard: React.FC = () => {
   const [tab, setTab] = useState(0);
   const [view, setView] = useState<TabView>('register');
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [editingRun, setEditingRun] = useState<PayrollRun | null>(null);
   const [selectedPayslip, setSelectedPayslip] = useState<Payslip | null>(null);
   const [kpi, setKpi] = useState({ employees: 0, gross: 0, remittances: 0, netPay: 0 });
   const [pieData, setPieData] = useState<{ name: string; value: number }[]>([]);
@@ -90,6 +91,7 @@ const PayrollDashboard: React.FC = () => {
     setTab(val);
     setView(TAB_VIEWS[val] ?? 'register');
     setSelectedRunId(null);
+    setEditingRun(null);
     setSelectedPayslip(null);
   };
 
@@ -101,6 +103,14 @@ const PayrollDashboard: React.FC = () => {
     return <PayrollRunForm
       onComplete={() => { setView('register'); setTab(0); }}
       onCancel={() => { setView('register'); setTab(0); }}
+    />;
+  }
+
+  if (view === 'edit_run' && editingRun) {
+    return <PayrollRunForm
+      editRun={editingRun}
+      onComplete={() => { setEditingRun(null); setView('register'); setTab(0); }}
+      onCancel={() => { setEditingRun(null); setView('register'); setTab(0); }}
     />;
   }
 
@@ -168,6 +178,7 @@ const PayrollDashboard: React.FC = () => {
             <PayrollRegister
               onNewRun={() => setView('new_run')}
               onViewRun={(run) => { setSelectedRunId(run.id); setView('view_run'); }}
+              onEditRun={(run) => { setEditingRun(run); setView('edit_run'); }}
             />
           )}
           {tab === 1 && <EmployeeList />}

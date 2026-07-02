@@ -2,12 +2,16 @@ import React, { useEffect, useState } from 'react';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, IconButton, Button, CircularProgress, Alert,
+  Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
 import { PayrollRun } from '../../types/Payroll';
-import { getPayrollRuns, approvePayrollRun, markRunPaid } from '../../utils/firebasePayroll';
+import { getPayrollRuns, approvePayrollRun, markRunPaid, deletePayrollRun } from '../../utils/firebasePayroll';
+import { useAuth } from '../../contexts/AuthContext';
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
@@ -21,12 +25,17 @@ const STATUS_COLORS: Record<string, 'default' | 'primary' | 'success'> = {
 interface Props {
   onNewRun: () => void;
   onViewRun: (run: PayrollRun) => void;
+  onEditRun: (run: PayrollRun) => void;
 }
 
-const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun }) => {
+const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun, onEditRun }) => {
+  const { user } = useAuth();
+  const isSuperadmin = user?.role === 'superadmin';
   const [runs, setRuns] = useState<PayrollRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<PayrollRun | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = async () => {
     try {
@@ -53,6 +62,17 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun }) => {
       await markRunPaid(runId);
       load();
     } catch { setError('Failed to mark run as paid.'); }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await deletePayrollRun(deleteTarget.id);
+      setDeleteTarget(null);
+      load();
+    } catch { setError('Failed to delete payroll run.'); }
+    finally { setDeleting(false); }
   };
 
   return (
@@ -113,6 +133,16 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun }) => {
                         Mark Paid
                       </Button>
                     )}
+                    {isSuperadmin && (
+                      <>
+                        <IconButton size="small" onClick={() => onEditRun(run)} title="Edit (superadmin)">
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton size="small" color="error" onClick={() => setDeleteTarget(run)} title="Delete (superadmin)">
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -120,6 +150,24 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun }) => {
           </Table>
         </TableContainer>
       )}
+
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)}>
+        <DialogTitle>Delete Payroll Run?</DialogTitle>
+        <DialogContent>
+          <Typography>
+            This permanently deletes the {deleteTarget?.status.toLowerCase()} run for{' '}
+            {deleteTarget && `${fmtDate(deleteTarget.periodStart)} – ${fmtDate(deleteTarget.periodEnd)}`}, all its payslips,
+            and — if it was approved or paid — reverses the overhead expense entries it posted to the company P&L.
+            This cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={handleDelete} disabled={deleting}>
+            {deleting ? <CircularProgress size={20} /> : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
