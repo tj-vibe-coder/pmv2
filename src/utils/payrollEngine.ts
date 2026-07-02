@@ -4,21 +4,31 @@
  * SSS Circular 2023-002, PhilHealth Circular 2023-0014, TRAIN Law (R.A. 10963)
  */
 
-import { Employee, DTRInput, Payslip } from '../types/Payroll';
+import { Employee, DTRInput, Payslip, RateType } from '../types/Payroll';
 import { computeSSS, computePhilhealth, computePagibig, toPerPeriod, ContribRates, CONTRIB_DEFAULTS } from './governmentContrib';
 import { annualize, computePerPeriodTax } from './taxTable';
+
+// ─── Rate Basis ────────────────────────────────────────────────────────────
+
+/**
+ * Resolve an employee's rate basis. When unset it falls back to the historical
+ * convention (FIELD→DAILY, OFFICE→MONTHLY) so existing records are unchanged.
+ */
+export function resolveRateType(emp: Pick<Employee, 'rateType' | 'employeeType'>): RateType {
+  return emp.rateType ?? (emp.employeeType === 'FIELD' ? 'DAILY' : 'MONTHLY');
+}
 
 // ─── Basic Pay ───────────────────────────────────────────────────────────────
 
 /**
  * Compute basic pay.
- * FIELD: dailyRate × workingDays
- * OFFICE: monthlyRate divided per the employee's own payFrequency (full for MONTHLY, ÷2 for
+ * DAILY basis: dailyRate × workingDays
+ * MONTHLY basis: monthlyRate divided per the employee's own payFrequency (full for MONTHLY, ÷2 for
  * SEMI_MONTHLY, ÷4.33 for WEEKLY) — same divisor government contributions already use via
  * toPerPeriod(), so a run's basic pay and its statutory deductions stay on the same cadence.
  */
 export function computeBasicPay(employee: Employee, workingDays: number): number {
-  if (employee.employeeType === 'FIELD') {
+  if (resolveRateType(employee) === 'DAILY') {
     return (employee.dailyRate ?? 0) * workingDays;
   }
   return toPerPeriod(employee.monthlyRate ?? 0, employee.payFrequency);
@@ -143,7 +153,13 @@ export function computePayslip(
 ): Payslip {
   const emp = dtr.employee;
   const dailyRate = emp.dailyRate ?? 0;
-  const isField = emp.employeeType === 'FIELD';
+  // Premiums (OT / holiday / night-diff / tardiness) apply only to a DAILY rate
+  // basis; a monthly salary is treated as all-inclusive. Rate basis, not the
+  // FIELD/OFFICE classification, drives this.
+  const isDaily = resolveRateType(emp) === 'DAILY';
+  // Per-employee toggles (absent = enabled, preserving legacy behavior).
+  const payOvertime = emp.applyOvertimePay !== false;
+  const applyDeductions = emp.applyDeductions !== false;
 
   // Basic pay
   const basicPay = computeBasicPay(emp, dtr.workingDays);
@@ -151,37 +167,37 @@ export function computePayslip(
   // Meal allowance
   const mealAllowance = computeMealAllowance(emp, dtr.workingDays);
 
-  // OT pay
-  const otPayRegular = isField ? computeOTRegular(dailyRate, dtr.overtimeHours) : 0;
-  const otPayRestDay = isField
+  // OT pay (zeroed when the employee's contract has no OT; hours stay recorded)
+  const otPayRegular = isDaily && payOvertime ? computeOTRegular(dailyRate, dtr.overtimeHours) : 0;
+  const otPayRestDay = isDaily && payOvertime
     ? computeOTRestDay(dailyRate, dtr.restDayOTHours ?? 0)
       + computeOTSpecialHolidayRestDay(dailyRate, dtr.specialHolidayRestDayOTHours ?? 0)
     : 0;
-  const otPayRegularHoliday = isField
+  const otPayRegularHoliday = isDaily && payOvertime
     ? computeOTRegularHoliday(dailyRate, dtr.regularHolidayOTHours ?? 0)
       + computeOTRegularHolidayRestDay(dailyRate, dtr.regularHolidayRestDayOTHours ?? 0)
     : 0;
 
   // Holiday pay
-  const regularHolidayPay = isField
+  const regularHolidayPay = isDaily
     ? (dtr.regularHolidayDays ?? 0) * computeRegularHolidayPay(dailyRate, true)
       + (dtr.regularHolidayRestDayDays ?? 0) * computeRegularHolidayRestDayPay(dailyRate)
     : 0;
-  const specialHolidayPay = isField
+  const specialHolidayPay = isDaily
     ? (dtr.specialHolidayDays ?? 0) * computeSpecialHolidayPay(dailyRate, true)
       + (dtr.specialHolidayRestDayDays ?? 0) * computeSpecialHolidayRestDayPay(dailyRate)
     : 0;
 
   // Night differential
-  const nightDifferential = isField ? computeNightDiff(dailyRate, dtr.nightDiffHours) : 0;
+  const nightDifferential = isDaily ? computeNightDiff(dailyRate, dtr.nightDiffHours) : 0;
 
-  // Tardiness
-  const tardinessDeduction = isField
+  // Tardiness (skipped when the employee opts out of deductions)
+  const tardinessDeduction = applyDeductions && isDaily
     ? computeTardinessDeduction(dailyRate, dtr.tardinessMinutes)
     : 0;
 
   // Monthly basis for government contributions
-  const monthlyBasic = isField
+  const monthlyBasic = isDaily
     ? dailyRate * 26 // standard 26 working days/month
     : emp.monthlyRate ?? 0;
 
@@ -196,9 +212,10 @@ export function computePayslip(
   const pagibig = piOn ? computePagibig(monthlyBasic, rates) : { employee: 0, employer: 0 };
 
   const freq = emp.payFrequency;
-  const empSSS = round2(toPerPeriod(sss.employee, freq));
-  const empPH = round2(toPerPeriod(ph.employee, freq));
-  const empPI = round2(toPerPeriod(pagibig.employee, freq));
+  // Employee share zeroed when deductions are off; employer share always computed.
+  const empSSS = applyDeductions ? round2(toPerPeriod(sss.employee, freq)) : 0;
+  const empPH = applyDeductions ? round2(toPerPeriod(ph.employee, freq)) : 0;
+  const empPI = applyDeductions ? round2(toPerPeriod(pagibig.employee, freq)) : 0;
   const erSSS = round2(toPerPeriod(sss.employer, freq));
   const erPH = round2(toPerPeriod(ph.employer, freq));
   const erPI = round2(toPerPeriod(pagibig.employer, freq));
@@ -221,7 +238,7 @@ export function computePayslip(
     grossEarnings - empSSS - empPH - empPI - mealAllowance
   );
   const annualTaxable = annualize(taxablePerPeriod, freq);
-  const withholdingTax = taxOn ? round2(computePerPeriodTax(annualTaxable, freq)) : 0;
+  const withholdingTax = (applyDeductions && taxOn) ? round2(computePerPeriodTax(annualTaxable, freq)) : 0;
 
   const totalDeductions = round2(
     empSSS + empPH + empPI + withholdingTax + tardinessDeduction

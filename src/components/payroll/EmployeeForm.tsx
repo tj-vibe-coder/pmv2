@@ -3,7 +3,8 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField, MenuItem, Grid, FormControlLabel, Switch, Typography,
 } from '@mui/material';
-import { Employee, EmployeeType, PayFrequency } from '../../types/Payroll';
+import { Employee, EmployeeType, PayFrequency, RateType } from '../../types/Payroll';
+import type { User } from '../../types/User';
 
 const DESIGNATIONS = ['Helper', 'Skilled Worker', 'Foreman', 'Supervisor', 'Engineer', 'Engineering Manager', 'Project Manager', 'Admin', 'Accounting', 'Other'];
 
@@ -12,19 +13,25 @@ interface Props {
   employee?: Employee | null;
   onClose: () => void;
   onSave: (data: Omit<Employee, 'id' | 'createdAt'>) => Promise<void>;
+  canEditRate?: boolean;
+  users?: User[];
 }
 
 const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
+  userId: '',
   employeeNumber: '',
   name: '',
   designation: '',
   employeeType: 'FIELD',
   payFrequency: 'WEEKLY',
+  rateType: 'DAILY',
   dailyRate: 0,
   monthlyRate: 0,
   mealAllowance: 0,
   dateHired: new Date().toISOString().split('T')[0],
   isActive: true,
+  applyDeductions: true,
+  applyOvertimePay: true,
   sssNumber: '',
   philhealthNumber: '',
   pagibigNumber: '',
@@ -35,7 +42,7 @@ const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
   withholdingTaxEnabled: true,
 };
 
-const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave }) => {
+const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEditRate = true, users = [] }) => {
   const [form, setForm] = useState<Omit<Employee, 'id' | 'createdAt'>>(EMPTY);
   const [saving, setSaving] = useState(false);
 
@@ -53,6 +60,10 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave }) => {
     const val = e.target.type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value;
     setForm((f) => ({ ...f, [field]: val }));
   };
+
+  // Resolved rate basis (falls back to the FIELD→DAILY / OFFICE→MONTHLY default
+  // for older records that predate the explicit rateType field).
+  const rateType: RateType = form.rateType ?? (form.employeeType === 'FIELD' ? 'DAILY' : 'MONTHLY');
 
   const handleSave = async () => {
     if (!form.name || !form.employeeNumber || !form.designation) return;
@@ -81,9 +92,20 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave }) => {
           </Grid>
           <Grid size={{ xs: 12, sm: 3 }}>
             <TextField fullWidth select label="Type" value={form.employeeType}
-              onChange={(e) => setForm((f) => ({ ...f, employeeType: e.target.value as EmployeeType }))}>
+              onChange={(e) => {
+                const employeeType = e.target.value as EmployeeType;
+                // Default the rate basis to the type's convention; still overridable below.
+                setForm((f) => ({ ...f, employeeType, rateType: employeeType === 'FIELD' ? 'DAILY' : 'MONTHLY' }));
+              }}>
               <MenuItem value="FIELD">Field</MenuItem>
               <MenuItem value="OFFICE">Office</MenuItem>
+            </TextField>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 3 }}>
+            <TextField fullWidth select label="Rate Basis" value={rateType}
+              onChange={(e) => setForm((f) => ({ ...f, rateType: e.target.value as RateType }))}>
+              <MenuItem value="DAILY">Daily</MenuItem>
+              <MenuItem value="MONTHLY">Monthly</MenuItem>
             </TextField>
           </Grid>
           <Grid size={{ xs: 12, sm: 3 }}>
@@ -95,19 +117,31 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave }) => {
             </TextField>
           </Grid>
 
-          {form.employeeType === 'FIELD' && (
+          {users.length > 0 && (
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField fullWidth select label="Linked User Account" value={form.userId || ''}
+                onChange={(e) => setForm((f) => ({ ...f, userId: e.target.value || undefined }))}>
+                <MenuItem value="">— Not linked —</MenuItem>
+                {users.map((u) => <MenuItem key={String(u.id)} value={String(u.id)}>{u.full_name || u.username} ({u.role})</MenuItem>)}
+              </TextField>
+            </Grid>
+          )}
+
+          {rateType === 'DAILY' && canEditRate && (
             <Grid size={{ xs: 12, sm: 4 }}>
               <TextField fullWidth label="Daily Rate (₱)" type="number" value={form.dailyRate} onChange={set('dailyRate')} inputProps={{ min: 0 }} />
             </Grid>
           )}
-          {form.employeeType === 'OFFICE' && (
+          {rateType === 'MONTHLY' && canEditRate && (
             <Grid size={{ xs: 12, sm: 4 }}>
               <TextField fullWidth label="Monthly Rate (₱)" type="number" value={form.monthlyRate} onChange={set('monthlyRate')} inputProps={{ min: 0 }} />
             </Grid>
           )}
-          <Grid size={{ xs: 12, sm: 4 }}>
-            <TextField fullWidth label="Meal Allowance (₱/day)" type="number" value={form.mealAllowance} onChange={set('mealAllowance')} inputProps={{ min: 0 }} />
-          </Grid>
+          {canEditRate && (
+            <Grid size={{ xs: 12, sm: 4 }}>
+              <TextField fullWidth label="Meal Allowance (₱/day)" type="number" value={form.mealAllowance} onChange={set('mealAllowance')} inputProps={{ min: 0 }} />
+            </Grid>
+          )}
           <Grid size={{ xs: 12, sm: 4 }}>
             <TextField fullWidth label="Date Hired" type="date" value={form.dateHired} onChange={set('dateHired')} InputLabelProps={{ shrink: true }} />
           </Grid>
@@ -154,6 +188,20 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave }) => {
             <FormControlLabel
               control={<Switch checked={form.withholdingTaxEnabled !== false} onChange={(e) => setForm((f) => ({ ...f, withholdingTaxEnabled: e.target.checked }))} />}
               label="Withholding Tax"
+            />
+          </Grid>
+
+          <Grid size={12}><strong>Payroll Options</strong></Grid>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <FormControlLabel
+              control={<Switch checked={form.applyDeductions !== false} onChange={(e) => setForm((f) => ({ ...f, applyDeductions: e.target.checked }))} />}
+              label="Apply government deductions"
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <FormControlLabel
+              control={<Switch checked={form.applyOvertimePay !== false} onChange={(e) => setForm((f) => ({ ...f, applyOvertimePay: e.target.checked }))} />}
+              label="Pay overtime"
             />
           </Grid>
 

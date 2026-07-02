@@ -71,7 +71,7 @@ const EmployeePayslipPage: React.FC = () => {
         >
           Back to payslips
         </Button>
-        <PayslipCard payslip={selectedPayslip} />
+        <PayslipCard payslip={selectedPayslip} canSeeRate={true} />
       </Box>
     );
   }

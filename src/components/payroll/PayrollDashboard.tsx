@@ -9,7 +9,9 @@ import PaymentsIcon from '@mui/icons-material/Payments';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { getEmployees, getPayrollRuns, getPayslipsForRun } from '../../utils/firebasePayroll';
-import { Payslip, PayrollRun } from '../../types/Payroll';
+import { Payslip, PayrollRun, Employee } from '../../types/Payroll';
+import { useAuth } from '../../contexts/AuthContext';
+import DTRPage from '../employee/DTRPage';
 import PayrollRegister from './PayrollRegister';
 import EmployeeList from './EmployeeList';
 import PayrollRunForm from './PayrollRunForm';
@@ -39,14 +41,16 @@ const KPICard: React.FC<KPICardProps> = ({ icon, label, value, color }) => (
   </Paper>
 );
 
-type TabView = 'register' | 'employees' | 'new_run' | 'edit_run' | 'view_run' | 'gov_contrib' | 'holidays' | 'settings';
+type TabView = 'register' | 'employees' | 'new_run' | 'edit_run' | 'view_run' | 'view_dtr' | 'gov_contrib' | 'holidays' | 'settings';
 
 const PayrollDashboard: React.FC = () => {
+  const { user } = useAuth();
   const [tab, setTab] = useState(0);
   const [view, setView] = useState<TabView>('register');
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [editingRun, setEditingRun] = useState<PayrollRun | null>(null);
   const [selectedPayslip, setSelectedPayslip] = useState<Payslip | null>(null);
+  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [kpi, setKpi] = useState({ employees: 0, gross: 0, remittances: 0, netPay: 0 });
   const [pieData, setPieData] = useState<{ name: string; value: number }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -93,10 +97,11 @@ const PayrollDashboard: React.FC = () => {
     setSelectedRunId(null);
     setEditingRun(null);
     setSelectedPayslip(null);
+    setSelectedEmployee(null);
   };
 
   if (selectedPayslip) {
-    return <PayslipCard payslip={selectedPayslip} onBack={() => setSelectedPayslip(null)} />;
+    return <PayslipCard payslip={selectedPayslip} onBack={() => setSelectedPayslip(null)} canSeeRate={user?.role === 'superadmin'} />;
   }
 
   if (view === 'new_run') {
@@ -119,6 +124,14 @@ const PayrollDashboard: React.FC = () => {
       runId={selectedRunId}
       onBack={() => { setView('register'); setSelectedRunId(null); }}
       onViewPayslip={setSelectedPayslip}
+    />;
+  }
+
+  if (view === 'view_dtr' && selectedEmployee) {
+    return <DTRPage
+      employeeId={String(selectedEmployee.userId)}
+      employeeName={selectedEmployee.name}
+      onBack={() => { setView('employees'); setTab(1); setSelectedEmployee(null); }}
     />;
   }
 
@@ -181,7 +194,7 @@ const PayrollDashboard: React.FC = () => {
               onEditRun={(run) => { setEditingRun(run); setView('edit_run'); }}
             />
           )}
-          {tab === 1 && <EmployeeList />}
+          {tab === 1 && <EmployeeList onViewDTR={(emp) => { setSelectedEmployee(emp); setView('view_dtr'); }} />}
           {tab === 2 && <GovernmentContribTable />}
           {tab === 3 && <HolidayManager />}
           {tab === 4 && <PayrollSettings />}

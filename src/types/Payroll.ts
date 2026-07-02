@@ -3,16 +3,21 @@ import type { FundingSource } from '../data/financeCategories';
 
 export type EmployeeType = 'FIELD' | 'OFFICE';
 export type PayFrequency = 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY';
+/** How the employee's pay is quoted. Drives basic-pay computation and premium eligibility, independent of FIELD/OFFICE classification. */
+export type RateType = 'DAILY' | 'MONTHLY';
 
 export interface Employee {
   id: string;
+  userId?: string;        // linked user account ID (from `users` collection)
   employeeNumber: string;
   name: string; // "LASTNAME, Firstname"
   designation: string;
   employeeType: EmployeeType;
   payFrequency: PayFrequency;
-  dailyRate?: number;     // FIELD only
-  monthlyRate?: number;   // OFFICE only
+  /** Rate basis. Absent = derived from employeeType (FIELD→DAILY, OFFICE→MONTHLY) for backward compatibility. */
+  rateType?: RateType;
+  dailyRate?: number;     // used when rateType is DAILY
+  monthlyRate?: number;   // used when rateType is MONTHLY
   mealAllowance?: number; // per day
   projectId?: string;
   dateHired: string;      // ISO string
@@ -31,6 +36,10 @@ export interface Employee {
   philhealthEnabled?: boolean;
   pagibigEnabled?: boolean;
   withholdingTaxEnabled?: boolean;
+  /** When false, government + tardiness deductions are skipped (net pay = gross). Absent/true = deductions apply. Employer share is unaffected. */
+  applyDeductions?: boolean;
+  /** When false, overtime pay is ₱0 (OT hours are still recorded). Absent/true = OT is paid. */
+  applyOvertimePay?: boolean;
   createdAt?: string;
 }
 

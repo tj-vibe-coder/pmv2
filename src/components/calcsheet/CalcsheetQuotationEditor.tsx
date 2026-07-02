@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import HistoryIcon from '@mui/icons-material/History';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import GridOnIcon from '@mui/icons-material/GridOn';
@@ -33,6 +34,8 @@ import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
+import PricelistPickerDialog from '../pricelists/PricelistPickerDialog';
+import type { PricelistItem } from '../../types/Pricelist';
 
 const id = () => nanoid(6);
 
@@ -198,6 +201,7 @@ export default function QuotationEditor() {
   }, [isDirty]);
 
   const [saving, setSaving] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
 
   // Saved-version history (snapshots captured server-side on every save).
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -388,6 +392,30 @@ export default function QuotationEditor() {
       { id: id(), code: nextCode('B', quotation.components), description: '', brand: '', partNo: '',
         qty: 1, uom: 'pc', unitCost: 0, forex: 1, contingencyPct: quotation.productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0 },
     ] as ComponentLine[]);
+
+  const addFromCatalog = (pickedItems: PricelistItem[]) => {
+    let nextNum = 10;
+    const nums = quotation.components
+      .map((c) => parseInt(c.code.replace(/^B-/, ''), 10))
+      .filter((n) => !isNaN(n));
+    if (nums.length) nextNum = Math.max(...nums) + 10;
+
+    const newLines: ComponentLine[] = pickedItems.map((item, idx) => ({
+      id: id(),
+      code: `B-${String(nextNum + idx * 10).padStart(4, '0')}`,
+      description: `${item.description} [${item.catalogNo}]`,
+      brand: item.brand,
+      partNo: item.catalogNo,
+      qty: 1,
+      uom: 'pc',
+      unitCost: item.sellingPrice,
+      forex: 1,
+      contingencyPct: quotation.productContingencyPct ?? 0,
+      contingencyPctOverridden: false,
+      discountPct: 0,
+    }));
+    commit('components', [...quotation.components, ...newLines] as ComponentLine[]);
+  };
 
   const compCols: Column<ComponentLine>[] = [
     { key: '_select', label: '', width: 36, render: (r) => (
@@ -1165,7 +1193,14 @@ export default function QuotationEditor() {
                 Group selected ({selectedCompIds.size})
               </Button>
             )}
-            {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addComponent}>Add row</Button>}
+            {!isLegacy && (
+              <>
+                <Button startIcon={<MenuBookIcon />} size="small" variant="outlined" onClick={() => setCatalogOpen(true)}>
+                  Browse Catalog
+                </Button>
+                <Button startIcon={<AddIcon />} size="small" onClick={addComponent}>Add row</Button>
+              </>
+            )}
           </Stack>
         </Stack>
         <EditableTable
@@ -1510,6 +1545,8 @@ export default function QuotationEditor() {
           <Button onClick={() => setHistoryOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      <PricelistPickerDialog open={catalogOpen} onClose={() => setCatalogOpen(false)} onAdd={addFromCatalog} />
 
       <Snackbar
         open={!!toast}

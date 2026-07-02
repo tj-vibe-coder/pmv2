@@ -22,9 +22,11 @@ import {
 import {
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
+  ArrowBack as ArrowBackIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import type { DTREntry, DayType } from '../../types/Payroll';
+import { isPaidDate, type PaidPeriod } from '../../utils/dtr';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 
@@ -86,14 +88,25 @@ interface DayRow {
   dirty: boolean; // changed since load
 }
 
-const DTRPage: React.FC = () => {
+interface DTRPageProps {
+  /** Admin view: the linked user-account id of the employee whose DTR to show/edit. Defaults to the logged-in user. */
+  employeeId?: string;
+  /** Admin view: display name shown in the header. */
+  employeeName?: string;
+  /** Admin view: back handler to return to the employee list. */
+  onBack?: () => void;
+}
+
+const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeName, onBack }) => {
   const { user } = useAuth();
-  const employeeId = user?.id != null ? String(user.id) : '';
+  const isAdminView = propEmployeeId != null;
+  const employeeId = propEmployeeId ?? (user?.id != null ? String(user.id) : '');
 
   const [viewMonth, setViewMonth] = useState(() => new Date().getMonth());
   const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
   const [rows, setRows] = useState<DayRow[]>([]);
   const [entries, setEntries] = useState<DTREntry[]>([]);
+  const [paidPeriods, setPaidPeriods] = useState<PaidPeriod[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
@@ -119,6 +132,31 @@ const DTRPage: React.FC = () => {
 
   useEffect(() => { fetchEntries(); }, [fetchEntries]);
 
+  // Fetch the employee's own payslips to know which dates are already paid.
+  // Best-effort: a failure just means no paid-date highlighting.
+  const fetchPaidPeriods = useCallback(async () => {
+    // my-payslips is self-only; skip in admin view so we don't overlay the
+    // admin's own paid periods onto another employee's DTR.
+    if (isAdminView) { setPaidPeriods([]); return; }
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/payroll/my-payslips`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const slips = await res.json() as { periodStart?: string; periodEnd?: string; runStatus?: string }[];
+      setPaidPeriods(
+        slips
+          .filter(s => s.runStatus === 'PAID' && s.periodStart && s.periodEnd)
+          .map(s => ({ periodStart: s.periodStart as string, periodEnd: s.periodEnd as string })),
+      );
+    } catch {
+      /* ignore — highlighting is non-critical */
+    }
+  }, [isAdminView]);
+
+  useEffect(() => { fetchPaidPeriods(); }, [fetchPaidPeriods]);
+
   // Build month rows whenever viewMonth/viewYear or entries change
   useEffect(() => {
     const dates = getMonthDates(viewYear, viewMonth);
@@ -138,7 +176,7 @@ const DTRPage: React.FC = () => {
         timeIn: existing?.timeIn || '',
         timeOut: existing?.timeOut || '',
         dayType: existing?.dayType || (isWeekend ? 'REST_DAY' : 'REGULAR'),
-        regularHours: existing?.regularHours ?? (isWeekend ? 0 : 8),
+        regularHours: existing?.regularHours ?? 0,
         overtimeHours: existing?.overtimeHours ?? 0,
         isAbsent: existing?.isAbsent ?? false,
         remarks: existing?.remarks || '',
@@ -249,6 +287,18 @@ const DTRPage: React.FC = () => {
 
   return (
     <Box>
+      {/* Admin view header */}
+      {isAdminView && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+          <Button startIcon={<ArrowBackIcon />} onClick={onBack} sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}>
+            Employees
+          </Button>
+          <Typography sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary, fontSize: { xs: '1rem', sm: '1.25rem' } }}>
+            {employeeName || 'Employee'} — DTR
+          </Typography>
+        </Box>
+      )}
+
       {feedback && (
         <Alert severity={feedback.severity} onClose={() => setFeedback(null)} sx={{ mb: 1.5 }}>
           {feedback.message}
@@ -301,7 +351,10 @@ const DTRPage: React.FC = () => {
           <TableBody>
             {rows.map((row, index) => {
               const isToday = row.dateStr === toDateStr(new Date());
-              const rowBg = row.dirty
+              const paid = isPaidDate(row.dateStr, paidPeriods);
+              const rowBg = paid
+                ? '#e8f5e9'
+                : row.dirty
                 ? '#fffde7'
                 : row.isAbsent
                 ? '#fce4ec'
@@ -317,7 +370,8 @@ const DTRPage: React.FC = () => {
                   </TableCell>
                   <TableCell sx={{ ...cellSx, whiteSpace: 'nowrap', width: 90 }}>
                     {row.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                    {isToday && <Chip label="Today" size="small" sx={{ ml: 0.5, height: 18, fontSize: '0.65rem' }} color="info" />}
+                    {paid && <Chip label="Paid" size="small" sx={{ ml: 0.5, height: 18, fontSize: '0.65rem' }} color="success" />}
+                    {!paid && isToday && <Chip label="Today" size="small" sx={{ ml: 0.5, height: 18, fontSize: '0.65rem' }} color="info" />}
                   </TableCell>
                   <TableCell sx={{ ...cellSx, width: 100 }}>
                     <TextField
@@ -325,7 +379,7 @@ const DTRPage: React.FC = () => {
                       type="time"
                       value={row.timeIn}
                       onChange={(e) => updateRow(index, 'timeIn', e.target.value)}
-                      disabled={row.isAbsent}
+                      disabled={row.isAbsent || paid}
                       variant="standard"
                       InputProps={{ disableUnderline: true }}
                       inputProps={{ style: { fontSize: '0.8125rem', padding: '2px 0' } }}
@@ -338,7 +392,7 @@ const DTRPage: React.FC = () => {
                       type="time"
                       value={row.timeOut}
                       onChange={(e) => updateRow(index, 'timeOut', e.target.value)}
-                      disabled={row.isAbsent}
+                      disabled={row.isAbsent || paid}
                       variant="standard"
                       InputProps={{ disableUnderline: true }}
                       inputProps={{ style: { fontSize: '0.8125rem', padding: '2px 0' } }}
@@ -354,7 +408,7 @@ const DTRPage: React.FC = () => {
                       type="number"
                       value={row.overtimeHours}
                       onChange={(e) => updateRow(index, 'overtimeHours', Number(e.target.value))}
-                      disabled={row.isAbsent}
+                      disabled={row.isAbsent || paid}
                       variant="standard"
                       InputProps={{ disableUnderline: true }}
                       inputProps={{ min: 0, max: 16, step: 0.5, style: { fontSize: '0.8125rem', padding: '2px 0', textAlign: 'right' } }}
@@ -367,6 +421,7 @@ const DTRPage: React.FC = () => {
                         value={row.dayType}
                         onChange={(e) => updateRow(index, 'dayType', e.target.value)}
                         disableUnderline
+                        disabled={paid}
                         sx={{ fontSize: '0.75rem' }}
                       >
                         {DAY_TYPES.map(dt => (
@@ -380,6 +435,7 @@ const DTRPage: React.FC = () => {
                       size="small"
                       checked={row.isAbsent}
                       onChange={(e) => updateRow(index, 'isAbsent', e.target.checked)}
+                      disabled={paid}
                       sx={{ p: 0 }}
                     />
                   </TableCell>
@@ -388,6 +444,7 @@ const DTRPage: React.FC = () => {
                       size="small"
                       value={row.remarks}
                       onChange={(e) => updateRow(index, 'remarks', e.target.value)}
+                      disabled={paid}
                       placeholder="—"
                       variant="standard"
                       InputProps={{ disableUnderline: true }}

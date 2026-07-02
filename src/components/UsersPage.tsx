@@ -45,6 +45,12 @@ interface UserRow {
   updated_at: number;
 }
 
+interface PayrollEmployee {
+  id: string;
+  name: string;
+  userId?: string;
+}
+
 const ROLES = ['superadmin', 'admin', 'user', 'viewer', 'tax_filer'] as const;
 
 export default function UsersPage() {
@@ -63,6 +69,22 @@ export default function UsersPage() {
   const [editPassword, setEditPassword] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [payrollEmployees, setPayrollEmployees] = useState<PayrollEmployee[]>([]);
+  const [editPayrollEmpId, setEditPayrollEmpId] = useState<string>('');
+
+  const fetchPayrollEmployees = useCallback(async () => {
+    const token = localStorage.getItem('netpacific_token');
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/payroll/employees`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPayrollEmployees(Array.isArray(data) ? data : []);
+      }
+    } catch { /* ignore — payroll link is optional */ }
+  }, []);
 
   const [addOpen, setAddOpen] = useState(false);
   const [addUsername, setAddUsername] = useState('');
@@ -113,7 +135,8 @@ export default function UsersPage() {
 
   useEffect(() => {
     fetchUsers();
-  }, [fetchUsers]);
+    fetchPayrollEmployees();
+  }, [fetchUsers, fetchPayrollEmployees]);
 
   const startEdit = (u: UserRow) => {
     setEditingId(u.id);
@@ -125,6 +148,9 @@ export default function UsersPage() {
     setEditRole(u.role);
     setEditApproved(u.approved);
     setEditPassword('');
+    // Find which payroll employee is currently linked to this user
+    const linked = payrollEmployees.find((pe) => pe.userId === u.id);
+    setEditPayrollEmpId(linked?.id ?? '');
   };
 
   const cancelEdit = () => {
@@ -218,6 +244,29 @@ export default function UsersPage() {
       });
       const data = await res.json();
       if (data.success && data.user) {
+        // Update payroll employee link if changed
+        const prevLinked = payrollEmployees.find((pe) => pe.userId === editingId);
+        const prevPayrollId = prevLinked?.id ?? '';
+        if (editPayrollEmpId !== prevPayrollId) {
+          // Unlink old payroll employee
+          if (prevPayrollId) {
+            await fetch(`${API_BASE}/api/payroll/employees/${prevPayrollId}`, {
+              method: 'PUT',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: '' }),
+            }).catch(() => {});
+          }
+          // Link new payroll employee
+          if (editPayrollEmpId) {
+            await fetch(`${API_BASE}/api/payroll/employees/${editPayrollEmpId}`, {
+              method: 'PUT',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: editingId }),
+            }).catch(() => {});
+          }
+          // Refresh payroll employees to reflect new links
+          fetchPayrollEmployees();
+        }
         setUsers((prev) =>
           prev.map((u) =>
             u.id === editingId
@@ -323,6 +372,7 @@ export default function UsersPage() {
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Access Role</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Approved</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Password</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Payroll Employee</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Created</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }} align="right">
                   Actions
@@ -450,6 +500,30 @@ export default function UsersPage() {
                       />
                     ) : (
                       '••••••'
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {editingId === u.id ? (
+                      <Select
+                        size="small"
+                        value={editPayrollEmpId}
+                        onChange={(e) => setEditPayrollEmpId(e.target.value)}
+                        displayEmpty
+                        sx={{ minWidth: 160 }}
+                      >
+                        <MenuItem value=""><em>None</em></MenuItem>
+                        {payrollEmployees.map((pe) => (
+                          <MenuItem
+                            key={pe.id}
+                            value={pe.id}
+                            disabled={!!pe.userId && pe.userId !== u.id}
+                          >
+                            {pe.name}{pe.userId && pe.userId !== u.id ? ' (linked)' : ''}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    ) : (
+                      payrollEmployees.find((pe) => pe.userId === u.id)?.name || '—'
                     )}
                   </TableCell>
                   <TableCell>

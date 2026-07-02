@@ -4,6 +4,7 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Paper, MenuItem, Alert, CircularProgress, Divider, Checkbox, Chip,
 } from '@mui/material';
+import SyncIcon from '@mui/icons-material/Sync';
 import { Employee, DTRInput, Payslip, PayrollRun, DayType } from '../../types/Payroll';
 import { getEmployees, getPayslipsForRun, createPayrollRun, updatePayrollRun, savePayslips, approvePayrollRun } from '../../utils/firebasePayroll';
 import { computePayslip } from '../../utils/payrollEngine';
@@ -120,6 +121,95 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel, editRun }) => {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editRun?.id]);
+
+  // DTR pull
+  const [pullingDtr, setPullingDtr] = useState(false);
+  const [dtrNotice, setDtrNotice] = useState('');
+
+  const pullFromDTR = async () => {
+    if (!periodStart || !periodEnd) return;
+    setPullingDtr(true);
+    setDtrNotice('');
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(
+        `${API_BASE}/api/dtr/aggregate?periodStart=${periodStart}&periodEnd=${periodEnd}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+      );
+      if (!res.ok) throw new Error('Failed to fetch DTR');
+      const { aggregates, submitters } = await res.json() as {
+        aggregates: Record<string, Record<string, number>>;
+        submitters?: Record<string, string>;
+      };
+
+      const dtrSubmitterCount = Object.keys(aggregates).length;
+
+      // Match DTR records (keyed by userId) to payroll employees (via employee.userId)
+      let matched = 0;
+      const unmatchedEmployees: string[] = [];
+      const matchedUserIds = new Set<string>();
+
+      setDtrInputs((prev) =>
+        prev.map((dtr) => {
+          const userIdKey = dtr.employee.userId;
+          const agg = userIdKey ? aggregates[userIdKey] : null;
+          if (agg) {
+            matched++;
+            matchedUserIds.add(userIdKey!);
+            return {
+              ...dtr,
+              workingDays: agg.workingDays ?? 0,
+              regularHours: agg.regularHours ?? 0,
+              overtimeHours: agg.overtimeHours ?? 0,
+              nightDiffHours: agg.nightDiffHours ?? 0,
+              tardinessMinutes: agg.tardinessMinutes ?? 0,
+              regularHolidayDays: agg.regularHolidayDays ?? 0,
+              specialHolidayDays: agg.specialHolidayDays ?? 0,
+              restDayOTHours: agg.restDayOTHours ?? 0,
+              regularHolidayOTHours: agg.regularHolidayOTHours ?? 0,
+              regularHolidayRestDayDays: agg.regularHolidayRestDayDays ?? 0,
+              specialHolidayRestDayDays: agg.specialHolidayRestDayDays ?? 0,
+              regularHolidayRestDayOTHours: agg.regularHolidayRestDayOTHours ?? 0,
+              specialHolidayRestDayOTHours: agg.specialHolidayRestDayOTHours ?? 0,
+            };
+          }
+          // Track why this employee didn't match
+          if (!userIdKey) {
+            unmatchedEmployees.push(`${dtr.employee.name} (no linked user account)`);
+          } else if (!aggregates[userIdKey]) {
+            unmatchedEmployees.push(`${dtr.employee.name} (no DTR submitted)`);
+          }
+          return dtr;
+        })
+      );
+
+      // Detect DTR submissions that couldn't be matched to any payroll employee
+      const orphanedDtr = Object.keys(aggregates)
+        .filter((uid) => !matchedUserIds.has(uid))
+        .map((uid) => submitters?.[uid] || uid);
+
+      // Build detailed notice
+      const lines: string[] = [];
+      if (matched > 0) lines.push(`Pulled DTR for ${matched} employee(s).`);
+      if (unmatchedEmployees.length > 0) {
+        lines.push(`Skipped ${unmatchedEmployees.length}: ${unmatchedEmployees.join('; ')}.`);
+      }
+      if (orphanedDtr.length > 0) {
+        lines.push(`${orphanedDtr.length} DTR submission(s) not linked to any payroll employee: ${orphanedDtr.join(', ')}.`);
+      }
+      if (dtrSubmitterCount === 0) {
+        lines.push('No DTR submissions found for this period.');
+      }
+      if (lines.length === 0) {
+        lines.push('No DTR records found and no employees to match.');
+      }
+      setDtrNotice(lines.join(' '));
+    } catch {
+      setDtrNotice('Failed to pull DTR data.');
+    } finally {
+      setPullingDtr(false);
+    }
+  };
 
   // ── Step 1 → 2: load all employees, default-select who was plausibly active this period ──
   const handleNextStep1 = async () => {
@@ -440,9 +530,20 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel, editRun }) => {
       {/* ── STEP 3: DTR ENTRY ──────────────────────────────────────────────────── */}
       {step === 2 && (
         <Box>
-          <Typography variant="subtitle1" fontWeight={600} mb={2}>
-            DTR Entry — {employees.length} selected employee(s)
-          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <Typography variant="subtitle1" fontWeight={600}>
+              DTR Entry — {employees.length} selected employee(s)
+            </Typography>
+            <Button
+              variant="outlined"
+              startIcon={pullingDtr ? <CircularProgress size={16} /> : <SyncIcon />}
+              onClick={pullFromDTR}
+              disabled={pullingDtr}
+              size="small"
+            >
+              {pullingDtr ? 'Pulling…' : 'Pull from DTR'}
+            </Button>
+          </Box>
           <TableContainer component={Paper} sx={{ borderRadius: 2, mb: 2, overflowX: 'auto' }}>
             <Table size="small">
               <TableHead sx={{ bgcolor: '#2c3242' }}>
@@ -578,6 +679,16 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel, editRun }) => {
             </Button>
           </Box>
         </Paper>
+      )}
+
+      {dtrNotice && step === 2 && (
+        <Alert
+          severity={dtrNotice.includes('Skipped') || dtrNotice.includes('not linked') ? 'warning' : dtrNotice.includes('Failed') ? 'error' : 'info'}
+          onClose={() => setDtrNotice('')}
+          sx={{ mt: 1, whiteSpace: 'pre-line' }}
+        >
+          {dtrNotice}
+        </Alert>
       )}
     </Box>
   );

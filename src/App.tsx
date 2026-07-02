@@ -50,6 +50,7 @@ import CalcsheetQuotationEditor from './components/calcsheet/CalcsheetQuotationE
 import CalcsheetCompareView from './components/calcsheet/CalcsheetCompareView';
 import CalcsheetClients from './components/calcsheet/CalcsheetClients';
 import CalcsheetPresets from './components/calcsheet/CalcsheetPresets';
+import PricelistBrowser from './components/pricelists/PricelistBrowser';
 import ScanPage from './components/ScanPage';
 import { useQuotationStore } from './store/quotationStore';
 
@@ -645,6 +646,16 @@ function App() {
                     <CalcsheetInit>
                       <CalcsheetPresets />
                     </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/pricelists"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <PricelistBrowser />
                   </AppLayout>
                 </ProtectedRoute>
               }

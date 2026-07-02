@@ -13,6 +13,7 @@ import {
   QueryStats as QueryStatsIcon,
   Calculate as CalculateIcon,
   People as ClientsIcon,
+  MenuBook as PricelistIcon,
   Assignment as MaterialRequestIcon,
   ReceiptLong as DeliveryIcon,
   Storefront as SuppliersIcon,
@@ -91,6 +92,29 @@ const SalesNavList: React.FC<SalesNavListProps> = ({ isExpanded, navBtnSx, iconS
               <ListItemText
                 primary="Calcsheet"
                 secondary="Quotations & estimates"
+                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                sx={{ color: 'white' }}
+              />
+            )}
+          </ListItemButton>
+        </Tooltip>
+      </ListItem>
+
+      {/* Pricelists */}
+      <ListItem disablePadding sx={{ mb: 0.5 }}>
+        <Tooltip title={isExpanded ? '' : 'Pricelists'} placement="right" arrow>
+          <ListItemButton
+            selected={location.pathname === '/sales/pricelists'}
+            onClick={() => navigate('/sales/pricelists')}
+            sx={navBtnSx(location.pathname === '/sales/pricelists')}
+          >
+            <ListItemIcon sx={iconSx()}>
+              <PricelistIcon />
+            </ListItemIcon>
+            {isExpanded && (
+              <ListItemText
+                primary="Pricelists"
+                secondary="Supplier catalogs & pricing"
                 secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                 sx={{ color: 'white' }}
               />

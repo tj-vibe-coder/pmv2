@@ -6,21 +6,45 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import PersonOffIcon from '@mui/icons-material/PersonOff';
+import EventNoteIcon from '@mui/icons-material/EventNote';
 import { Employee } from '../../types/Payroll';
+import type { User } from '../../types/User';
 import { getEmployees, createEmployee, updateEmployee, deactivateEmployee } from '../../utils/firebasePayroll';
+import { resolveRateType } from '../../utils/payrollEngine';
+import { useAuth } from '../../contexts/AuthContext';
 import EmployeeForm from './EmployeeForm';
+
+const API_BASE = process.env.REACT_APP_API_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
 
 const fmt = (n?: number) =>
   n !== undefined
     ? new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n)
     : '—';
 
-const EmployeeList: React.FC = () => {
+interface EmployeeListProps {
+  /** When provided, shows a "View DTR" action per employee (admin/superadmin only). */
+  onViewDTR?: (emp: Employee) => void;
+}
+
+const EmployeeList: React.FC<EmployeeListProps> = ({ onViewDTR }) => {
+  const { user } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+
+  const loadUsers = async () => {
+    if (user?.role !== 'superadmin') return;
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/users`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) { const data = await res.json(); setAllUsers(Array.isArray(data) ? data : data.users || []); }
+    } catch { /* non-critical */ }
+  };
 
   const load = async () => {
     try {
@@ -33,7 +57,11 @@ const EmployeeList: React.FC = () => {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    loadUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSave = async (data: Omit<Employee, 'id' | 'createdAt'>) => {
     if (editing) {
@@ -93,7 +121,7 @@ const EmployeeList: React.FC = () => {
                       color={emp.employeeType === 'FIELD' ? 'warning' : 'info'} />
                   </TableCell>
                   <TableCell>
-                    {emp.employeeType === 'FIELD' ? fmt(emp.dailyRate) + '/day' : fmt(emp.monthlyRate) + '/mo'}
+                    {resolveRateType(emp) === 'DAILY' ? fmt(emp.dailyRate) + '/day' : fmt(emp.monthlyRate) + '/mo'}
                   </TableCell>
                   <TableCell>{fmt(emp.mealAllowance)}/day</TableCell>
                   <TableCell>{emp.payFrequency.replace('_', '-')}</TableCell>
@@ -102,6 +130,11 @@ const EmployeeList: React.FC = () => {
                       color={emp.isActive ? 'success' : 'default'} />
                   </TableCell>
                   <TableCell>
+                    {onViewDTR && emp.userId && (
+                      <IconButton size="small" title="View DTR" onClick={() => onViewDTR(emp)}>
+                        <EventNoteIcon fontSize="small" />
+                      </IconButton>
+                    )}
                     <IconButton size="small" onClick={() => { setEditing(emp); setFormOpen(true); }}>
                       <EditIcon fontSize="small" />
                     </IconButton>
@@ -123,6 +156,8 @@ const EmployeeList: React.FC = () => {
         employee={editing}
         onClose={() => setFormOpen(false)}
         onSave={handleSave}
+        canEditRate={user?.role === 'superadmin'}
+        users={user?.role === 'superadmin' ? allUsers : []}
       />
     </Box>
   );
