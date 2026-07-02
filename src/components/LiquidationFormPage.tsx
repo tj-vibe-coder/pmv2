@@ -233,6 +233,7 @@ async function addLiquidationRowsToProjectExpenses(
       if ((r.invoiceNo || '').trim()) expense.invoiceNo = (r.invoiceNo || '').trim();
       if (typeof r.deductible === 'boolean') expense.deductible = r.deductible;
       if ((r.deductibleReason || '').trim()) expense.deductibleReason = (r.deductibleReason || '').trim();
+      if ((r.remarks || '').trim()) expense.remarks = (r.remarks || '').trim();
       return expense;
     });
     await fetch(`${API_BASE}/api/project-expenses`, {

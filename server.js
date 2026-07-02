@@ -1028,6 +1028,42 @@ function normalizeFundingSource(fs) {
   return out;
 }
 
+// project_expenses keys the project ref as `projectId`; cash_advances (a plain Firestore
+// doc predating the camelCase convention) keys it as `project_id`. Everything else (overhead,
+// payroll) has no project of its own.
+function projectIdForFundingDoc(collection, doc) {
+  if (collection === 'project_expenses') return doc.projectId || null;
+  if (collection === 'cash_advances') return doc.project_id || null;
+  return null;
+}
+
+function investmentCategoryForFundingDoc(collection) {
+  if (collection === 'project_expenses') return 'Project Expense';
+  if (collection === 'cash_advances') return 'Cash Advance';
+  return 'Overhead';
+}
+
+function newOneOffInvestmentDoc(collection, id, doc, fs) {
+  return {
+    date: doc.date,
+    investor: fs.investor.trim(),
+    amount: Number(doc.amount) || 0,
+    category: investmentCategoryForFundingDoc(collection),
+    description: `Out-of-pocket: ${doc.description || doc.purpose || doc.category || ''}`,
+    sourceType: 'expense_sync',
+    sourceExpenseId: id,
+    sourceCollection: collection,
+    sourceExpenseProjectId: projectIdForFundingDoc(collection, doc),
+    // Anchor to the expense's own createdAt (stable across edits, no extra read)
+    // rather than re-stamping "now" on every upsert.
+    created_at: doc.createdAt || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+// Returns true on success (including a deliberate no-op), false if the sync itself threw —
+// callers whose whole purpose is "make sure this is linked" (the funding-retrofit endpoint)
+// should surface a warning rather than silently reporting success when this comes back false.
 async function syncExpenseFundingInvestment(id, collection, doc) {
   const invRef = db.collection('investments').doc(`expense_sync_${id}`);
   try {
@@ -1059,42 +1095,39 @@ async function syncExpenseFundingInvestment(id, collection, doc) {
       // treat the expense as authoritative for date/description and store the back-reference
       // so the ledger can link to the source expense. Still clean up any stale auto-created
       // row from a prior state (e.g. the expense used to be a standalone out-of-pocket entry).
-      await invRef.delete();
       const linkedRef = db.collection('investments').doc(linkedId);
       const linkedSnap = await linkedRef.get();
-      if (linkedSnap.exists) {
+      // Guard against linking to a row that belongs to a DIFFERENT investor than the one on
+      // this fundingSource — a mismatched linkedInvestmentId (stale UI state, hand-crafted API
+      // call, copy-paste error) must not silently misattribute someone else's capital
+      // contribution. Fall back to a fresh one-off row for the correct investor instead.
+      if (linkedSnap.exists && linkedSnap.data().investor === fs.investor.trim()) {
+        await invRef.delete();
         await linkedRef.update({
           date: doc.date,
-          description: doc.description || linkedSnap.data().description || '',
+          description: doc.description || doc.purpose || linkedSnap.data().description || '',
           linkedExpenseId: id,
           linkedExpenseCollection: collection,
-          linkedExpenseProjectId: collection === 'project_expenses' ? (doc.projectId || null) : null,
+          linkedExpenseProjectId: projectIdForFundingDoc(collection, doc),
           updated_at: new Date().toISOString(),
         });
+      } else {
+        if (linkedSnap.exists) {
+          console.warn(`syncExpenseFundingInvestment: linkedInvestmentId ${linkedId} belongs to investor "${linkedSnap.data().investor}", not "${fs.investor.trim()}" — ignoring the link and creating a new entry for ${collection}/${id}`);
+        }
+        await invRef.set(newOneOffInvestmentDoc(collection, id, doc, fs));
       }
     } else if (isOutOfPocket) {
-      await invRef.set({
-        date: doc.date,
-        investor: fs.investor.trim(),
-        amount: Number(doc.amount) || 0,
-        category: collection === 'project_expenses' ? 'Project Expense' : 'Overhead',
-        description: `Out-of-pocket: ${doc.description || doc.category || ''}`,
-        sourceType: 'expense_sync',
-        sourceExpenseId: id,
-        sourceCollection: collection,
-        sourceExpenseProjectId: collection === 'project_expenses' ? (doc.projectId || null) : null,
-        // Anchor to the expense's own createdAt (stable across edits, no extra read)
-        // rather than re-stamping "now" on every upsert.
-        created_at: doc.createdAt || new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
+      await invRef.set(newOneOffInvestmentDoc(collection, id, doc, fs));
     } else {
       // Not out-of-pocket (or cleared) — remove any previously-linked row.
       // Deleting a non-existent doc is a safe no-op in Firestore.
       await invRef.delete();
     }
+    return true;
   } catch (syncErr) {
     console.error('Expense funding investment sync failed for', collection, id, syncErr);
+    return false;
   }
 }
 
@@ -1172,6 +1205,7 @@ app.post('/api/project-expenses', async (req, res) => {
           if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
           if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
           if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
+          if (exp.remarks) doc.remarks = String(exp.remarks);
           // BIR substantiation passthrough — mirrors the single-insert path so
           // liquidation/PO-synced rows carry supplier/invoice detail into the tax ledger.
           if (exp.supplier) doc.supplier = String(exp.supplier);
@@ -1197,7 +1231,7 @@ app.post('/api/project-expenses', async (req, res) => {
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     // Single insert
-    const { projectId, projectName, description, amount, date, category, sourceType,
+    const { projectId, projectName, description, remarks, amount, date, category, sourceType,
             sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
             supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = body;
     if (!projectId || !amount) {
@@ -1219,6 +1253,7 @@ app.post('/api/project-expenses', async (req, res) => {
     if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
     if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
     if (sourceCaId) doc.sourceCaId = sourceCaId;
+    if (remarks) doc.remarks = String(remarks);
     if (receiptRef) doc.receiptRef = receiptRef;
     if (supplier) doc.supplier = String(supplier);
     if (invoiceNo) doc.invoiceNo = String(invoiceNo);
@@ -1270,8 +1305,9 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
+    const { description, remarks, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
+    if (remarks !== undefined) allowed.remarks = String(remarks);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
     if (category !== undefined) allowed.category = String(category);
@@ -1480,9 +1516,16 @@ app.post('/api/cash-advances', async (req, res) => {
   if (dateRequested && /^\d{4}-\d{2}-\d{2}$/.test(String(dateRequested).trim())) {
     requestedAt = Math.floor(new Date(dateRequested + 'T12:00:00').getTime() / 1000);
   }
+  // Which investor is fronting a cash advance is an approval-time call, not a request-time
+  // one — the requester hasn't spent anything yet (unlike a project/overhead expense, where
+  // self-attesting fundingSource is coherent because the person entering it is the one who
+  // actually paid out of pocket). Only admins may set it, whether at creation or later via
+  // PATCH /api/cash-advances/:id/funding.
+  const isAdminRequester = user.role === 'superadmin' || user.role === 'admin';
+  const fundingSource = isAdminRequester ? normalizeFundingSource(req.body.fundingSource) : null;
   try {
     const caNo = await nextCaNo(projectId, new Date(requestedAt * 1000));
-    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt });
+    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt, ...(fundingSource ? { fundingSource } : {}) });
     res.status(201).json({ success: true, id: ref.id, ca_no: caNo, message: `Cash advance ${caNo} requested` });
   } catch (err) {
     console.error('Error creating cash advance:', err);
@@ -1505,9 +1548,60 @@ app.patch('/api/cash-advances/:id', async (req, res) => {
     if (ca.status !== 'pending') return res.status(400).json({ success: false, error: 'Already processed' });
     const now = Math.floor(Date.now() / 1000);
     await ref.update({ status, balance_remaining: status === 'approved' ? ca.amount : 0, approved_at: status === 'approved' ? now : null, approved_by: status === 'approved' ? user.id : null, updated_at: now });
+    // Money only actually leaves an investor's pocket once the request is approved — mirror
+    // the run's funding source onto an Investment Tracker row at that point, same idiom as
+    // syncPayrollOverheadExpenses. A rejected CA was never synced, so nothing to reverse.
+    // Re-read after our own write (not the pre-write `ca`) so a fundingSource set by a
+    // concurrent PATCH .../funding request lands correctly — this doesn't eliminate the race
+    // (neither endpoint uses a transaction, matching this codebase's existing risk tolerance
+    // for balance_remaining elsewhere), but it closes the more likely ordering.
+    if (status === 'approved') {
+      const freshCa = (await ref.get()).data();
+      await syncExpenseFundingInvestment(id, 'cash_advances', { ...freshCa, date: new Date(now * 1000).toISOString().slice(0, 10) });
+    }
     res.json({ success: true, message: status === 'approved' ? 'Cash advance approved' : 'Cash advance rejected' });
   } catch (err) {
     console.error('Error updating cash advance:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Backfills/edits the funding source on a CA independent of a status transition — needed
+// because CAs created before the funding-source feature shipped (and any CA an admin wants
+// to correct) have no way to pick up Investment Tracker linking otherwise, since the approve
+// endpoint above only reads/syncs fundingSource at the moment status flips to 'approved'.
+app.patch('/api/cash-advances/:id/funding', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  try {
+    const ref = db.collection('cash_advances').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Cash advance not found' });
+    const fundingSource = normalizeFundingSource(req.body.fundingSource);
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({ fundingSource: fundingSource || FieldValue.delete(), updated_at: now });
+    // Only an approved CA has actually drawn money — sync (or clear) its Investment Tracker
+    // link immediately, dated to the original approval (not today) so historical CAs land in
+    // the right period. A pending/rejected CA's funding choice just gets carried into the doc;
+    // it takes effect the next time (if ever) the approve endpoint above runs — never, for a
+    // rejected one, which is why the client hides this action for rejected CAs.
+    // Re-read after our own write (not the pre-write `ca`/`doc`) to narrow the race with a
+    // concurrent approve request landing between our read and write.
+    let syncOk = true;
+    const freshCa = (await ref.get()).data();
+    if (freshCa.status === 'approved') {
+      const syncDate = freshCa.approved_at ? new Date(freshCa.approved_at * 1000).toISOString().slice(0, 10) : new Date(now * 1000).toISOString().slice(0, 10);
+      syncOk = await syncExpenseFundingInvestment(id, 'cash_advances', { ...freshCa, date: syncDate });
+    }
+    res.json({
+      success: true,
+      message: syncOk ? 'Funding source updated' : 'Funding source saved, but updating the Investment Tracker link failed — please retry.',
+      syncWarning: !syncOk,
+    });
+  } catch (err) {
+    console.error('Error updating cash advance funding source:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
@@ -1541,6 +1635,8 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
       await batch.commit();
     }
     await ref.delete();
+    // Remove/unlink any Investment Tracker row this CA's approval had synced.
+    await syncExpenseFundingInvestment(id, 'cash_advances', {});
     res.json({ success: true, message: 'Cash advance deleted' });
   } catch (err) {
     console.error('Error deleting cash advance:', err);
@@ -4833,6 +4929,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
             sourceType: exp.sourceType || 'manual',
           };
           if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
+          if (exp.remarks) doc.remarks = String(exp.remarks);
           if (exp.supplier) doc.supplier = String(exp.supplier);
           if (exp.invoiceNo) doc.invoiceNo = String(exp.invoiceNo);
           if (exp.invoiceType) doc.invoiceType = String(exp.invoiceType);
@@ -4851,7 +4948,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
       await Promise.all(outOfPocketInserted.map(exp => syncExpenseFundingInvestment(exp.id, 'overhead_expenses', exp)));
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
-    const { description, amount, date, category, sourceType, receiptRef,
+    const { description, remarks, amount, date, category, sourceType, receiptRef,
             supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
@@ -4864,6 +4961,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
       sourceType: sourceType || 'manual',
     };
     if (receiptRef) doc.receiptRef = receiptRef;
+    if (remarks) doc.remarks = String(remarks);
     if (supplier) doc.supplier = String(supplier);
     if (invoiceNo) doc.invoiceNo = String(invoiceNo);
     if (invoiceType) doc.invoiceType = String(invoiceType);
@@ -4894,8 +4992,9 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
+    const { description, remarks, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
+    if (remarks !== undefined) allowed.remarks = String(remarks);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
     if (category !== undefined) allowed.category = String(category);

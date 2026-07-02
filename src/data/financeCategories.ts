@@ -111,6 +111,7 @@ export const INVESTMENT_CATEGORIES = [
   'Project Expense',
   'Startup Expense',
   'Overhead',
+  'Cash Advance',
   'Liquidation',
   'Flight',
 ] as const;

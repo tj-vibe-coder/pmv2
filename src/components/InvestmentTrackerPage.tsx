@@ -59,12 +59,12 @@ interface Investment {
   updated_at?: string;
   // Present on rows auto-mirrored from an out-of-pocket expense.
   sourceExpenseId?: string;
-  sourceCollection?: 'project_expenses' | 'overhead_expenses';
+  sourceCollection?: 'project_expenses' | 'overhead_expenses' | 'cash_advances';
   sourceExpenseProjectId?: string | null;
   // Present on manually-entered (pencil-booked) rows once an out-of-pocket
   // expense has been linked back to them.
   linkedExpenseId?: string;
-  linkedExpenseCollection?: 'project_expenses' | 'overhead_expenses';
+  linkedExpenseCollection?: 'project_expenses' | 'overhead_expenses' | 'cash_advances';
   linkedExpenseProjectId?: string | null;
 }
 
@@ -99,6 +99,9 @@ function expenseLinkTarget(inv: Investment): string | null {
   if (!collection) return null;
   if (collection === 'project_expenses') {
     return projectId ? `/finance/projects/${projectId}/expenses` : '/finance/expense-monitoring';
+  }
+  if (collection === 'cash_advances') {
+    return '/finance/expense-monitoring/ca-form';
   }
   return '/finance/overhead-expenses';
 }
@@ -433,7 +436,7 @@ const InvestmentTrackerPage: React.FC = () => {
                   </TableCell>
                   <TableCell sx={{ fontSize: '0.8rem', fontStyle: 'italic', color: 'text.secondary' }}>
                     {expenseLinkTarget(row) ? (
-                      <Tooltip title="View linked expense">
+                      <Tooltip title={(row.sourceCollection || row.linkedExpenseCollection) === 'cash_advances' ? 'View linked cash advance' : 'View linked expense'}>
                         <Link
                           component="button"
                           type="button"

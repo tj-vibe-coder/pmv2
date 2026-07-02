@@ -15,6 +15,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
   Paper,
   LinearProgress,
   Button,
@@ -102,6 +103,8 @@ export interface ProjectExpense {
   projectId?: string;
   projectName?: string;
   description: string;
+  /** Free-text note on what the expense was for, e.g. "lunch out with client" */
+  remarks?: string;
   amount: number;
   date: string;
   category: string;
@@ -194,6 +197,8 @@ const ExpenseMonitoring: React.FC = () => {
   const [selectedMonth, setSelectedMonth] = useState<number>(0);
   const [selectedQuarter, setSelectedQuarter] = useState<number>(0);
   const [selectedProjectId, setSelectedProjectId] = useState<string | ''>('');
+  const [sortKey, setSortKey] = useState<'date' | 'project' | 'category' | 'description' | 'amount'>('date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
   const [addExpenseOpen, setAddExpenseOpen] = useState(false);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
@@ -204,6 +209,7 @@ const ExpenseMonitoring: React.FC = () => {
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [expenseDescription, setExpenseDescription] = useState('');
+  const [expenseRemarks, setExpenseRemarks] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('');
   const [expenseSupplier, setExpenseSupplier] = useState('');
   const [expenseInvoiceNo, setExpenseInvoiceNo] = useState('');
@@ -248,7 +254,7 @@ const ExpenseMonitoring: React.FC = () => {
   const viewerDragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
   // Edit an existing row (scope-aware PATCH).
   const [editExpense, setEditExpense] = useState<ProjectExpense | null>(null);
-  const [editFields, setEditFields] = useState({ description: '', amount: '', date: '', category: '', supplier: '', invoiceNo: '', invoiceType: '', vat: '', tin: '' });
+  const [editFields, setEditFields] = useState({ description: '', remarks: '', amount: '', date: '', category: '', supplier: '', invoiceNo: '', invoiceType: '', vat: '', tin: '' });
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState('');
   // Move a row between overhead and a project (server-side copy+delete).
@@ -422,11 +428,42 @@ const ExpenseMonitoring: React.FC = () => {
   // shows only that project's expenses, OVERHEAD_SENTINEL shows only overhead rows, and
   // '' (All) shows everything — both scopes, all projects.
   const tableRows = useMemo(() => {
-    if (selectedProjectId === OVERHEAD_SENTINEL) return expensesInYear.filter((e) => e.scope === 'overhead');
-    if (selectedProjectId === ALL_PROJECTS_SENTINEL) return expensesInYear.filter((e) => e.scope === 'project');
-    if (selectedProjectId !== '') return expensesInYear.filter((e) => e.scope === 'project' && String(e.projectId) === selectedProjectId);
-    return expensesInYear;
-  }, [expensesInYear, selectedProjectId]);
+    let rows: ProjectExpense[];
+    if (selectedProjectId === OVERHEAD_SENTINEL) rows = expensesInYear.filter((e) => e.scope === 'overhead');
+    else if (selectedProjectId === ALL_PROJECTS_SENTINEL) rows = expensesInYear.filter((e) => e.scope === 'project');
+    else if (selectedProjectId !== '') rows = expensesInYear.filter((e) => e.scope === 'project' && String(e.projectId) === selectedProjectId);
+    else rows = expensesInYear;
+
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case 'amount': cmp = a.amount - b.amount; break;
+        case 'project': cmp = (a.projectName || '').localeCompare(b.projectName || ''); break;
+        case 'category': cmp = (a.category || '').localeCompare(b.category || ''); break;
+        case 'description': cmp = (a.description || '').localeCompare(b.description || ''); break;
+        case 'date':
+        default: cmp = String(a.date).localeCompare(String(b.date)); break;
+      }
+      return cmp * dir;
+    });
+  }, [expensesInYear, selectedProjectId, sortKey, sortDir]);
+
+  const handleSort = (key: typeof sortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir(key === 'amount' || key === 'date' ? 'desc' : 'asc'); }
+  };
+
+  const sortLabel = (key: typeof sortKey, text: string, align?: 'right') => (
+    <TableSortLabel
+      active={sortKey === key}
+      direction={sortKey === key ? sortDir : 'asc'}
+      onClick={() => handleSort(key)}
+      sx={align === 'right' ? { flexDirection: 'row-reverse' } : undefined}
+    >
+      {text}
+    </TableSortLabel>
+  );
 
   const expensesForProject = (projectId: string) => expenses.filter((e) => e.scope === 'project' && String(e.projectId) === projectId);
 
@@ -565,6 +602,7 @@ const ExpenseMonitoring: React.FC = () => {
             projectId: pid,
             projectName,
             description: `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`,
+            remarks: (row.remarks || '').trim() || undefined,
             amount: amt,
             date: row.date || liq.date_of_submission || new Date().toISOString().slice(0, 10),
             category: (row.category || '').trim() || 'Others',
@@ -670,6 +708,7 @@ const ExpenseMonitoring: React.FC = () => {
     setEditError('');
     setEditFields({
       description: expense.description || '',
+      remarks: expense.remarks || '',
       amount: String(expense.amount ?? ''),
       date: expense.date || '',
       category: expense.category || '',
@@ -696,6 +735,7 @@ const ExpenseMonitoring: React.FC = () => {
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
           description: editFields.description.trim() || '—',
+          remarks: editFields.remarks.trim(),
           amount,
           date: editFields.date,
           category: editFields.category.trim() || 'Others',
@@ -1101,6 +1141,7 @@ const ExpenseMonitoring: React.FC = () => {
         body: JSON.stringify({
           ...(expenseScope === 'project' ? { projectId: pid, projectName: project?.project_name ?? '—' } : {}),
           description: expenseDescription.trim() || '—',
+          ...(expenseRemarks.trim() ? { remarks: expenseRemarks.trim() } : {}),
           amount,
           date: expenseDate,
           category: expenseCategory.trim() || '—',
@@ -1125,6 +1166,7 @@ const ExpenseMonitoring: React.FC = () => {
         setExpenseAmount('');
         setExpenseDate(new Date().toISOString().slice(0, 10));
         setExpenseDescription('');
+        setExpenseRemarks('');
         setExpenseCategory('');
         setExpenseSupplier('');
         setExpenseInvoiceNo('');
@@ -1570,13 +1612,14 @@ const ExpenseMonitoring: React.FC = () => {
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell>Date</TableCell>
-                  <TableCell>Project</TableCell>
+                  <TableCell>{sortLabel('date', 'Date')}</TableCell>
+                  <TableCell>{sortLabel('project', 'Project')}</TableCell>
                   <TableCell>Project No.</TableCell>
                   <TableCell>PO Number</TableCell>
-                  <TableCell>Category</TableCell>
-                  <TableCell>Description Part #</TableCell>
-                  <TableCell align="right">Amount</TableCell>
+                  <TableCell>{sortLabel('category', 'Category')}</TableCell>
+                  <TableCell>{sortLabel('description', 'Description Part #')}</TableCell>
+                  <TableCell>Remarks</TableCell>
+                  <TableCell align="right">{sortLabel('amount', 'Amount', 'right')}</TableCell>
                   <TableCell>Receipt</TableCell>
                   <TableCell>Source</TableCell>
                   <TableCell padding="none" align="center" width={170}>Actions</TableCell>
@@ -1585,7 +1628,7 @@ const ExpenseMonitoring: React.FC = () => {
               <TableBody>
                 {tableRows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={10} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                    <TableCell colSpan={11} align="center" sx={{ py: 3, color: 'text.secondary' }}>
                       {selectedYear === 0
                         ? 'No expenses yet. Use the Add Expense button to add an expense.'
                         : `No expenses in ${selectedYear}. Use the Add Expense button to add an expense.`}
@@ -1610,6 +1653,7 @@ const ExpenseMonitoring: React.FC = () => {
                       <TableCell>{expense.scope === 'overhead' ? '—' : poNumber}</TableCell>
                       <TableCell>{expense.category}</TableCell>
                       <TableCell>{expense.description}</TableCell>
+                      <TableCell>{expense.remarks || '—'}</TableCell>
                       <TableCell align="right">{formatCurrency(expense.amount)}</TableCell>
                       <TableCell>
                         {expense.receiptRef?.oneDriveId && thumbs[expense.receiptRef.oneDriveId] ? (
@@ -1766,6 +1810,16 @@ const ExpenseMonitoring: React.FC = () => {
                   onChange={(e) => setExpenseDescription(e.target.value)}
                   multiline
                   rows={2}
+                />
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Remarks"
+                  placeholder='e.g. "Lunch out with client", "Company meeting"'
+                  value={expenseRemarks}
+                  onChange={(e) => setExpenseRemarks(e.target.value)}
                 />
               </Grid>
               <Grid size={{ xs: 12 }}>
@@ -2037,6 +2091,7 @@ const ExpenseMonitoring: React.FC = () => {
                 setExpenseAmount('');
                 setExpenseDate(new Date().toISOString().slice(0, 10));
                 setExpenseDescription('');
+                setExpenseRemarks('');
                 setExpenseCategory('');
                 setExpenseSupplier('');
                 setExpenseInvoiceNo('');
@@ -2072,6 +2127,10 @@ const ExpenseMonitoring: React.FC = () => {
               <Grid size={{ xs: 12 }}>
                 <TextField fullWidth size="small" label="Description" value={editFields.description}
                   onChange={(e) => setEditFields((f) => ({ ...f, description: e.target.value }))} multiline rows={2} />
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <TextField fullWidth size="small" label="Remarks" value={editFields.remarks}
+                  onChange={(e) => setEditFields((f) => ({ ...f, remarks: e.target.value }))} />
               </Grid>
               <Grid size={{ xs: 12 }}>
                 <FormControl fullWidth size="small">

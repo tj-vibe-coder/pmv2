@@ -277,6 +277,17 @@ Driven by RJ backfilling payroll Feb–May 2026 (company never ran payroll befor
 
 `npx tsc --noEmit` + `node --check server.js` + `CI=true npm run build` clean. **NOT runtime-verified** (no authed session against production Firestore this session).
 
+### Cash Advance → Investment Tracker linking (2026-07-02, uncommitted on `rj/dev`)
+
+Same `fundingSource` idiom as the Payroll-run and Expense-Monitoring linkings above, applied to Cash Advances (`CAFormPage.tsx` / `cash_advances` collection) — the third and last consumer of the pattern.
+
+- **`CashAdvanceRow` gained `fundingSource?: FundingSource`.** The Request Cash Advance form gained a "Funded By" block (Paid From / Investor / optional "Link to Existing Investment") — same 3-select pattern, fetching `GET /api/investments` filtered to the chosen investor. Funding source is captured at **request time**, same as a payroll run, but only takes effect at **approval time** (money doesn't actually leave an investor's pocket until the CA is approved and the employee can draw against it).
+- **Server**: `POST /api/cash-advances` normalizes and stores `fundingSource` via the existing `normalizeFundingSource()`. `PATCH /api/cash-advances/:id` (approve/reject) calls `syncExpenseFundingInvestment(id, 'cash_advances', {...ca, date: <approval date>})` only on the `approved` branch — a rejected CA was never synced, so there's nothing to reverse. `DELETE /api/cash-advances/:id` now also calls the sync with an empty doc after deleting, so deleting a previously-approved out-of-pocket CA doesn't leave an orphaned `expense_sync_{id}` investments row.
+- **Generalized `syncExpenseFundingInvestment`** (previously only handled `project_expenses`/`overhead_expenses`): extracted `projectIdForFundingDoc(collection, doc)` (handles `project_expenses`' `projectId` vs. `cash_advances`' `project_id` key naming) and `investmentCategoryForFundingDoc(collection)` (adds a `'Cash Advance'` category, new entry in `INVESTMENT_CATEGORIES`). Description fallback widened to `doc.description || doc.purpose || doc.category || ''` since a CA doc has `purpose`, not `description`.
+- **`InvestmentTrackerPage.tsx`**: `sourceCollection`/`linkedExpenseCollection` unions widened to include `'cash_advances'`; `expenseLinkTarget()` routes it to `/finance/expense-monitoring/ca-form` (same page whether reached via `/expense-monitoring/ca-form` or the Finance-workspace mount); the "View linked expense" tooltip now reads "View linked cash advance" for this collection.
+
+`npx tsc --noEmit` + `node --check server.js` + `CI=true npm run build` clean. **NOT runtime-verified** (no authed session against production Firestore this session).
+
 ---
 
 ## Security cleanup (committed)

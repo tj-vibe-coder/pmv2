@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Chip, IconButton, Button, CircularProgress, Alert,
+  TableHead, TableRow, TableSortLabel, Chip, IconButton, Button, CircularProgress, Alert,
   Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -36,6 +36,8 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun, onEditRun }) =>
   const [error, setError] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<PayrollRun | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [sortKey, setSortKey] = useState<'period' | 'payDate' | 'status' | 'createdBy'>('period');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const load = async () => {
     try {
@@ -49,6 +51,43 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun, onEditRun }) =>
   };
 
   useEffect(() => { load(); }, []);
+
+  const sortedRuns = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...runs].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case 'payDate': cmp = String(a.payDate).localeCompare(String(b.payDate)); break;
+        case 'status': cmp = a.status.localeCompare(b.status); break;
+        case 'createdBy': cmp = (a.createdBy || '').localeCompare(b.createdBy || ''); break;
+        case 'period':
+        default: cmp = String(a.periodStart).localeCompare(String(b.periodStart)); break;
+      }
+      return cmp * dir;
+    });
+  }, [runs, sortKey, sortDir]);
+
+  const handleSort = (key: typeof sortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+
+  // Header row background is dark navy — force white text/icon (TableSortLabel doesn't inherit color).
+  const sortLabel = (key: typeof sortKey, text: string) => (
+    <TableSortLabel
+      active={sortKey === key}
+      direction={sortKey === key ? sortDir : 'asc'}
+      onClick={() => handleSort(key)}
+      sx={{
+        color: 'white',
+        '&:hover': { color: 'white' },
+        '&.Mui-active': { color: 'white' },
+        '& .MuiTableSortLabel-icon': { color: 'white !important' },
+      }}
+    >
+      {text}
+    </TableSortLabel>
+  );
 
   const handleApprove = async (runId: string) => {
     try {
@@ -96,19 +135,21 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun, onEditRun }) =>
           <Table>
             <TableHead sx={{ bgcolor: '#2c3242' }}>
               <TableRow>
-                {['Period', 'Pay Date', 'Status', 'Created By', 'Actions'].map((h) => (
-                  <TableCell key={h} sx={{ color: 'white', fontWeight: 600 }}>{h}</TableCell>
-                ))}
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>{sortLabel('period', 'Period')}</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>{sortLabel('payDate', 'Pay Date')}</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>{sortLabel('status', 'Status')}</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>{sortLabel('createdBy', 'Created By')}</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {runs.length === 0 ? (
+              {sortedRuns.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                     No payroll runs yet. Create your first run.
                   </TableCell>
                 </TableRow>
-              ) : runs.map((run) => (
+              ) : sortedRuns.map((run) => (
                 <TableRow key={run.id} hover>
                   <TableCell>
                     {fmtDate(run.periodStart)} – {fmtDate(run.periodEnd)}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -29,11 +29,13 @@ import {
   MenuItem,
   Snackbar,
   Tooltip,
+  Divider,
 } from '@mui/material';
-import { Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, PhotoCamera as PhotoCameraIcon } from '@mui/icons-material';
+import { Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, PhotoCamera as PhotoCameraIcon, AccountBalanceWallet as WalletIcon } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
+import { INVESTORS, FundingSource } from '../data/financeCategories';
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 import PdfPreviewDialog from './PdfPreviewDialog';
@@ -110,6 +112,7 @@ interface CashAdvanceRow {
   updated_at: number;
   username?: string;
   full_name?: string | null;
+  fundingSource?: FundingSource;
 }
 
 interface LiquidationRow {
@@ -120,6 +123,20 @@ interface LiquidationRow {
   status?: string;
   ca_id?: string | null;
   created_at?: number;
+}
+
+// Per-employee rollup across all of an employee's approved CAs. Tracks the "still holds
+// cash" and "company owes them" amounts SEPARATELY (summed per-CA before combining), rather
+// than netting to one number — an employee can simultaneously still be holding cash on one
+// CA and be owed a refund on another (an over-liquidated one); netting those together can
+// cancel out near zero and hide both facts from the admin reviewing this table.
+interface EmployeeCaBalance {
+  userId: string;
+  name: string;
+  approvedCount: number;
+  totalApproved: number;
+  heldPositive: number; // sum of each approved CA's balance_remaining where it's > 0
+  owedNegative: number; // sum of abs(balance_remaining) where it's < 0 (company owes employee)
 }
 
 // Parse a stored breakdown regardless of vintage: legacy docs hold a JSON
@@ -147,9 +164,28 @@ export default function CAFormPage() {
   const [purpose, setPurpose] = useState('');
   const [dateRequested, setDateRequested] = useState(() => new Date().toISOString().slice(0, 10));
   const [breakdown, setBreakdown] = useState<BreakdownItem[]>([{ _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
+  const [fundingType, setFundingType] = useState<'corporate_bank' | 'investor_outofpocket'>('corporate_bank');
+  const [fundingInvestor, setFundingInvestor] = useState('');
+  const [linkedInvestmentId, setLinkedInvestmentId] = useState('');
+  const [linkedInvestments, setLinkedInvestments] = useState<{ id: string; date: string; category: string; description: string; amount: number }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CashAdvanceRow | null>(null);
+  // Edit-funding dialog — separate state from the "new request" funding fields above so
+  // opening it (for any existing CA, including ones created before this feature shipped)
+  // doesn't clobber whatever the admin has mid-typed into the request form.
+  const [fundingEditTarget, setFundingEditTarget] = useState<CashAdvanceRow | null>(null);
+  const [fundingEditType, setFundingEditType] = useState<'corporate_bank' | 'investor_outofpocket'>('corporate_bank');
+  const [fundingEditInvestor, setFundingEditInvestor] = useState('');
+  const [fundingEditLinkedId, setFundingEditLinkedId] = useState('');
+  const [fundingEditLinkedInvestments, setFundingEditLinkedInvestments] = useState<{ id: string; date: string; category: string; description: string; amount: number }[]>([]);
+  const [fundingEditLoadingInvestments, setFundingEditLoadingInvestments] = useState(false);
+  const [savingFunding, setSavingFunding] = useState(false);
+  // Invalidates any in-flight /api/investments fetch from a previous dialog open or a previous
+  // investor selection — without this, a slow response for CA-A (or a previously-picked
+  // investor) can resolve after the dialog has moved on to CA-B and silently overwrite its
+  // investor/linked-investment state with the wrong data.
+  const fundingEditGenRef = useRef(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
   const [pdfPreviewBlob, setPdfPreviewBlob] = useState<Blob | null>(null);
@@ -211,6 +247,124 @@ export default function CAFormPage() {
       })
       .catch(() => {});
   }, []);
+
+  const handleFundingInvestorChange = async (investor: string) => {
+    setFundingInvestor(investor);
+    setLinkedInvestmentId('');
+    setLinkedInvestments([]);
+    if (!investor) return;
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/investments`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        const eligible = (data.investments || []).filter((inv: { investor: string; sourceType?: string }) =>
+          inv.investor === investor && inv.sourceType !== 'expense_sync'
+        );
+        setLinkedInvestments(eligible.map((inv: { id: string; date: string; category: string; description: string; amount: number }) => ({
+          id: inv.id, date: inv.date, category: inv.category, description: inv.description, amount: Number(inv.amount) || 0,
+        })));
+      }
+    } catch {
+      // silent — admin-only endpoint; non-admins just won't see linkable investments
+    }
+  };
+
+  // `gen` lets a caller (openFundingEdit) reuse a generation it already bumped, so opening a
+  // dialog counts as exactly one invalidation event rather than two. A direct call from the
+  // Investor <Select> (no `gen` passed) bumps its own, invalidating any earlier in-flight
+  // fetch for this same dialog (e.g. the admin switching investors twice quickly).
+  const handleFundingEditInvestorChange = async (investor: string, gen?: number) => {
+    const myGen = gen ?? ++fundingEditGenRef.current;
+    setFundingEditInvestor(investor);
+    setFundingEditLinkedId('');
+    setFundingEditLinkedInvestments([]);
+    if (!investor) return;
+    setFundingEditLoadingInvestments(true);
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/investments`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (fundingEditGenRef.current !== myGen) return; // superseded by a newer open/selection
+      if (data.success) {
+        const eligible = (data.investments || []).filter((inv: { investor: string; sourceType?: string }) =>
+          inv.investor === investor && inv.sourceType !== 'expense_sync'
+        );
+        setFundingEditLinkedInvestments(eligible.map((inv: { id: string; date: string; category: string; description: string; amount: number }) => ({
+          id: inv.id, date: inv.date, category: inv.category, description: inv.description, amount: Number(inv.amount) || 0,
+        })));
+      }
+    } catch {
+      // silent — admin-only endpoint
+    } finally {
+      if (fundingEditGenRef.current === myGen) setFundingEditLoadingInvestments(false);
+    }
+  };
+
+  const openFundingEdit = async (ca: CashAdvanceRow) => {
+    const myGen = ++fundingEditGenRef.current; // invalidates any fetch still in flight from a previously-opened CA
+    setFundingEditTarget(ca);
+    setError(null);
+    const fs = ca.fundingSource;
+    if (fs && fs.type === 'investor_outofpocket' && fs.investor) {
+      setFundingEditType('investor_outofpocket');
+      await handleFundingEditInvestorChange(fs.investor, myGen);
+      if (fundingEditGenRef.current !== myGen) return; // a newer open superseded this one
+      setFundingEditLinkedId(fs.linkedInvestmentId ?? '');
+    } else {
+      setFundingEditType('corporate_bank');
+      setFundingEditInvestor('');
+      setFundingEditLinkedId('');
+      setFundingEditLinkedInvestments([]);
+      setFundingEditLoadingInvestments(false);
+    }
+  };
+
+  const closeFundingEdit = () => {
+    fundingEditGenRef.current++; // invalidate any fetch still in flight for the CA being closed
+    setFundingEditTarget(null);
+    setError(null);
+    setFundingEditType('corporate_bank');
+    setFundingEditInvestor('');
+    setFundingEditLinkedId('');
+    setFundingEditLinkedInvestments([]);
+    setFundingEditLoadingInvestments(false);
+  };
+
+  const handleSaveFunding = async () => {
+    if (!fundingEditTarget) return;
+    const token = localStorage.getItem('netpacific_token');
+    if (!token) { setError('Session expired — please refresh and sign in again.'); return; }
+    const fundingSource: FundingSource = fundingEditType === 'investor_outofpocket' && fundingEditInvestor
+      ? { type: 'investor_outofpocket', investor: fundingEditInvestor, ...(fundingEditLinkedId ? { linkedInvestmentId: fundingEditLinkedId } : {}) }
+      : { type: 'corporate_bank' };
+    setSavingFunding(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/cash-advances/${fundingEditTarget.id}/funding`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ fundingSource }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        if (data.syncWarning) {
+          setSnackbar(null);
+          setError(data.message || 'Funding source saved, but the Investment Tracker link failed to update — please retry.');
+        } else {
+          setSnackbar('Funding source updated');
+          closeFundingEdit();
+        }
+        fetchList();
+      } else {
+        setError(data.error || 'Failed to update funding source');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Network error');
+    } finally {
+      setSavingFunding(false);
+    }
+  };
 
   const addBreakdownRow = () => setBreakdown((b) => [...b, { _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
   const removeBreakdownRow = (index: number) =>
@@ -394,6 +548,46 @@ export default function CAFormPage() {
     (ca) => ca.status === 'approved' && Number(ca.balance_remaining) > 0
   );
 
+  // Answers "does this person still hold unliquidated cash, or has their liquidation
+  // exceeded what they were advanced (company owes them the difference)?" balance_remaining
+  // is server-authoritative (see PATCH /approve and the liquidation submit/revision paths),
+  // so this only sums it — it never re-derives the number from liquidations itself.
+  const employeeBalances = useMemo<EmployeeCaBalance[]>(() => {
+    const byUser = new Map<string, EmployeeCaBalance>();
+    for (const ca of list) {
+      if (ca.status !== 'approved') continue;
+      const key = String(ca.user_id);
+      const name = ca.full_name?.trim() || ca.username || key;
+      const bal = Number(ca.balance_remaining) || 0;
+      const existing = byUser.get(key);
+      if (existing) {
+        existing.approvedCount += 1;
+        existing.totalApproved += Number(ca.amount) || 0;
+        existing.heldPositive += Math.max(0, bal);
+        existing.owedNegative += Math.max(0, -bal);
+      } else {
+        byUser.set(key, {
+          userId: key,
+          name,
+          approvedCount: 1,
+          totalApproved: Number(ca.amount) || 0,
+          heldPositive: Math.max(0, bal),
+          owedNegative: Math.max(0, -bal),
+        });
+      }
+    }
+    // Settled employees (nothing held, nothing owed) add no value here — only surface who
+    // still has something open, biggest total exposure first.
+    return Array.from(byUser.values())
+      .filter((b) => b.heldPositive > 0.005 || b.owedNegative > 0.005)
+      .sort((a, b) => (b.heldPositive + b.owedNegative) - (a.heldPositive + a.owedNegative));
+  }, [list]);
+  const visibleEmployeeBalances = isAdmin
+    ? employeeBalances
+    : employeeBalances.filter((b) => b.userId === String(user?.id));
+  const totalOutstandingHeld = employeeBalances.reduce((s, b) => s + b.heldPositive, 0);
+  const totalCompanyOwes = employeeBalances.reduce((s, b) => s + b.owedNegative, 0);
+
   const exportCurrentFormToPDF = () => {
     if (breakdownTotal <= 0) {
       setError('Add breakdown lines before exporting.');
@@ -506,6 +700,9 @@ export default function CAFormPage() {
       .filter((r) => r.amount > 0);
     const token = localStorage.getItem('netpacific_token');
     if (!token) return;
+    const fundingSource: FundingSource | undefined = fundingType === 'investor_outofpocket' && fundingInvestor
+      ? { type: 'investor_outofpocket', investor: fundingInvestor, ...(linkedInvestmentId ? { linkedInvestmentId } : {}) }
+      : undefined;
     setSubmitting(true);
     setError(null);
     try {
@@ -518,6 +715,7 @@ export default function CAFormPage() {
           purpose: purpose.trim() || undefined,
           date_requested: dateRequested || undefined,
           breakdown: items.length > 0 ? items : undefined,
+          ...(fundingSource ? { fundingSource } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -529,6 +727,10 @@ export default function CAFormPage() {
         setSelectedProject(null);
         setPurpose('');
         setBreakdown([{ _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
+        setFundingType('corporate_bank');
+        setFundingInvestor('');
+        setLinkedInvestmentId('');
+        setLinkedInvestments([]);
         setSnackbar(data.ca_no ? `Cash advance ${data.ca_no} requested` : 'Cash advance requested');
         fetchList();
       } else {
@@ -640,6 +842,66 @@ export default function CAFormPage() {
             />
           )}
         </Box>
+
+        {isAdmin && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5, color: theme.primary }}>
+              Funded By
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+              Applies once this CA is approved. Link it to an Investment Tracker entry the same way an out-of-pocket expense is linked. Admin-only — which investor is fronting a CA is decided at approval, not by the requester.
+            </Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'flex-start', mb: 2 }}>
+              <TextField
+                select
+                size="small"
+                label="Paid From"
+                value={fundingType}
+                sx={{ minWidth: 220 }}
+                onChange={(e) => {
+                  const v = e.target.value as 'corporate_bank' | 'investor_outofpocket';
+                  setFundingType(v);
+                  if (v !== 'investor_outofpocket') { setFundingInvestor(''); setLinkedInvestmentId(''); setLinkedInvestments([]); }
+                }}
+              >
+                <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
+                <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
+              </TextField>
+              {fundingType === 'investor_outofpocket' && (
+                <TextField
+                  select
+                  size="small"
+                  label="Investor"
+                  value={fundingInvestor}
+                  sx={{ minWidth: 220 }}
+                  onChange={(e) => handleFundingInvestorChange(e.target.value)}
+                >
+                  <MenuItem value="">— Select investor —</MenuItem>
+                  {INVESTORS.map((inv) => <MenuItem key={inv} value={inv}>{inv}</MenuItem>)}
+                </TextField>
+              )}
+              {fundingType === 'investor_outofpocket' && fundingInvestor && linkedInvestments.length > 0 && (
+                <TextField
+                  select
+                  size="small"
+                  label="Link to Existing Investment (Optional)"
+                  value={linkedInvestmentId}
+                  sx={{ minWidth: 280 }}
+                  onChange={(e) => setLinkedInvestmentId(e.target.value)}
+                >
+                  <MenuItem value="">— New investment entry —</MenuItem>
+                  {linkedInvestments.map((inv) => (
+                    <MenuItem key={inv.id} value={inv.id}>
+                      {inv.date} · {inv.category} · {inv.description || '—'} · {inv.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              )}
+            </Box>
+          </>
+        )}
+
         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: theme.primary }}>
           Breakdown by category (add child lines under Materials for item breakdown; amount is auto-computed)
         </Typography>
@@ -747,6 +1009,56 @@ export default function CAFormPage() {
           </Button>
         </Box>
       </Paper>
+
+      {!loading && visibleEmployeeBalances.length > 0 && (
+        <Paper sx={{ p: 2, mb: 3, border: '1px solid #e0e0e0', borderRadius: 2 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: theme.primary }}>
+            {isAdmin ? 'Cash Advance Balances by Employee' : 'Your Cash Advance Balance'}
+          </Typography>
+          {isAdmin && (
+            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 1.5 }}>
+              <Typography variant="body2">
+                Held by employees (still to liquidate):{' '}
+                <strong>{totalOutstandingHeld.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong>
+              </Typography>
+              {totalCompanyOwes > 0 && (
+                <Typography variant="body2" sx={{ color: 'error.main' }}>
+                  Company owes employees (over-liquidated):{' '}
+                  <strong>{totalCompanyOwes.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong>
+                </Typography>
+              )}
+            </Box>
+          )}
+          <TableContainer sx={{ border: '1px solid #e0e0e0', borderRadius: 1 }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ bgcolor: theme.primary + '08' }}>
+                  {isAdmin && <TableCell sx={{ fontWeight: 600 }}>Employee</TableCell>}
+                  <TableCell sx={{ fontWeight: 600 }} align="right">Approved CAs</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }} align="right">Total Approved</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }} align="right">Holds Unliquidated</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }} align="right">Company Owes</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {visibleEmployeeBalances.map((b) => (
+                  <TableRow key={b.userId} hover>
+                    {isAdmin && <TableCell>{b.name}</TableCell>}
+                    <TableCell align="right">{b.approvedCount}</TableCell>
+                    <TableCell align="right">{b.totalApproved.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: b.heldPositive > 0 ? 600 : undefined, color: b.heldPositive > 0 ? 'warning.main' : 'text.disabled' }}>
+                      {b.heldPositive > 0 ? b.heldPositive.toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '—'}
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontWeight: b.owedNegative > 0 ? 600 : undefined, color: b.owedNegative > 0 ? 'error.main' : 'text.disabled' }}>
+                      {b.owedNegative > 0 ? b.owedNegative.toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '—'}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Paper>
+      )}
 
       <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: theme.primary }}>
         {isAdmin ? 'All CA requests (monitor and approve)' : 'My CA requests'}
@@ -918,6 +1230,16 @@ export default function CAFormPage() {
                       >
                         <PictureAsPdfIcon fontSize="small" />
                       </IconButton>
+                      {isAdmin && ca.status !== 'rejected' && (
+                        <IconButton
+                          size="small"
+                          onClick={() => openFundingEdit(ca)}
+                          title={ca.fundingSource?.type === 'investor_outofpocket' ? `Funded by ${ca.fundingSource.investor} (out-of-pocket) — edit` : 'Edit funding source / link to Investment Tracker'}
+                          sx={{ color: ca.fundingSource?.type === 'investor_outofpocket' ? 'info.main' : theme.primary, ml: 0.5 }}
+                        >
+                          <WalletIcon fontSize="small" />
+                        </IconButton>
+                      )}
                       {(isAdmin || (ca.status === 'pending' && String(ca.user_id) === String(user?.id))) && (
                         <Button
                           size="small"
@@ -988,6 +1310,87 @@ export default function CAFormPage() {
             disabled={!!actionId}
           >
             Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={!!fundingEditTarget} onClose={closeFundingEdit} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Funding Source — {fundingEditTarget?.ca_no || fundingEditTarget?.id}
+        </DialogTitle>
+        <DialogContent>
+          {error && (
+            <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>
+              {error}
+            </Alert>
+          )}
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {fundingEditTarget?.status === 'approved'
+              ? "Applies immediately — links (or unlinks) this CA's Investment Tracker entry now, dated to its original approval."
+              : 'This CA is still pending, so nothing is linked yet. The funding source you pick here takes effect automatically once it’s approved.'}
+          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <TextField
+              select
+              size="small"
+              label="Paid From"
+              value={fundingEditType}
+              fullWidth
+              onChange={(e) => {
+                const v = e.target.value as 'corporate_bank' | 'investor_outofpocket';
+                setFundingEditType(v);
+                if (v !== 'investor_outofpocket') { setFundingEditInvestor(''); setFundingEditLinkedId(''); setFundingEditLinkedInvestments([]); }
+              }}
+            >
+              <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
+              <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
+            </TextField>
+            {fundingEditType === 'investor_outofpocket' && (
+              <TextField
+                select
+                size="small"
+                label="Investor"
+                value={fundingEditInvestor}
+                fullWidth
+                onChange={(e) => handleFundingEditInvestorChange(e.target.value)}
+              >
+                <MenuItem value="">— Select investor —</MenuItem>
+                {INVESTORS.map((inv) => <MenuItem key={inv} value={inv}>{inv}</MenuItem>)}
+              </TextField>
+            )}
+            {fundingEditType === 'investor_outofpocket' && fundingEditInvestor && fundingEditLoadingInvestments && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary' }}>
+                <CircularProgress size={16} />
+                <Typography variant="caption">Loading this investor's linkable investments…</Typography>
+              </Box>
+            )}
+            {fundingEditType === 'investor_outofpocket' && fundingEditInvestor && !fundingEditLoadingInvestments && fundingEditLinkedInvestments.length > 0 && (
+              <TextField
+                select
+                size="small"
+                label="Link to Existing Investment (Optional)"
+                value={fundingEditLinkedId}
+                fullWidth
+                onChange={(e) => setFundingEditLinkedId(e.target.value)}
+              >
+                <MenuItem value="">— New investment entry —</MenuItem>
+                {fundingEditLinkedInvestments.map((inv) => (
+                  <MenuItem key={inv.id} value={inv.id}>
+                    {inv.date} · {inv.category} · {inv.description || '—'} · {inv.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                  </MenuItem>
+                ))}
+              </TextField>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeFundingEdit} disabled={savingFunding}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleSaveFunding}
+            disabled={savingFunding || fundingEditLoadingInvestments || (fundingEditType === 'investor_outofpocket' && !fundingEditInvestor)}
+            sx={{ bgcolor: theme.primary, '&:hover': { bgcolor: theme.secondary } }}
+          >
+            {savingFunding ? <CircularProgress size={20} /> : 'Save'}
           </Button>
         </DialogActions>
       </Dialog>
