@@ -287,3 +287,11 @@ In the deploy-prep commit:
 - Comments mentioning specific contact names in `scripts/migrate-clients-unified.js` genericized.
 - `.gitignore`: added `/backups/`, `/.firebase/`, `/.claude/`, `*.bak-*`, legacy-import preview artifacts.
 - Plan doc moved: `ok-fizzy-sparrow.md` → `docs/cloud-functions-migration.md`.
+
+### Git merge & Jest test fix (2026-07-02, committed on `rj/dev`)
+
+- **Mocked `@react-pdf/renderer` in Jest:** Mocked `@react-pdf/renderer` globally in `src/setupTests.ts` to prevent Jest from attempting to compile ESM files in `node_modules` during tests, resolving `SyntaxError: Cannot use import statement outside a module`.
+- **Updated `App.test.tsx`:** Updated boilerplate assertion from checking for a non-existent `"learn react"` link to checking that the Login page renders correctly (looks for `"Sign in"` text/buttons).
+- **Concluded merge:** Staged all changes and committed the merge of `origin/main` into `rj/dev`.
+- **Verified build and tests:** `CI=true npm test` and `CI=true npm run build` both compile and pass.
+
