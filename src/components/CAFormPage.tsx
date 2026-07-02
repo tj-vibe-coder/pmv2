@@ -171,6 +171,8 @@ export default function CAFormPage() {
   const [submitting, setSubmitting] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CashAdvanceRow | null>(null);
+  const [closeTarget, setCloseTarget] = useState<CashAdvanceRow | null>(null);
+  const [closing, setClosing] = useState(false);
   // Edit-funding dialog — separate state from the "new request" funding fields above so
   // opening it (for any existing CA, including ones created before this feature shipped)
   // doesn't clobber whatever the admin has mid-typed into the request form.
@@ -789,6 +791,30 @@ export default function CAFormPage() {
     }
   };
 
+  const handleClose = async (closureType: 'returned' | 'written_off') => {
+    if (!closeTarget) return;
+    const token = localStorage.getItem('netpacific_token');
+    if (!token) return;
+    setClosing(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/cash-advances/${closeTarget.id}/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ closureType }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        setSnackbar(data.message || 'Cash advance closed');
+        setCloseTarget(null);
+        fetchList();
+      } else setError(data.error || 'Close failed');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Network error');
+    } finally {
+      setClosing(false);
+    }
+  };
+
   const theme = { primary: '#2c5aa0', secondary: '#1e4a72' };
 
   return (
@@ -1222,6 +1248,17 @@ export default function CAFormPage() {
                           Liquidate
                         </Button>
                       )}
+                      {isAdmin && ca.status === 'approved' && Number(ca.balance_remaining) > 0 && (
+                        <Button
+                          size="small"
+                          startIcon={<WalletIcon />}
+                          onClick={() => setCloseTarget(ca)}
+                          sx={{ color: theme.primary, mr: 0.5 }}
+                          title="Close out this CA's remaining unused balance"
+                        >
+                          Close &amp; Settle
+                        </Button>
+                      )}
                       <IconButton
                         size="small"
                         onClick={() => exportCARowToPDF(ca)}
@@ -1310,6 +1347,45 @@ export default function CAFormPage() {
             disabled={!!actionId}
           >
             Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={!!closeTarget} onClose={() => setCloseTarget(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Close &amp; Settle — {closeTarget?.ca_no || closeTarget?.id}</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            {closeTarget?.full_name || closeTarget?.username || 'This employee'} still holds an unused balance of{' '}
+            <strong>
+              ₱{closeTarget ? Number(closeTarget.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '0.00'}
+            </strong>{' '}
+            on this cash advance. Choose how to settle it.
+          </DialogContentText>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              <strong>Cash Returned</strong> — Employee physically returned the unused cash.
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              <strong>Write Off</strong> — Absorb the shortfall as a company cost (no cash physically returned).
+            </Typography>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setCloseTarget(null)} disabled={closing}>Cancel</Button>
+          <Button
+            color="warning"
+            variant="contained"
+            onClick={() => handleClose('written_off')}
+            disabled={closing}
+          >
+            Write Off
+          </Button>
+          <Button
+            color="success"
+            variant="contained"
+            onClick={() => handleClose('returned')}
+            disabled={closing}
+          >
+            Cash Returned
           </Button>
         </DialogActions>
       </Dialog>

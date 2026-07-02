@@ -1034,12 +1034,14 @@ function normalizeFundingSource(fs) {
 function projectIdForFundingDoc(collection, doc) {
   if (collection === 'project_expenses') return doc.projectId || null;
   if (collection === 'cash_advances') return doc.project_id || null;
+  if (collection === 'reimbursements') return doc.projectId || null;
   return null;
 }
 
 function investmentCategoryForFundingDoc(collection) {
   if (collection === 'project_expenses') return 'Project Expense';
   if (collection === 'cash_advances') return 'Cash Advance';
+  if (collection === 'reimbursements') return 'Reimbursement';
   return 'Overhead';
 }
 
@@ -1606,6 +1608,62 @@ app.patch('/api/cash-advances/:id/funding', async (req, res) => {
   }
 });
 
+// Admin-only: close out an approved cash advance's remaining balance — either
+// the cash physically came back ('returned') or it's being written off as a
+// realized loss ('written_off').
+app.post('/api/cash-advances/:id/close', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  const { closureType } = req.body;
+  if (closureType !== 'returned' && closureType !== 'written_off') return res.status(400).json({ success: false, error: "closureType must be 'returned' or 'written_off'" });
+  try {
+    const ref = db.collection('cash_advances').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Cash advance not found' });
+    const ca = doc.data();
+    if (ca.status !== 'approved') return res.status(400).json({ success: false, error: 'Only approved cash advances can be closed' });
+    const balance = parseFloat(ca.balance_remaining) || 0;
+    // A negative balance means the employee over-liquidated against this CA — that's
+    // a reimbursement payable, not an unused-cash closeout. Settle it from the
+    // Reimbursements page (POST /api/reimbursements/:id/pay), which pays the employee
+    // back and restores this CA's balance toward zero as a side effect.
+    if (balance < 0) return res.status(400).json({ success: false, error: 'This CA has a negative balance (company owes the employee) — settle it from the Reimbursements page instead.' });
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({ status: 'closed', closureType, closedAt: now, closedBy: user.id, balance_remaining: 0, updated_at: now });
+    let syncOk = true;
+    if (closureType === 'returned' && balance > 0) {
+      // The investment row (if any) currently reflects the FULL original advance as deployed
+      // capital. The returned portion never actually got spent — bring the row down to
+      // actually-deployed capital (original amount minus what just came back).
+      const invRef = db.collection('investments').doc(`expense_sync_${id}`);
+      const invSnap = await invRef.get();
+      if (invSnap.exists) {
+        const currentAmount = Number(invSnap.data().amount) || 0;
+        await invRef.update({ amount: Math.max(0, currentAmount - balance), updated_at: new Date().toISOString() });
+      }
+    } else if (closureType === 'written_off' && balance > 0) {
+      // The capital genuinely left and wasn't recovered — leave the investment row as-is, but
+      // book the shortfall as a real cost so it isn't a phantom gap in the P&L.
+      await db.collection('overhead_expenses').add({
+        description: `Cash advance write-off: ${ca.ca_no || id}`,
+        amount: balance,
+        date: new Date(now * 1000).toISOString().slice(0, 10),
+        category: 'Cash Advance Write-off',
+        createdAt: new Date(now * 1000).toISOString(),
+        createdBy: user.id,
+        sourceType: 'ca_writeoff',
+        sourceCaId: id,
+      });
+    }
+    res.json({ success: true, message: closureType === 'returned' ? 'Cash advance closed — cash returned' : 'Cash advance closed — written off', syncWarning: !syncOk });
+  } catch (err) {
+    console.error('Error closing cash advance:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 app.delete('/api/cash-advances/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -1713,22 +1771,53 @@ app.post('/api/liquidations', async (req, res) => {
   const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
   const caId = ca_id ? String(ca_id) : null;
   try {
+    let caCoveredAmount = 0;
+    let reimbursableAmount = 0;
     if (liqStatus === 'submitted' && caId) {
       const caDoc = await db.collection('cash_advances').doc(caId).get();
       if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
       const bal = parseFloat(caDoc.data().balance_remaining) || 0;
-      if (total > bal) return res.status(400).json({ success: false, error: `Liquidation (₱${total.toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+      // An overspend no longer blocks submission — the amount beyond the CA's
+      // balance just splits off into a reimbursement claim instead (see below).
+      caCoveredAmount = Math.min(total, bal);
+      reimbursableAmount = Math.max(0, total - bal);
+    } else if (liqStatus === 'submitted' && !caId) {
+      reimbursableAmount = total;
     }
     if (liqStatus === 'submitted' && form_no) {
       const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
       if (!dupSnap.empty) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
     }
-    // No-CA submitted liquidations are out-of-pocket reimbursement claims —
-    // tracked so the requester gets paid back (see PATCH below).
-    const reimbursementStatus = liqStatus === 'submitted' && !caId ? 'pending' : null;
-    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
+    // Reimbursable amounts — out-of-pocket claims, or the slice of a liquidation
+    // that exceeds the CA's balance — are tracked so the requester gets paid
+    // back (see /api/reimbursements).
+    const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
+    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
+      // Decrement by the FULL total, not just the covered portion — a CA's
+      // balance_remaining going negative IS the "company owes this employee" signal
+      // the existing employee-balances rollup (CAFormPage.tsx) already reads.
+      // ca_covered_amount/reimbursable_amount above are kept as informational splits
+      // for display; they don't change what actually gets written to the CA balance.
       await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
+    }
+    if (liqStatus === 'submitted' && reimbursableAmount > 0) {
+      await db.collection('reimbursements').doc(ref.id).set({
+        liquidationId: ref.id,
+        formNo: form_no || null,
+        employeeId: user.id,
+        employeeName: employee_name || user.full_name || user.username || null,
+        origin: caId ? 'ca_excess' : 'no_ca',
+        amount: reimbursableAmount,
+        caId: caId || null,
+        status: 'pending',
+        fundingSource: null,
+        paidAt: null,
+        paidBy: null,
+        syncedInvestmentId: null,
+        createdAt: now,
+        updatedAt: now,
+      });
     }
     res.status(201).json({ success: true, id: ref.id, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved' });
   } catch (err) {
@@ -1755,20 +1844,45 @@ app.put('/api/liquidations/:id', async (req, res) => {
     const now = Math.floor(Date.now() / 1000);
     const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
     const caId = ca_id ? String(ca_id) : null;
+    let caCoveredAmount = 0;
+    let reimbursableAmount = 0;
     if (liqStatus === 'submitted' && caId) {
       const caDoc = await db.collection('cash_advances').doc(caId).get();
       if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
       const bal = parseFloat(caDoc.data().balance_remaining) || 0;
-      if (total > bal) return res.status(400).json({ success: false, error: `Liquidation (₱${total.toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+      caCoveredAmount = Math.min(total, bal);
+      reimbursableAmount = Math.max(0, total - bal);
+    } else if (liqStatus === 'submitted' && !caId) {
+      reimbursableAmount = total;
     }
     if (liqStatus === 'submitted' && form_no) {
       const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
       if (dupSnap.docs.some(d => d.id !== id)) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
     }
-    const reimbursementStatus = liqStatus === 'submitted' && !caId ? 'pending' : null;
-    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
+    const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
+    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
+      // Full total, matching POST above — the CA's balance_remaining can go
+      // negative, which is the existing "company owes this employee" signal.
       await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
+    }
+    if (liqStatus === 'submitted' && reimbursableAmount > 0) {
+      await db.collection('reimbursements').doc(id).set({
+        liquidationId: id,
+        formNo: form_no || null,
+        employeeId: existing.user_id,
+        employeeName: employee_name || user.full_name || user.username || null,
+        origin: caId ? 'ca_excess' : 'no_ca',
+        amount: reimbursableAmount,
+        caId: caId || null,
+        status: 'pending',
+        fundingSource: null,
+        paidAt: null,
+        paidBy: null,
+        syncedInvestmentId: null,
+        createdAt: now,
+        updatedAt: now,
+      });
     }
     res.json({ success: true, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
   } catch (err) {
@@ -1799,6 +1913,17 @@ app.patch('/api/liquidations/:id', async (req, res) => {
       reimbursed_by: reimbursement_status === 'reimbursed' ? user.id : null,
       updated_at: now,
     });
+    // Keep the first-class reimbursements doc (source of truth for GET /api/reimbursements)
+    // in sync with this legacy toggle — reimbursement docs are keyed by liquidation id.
+    const reimbursementRef = db.collection('reimbursements').doc(req.params.id);
+    const reimbursementSnap = await reimbursementRef.get();
+    if (reimbursementSnap.exists) {
+      if (reimbursement_status === 'reimbursed') {
+        await reimbursementRef.update({ status: 'paid', paidAt: now, paidBy: user.id, updatedAt: now });
+      } else if (reimbursementSnap.data().status === 'paid') {
+        await reimbursementRef.update({ status: 'pending', paidAt: null, paidBy: null, fundingSource: null, updatedAt: now });
+      }
+    }
     res.json({ success: true, message: reimbursement_status === 'reimbursed' ? 'Marked as reimbursed' : 'Reverted to pending reimbursement' });
   } catch (err) {
     console.error('Error updating liquidation reimbursement status:', err);
@@ -1806,22 +1931,23 @@ app.patch('/api/liquidations/:id', async (req, res) => {
   }
 });
 
-// Admin-only: list liquidations pending reimbursement (submitted, no CA).
+// Admin-only: list pending reimbursement claims (out-of-pocket liquidation rows,
+// and the slice of any liquidation that exceeded its CA's balance).
 app.get('/api/reimbursements', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
   try {
-    const snap = await db.collection('liquidations').where('reimbursement_status', '==', 'pending').get();
+    const snap = await db.collection('reimbursements').where('status', '==', 'pending').get();
     const rows = await Promise.all(snap.docs.map(async doc => {
-      const liq = { id: doc.id, ...doc.data() };
-      if (liq.user_id) {
-        const uDoc = await db.collection('users').doc(liq.user_id).get();
-        if (uDoc.exists) { liq.username = uDoc.data().username; liq.full_name = uDoc.data().full_name; }
+      const r = { id: doc.id, ...doc.data() };
+      if (r.employeeId) {
+        const uDoc = await db.collection('users').doc(r.employeeId).get();
+        if (uDoc.exists) { r.username = uDoc.data().username; r.full_name = uDoc.data().full_name; }
       }
-      return liq;
+      return r;
     }));
-    rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     res.json({ success: true, reimbursements: rows });
   } catch (err) {
     console.error('Error fetching reimbursements:', err);
@@ -1829,7 +1955,46 @@ app.get('/api/reimbursements', async (req, res) => {
   }
 });
 
-// Admin-only: batch-mark pending (no-CA submitted) liquidations as reimbursed.
+// Admin-only: mark a single pending reimbursement as paid, optionally recording an
+// out-of-pocket funding source so it syncs into the Investment Tracker.
+app.post('/api/reimbursements/:id/pay', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  try {
+    const ref = db.collection('reimbursements').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Reimbursement not found' });
+    const reimbursement = doc.data();
+    if (reimbursement.status !== 'pending') return res.status(400).json({ success: false, error: 'Reimbursement is not pending' });
+    const fs = normalizeFundingSource(req.body.fundingSource);
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({ status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, updatedAt: now });
+    await db.collection('liquidations').doc(reimbursement.liquidationId).update({ reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
+    // Paying a ca_excess reimbursement is the company actually handing the employee
+    // the amount their over-liquidation put the CA into the negative for — restore
+    // that CA's balance_remaining toward zero by the same amount.
+    if (reimbursement.origin === 'ca_excess' && reimbursement.caId) {
+      await db.collection('cash_advances').doc(reimbursement.caId).update({ balance_remaining: FieldValue.increment(reimbursement.amount), updated_at: now });
+    }
+    // Re-read after our own write, same defensive pattern as the CA /funding endpoint,
+    // so the sync sees the just-written fundingSource rather than a stale pre-write copy.
+    const fresh = (await ref.get()).data();
+    const syncOk = await syncExpenseFundingInvestment(id, 'reimbursements', {
+      date: new Date(now * 1000).toISOString().slice(0, 10),
+      amount: fresh.amount,
+      fundingSource: fresh.fundingSource,
+      description: `Reimbursement ${fresh.formNo || id}: ${fresh.employeeName || ''}`.trim(),
+    });
+    res.json({ success: true, message: 'Reimbursement marked paid', syncWarning: !syncOk });
+  } catch (err) {
+    console.error('Error paying reimbursement:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: batch-mark pending reimbursements as paid, optionally from a shared funding source.
 app.post('/api/reimbursements/batch-mark', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -1840,22 +2005,36 @@ app.post('/api/reimbursements/batch-mark', async (req, res) => {
   if (ids.length > 500) return res.status(400).json({ success: false, error: 'Maximum 500 ids per request' });
   try {
     const now = Math.floor(Date.now() / 1000);
+    const fs = normalizeFundingSource(req.body.fundingSource);
     const batch = db.batch();
     const skipped = [];
-    let updated = 0;
+    const toSync = [];
     for (const id of ids) {
-      const ref = db.collection('liquidations').doc(id);
+      const ref = db.collection('reimbursements').doc(id);
       const doc = await ref.get();
       if (!doc.exists) { skipped.push({ id, reason: 'not found' }); continue; }
-      const liq = doc.data();
-      if (liq.status !== 'submitted' || liq.ca_id || liq.reimbursement_status !== 'pending') {
-        skipped.push({ id, reason: 'not a pending no-CA submitted liquidation' });
-        continue;
+      const r = doc.data();
+      if (r.status !== 'pending') { skipped.push({ id, reason: 'not pending' }); continue; }
+      batch.update(ref, { status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, updatedAt: now });
+      if (r.liquidationId) {
+        batch.update(db.collection('liquidations').doc(r.liquidationId), { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
       }
-      batch.update(ref, { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id, updated_at: now });
-      updated++;
+      // Same CA-balance restoration as the single-pay endpoint, batched.
+      if (r.origin === 'ca_excess' && r.caId) {
+        batch.update(db.collection('cash_advances').doc(r.caId), { balance_remaining: FieldValue.increment(r.amount), updated_at: now });
+      }
+      toSync.push({ id, amount: r.amount, formNo: r.formNo, employeeName: r.employeeName });
     }
-    if (updated > 0) await batch.commit();
+    if (toSync.length > 0) await batch.commit();
+    for (const r of toSync) {
+      await syncExpenseFundingInvestment(r.id, 'reimbursements', {
+        date: new Date(now * 1000).toISOString().slice(0, 10),
+        amount: r.amount,
+        fundingSource: fs,
+        description: `Reimbursement ${r.formNo || r.id}: ${r.employeeName || ''}`.trim(),
+      });
+    }
+    const updated = toSync.length;
     res.json({ success: true, updated, skipped, message: `Marked ${updated} as reimbursed` });
   } catch (err) {
     console.error('Error batch-marking reimbursements:', err);
@@ -1877,8 +2056,25 @@ app.delete('/api/liquidations/:id', async (req, res) => {
     const total = parseFloat(liq.total_amount) || 0;
     const caId = liq.ca_id || null;
     const now = Math.floor(Date.now() / 1000);
-    if (liq.status === 'submitted' && caId && total > 0) {
-      await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(total), updated_at: now });
+    const reimbursementRef = db.collection('reimbursements').doc(id);
+    const reimbursementSnap = await reimbursementRef.get();
+    const reimbursement = reimbursementSnap.exists ? reimbursementSnap.data() : null;
+    if (liq.status === 'submitted' && caId) {
+      // The CA's balance_remaining was decremented by the FULL total at submission.
+      // If the reimbursable portion was already paid out, that amount was already
+      // restored to the CA balance at payment time (see POST /api/reimbursements/:id/pay)
+      // — refund only the remaining CA-covered portion here to avoid double-crediting.
+      const alreadyRestored = reimbursement && reimbursement.status === 'paid' ? (parseFloat(reimbursement.amount) || 0) : 0;
+      const refundAmount = total - alreadyRestored;
+      if (refundAmount > 0) {
+        await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(refundAmount), updated_at: now });
+      }
+    }
+    // Drop any still-pending reimbursement claim this liquidation spawned — an
+    // already-paid one stays as the payment record even though its source liquidation
+    // is gone, same reasoning as applyLiquidationRevision's paid-amount guard.
+    if (reimbursement && reimbursement.status === 'pending') {
+      await reimbursementRef.delete();
     }
     await ref.delete();
     res.json({ success: true, message: 'Liquidation deleted' });
@@ -1909,17 +2105,41 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
   const oldTotal = parseFloat(liq.total_amount) || 0;
   const newTotal = parseFloat(revision.total_amount) || 0;
 
-  // CA reconciliation: the original submission already deducted oldTotal, so
-  // only the delta moves, and the revision may not overdraw the CA.
+  // CA reconciliation: only the delta moves on balance_remaining (raw, uncapped —
+  // same as POST/PUT above, a negative balance is the "company owes this employee"
+  // signal, not an error). ca_covered_amount/reimbursable_amount are recomputed as
+  // an informational split against what the CA's balance was before THIS
+  // liquidation's own prior effect (i.e. undoing oldTotal), so the split reflects
+  // the revision as if it were a fresh submission against that same starting point.
+  let newCaCoveredAmount = 0;
+  let newReimbursableAmount = newTotal;
+  let caRef = null;
+  let caDelta = 0;
   if (liq.ca_id) {
-    const caRef = db.collection('cash_advances').doc(String(liq.ca_id));
+    caRef = db.collection('cash_advances').doc(String(liq.ca_id));
     const caDoc = await caRef.get();
     if (caDoc.exists) {
       const bal = parseFloat(caDoc.data().balance_remaining) || 0;
-      const delta = newTotal - oldTotal;
-      if (delta > bal) throw Object.assign(new Error(`Revised total (₱${newTotal.toFixed(2)}) exceeds the CA's available balance (₱${(bal + oldTotal).toFixed(2)})`), { status: 400 });
-      if (delta !== 0) await caRef.update({ balance_remaining: FieldValue.increment(-delta), updated_at: now });
+      const balBeforeThisLiquidation = bal + oldTotal;
+      newCaCoveredAmount = Math.min(newTotal, Math.max(0, balBeforeThisLiquidation));
+      newReimbursableAmount = Math.max(0, newTotal - balBeforeThisLiquidation);
+      caDelta = newTotal - oldTotal;
+    } else {
+      caRef = null; // nothing to write balance_remaining onto
     }
+  }
+
+  // A revision may not silently change an amount that's already been paid out —
+  // reject it and let the payment discrepancy be resolved by hand first.
+  const reimbursementRef = db.collection('reimbursements').doc(liqId);
+  const reimbursementSnap = await reimbursementRef.get();
+  const existingReimbursement = reimbursementSnap.exists ? reimbursementSnap.data() : null;
+  if (existingReimbursement && existingReimbursement.status === 'paid' && (parseFloat(existingReimbursement.amount) || 0) !== newReimbursableAmount) {
+    throw Object.assign(new Error('This revision would change an already-paid reimbursement amount — resolve the payment discrepancy manually before revising.'), { status: 400 });
+  }
+
+  if (caRef && caDelta !== 0) {
+    await caRef.update({ balance_remaining: FieldValue.increment(-caDelta), updated_at: now });
   }
 
   // project_expenses re-sync: update/delete docs previously synced from this
@@ -1972,6 +2192,34 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
   }
   await batch.commit();
 
+  // Reconcile the reimbursements doc to the re-split amount. Skip touching a
+  // doc that's already 'paid' — the throw-guard above already proved its
+  // amount is unchanged, so re-setting it back to 'pending' would silently
+  // reverse a real payment.
+  if (newReimbursableAmount > 0) {
+    if (!existingReimbursement || existingReimbursement.status !== 'paid') {
+      const reimbursementUpdate = {
+        liquidationId: liqId,
+        formNo: liq.form_no || null,
+        employeeId: liq.user_id,
+        employeeName: (revision.employee_name ?? liq.employee_name) || null,
+        origin: liq.ca_id ? 'ca_excess' : 'no_ca',
+        amount: newReimbursableAmount,
+        caId: liq.ca_id || null,
+        status: 'pending',
+        fundingSource: null,
+        paidAt: null,
+        paidBy: null,
+        syncedInvestmentId: null,
+        updatedAt: now,
+      };
+      if (!existingReimbursement) reimbursementUpdate.createdAt = now;
+      await reimbursementRef.set(reimbursementUpdate, { merge: true });
+    }
+  } else if (existingReimbursement && existingReimbursement.status === 'pending') {
+    await reimbursementRef.delete();
+  }
+
   await db.collection('liquidation_revision_audit').add({
     liquidation_id: liqId,
     form_no: liq.form_no || null,
@@ -1985,7 +2233,18 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
     created_at: now,
   });
 
-  const update = { rows_json: JSON.stringify(newRows), total_amount: newTotal, updated_at: now, pending_revision: FieldValue.delete() };
+  const finalReimbursementStatus = newReimbursableAmount > 0
+    ? ((existingReimbursement && existingReimbursement.status === 'paid') ? 'reimbursed' : 'pending')
+    : null;
+  const update = {
+    rows_json: JSON.stringify(newRows),
+    total_amount: newTotal,
+    ca_covered_amount: newCaCoveredAmount,
+    reimbursable_amount: newReimbursableAmount,
+    reimbursement_status: finalReimbursementStatus,
+    updated_at: now,
+    pending_revision: FieldValue.delete(),
+  };
   if (revision.employee_name != null) update.employee_name = revision.employee_name;
   if (revision.date_of_submission != null) update.date_of_submission = revision.date_of_submission;
   if (revision.receipts_json != null) update.receipts_json = revision.receipts_json;

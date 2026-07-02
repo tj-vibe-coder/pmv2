@@ -271,7 +271,7 @@ export default function LiquidationFormPage() {
   const [loadedOptionValue, setLoadedOptionValue] = useState<string>('');
   const [cashAdvances, setCashAdvances] = useState<CaOption[]>([]);
   // Reimbursement tracking of the currently loaded submitted no-CA liquidation.
-  const [loadedReimb, setLoadedReimb] = useState<{ id: string; status: string | null; at: number | null } | null>(null);
+  const [loadedReimb, setLoadedReimb] = useState<{ id: string; status: string | null; at: number | null; caId: string | null } | null>(null);
   // Receipt scans/photos attached per expense row.
   const [receipts, setReceipts] = useState<ReceiptAttachment[]>([]);
   const receiptInputRef = useRef<HTMLInputElement>(null);
@@ -698,8 +698,8 @@ export default function LiquidationFormPage() {
     setDraftId(submitted ? null : l.id);
     setLoadedOptionValue(submitted ? `submitted:${l.id}` : `draft:${l.id}`);
     setLoadedReimb(
-      submitted && !l.ca_id
-        ? { id: l.id, status: l.reimbursement_status || 'pending', at: l.reimbursed_at || null }
+      submitted && l.reimbursement_status
+        ? { id: l.id, status: l.reimbursement_status, at: l.reimbursed_at || null, caId: l.ca_id || null }
         : null
     );
     setRevisionMode(false);
@@ -1078,6 +1078,8 @@ export default function LiquidationFormPage() {
   // the plain balance check would false-positive — the server validates the
   // delta against the live balance instead.
   const overBalance = !isViewingSubmitted && !revisionMode && !!selectedCa && totalAmount > Number(selectedCa.balance_remaining);
+  const splitCaCovered = selectedCa ? Math.min(totalAmount, Number(selectedCa.balance_remaining)) : totalAmount;
+  const splitReimbursable = selectedCa ? Math.max(0, totalAmount - Number(selectedCa.balance_remaining)) : 0;
 
   const exportToPDF = async () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -1464,7 +1466,7 @@ export default function LiquidationFormPage() {
                     {!!d.pending_revision && (
                       <Chip size="small" label="Edit pending" color="warning" sx={{ ml: 1, height: 18, fontSize: '0.65rem' }} />
                     )}
-                    {!d.ca_id && d.reimbursement_status && (
+                    {d.reimbursement_status && (
                       <Chip
                         size="small"
                         label={d.reimbursement_status === 'reimbursed' ? 'Reimbursed' : 'Reimb. pending'}
@@ -1627,7 +1629,7 @@ export default function LiquidationFormPage() {
               {selectedCa && !isViewingSubmitted && (
                 <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: overBalance ? 'error.main' : 'text.secondary' }}>
                   {overBalance
-                    ? `Total exceeds the remaining balance of ₱${Number(selectedCa.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`
+                    ? `₱${splitReimbursable.toLocaleString('en-PH', { minimumFractionDigits: 2 })} of this will exceed the CA and become a reimbursement claim`
                     : `₱${Number(selectedCa.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })} remaining to liquidate on this CA`}
                 </Typography>
               )}
@@ -1642,7 +1644,7 @@ export default function LiquidationFormPage() {
 
         {overBalance && (
           <Alert severity="warning" sx={{ mb: 2 }}>
-            Total ₱{totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} exceeds the CA balance ₱{Number(selectedCa?.balance_remaining || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}. Reduce the rows or split into a separate reimbursement liquidation.
+            Total ₱{totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} exceeds the CA balance ₱{Number(selectedCa?.balance_remaining || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}. The covered portion (₱{splitCaCovered.toLocaleString('en-PH', { minimumFractionDigits: 2 })}) will draw down the CA; the remaining ₱{splitReimbursable.toLocaleString('en-PH', { minimumFractionDigits: 2 })} will be tracked as a reimbursement claim payable to you.
           </Alert>
         )}
 
@@ -1663,7 +1665,7 @@ export default function LiquidationFormPage() {
               )}
             </Box>
             <Box sx={{ display: 'flex', gap: 1 }}>
-              {loadedReimb && isAdmin && (
+              {loadedReimb && isAdmin && !loadedReimb.caId && (
                 <Button
                   variant="outlined"
                   size="small"
@@ -1672,6 +1674,11 @@ export default function LiquidationFormPage() {
                 >
                   {loadedReimb.status === 'reimbursed' ? 'Revert to pending' : 'Mark reimbursed'}
                 </Button>
+              )}
+              {loadedReimb && isAdmin && loadedReimb.caId && loadedReimb.status !== 'reimbursed' && (
+                <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic' }}>
+                  Settle this from the Reimbursements page
+                </Typography>
               )}
               <Button
                 variant="contained"
@@ -2144,8 +2151,7 @@ export default function LiquidationFormPage() {
               variant="contained"
               startIcon={<SendIcon />}
               onClick={revisionMode ? submitRevision : submitLiquidation}
-              disabled={saving || isViewingSubmitted || overBalance}
-              title={overBalance ? 'Total exceeds the selected CA balance' : undefined}
+              disabled={saving || isViewingSubmitted}
               sx={{ bgcolor: theme.secondary, '&:hover': { bgcolor: theme.primary } }}
             >
               {revisionMode
