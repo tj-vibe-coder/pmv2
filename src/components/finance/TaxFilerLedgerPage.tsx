@@ -35,10 +35,14 @@ import {
   OpenInNew as OpenInNewIcon,
   Close as CloseIcon,
   DragIndicator as DragIndicatorIcon,
+  ExpandMore as ExpandMoreIcon,
+  ExpandLess as ExpandLessIcon,
 } from '@mui/icons-material';
 import { API_BASE } from '../../config/api';
 import { accountFor } from '../../data/financeCategories';
 import { fetchOverheadExpenses, OverheadExpense } from '../../services/overheadExpenseService';
+import { getOfficePayrollBreakdown } from '../../utils/firebasePayroll';
+import { Payslip } from '../../types/Payroll';
 import { useAuth } from '../../contexts/AuthContext';
 import { fetchDriveItemBlob } from '../../services/onedriveFolderService';
 
@@ -114,9 +118,18 @@ interface LedgerRow {
   deductibleReason: string;
   countInTotal: boolean; // payroll runs are informational (already synced into overhead)
   isSyncedPayroll?: boolean; // overhead rows posted by the payroll-approval sync
+  syncRunId?: string; // payroll run id this synced overhead row was posted from (drill-down key)
   projectId?: string;
   receiptRef?: ReceiptRef;
   runStatus?: string;
+}
+
+// Deterministic sync doc ids are `payroll_sync_{runId}_salaries` / `payroll_sync_{runId}_govt`
+// (see syncPayrollOverheadExpenses in server.js) — recover the run id from the id itself rather
+// than adding a field, same idiom `isSyncedPayroll` below already uses.
+function payrollSyncRunId(id: string): string | undefined {
+  const m = /^payroll_sync_(.+)_(salaries|govt)$/.exec(id);
+  return m ? m[1] : undefined;
 }
 
 const SOURCE_LABEL: Record<LedgerSource, string> = {
@@ -229,6 +242,29 @@ const TaxFilerLedgerPage: React.FC = () => {
   // tax_filer is read-only; everyone else (accounting/admin) can correct the flag inline.
   const canEdit = !isTaxFiler;
 
+  // Per-employee breakdown behind a synced "Overhead (Payroll)" row, expanded on click.
+  // Cached by run id so toggling the salaries/govt row pair for the same run doesn't re-fetch.
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+  const [breakdownByRun, setBreakdownByRun] = useState<Record<string, Payslip[]>>({});
+  const [breakdownLoadingRunId, setBreakdownLoadingRunId] = useState<string | null>(null);
+  const [breakdownErrorRunId, setBreakdownErrorRunId] = useState<string | null>(null);
+
+  const toggleBreakdown = async (runId: string) => {
+    if (expandedRunId === runId) { setExpandedRunId(null); return; }
+    setExpandedRunId(runId);
+    if (breakdownByRun[runId]) return;
+    setBreakdownLoadingRunId(runId);
+    setBreakdownErrorRunId(null);
+    try {
+      const slips = await getOfficePayrollBreakdown(runId);
+      setBreakdownByRun((prev) => ({ ...prev, [runId]: slips }));
+    } catch {
+      setBreakdownErrorRunId(runId);
+    } finally {
+      setBreakdownLoadingRunId(null);
+    }
+  };
+
   // Floating draggable receipt viewer pane (ported from Expense Monitoring).
   const [viewer, setViewer] = useState<{ row: LedgerRow; url: string | null } | null>(null);
   const [viewerPos, setViewerPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -333,6 +369,7 @@ const TaxFilerLedgerPage: React.FC = () => {
             deductibleReason: e.deductibleReason || '',
             countInTotal: true,
             isSyncedPayroll,
+            syncRunId: isSyncedPayroll ? payrollSyncRunId(e.id || '') : undefined,
             receiptRef: e.receiptRef,
           });
         });
@@ -594,14 +631,29 @@ const TaxFilerLedgerPage: React.FC = () => {
                     <TableRow><TableCell colSpan={13} align="center" sx={{ color: 'text.secondary', py: 4 }}>No records for {period === 'all' ? year : `${year} ${period.toUpperCase()}`}.</TableCell></TableRow>
                   ) : (
                     filtered.map((r) => (
-                      <TableRow key={`${r.source}-${r.id}`} hover>
+                      <React.Fragment key={`${r.source}-${r.id}`}>
+                      <TableRow hover>
                         <TableCell>
-                          <Chip
-                            size="small"
-                            label={r.isSyncedPayroll ? 'Overhead (Payroll)' : SOURCE_LABEL[r.source]}
-                            color={r.source === 'project' ? 'primary' : r.source === 'overhead' ? 'secondary' : 'default'}
-                            variant="outlined"
-                          />
+                          {r.isSyncedPayroll && r.syncRunId ? (
+                            <Tooltip title={expandedRunId === r.syncRunId ? 'Hide employee breakdown' : 'View employee breakdown'}>
+                              <Chip
+                                size="small"
+                                label="Overhead (Payroll)"
+                                color="secondary"
+                                variant="outlined"
+                                icon={expandedRunId === r.syncRunId ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                                onClick={() => toggleBreakdown(r.syncRunId as string)}
+                                sx={{ cursor: 'pointer' }}
+                              />
+                            </Tooltip>
+                          ) : (
+                            <Chip
+                              size="small"
+                              label={SOURCE_LABEL[r.source]}
+                              color={r.source === 'project' ? 'primary' : r.source === 'overhead' ? 'secondary' : 'default'}
+                              variant="outlined"
+                            />
+                          )}
                         </TableCell>
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>{r.date ? String(r.date).slice(0, 10) : '-'}</TableCell>
                         <TableCell sx={{ maxWidth: 240 }}>{r.description}{r.runStatus ? ` (${r.runStatus})` : ''}</TableCell>
@@ -652,6 +704,47 @@ const TaxFilerLedgerPage: React.FC = () => {
                         </TableCell>
                         <TableCell><ReceiptCell row={r} onOpen={openReceiptViewer} /></TableCell>
                       </TableRow>
+                      {r.isSyncedPayroll && r.syncRunId && expandedRunId === r.syncRunId && (
+                        <TableRow>
+                          <TableCell colSpan={13} sx={{ bgcolor: '#f8fafc', py: 2 }}>
+                            {breakdownLoadingRunId === r.syncRunId ? (
+                              <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}><CircularProgress size={20} /></Box>
+                            ) : breakdownErrorRunId === r.syncRunId ? (
+                              <Alert severity="error">Failed to load the employee breakdown for this run.</Alert>
+                            ) : (breakdownByRun[r.syncRunId] || []).length === 0 ? (
+                              <Typography variant="body2" color="text.secondary">No office-employee payslips found for this run.</Typography>
+                            ) : (
+                              <Table size="small">
+                                <TableHead>
+                                  <TableRow>
+                                    {['Employee', 'Designation', 'Gross Pay', 'SSS (EE)', 'PhilHealth (EE)', 'Pag-IBIG (EE)', 'Withholding Tax', 'SSS (ER)', 'PhilHealth (ER)', 'Pag-IBIG (ER)', 'Net Pay'].map((h) => (
+                                      <TableCell key={h} sx={{ fontWeight: 600, fontSize: '0.75rem' }}>{h}</TableCell>
+                                    ))}
+                                  </TableRow>
+                                </TableHead>
+                                <TableBody>
+                                  {(breakdownByRun[r.syncRunId] || []).map((p) => (
+                                    <TableRow key={p.employeeId}>
+                                      <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{p.employeeSnapshot?.name || '—'}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{p.employeeSnapshot?.designation || '—'}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.grossPay) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.empSSS) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.empPhilhealth) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.empPagibig) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.withholdingTax) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.erSSS) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.erPhilhealth) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.erPagibig) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem', fontWeight: 600 }}>{formatPHP(Number(p.netPay) || 0)}</TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      </React.Fragment>
                     ))
                   )}
                 </TableBody>
@@ -659,7 +752,7 @@ const TaxFilerLedgerPage: React.FC = () => {
             </TableContainer>
           </Paper>
           <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 1.5 }}>
-            Payroll runs are listed for reference only and are not added to the totals: office payroll is already posted into Overhead (Salaries &amp; Wages / Government Contributions) by the payroll-approval sync, so counting it here would double it. Overhead rows tagged "Overhead (Payroll)" are that synced labor.
+            Payroll runs are listed for reference only and are not added to the totals: office payroll is already posted into Overhead (Salaries &amp; Wages / Government Contributions) by the payroll-approval sync, so counting it here would double it. Overhead rows tagged "Overhead (Payroll)" are that synced labor — click one to see the per-employee breakdown (office staff only; field-crew labor isn't synced here).
           </Typography>
         </>
       )}

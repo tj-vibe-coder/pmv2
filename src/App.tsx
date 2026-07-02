@@ -426,7 +426,9 @@ function App() {
                 <ProtectedRoute>
                   <EmployeeGuard>
                     <AppLayout>
-                      <InvestmentTrackerPage />
+                      <TaxFilerBlock>
+                        <InvestmentTrackerPage />
+                      </TaxFilerBlock>
                     </AppLayout>
                   </EmployeeGuard>
                 </ProtectedRoute>

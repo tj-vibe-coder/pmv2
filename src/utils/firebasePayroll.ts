@@ -149,6 +149,13 @@ export async function getPayslipsForRun(runId: string): Promise<Payslip[]> {
   return handleResponse<Payslip[]>(res);
 }
 
+// Rate-stripped, OFFICE-only breakdown for tax filers (and existing payroll roles) drilling into
+// a run's synced "Overhead (Payroll)" totals — narrower access than getPayslipsForRun above.
+export async function getOfficePayrollBreakdown(runId: string): Promise<Payslip[]> {
+  const res = await fetch(`${BASE}/runs/${runId}/office-breakdown`, { headers: getAuthHeader() });
+  return handleResponse<Payslip[]>(res);
+}
+
 // ─── Contribution Settings ────────────────────────────────────────────────
 
 export interface ContributionRates {

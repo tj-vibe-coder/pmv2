@@ -197,7 +197,8 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
         </List>
       </Collapse>
 
-      {/* Investment Tracker */}
+      {/* Investment Tracker — hidden from tax_filer (capital ledger, not a BIR substantiation source) */}
+      {user?.role !== 'tax_filer' && (
       <ListItem disablePadding sx={{ mb: 0.5 }}>
         <Tooltip title={isExpanded ? '' : 'Investment Tracker'} placement="right" arrow>
           <ListItemButton
@@ -219,6 +220,7 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
           </ListItemButton>
         </Tooltip>
       </ListItem>
+      )}
 
       {/* Profit & Loss — superadmin only */}
       {user?.role === 'superadmin' && (

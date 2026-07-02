@@ -938,8 +938,10 @@ app.get('/api/project-expenses', async (req, res) => {
     // (PO/liquidation/migrated) have no natural per-user owner, so expose them to every finance user —
     // otherwise the per-project Expense Monitoring list would hide costs (e.g. synced PO items or
     // liquidation rows) the company P&L still counts, producing a confusing reconciliation gap.
-    // In-memory filter only, so no Firestore composite index is needed.
-    if (!isAdmin) {
+    // In-memory filter only, so no Firestore composite index is needed. tax_filer is exempted
+    // entirely — the Tax Filer Ledger needs full company expense visibility for BIR substantiation;
+    // it's a read-only role (write access stays admin/owner-gated separately in the PATCH handler).
+    if (!isAdmin && user.role !== 'tax_filer') {
       const SYNC_SOURCE_TYPES = new Set(['po_sync', 'liquidation_sync', 'migrated']);
       rows = rows.filter(r => r.createdBy === user.id || SYNC_SOURCE_TYPES.has(r.sourceType));
     }
@@ -2282,6 +2284,16 @@ async function requireSuperadminPayrollAccess(req, res) {
   return user;
 }
 
+// Read-only: lets the tax_filer role (plus whoever already has full payroll access) see the
+// OFFICE-employee breakdown behind a run's synced overhead totals, without granting any of the
+// broader payroll admin routes gated by requirePayrollAccess above.
+async function requireTaxLedgerPayrollAccess(req, res) {
+  const user = await getCurrentUser(req);
+  if (!user) { res.status(401).json({ error: 'Unauthorized' }); return null; }
+  if (user.role !== 'tax_filer' && !PAYROLL_ROLES.includes(user.role)) { res.status(403).json({ error: 'Forbidden' }); return null; }
+  return user;
+}
+
 // Posts/updates/removes the OFFICE-staff payroll cost rows in overhead_expenses for a run,
 // keyed on deterministic ids so recompute always overwrites (never duplicates) them — same
 // idempotent idiom used on approve. Also mirrors the funding source onto (or off of) an
@@ -2597,6 +2609,20 @@ app.post('/api/payroll/runs/:runId/payslips', async (req, res) => {
     await batch.commit();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to save payslips' }); }
+});
+
+// OFFICE-only, rate-stripped payslip breakdown for a run — the per-employee detail behind the
+// two lump-sum "Overhead (Payroll)" rows the Tax Filer Ledger already shows. FIELD payslips are
+// excluded (their cost isn't synced into overhead_expenses, so they're irrelevant to those rows).
+app.get('/api/payroll/runs/:runId/office-breakdown', async (req, res) => {
+  const user = await requireTaxLedgerPayrollAccess(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('payroll_runs').doc(req.params.runId).collection('payslips').get();
+    const office = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(p => p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE');
+    res.json(isSuperadmin(user) ? office : office.map(p => ({ ...p, employeeSnapshot: stripRates(p.employeeSnapshot) })));
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch payroll breakdown' }); }
 });
 
 // ── Employee Payslip (self-service) ────────────────────────────────────────
@@ -4767,7 +4793,9 @@ app.get('/api/overhead-expenses', async (req, res) => {
   try {
     const { year, category } = req.query;
     let query = db.collection('overhead_expenses');
-    if (!isAdmin) query = query.where('createdBy', '==', user.id);
+    // tax_filer needs full visibility for BIR substantiation (Tax Filer Ledger) — it's a
+    // read-only role; write access stays admin/owner-gated separately in the PATCH handler below.
+    if (!isAdmin && user.role !== 'tax_filer') query = query.where('createdBy', '==', user.id);
     if (category) query = query.where('category', '==', String(category));
     const snap = await query.get();
     let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
