@@ -155,6 +155,7 @@ export interface Quotation {
   authorizedBy?: string;
   termsOverrides?: {
     scopeOfWork?: string;         // replaces the hardcoded Scope of Work paragraph
+    exclusions?: string;          // adds an Exclusions section (newline-separated bullets); omitted from the PDF entirely if blank, no default text
     basisOfProposal?: string;     // replaces the hardcoded Basis of Proposal paragraph
     deliveryLines?: string;       // replaces ALL delivery bullet lines (newline-separated, each already starts with "- ")
     warrantyExclusion?: string;   // replaces the hardcoded warranty-exclusion sentence

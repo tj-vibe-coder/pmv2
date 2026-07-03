@@ -37,3 +37,14 @@ export function assignLegacyCode(yymm: string, seq: number, clientCode: string, 
   const cli = (clientCode || 'XXX').toUpperCase().slice(0, 3).padEnd(3, 'X');
   return `PCS${yymm}${String(seq).padStart(3, '0')}-${cli}-${revision}`;
 }
+
+// A Project's `code` always carries a baked-in "-{CLI}-00" suffix from
+// quotationCode() at creation time (a placeholder, not any one quotation's
+// actual revision). Every quotation's human-facing reference number strips
+// that placeholder off and rebuilds it with the real recipient code and the
+// quotation's own revision — otherwise both segments get concatenated and you
+// get a duplicated "-00-00" (or "-00-00-OPT1", etc.).
+export function quotationRefNo(projectCode: string, recipientCode: string | undefined, revision: string): string {
+  const base = projectCode.replace(/-[A-Z]{3}-\d{2}$/, '');
+  return `${base}-${(recipientCode ?? 'XXX').slice(0, 3)}-${revision}`;
+}

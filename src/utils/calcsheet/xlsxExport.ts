@@ -5,6 +5,7 @@ import type { Client, Project, Quotation } from '../../types/Quotation';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, manpowerCost,
 } from './calc';
+import { quotationRefNo } from './codes';
 
 const PHP_FMT = '"₱" #,##0.00;[Red]"₱" -#,##0.00';
 
@@ -21,7 +22,7 @@ export async function exportQuotationXlsx(
   wb.created = new Date();
 
   const totals = computeTotals(quotation);
-  const refNo = `${project.code.replace(/-[A-Z]{3}-\d{2}$/, '')}-${(recipient?.code ?? 'XXX').slice(0, 3)}-${quotation.revision}`;
+  const refNo = quotationRefNo(project.code, recipient?.code, quotation.revision);
   const generalReqtsExportQty = Math.max(1, quotation.generalReqtsExportQty || 1);
   const generalReqtsExportUnitPrice = totals.generalReqtsSubtotal / generalReqtsExportQty;
   const engineeringServicesQty = Math.max(1, quotation.engineeringServicesQty || 1);
@@ -261,6 +262,6 @@ export async function exportQuotationXlsx(
   }
 
   const buf = await wb.xlsx.writeBuffer();
-  const filename = `${project.code.replace(/-[A-Z]{3}-\d{2}$/, '')}-${(recipient?.code ?? 'XXX').slice(0, 3)}-${quotation.revision}.xlsx`;
+  const filename = `${refNo}.xlsx`;
   saveAs(new Blob([buf]), filename);
 }

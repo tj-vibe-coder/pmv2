@@ -18,11 +18,16 @@ import { format } from 'date-fns';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
+import PushPinIcon from '@mui/icons-material/PushPin';
+import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import { useQuotationStore } from '../../store/quotationStore';
 import {
   PHP, computeTotals, componentLineTotal,
   componentSellingUnit, lineGeneralTotal, manpowerCost, manpowerTotalCost, manpowerDailyRate,
 } from '../../utils/calcsheet/calc';
+import { ISSUER_NAMES, DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from '../../utils/calcsheet/defaultTerms';
+import { quotationRefNo } from '../../utils/calcsheet/codes';
+import { FloatingTotalsWidget } from './FloatingTotalsWidget';
 import type {
   ComponentLine, GeneralReqLine, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
 } from '../../types/Quotation';
@@ -136,6 +141,14 @@ export default function QuotationEditor() {
   const [selectedCompIds, setSelectedCompIds] = useState<Set<string>>(new Set());
   const [groupDialogOpen, setGroupDialogOpen] = useState<'services' | 'components' | false>(false);
   const [groupLabel, setGroupLabel] = useState('');
+  const [showFloatingTotals, setShowFloatingTotals] = useState(
+    () => localStorage.getItem('calcsheet:floatingTotalsVisible') === '1',
+  );
+  const toggleFloatingTotals = () => setShowFloatingTotals((v) => {
+    const next = !v;
+    try { localStorage.setItem('calcsheet:floatingTotalsVisible', next ? '1' : '0'); } catch { /* ignore */ }
+    return next;
+  });
 
   // Re-init the draft when the URL points at a different quotation OR when the
   // saved record changes via some path we don't control (e.g. another browser
@@ -709,6 +722,25 @@ export default function QuotationEditor() {
 
   const exportXlsx = () => exportQuotationXlsx(quotation, project, recipient ?? null, customer ?? null);
 
+  // Each category's share of the VAT-EX subtotal — helps sanity-check the
+  // cost mix (e.g. is Labor too thin relative to Product) while nudging
+  // prices to land on a round total.
+  const mixPct = (value: number) => (totals.subtotal > 0 ? `${((value / totals.subtotal) * 100).toFixed(1)}%` : '—');
+
+  // Each T&C textbox displays the default wording whenever the underlying
+  // override is blank (see the Terms & Conditions accordion below), so a
+  // plain truthiness check on termsOverrides would misfire if a user clicks
+  // into a field and retypes the default verbatim. Compare against what the
+  // default computes to right now instead — only flag genuine edits.
+  const to = quotation.termsOverrides;
+  const hasCustomTerms = !!to && (
+    (!!to.scopeOfWork && to.scopeOfWork !== DEFAULT_SCOPE_OF_WORK) ||
+    !!to.exclusions ||
+    (!!to.basisOfProposal && to.basisOfProposal !== defaultBasisOfProposal(ISSUER_NAMES[quotation.kind])) ||
+    (!!to.deliveryLines && to.deliveryLines !== defaultDeliveryText(quotation.deliveryTerms)) ||
+    (!!to.warrantyExclusion && to.warrantyExclusion !== DEFAULT_WARRANTY_EXCLUSION)
+  );
+
   return (
     <Stack spacing={3}>
       {/* Header */}
@@ -726,7 +758,7 @@ export default function QuotationEditor() {
               />
             )}
             <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
-              {project.code}-{quotation.revision}
+              {quotationRefNo(project.code, recipient?.code, quotation.revision)}
             </Typography>
           </Stack>
           <Typography variant="h5">{project.name}</Typography>
@@ -794,6 +826,16 @@ export default function QuotationEditor() {
           >
             History
           </Button>
+          <Tooltip title={showFloatingTotals ? 'Hide floating totals' : 'Show a draggable totals panel while you edit prices'}>
+            <Button
+              startIcon={showFloatingTotals ? <PushPinIcon /> : <PushPinOutlinedIcon />}
+              variant={showFloatingTotals ? 'contained' : 'outlined'}
+              color="inherit"
+              onClick={toggleFloatingTotals}
+            >
+              Totals
+            </Button>
+          </Tooltip>
           <Button component={Link} to={`/sales/calcsheet/projects/${project.id}`} variant="text" size="small">← Project</Button>
         </Stack>
       </Stack>
@@ -909,35 +951,6 @@ export default function QuotationEditor() {
             )}
           </Box>
           {(() => {
-            const totalScopeDays = quotation.services.reduce((s, l) => s + (l.days || 0), 0);
-            const installDays = totalScopeDays > 0 ? totalScopeDays + 5 : 0;
-            const maxComponentLead = quotation.components.reduce((m, c) => Math.max(m, c.leadTimeDays || 0), 0);
-            const installWeeks = installDays > 0 ? Math.ceil(installDays / 7) : 0;
-            const deliveryWeeks = maxComponentLead > 0 ? Math.ceil(maxComponentLead / 7) : 0;
-            const parts: string[] = [];
-            if (installWeeks > 0) parts.push(`Installation is ${installWeeks} week${installWeeks > 1 ? 's' : ''} (${installDays} days)`);
-            if (deliveryWeeks > 0) parts.push(`Delivery of components is ${deliveryWeeks} week${deliveryWeeks > 1 ? 's' : ''} (${maxComponentLead} days)`);
-            const suggested = parts.length > 0
-              ? parts.join('. ') + ', upon receipt of a technically and commercially clarified purchase order.'
-              : '';
-            return (
-              <Box sx={{ gridColumn: 'span 2' }}>
-                <TextField
-                  label="Delivery Terms"
-                  value={quotation.deliveryTerms}
-                  onChange={(e) => setField('deliveryTerms', e.target.value)}
-                  multiline
-                  minRows={2}
-                  disabled={isLegacy}
-                  fullWidth
-                  helperText={suggested && suggested !== quotation.deliveryTerms
-                    ? <span>Suggested: {suggested} <Typography component="span" variant="caption" sx={{ color: 'primary.main', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => setField('deliveryTerms', suggested)}>Apply</Typography></span>
-                    : undefined}
-                />
-              </Box>
-            );
-          })()}
-          {(() => {
             const staffOption = (props: any, option: string) => {
               const c = effectiveSalesContacts.find((x) => x.name === option);
               const sub = [c?.position, c?.phone, c?.email].filter(Boolean).join(' · ');
@@ -1016,7 +1029,7 @@ export default function QuotationEditor() {
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
               Terms &amp; Conditions
-              {quotation.termsOverrides && Object.values(quotation.termsOverrides).some(Boolean) && (
+              {hasCustomTerms && (
                 <Chip label="custom" size="small" color="warning" sx={{ ml: 1, height: 18, fontSize: 11 }} />
               )}
             </Typography>
@@ -1024,7 +1037,7 @@ export default function QuotationEditor() {
           <AccordionDetails>
             <Stack spacing={2}>
               <Typography variant="caption" color="text.secondary">
-                Leave any field blank to use the default text. Filled fields override the matching section in the exported PDF.
+                Each field below starts filled with the current default wording — edit it in place, or clear it entirely to fall back to the default. Whatever's shown here is exactly what prints in the exported PDF.
               </Typography>
               <FormControlLabel
                 control={
@@ -1042,39 +1055,68 @@ export default function QuotationEditor() {
                 multiline
                 minRows={3}
                 fullWidth
-                value={quotation.termsOverrides?.scopeOfWork ?? ''}
+                value={quotation.termsOverrides?.scopeOfWork ?? DEFAULT_SCOPE_OF_WORK}
                 onChange={(e) => setTermsOverride('scopeOfWork', e.target.value)}
-                placeholder="- The scope of work shall be limited strictly to the items, specifications, and services explicitly stated in this proposal. Any additional works, modifications, or deviations not covered herein shall be treated as a Variation Order and shall be subject to separate quotation, approval, and corresponding adjustment in price and delivery schedule."
                 helperText="Replaces the default Scope of Work paragraph"
               />
+
+              <TextField
+                label="Exclusions"
+                multiline
+                minRows={2}
+                fullWidth
+                value={quotation.termsOverrides?.exclusions ?? ''}
+                onChange={(e) => setTermsOverride('exclusions', e.target.value)}
+                placeholder={'- Civil, structural, and mechanical works\n- Permits, licenses, and government fees\n- Items and services not explicitly listed in the Scope of Work'}
+                helperText="Optional — adds an Exclusions section to the PDF, right after Scope of Work. Each line on its own row (start with '- '). Leave blank to omit the section entirely — there is no default text."
+              />
+
               <TextField
                 label="Basis of Proposal"
                 multiline
                 minRows={3}
                 fullWidth
-                value={quotation.termsOverrides?.basisOfProposal ?? ''}
+                value={quotation.termsOverrides?.basisOfProposal ?? defaultBasisOfProposal(ISSUER_NAMES[quotation.kind])}
                 onChange={(e) => setTermsOverride('basisOfProposal', e.target.value)}
-                placeholder={`- This offer is based on the technical documents, drawings, specifications, and other references provided by the Client at the time of quotation. ${quotation.kind === 'ACTI' ? 'Advance Controle Technologie Inc.' : 'IO Control Technologie OPC'} reserves the right to revise pricing, scope, and schedule should there be significant changes, inconsistencies, or incomplete information discovered after award.`}
                 helperText="Replaces the default Basis of Proposal paragraph"
               />
-              <TextField
-                label="Delivery — all bullet lines"
-                multiline
-                minRows={3}
-                fullWidth
-                value={quotation.termsOverrides?.deliveryLines ?? ''}
-                onChange={(e) => setTermsOverride('deliveryLines', e.target.value)}
-                placeholder={`- ${quotation.deliveryTerms || 'Delivery is 1-2 weeks, upon receipt of a technically and commercially clarified purchase order.'}\n- Delivery terms shall be DDP – Client's Plant Site, unless otherwise specified.`}
-                helperText="Replaces ALL delivery bullet lines. Each line on its own row (start with '- '). Leave blank to use the Delivery Terms field above plus the default DDP line."
-              />
+
+              {(() => {
+                const totalScopeDays = quotation.services.reduce((s, l) => s + (l.days || 0), 0);
+                const installDays = totalScopeDays > 0 ? totalScopeDays + 5 : 0;
+                const maxComponentLead = quotation.components.reduce((m, c) => Math.max(m, c.leadTimeDays || 0), 0);
+                const installWeeks = installDays > 0 ? Math.ceil(installDays / 7) : 0;
+                const deliveryWeeks = maxComponentLead > 0 ? Math.ceil(maxComponentLead / 7) : 0;
+                const parts: string[] = [];
+                if (installWeeks > 0) parts.push(`Installation is ${installWeeks} week${installWeeks > 1 ? 's' : ''} (${installDays} days)`);
+                if (deliveryWeeks > 0) parts.push(`Delivery of components is ${deliveryWeeks} week${deliveryWeeks > 1 ? 's' : ''} (${maxComponentLead} days)`);
+                const suggestedLine1 = parts.length > 0
+                  ? parts.join('. ') + ', upon receipt of a technically and commercially clarified purchase order.'
+                  : '';
+                const effectiveText = quotation.termsOverrides?.deliveryLines ?? defaultDeliveryText(quotation.deliveryTerms);
+                const suggestedText = defaultDeliveryText(suggestedLine1);
+                return (
+                  <TextField
+                    label="Delivery — all bullet lines"
+                    multiline
+                    minRows={3}
+                    fullWidth
+                    value={effectiveText}
+                    onChange={(e) => setTermsOverride('deliveryLines', e.target.value)}
+                    helperText={suggestedLine1 && suggestedText !== effectiveText
+                      ? <span>Suggested (from scope days / component lead time): {suggestedLine1} <Typography component="span" variant="caption" sx={{ color: 'primary.main', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => setTermsOverride('deliveryLines', suggestedText)}>Apply</Typography></span>
+                      : "Each line on its own row (start with '- '). Clear to fall back to the default DDP wording."}
+                  />
+                );
+              })()}
+
               <TextField
                 label="Warranty exclusion clause"
                 multiline
                 minRows={2}
                 fullWidth
-                value={quotation.termsOverrides?.warrantyExclusion ?? ''}
+                value={quotation.termsOverrides?.warrantyExclusion ?? DEFAULT_WARRANTY_EXCLUSION}
                 onChange={(e) => setTermsOverride('warrantyExclusion', e.target.value)}
-                placeholder="- Warranty excludes improper installation, unauthorized modifications, misuse, abnormal conditions, power surges, environmental damage, or force majeure events."
                 helperText="Replaces the default warranty-exclusion sentence (the coverage sentence above it stays driven by the Warranty months field)"
               />
             </Stack>
@@ -1394,25 +1436,34 @@ export default function QuotationEditor() {
       {/* Totals */}
       <Paper sx={{ p: 2.5, bgcolor: 'grey.50' }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1.5 }}>Totals</Typography>
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 1, columnGap: 4, maxWidth: 560, ml: 'auto', mb: 2 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto auto', rowGap: 1, columnGap: 2, maxWidth: 560, ml: 'auto', mb: 2 }}>
           <Typography variant="body2">A. General Requirements</Typography>
           <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(totals.generalReqtsSubtotal)}</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right', minWidth: 44 }}>{mixPct(totals.generalReqtsSubtotal)}</Typography>
           <Typography variant="body2">B. Supply of Components</Typography>
           <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(totals.componentsSubtotal)}</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right', minWidth: 44 }}>{mixPct(totals.componentsSubtotal)}</Typography>
           <Typography variant="body2">C. Engineering Services</Typography>
           <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(totals.servicesSubtotal)}</Typography>
-          <Divider sx={{ gridColumn: 'span 2', my: 0.5 }} />
+          <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right', minWidth: 44 }}>{mixPct(totals.servicesSubtotal)}</Typography>
+          <Divider sx={{ gridColumn: 'span 3', my: 0.5 }} />
           <Typography variant="body2" sx={{ fontWeight: 600 }}>Subtotal (VAT-EX)</Typography>
           <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right', fontWeight: 600 }}>{PHP(totals.subtotal)}</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right', minWidth: 44 }}>100%</Typography>
           {quotation.discountPct > 0 && <>
             <Typography variant="body2">Discount ({quotation.discountPct}%)</Typography>
             <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right', color: 'error.main' }}>− {PHP(totals.discount)}</Typography>
+            <Box />
           </>}
           {quotation.vatPct > 0 && <>
             <Typography variant="body2">VAT ({quotation.vatPct}%)</Typography>
             <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(totals.vat)}</Typography>
+            <Box />
           </>}
         </Box>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'right', maxWidth: 560, ml: 'auto', mb: 2, mt: -1 }}>
+          % = share of Subtotal (VAT-EX) — use to sanity-check the cost mix while balancing the sheet
+        </Typography>
         <Stack direction="row" spacing={2} justifyContent="flex-end">
           <Box sx={{ p: 2, border: '1px solid', borderColor: 'success.light', borderRadius: 1, bgcolor: 'rgba(46,125,50,0.05)', textAlign: 'right', minWidth: 240 }}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>Total Margin (markup only)</Typography>
@@ -1489,7 +1540,7 @@ export default function QuotationEditor() {
       {/* Saved-version history */}
       <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
-          Version history — {project.code}-{quotation.revision} ({quotation.kind})
+          Version history — {quotationRefNo(project.code, recipient?.code, quotation.revision)} ({quotation.kind})
           <Typography variant="body2" color="text.secondary">
             A snapshot of the previous state is kept every time this quotation is saved.
             The current state is what you see in the editor.
@@ -1560,6 +1611,15 @@ export default function QuotationEditor() {
           </Alert>
         ) : undefined}
       </Snackbar>
+
+      {showFloatingTotals && (
+        <FloatingTotalsWidget
+          totals={totals}
+          marginSummary={marginSummary}
+          quotation={quotation}
+          onClose={toggleFloatingTotals}
+        />
+      )}
     </Stack>
   );
 }
