@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
@@ -194,17 +194,18 @@ const RedirectCalcsheet: React.FC = () => {
 
 // Main App Layout component
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-      <Header />
+      <Header onMenuClick={() => setMobileNavOpen((o) => !o)} />
       <Box sx={{ display: 'flex', flexGrow: 1 }}>
-        <Sidebar />
-        <Box sx={{ 
+        <Sidebar mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
+        <Box sx={{
           flexGrow: 1,
           minWidth: 0,
           backgroundColor: '#f5f5f5',
           minHeight: 'calc(100vh - 80px)',
-          p: 2
+          p: { xs: 1, md: 2 }
         }}>
           {children}
         </Box>

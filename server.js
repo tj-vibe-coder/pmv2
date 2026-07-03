@@ -3610,7 +3610,8 @@ app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
 app.get('/api/calcsheet/clients', async (req, res) => {
   try {
     const snap = await db.collection('clients').orderBy('name').get();
-    const clients = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Spread data first so a stray stored `id` field can't clobber the doc id.
+    const clients = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
     res.json({ success: true, clients });
   } catch (err) { res.status(500).json({ error: 'Failed to get clients' }); }
 });
@@ -3627,7 +3628,8 @@ app.delete('/api/calcsheet/clients/:id', (req, res) => res.status(410).json({ er
 app.get('/api/calcsheet/presets', async (req, res) => {
   try {
     const snap = await db.collection('calcsheet_presets').orderBy('group').get();
-    const presets = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Spread data first so a stray stored `id` field can't clobber the doc id.
+    const presets = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
     res.json({ success: true, presets });
   } catch (err) { res.status(500).json({ error: 'Failed to get presets' }); }
 });
@@ -4171,6 +4173,84 @@ app.delete('/api/completion-certificates/:id', async (req, res) => {
   }
 });
 
+// ─── DTR Aggregation (for payroll auto-populate) ────────────────────────────
+app.get('/api/dtr/aggregate', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { periodStart, periodEnd } = req.query;
+  if (!periodStart || !periodEnd) return res.status(400).json({ error: 'periodStart and periodEnd required' });
+  try {
+    // Fetch all DTR entries within the date range
+    const snap = await db.collection('dtr_entries')
+      .where('entryDate', '>=', periodStart)
+      .where('entryDate', '<=', periodEnd)
+      .get();
+
+    // Group by employeeId and aggregate
+    const byEmployee = {};
+    snap.docs.forEach(d => {
+      const entry = d.data();
+      const eid = entry.employeeId;
+      if (!byEmployee[eid]) {
+        byEmployee[eid] = {
+          employeeId: eid,
+          workingDays: 0,
+          regularHours: 0,
+          overtimeHours: 0,
+          nightDiffHours: 0,
+          tardinessMinutes: 0,
+          regularHolidayDays: 0,
+          specialHolidayDays: 0,
+          restDayOTHours: 0,
+          regularHolidayOTHours: 0,
+          regularHolidayRestDayDays: 0,
+          specialHolidayRestDayDays: 0,
+          regularHolidayRestDayOTHours: 0,
+          specialHolidayRestDayOTHours: 0,
+        };
+      }
+      const agg = byEmployee[eid];
+      if (!entry.isAbsent) {
+        // No inputted hours = no pay. A REGULAR day only counts as a working day
+        // when hours were actually recorded (computed from time-in/out on save, or
+        // entered manually for paid leave). A blank day earns nothing.
+        const hasHours = (Number(entry.regularHours) || 0) > 0;
+        if (entry.dayType === 'REGULAR') { if (hasHours) agg.workingDays++; }
+        else if (entry.dayType === 'REST_DAY') { /* rest day doesn't count as working day unless OT */ }
+        else if (entry.dayType === 'REGULAR_HOLIDAY') agg.regularHolidayDays++;
+        else if (entry.dayType === 'SPECIAL_HOLIDAY') agg.specialHolidayDays++;
+        else if (entry.dayType === 'DOUBLE_HOLIDAY') { agg.regularHolidayDays++; agg.specialHolidayDays++; }
+      }
+      agg.regularHours += Number(entry.regularHours) || 0;
+      agg.overtimeHours += Number(entry.overtimeHours) || 0;
+      agg.nightDiffHours += Number(entry.nightDiffHours) || 0;
+      agg.tardinessMinutes += Number(entry.tardinessMinutes) || 0;
+    });
+
+    // Look up submitter names for each DTR employeeId (user account). Batch the
+    // reads in parallel instead of awaiting one doc at a time (was O(n) serial).
+    const submitterIds = Object.keys(byEmployee);
+    const submitters = {};
+    try {
+      const userDocs = await Promise.all(
+        submitterIds.map((uid) => db.collection('users').doc(uid).get().catch(() => null)),
+      );
+      submitterIds.forEach((uid, i) => {
+        const uDoc = userDocs[i];
+        const u = uDoc && uDoc.exists ? uDoc.data() : null;
+        submitters[uid] = (u && (u.full_name || u.username)) || uid;
+      });
+    } catch (e) {
+      console.error('GET /api/dtr/aggregate submitter lookup error:', e);
+      submitterIds.forEach((uid) => { submitters[uid] = submitters[uid] || uid; });
+    }
+
+    res.json({ success: true, aggregates: byEmployee, submitters });
+  } catch (err) {
+    console.error('GET /api/dtr/aggregate error:', err);
+    res.status(500).json({ error: 'Failed to aggregate DTR entries' });
+  }
+});
+
 // ─── DTR Entries ────────────────────────────────────────────────────────────
 app.get('/api/dtr', async (req, res) => {
   const user = await getCurrentUser(req);
@@ -4190,14 +4270,47 @@ app.get('/api/dtr', async (req, res) => {
   }
 });
 
+// Normalize a clock-in/out GPS fix to { lat, lng, accuracy } numbers, or null.
+function sanitizeLocation(loc) {
+  if (!loc || typeof loc !== 'object') return null;
+  const lat = Number(loc.lat);
+  const lng = Number(loc.lng);
+  const accuracy = Number(loc.accuracy);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng, accuracy: Number.isFinite(accuracy) ? accuracy : null };
+}
+
+// True when an employee's DTR date sits inside a PAID payroll period. Mirrors the
+// employee-portal paid-date lock (isPaidDate) so the server enforces it too — an
+// employee must not be able to edit/create a punch after that period is paid.
+async function isDtrDateLocked(employeeId, entryDate) {
+  const date = String(entryDate || '').slice(0, 10);
+  if (!employeeId || !date) return false;
+  const runs = await db.collection('payroll_runs').where('status', '==', 'PAID').get();
+  for (const run of runs.docs) {
+    const d = run.data();
+    const start = String(d.periodStart || '').slice(0, 10);
+    const end = String(d.periodEnd || '').slice(0, 10);
+    if (!start || !end || date < start || date > end) continue;
+    // Confirm this employee was actually included in the paid run.
+    const slip = await run.ref.collection('payslips').doc(String(employeeId)).get();
+    if (slip.exists) return true;
+  }
+  return false;
+}
+
 app.post('/api/dtr', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
-  const { employeeId, entryDate, timeIn, timeOut, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks } = req.body;
+  const { employeeId, entryDate, timeIn, timeOut, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks, clockInLocation, clockOutLocation } = req.body;
   if (!employeeId || !entryDate || !dayType) return res.status(400).json({ error: 'employeeId, entryDate, and dayType are required' });
   // Non-admin users can only create entries for themselves
   const isAdmin = user.role === 'superadmin' || user.role === 'admin';
   if (!isAdmin && String(employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+  // Employees can't create a punch inside an already-paid period (admins may correct).
+  if (!isAdmin && await isDtrDateLocked(employeeId, entryDate)) {
+    return res.status(409).json({ error: 'This date is in a paid payroll period and is locked.' });
+  }
   // Duplicate check
   const existing = await db.collection('dtr_entries')
     .where('employeeId', '==', employeeId)
@@ -4217,6 +4330,8 @@ app.post('/api/dtr', async (req, res) => {
       isAbsent: !!isAbsent,
       tardinessMinutes: Number(tardinessMinutes) || 0,
       remarks: remarks || '',
+      clockInLocation: sanitizeLocation(clockInLocation),
+      clockOutLocation: sanitizeLocation(clockOutLocation),
       submittedAt: new Date().toISOString(),
     };
     const ref = await db.collection('dtr_entries').add(entry);
@@ -4238,7 +4353,14 @@ app.put('/api/dtr/:id', async (req, res) => {
     const data = doc.data();
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+    // Locked once the covering payroll period is paid (admins may still correct).
+    if (!isAdmin && await isDtrDateLocked(data.employeeId, data.entryDate)) {
+      return res.status(409).json({ error: 'This date is in a paid payroll period and is locked.' });
+    }
     const { employeeId, id: _id, ...updates } = req.body;
+    // Normalize location payloads so we never store arbitrary client objects.
+    if ('clockInLocation' in updates) updates.clockInLocation = sanitizeLocation(updates.clockInLocation);
+    if ('clockOutLocation' in updates) updates.clockOutLocation = sanitizeLocation(updates.clockOutLocation);
     updates.submittedAt = new Date().toISOString();
     await docRef.update(updates);
     const updated = await docRef.get();
@@ -4260,6 +4382,10 @@ app.delete('/api/dtr/:id', async (req, res) => {
     const data = doc.data();
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+    // Locked once the covering payroll period is paid (admins may still correct).
+    if (!isAdmin && await isDtrDateLocked(data.employeeId, data.entryDate)) {
+      return res.status(409).json({ error: 'This date is in a paid payroll period and is locked.' });
+    }
     await docRef.delete();
     res.json({ success: true });
   } catch (e) {

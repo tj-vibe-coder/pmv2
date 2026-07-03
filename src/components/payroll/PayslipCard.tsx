@@ -140,9 +140,9 @@ const PayslipCard: React.FC<Props> = ({ payslip: s, onBack, canSeeRate = true })
         </Box>
 
         {/* Earnings | Deductions */}
-        <Box sx={{ display: 'flex', gap: 0 }}>
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 0 }}>
           {/* Earnings */}
-          <Box sx={{ flex: 1, p: 2, borderRight: '1px solid #ddd' }}>
+          <Box sx={{ flex: 1, p: 2, borderRight: { xs: 'none', sm: '1px solid #ddd' }, borderBottom: { xs: '1px solid #ddd', sm: 'none' } }}>
             <Typography variant="subtitle2" fontWeight={700} color="#2853c0" mb={1}>EARNINGS</Typography>
             <Row label="Basic Pay" value={s.basicPay} sub={basicSub} />
             <Row label="Meal Allowance" value={s.mealAllowance} sub={mealSub} />
@@ -184,7 +184,7 @@ const PayslipCard: React.FC<Props> = ({ payslip: s, onBack, canSeeRate = true })
         </Box>
 
         {/* Signature block */}
-        <Box sx={{ p: 2, display: 'flex', gap: 4 }}>
+        <Box sx={{ p: 2, display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: { xs: 3, sm: 4 } }}>
           <Box sx={{ flex: 1 }}>
             <Typography variant="caption" color="text.secondary">Prepared by</Typography>
             <Box sx={{ borderBottom: '1px solid #999', mt: 4, mb: 0.5 }} />

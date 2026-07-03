@@ -12,8 +12,11 @@ import {
   Typography,
   Divider,
   useTheme,
+  useMediaQuery,
   Collapse,
   Tooltip,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
@@ -50,15 +53,26 @@ const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
 const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator', '/utilities/acknowledgement-receipt'];
 
-const Sidebar: React.FC = () => {
+interface SidebarProps {
+  /** Mobile: whether the temporary drawer is open. */
+  mobileOpen?: boolean;
+  /** Mobile: called to close the temporary drawer (backdrop tap or navigation). */
+  onMobileClose?: () => void;
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) => {
   const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
   const isEmployeeWorkspace = location.pathname === '/employee' || location.pathname.startsWith('/employee/');
   const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
   const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  // On mobile the drawer is a full temporary panel (always shows labels); on
+  // desktop it expands on hover. Every render use of `isExpanded` below keys off this.
+  const isExpanded = isMobile ? true : isHovered;
   const [supplyChainOpen, setSupplyChainOpen] = useState(() =>
     SUPPLY_CHAIN_PATHS.some((p) => location.pathname === p)
   );
@@ -87,6 +101,13 @@ const Sidebar: React.FC = () => {
     }
   }, [location.pathname]);
 
+  // Mobile: close the temporary drawer after navigating to a new route.
+  useEffect(() => {
+    if (isMobile) onMobileClose?.();
+    // Only react to route changes; deps intentionally limited to pathname.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
   const navBtnSx = (selected: boolean, isSubItem = false) => ({
     borderRadius: 2,
     mx: 1,
@@ -110,11 +131,14 @@ const Sidebar: React.FC = () => {
 
   return (
     <Drawer
-      variant="permanent"
-      onMouseEnter={() => setIsExpanded(true)}
-      onMouseLeave={() => setIsExpanded(false)}
+      variant={isMobile ? 'temporary' : 'permanent'}
+      open={isMobile ? mobileOpen : undefined}
+      onClose={onMobileClose}
+      ModalProps={{ keepMounted: true }}
+      onMouseEnter={isMobile ? undefined : () => setIsHovered(true)}
+      onMouseLeave={isMobile ? undefined : () => setIsHovered(false)}
       sx={{
-        width: isExpanded ? SIDEBAR_WIDTH : SIDEBAR_COLLAPSED_WIDTH,
+        width: isMobile ? 0 : (isExpanded ? SIDEBAR_WIDTH : SIDEBAR_COLLAPSED_WIDTH),
         flexShrink: 0,
         whiteSpace: 'nowrap',
         transition: theme.transitions.create('width', {
@@ -128,8 +152,8 @@ const Sidebar: React.FC = () => {
             duration: theme.transitions.duration.leavingScreen,
           }),
           overflowX: 'hidden',
-          top: '80px',
-          height: 'calc(100vh - 80px)',
+          top: isMobile ? 0 : '80px',
+          height: isMobile ? '100%' : 'calc(100vh - 80px)',
           backgroundColor: theme.palette.primary.main,
           color: 'white',
           borderRight: 'none',
@@ -160,6 +184,46 @@ const Sidebar: React.FC = () => {
           </Box>
         )}
       </Box>
+
+      {/* Mobile-only workspace switcher. On desktop this lives in the header
+          toggle, which is hidden on small screens — so surface it in the drawer
+          (non-employee workspaces only, matching the header's condition). */}
+      {isMobile && !isEmployeeWorkspace && (
+        <Box sx={{ px: 2, pb: 1.5 }}>
+          <ToggleButtonGroup
+            value={isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects'}
+            exclusive
+            fullWidth
+            size="small"
+            onChange={(_, v) => {
+              if (!v) return;
+              onMobileClose?.();
+              if (v === 'projects') navigate('/dashboard');
+              else if (v === 'sales') navigate('/sales');
+              else if (v === 'finance') navigate('/finance');
+            }}
+            sx={{
+              '& .MuiToggleButton-root': {
+                color: 'rgba(255,255,255,0.85)',
+                borderColor: 'rgba(255,255,255,0.3)',
+                textTransform: 'none',
+                fontSize: '0.72rem',
+                py: 0.5,
+                '&.Mui-selected': {
+                  backgroundColor: 'rgba(255,255,255,0.22)',
+                  color: 'white',
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.3)' },
+                },
+                '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+              },
+            }}
+          >
+            <ToggleButton value="projects">Projects</ToggleButton>
+            <ToggleButton value="sales">Sales</ToggleButton>
+            <ToggleButton value="finance">Finance</ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
+      )}
 
       <Divider sx={{ borderColor: 'rgba(255,255,255,0.2)', mx: isExpanded ? 2 : 1 }} />
 

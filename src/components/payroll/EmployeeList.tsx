@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, TableSortLabel, Paper, Chip, IconButton, Alert, CircularProgress,
@@ -37,7 +37,7 @@ const EmployeeList: React.FC<EmployeeListProps> = ({ onViewDTR }) => {
   const [sortKey, setSortKey] = useState<'employeeNumber' | 'name' | 'designation' | 'employeeType' | 'rate' | 'isActive'>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     if (user?.role !== 'superadmin') return;
     try {
       const token = localStorage.getItem('netpacific_token');
@@ -46,9 +46,9 @@ const EmployeeList: React.FC<EmployeeListProps> = ({ onViewDTR }) => {
       });
       if (res.ok) { const data = await res.json(); setAllUsers(Array.isArray(data) ? data : data.users || []); }
     } catch { /* non-critical */ }
-  };
+  }, [user?.role]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       setLoading(true);
       setEmployees(await getEmployees());
@@ -57,13 +57,9 @@ const EmployeeList: React.FC<EmployeeListProps> = ({ onViewDTR }) => {
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    load();
-    loadUsers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => { load(); loadUsers(); }, [load, loadUsers]);
 
   const handleSave = async (data: Omit<Employee, 'id' | 'createdAt'>) => {
     if (editing) {
