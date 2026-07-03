@@ -3314,10 +3314,20 @@ app.get('/api/dtr', async (req, res) => {
   }
 });
 
+// Normalize a clock-in/out GPS fix to { lat, lng, accuracy } numbers, or null.
+function sanitizeLocation(loc) {
+  if (!loc || typeof loc !== 'object') return null;
+  const lat = Number(loc.lat);
+  const lng = Number(loc.lng);
+  const accuracy = Number(loc.accuracy);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng, accuracy: Number.isFinite(accuracy) ? accuracy : null };
+}
+
 app.post('/api/dtr', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
-  const { employeeId, entryDate, timeIn, timeOut, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks } = req.body;
+  const { employeeId, entryDate, timeIn, timeOut, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks, clockInLocation, clockOutLocation } = req.body;
   if (!employeeId || !entryDate || !dayType) return res.status(400).json({ error: 'employeeId, entryDate, and dayType are required' });
   // Non-admin users can only create entries for themselves
   const isAdmin = user.role === 'superadmin' || user.role === 'admin';
@@ -3341,6 +3351,8 @@ app.post('/api/dtr', async (req, res) => {
       isAbsent: !!isAbsent,
       tardinessMinutes: Number(tardinessMinutes) || 0,
       remarks: remarks || '',
+      clockInLocation: sanitizeLocation(clockInLocation),
+      clockOutLocation: sanitizeLocation(clockOutLocation),
       submittedAt: new Date().toISOString(),
     };
     const ref = await db.collection('dtr_entries').add(entry);
@@ -3363,6 +3375,9 @@ app.put('/api/dtr/:id', async (req, res) => {
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
     const { employeeId, id: _id, ...updates } = req.body;
+    // Normalize location payloads so we never store arbitrary client objects.
+    if ('clockInLocation' in updates) updates.clockInLocation = sanitizeLocation(updates.clockInLocation);
+    if ('clockOutLocation' in updates) updates.clockOutLocation = sanitizeLocation(updates.clockOutLocation);
     updates.submittedAt = new Date().toISOString();
     await docRef.update(updates);
     const updated = await docRef.get();
