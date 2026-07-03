@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, Paper, IconButton, Alert, CircularProgress, Dialog, DialogTitle,
-  DialogContent, DialogActions, TextField, Link, Stack,
+  DialogContent, DialogActions, TextField, Link, Stack, Divider,
 } from '@mui/material';
 import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, Place as PlaceIcon } from '@mui/icons-material';
 import type { WorkSite } from '../../types/Payroll';
@@ -25,6 +25,8 @@ const WorkSitesManager: React.FC = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [saving, setSaving] = useState(false);
+  const [suggestions, setSuggestions] = useState<{ lat: number; lng: number; count: number; lastSeen: string }[] | null>(null);
+  const [loadingSug, setLoadingSug] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -43,10 +45,24 @@ const WorkSitesManager: React.FC = () => {
 
   useEffect(() => { load(); }, [load]);
 
-  const openNew = () => { setDraft(EMPTY); setDialogOpen(true); };
+  const openNew = () => { setDraft(EMPTY); setSuggestions(null); setDialogOpen(true); };
   const openEdit = (s: WorkSite) => {
     setDraft({ id: s.id, name: s.name, lat: String(s.lat), lng: String(s.lng), radiusMeters: String(s.radiusMeters ?? 150) });
+    setSuggestions(null);
     setDialogOpen(true);
+  };
+
+  const loadSuggestions = async () => {
+    setLoadingSug(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/work-sites/suggestions`, { headers: authHeaders() });
+      const data = res.ok ? await res.json() : { points: [] };
+      setSuggestions(Array.isArray(data.points) ? data.points : []);
+    } catch {
+      setSuggestions([]);
+    } finally {
+      setLoadingSug(false);
+    }
   };
 
   const save = async () => {
@@ -149,6 +165,31 @@ const WorkSitesManager: React.FC = () => {
             <Typography variant="caption" color="text.secondary">
               Tip: in Google Maps, right-click the spot and click the "lat, lng" numbers to copy them.
             </Typography>
+
+            <Divider sx={{ fontSize: '0.7rem', color: 'text.secondary' }}>or pick from recorded clock-ins</Divider>
+            <Button size="small" variant="outlined" onClick={loadSuggestions} disabled={loadingSug} sx={{ alignSelf: 'flex-start' }}>
+              {loadingSug ? 'Loading…' : 'Load clock-in spots'}
+            </Button>
+            {suggestions && (
+              suggestions.length === 0 ? (
+                <Typography variant="caption" color="text.secondary">No clock-in locations recorded yet.</Typography>
+              ) : (
+                <Box sx={{ maxHeight: 168, overflowY: 'auto', border: '1px solid #eee', borderRadius: 1 }}>
+                  {suggestions.map((p, i) => (
+                    <Box
+                      key={i}
+                      onClick={() => setDraft((d) => ({ ...d, lat: p.lat.toFixed(6), lng: p.lng.toFixed(6) }))}
+                      sx={{ px: 1, py: 0.75, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 1, borderBottom: '1px solid #f2f2f2', '&:hover': { bgcolor: '#f5f7fa' } }}
+                    >
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{p.lat.toFixed(5)}, {p.lng.toFixed(5)}</Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                        {p.count} punch{p.count === 1 ? '' : 'es'}{p.lastSeen ? ` · ${p.lastSeen}` : ''}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              )
+            )}
           </Stack>
         </DialogContent>
         <DialogActions>

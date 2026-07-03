@@ -3458,6 +3458,48 @@ app.get('/api/work-sites', async (req, res) => {
   }
 });
 
+// Suggest site coordinates from where employees actually clocked in: greedily
+// cluster recorded clock-in/out GPS points (~75m) and return the busiest spots.
+function haversineMeters(aLat, aLng, bLat, bLng) {
+  const R = 6371000, toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat), dLng = toRad(bLng - aLng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+app.get('/api/work-sites/suggestions', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('dtr_entries').orderBy('entryDate', 'desc').limit(2000).get();
+    const pts = [];
+    snap.docs.forEach((d) => {
+      const e = d.data();
+      for (const loc of [e.clockInLocation, e.clockOutLocation]) {
+        if (loc && Number.isFinite(Number(loc.lat)) && Number.isFinite(Number(loc.lng))) {
+          pts.push({ lat: Number(loc.lat), lng: Number(loc.lng), date: e.entryDate || '' });
+        }
+      }
+    });
+    const clusters = [];
+    for (const p of pts) {
+      const c = clusters.find((cl) => haversineMeters(cl.lat, cl.lng, p.lat, p.lng) <= 75);
+      if (c) {
+        c.lat = (c.lat * c.count + p.lat) / (c.count + 1);
+        c.lng = (c.lng * c.count + p.lng) / (c.count + 1);
+        c.count += 1;
+        if (p.date > c.lastSeen) c.lastSeen = p.date;
+      } else {
+        clusters.push({ lat: p.lat, lng: p.lng, count: 1, lastSeen: p.date });
+      }
+    }
+    clusters.sort((a, b) => b.count - a.count);
+    res.json({ success: true, points: clusters.slice(0, 30) });
+  } catch (e) {
+    console.error('GET /api/work-sites/suggestions error:', e);
+    res.status(500).json({ error: 'Failed to suggest clock-in points' });
+  }
+});
+
 app.post('/api/work-sites', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   const { name, lat, lng, radiusMeters } = req.body || {};
