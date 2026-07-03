@@ -1,4 +1,5 @@
 import type { ContribRates } from '../utils/governmentContrib';
+import type { FundingSource } from '../data/financeCategories';
 
 export type EmployeeType = 'FIELD' | 'OFFICE';
 export type PayFrequency = 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY';
@@ -25,6 +26,16 @@ export interface Employee {
   philhealthNumber?: string;
   pagibigNumber?: string;
   tinNumber?: string;
+  /**
+   * Per-agency remittance toggles. Undefined/true = compute & deduct as normal;
+   * false = skip that agency's computation entirely (payslip shows 0 for it).
+   * Lets a project-based hire, or any period where remittance isn't actually being
+   * filed yet, be paid basic pay without falsely implying money was withheld/remitted.
+   */
+  sssEnabled?: boolean;
+  philhealthEnabled?: boolean;
+  pagibigEnabled?: boolean;
+  withholdingTaxEnabled?: boolean;
   /** When false, government + tardiness deductions are skipped (net pay = gross). Absent/true = deductions apply. Employer share is unaffected. */
   applyDeductions?: boolean;
   /** When false, overtime pay is ₱0 (OT hours are still recorded). Absent/true = OT is paid. */
@@ -71,6 +82,13 @@ export interface PayrollRun {
    * an existing run. Optional for backward-compat with runs created before snapshotting.
    */
   contribRates?: ContribRates;
+  /**
+   * How the office-staff share of this run was funded. Mirrors the expense-monitoring
+   * fundingSource idiom — when 'investor_outofpocket', approving the run links the
+   * overhead-expenses sync rows (salaries + employer gov't contributions) to an
+   * Investment Tracker entry the same way a manually-entered expense would.
+   */
+  fundingSource?: FundingSource;
 }
 
 export interface Payslip {
@@ -120,6 +138,13 @@ export interface Payslip {
 
   remarks?: string;
   computedAt?: string;
+  /**
+   * Raw DTR input this payslip was computed from. Not used in payslip math — kept so a
+   * superadmin editing an existing run can reload the DTR Entry step with the original
+   * per-employee inputs instead of just the derived pay figures (which alone can't be
+   * reversed back into hours/days worked).
+   */
+  dtrInput?: DTRInput;
 }
 
 // For DTR wizard: aggregated per-employee input

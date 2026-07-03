@@ -305,6 +305,53 @@ async function listAllUsers(req, res) {
 app.get('/api/users', listAllUsers);
 usersRouter.get('/', listAllUsers);
 
+// Superadmin-only direct create — unlike /api/auth/register (self-service,
+// role limited to user/viewer, always starts unapproved), this can set any
+// role and is approved=1 immediately so the account is usable right away.
+usersRouter.post('/', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { username, email, password, full_name, designation, contact_number, role = 'user', approved = 1 } = req.body;
+  const nextUsername = String(username || '').trim();
+  const nextEmail = String(email || '').trim();
+  const nextPassword = String(password || '');
+  if (!nextUsername) return res.status(400).json({ success: false, error: 'Username is required' });
+  if (!nextEmail) return res.status(400).json({ success: false, error: 'Email is required' });
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(nextEmail)) return res.status(400).json({ success: false, error: 'Please enter a valid email address' });
+  if (nextPassword.length < 6) return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long' });
+  if (!['superadmin', 'admin', 'user', 'viewer', 'tax_filer'].includes(role)) return res.status(400).json({ success: false, error: 'Invalid role specified' });
+  try {
+    const [uSnap, eSnap] = await Promise.all([
+      db.collection('users').where('username', '==', nextUsername).limit(1).get(),
+      db.collection('users').where('email', '==', nextEmail).limit(1).get(),
+    ]);
+    if (!uSnap.empty) return res.status(409).json({ success: false, error: 'Username already exists' });
+    if (!eSnap.empty) return res.status(409).json({ success: false, error: 'Email already exists' });
+    const passwordHash = Buffer.from(nextPassword).toString('base64');
+    const now = Math.floor(Date.now() / 1000);
+    const ref = await db.collection('users').add({
+      username: nextUsername,
+      email: nextEmail,
+      password_hash: passwordHash,
+      role,
+      approved: approved ? 1 : 0,
+      full_name: full_name ? String(full_name).trim() : null,
+      designation: designation ? String(designation).trim() : null,
+      contact_number: contact_number ? String(contact_number).trim() : null,
+      created_at: now,
+      updated_at: now,
+    });
+    console.log(`User ${nextUsername} created by superadmin ${user.username} with role: ${role}`);
+    const doc = await ref.get();
+    res.status(201).json({ success: true, message: 'User created', user: userResponse(doc.id, doc.data()) });
+  } catch (err) {
+    console.error('Error creating user:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 usersRouter.get('/staff-contacts', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -891,8 +938,10 @@ app.get('/api/project-expenses', async (req, res) => {
     // (PO/liquidation/migrated) have no natural per-user owner, so expose them to every finance user —
     // otherwise the per-project Expense Monitoring list would hide costs (e.g. synced PO items or
     // liquidation rows) the company P&L still counts, producing a confusing reconciliation gap.
-    // In-memory filter only, so no Firestore composite index is needed.
-    if (!isAdmin) {
+    // In-memory filter only, so no Firestore composite index is needed. tax_filer is exempted
+    // entirely — the Tax Filer Ledger needs full company expense visibility for BIR substantiation;
+    // it's a read-only role (write access stays admin/owner-gated separately in the PATCH handler).
+    if (!isAdmin && user.role !== 'tax_filer') {
       const SYNC_SOURCE_TYPES = new Set(['po_sync', 'liquidation_sync', 'migrated']);
       rows = rows.filter(r => r.createdBy === user.id || SYNC_SOURCE_TYPES.has(r.sourceType));
     }
@@ -957,6 +1006,132 @@ app.post('/api/project-expenses/migrate-from-localstorage', async (req, res) => 
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Funding-source -> investments sync (best-effort, deterministic-id upsert).
+// When an expense is paid directly out of an investor's pocket instead of the
+// corporate bank account, mirror it into a LINKED investments row so it does
+// not have to be re-keyed by hand and cannot be double-counted. Same idiom as
+// the payroll_sync_* overhead sync: a deterministic doc id keyed on the source
+// expense, upsert on out-of-pocket, delete otherwise. Never throws to caller.
+// ---------------------------------------------------------------------------
+function normalizeFundingSource(fs) {
+  if (!fs || typeof fs !== 'object') return null;
+  const type = fs.type === 'investor_outofpocket' ? 'investor_outofpocket' : 'corporate_bank';
+  const out = { type };
+  if (type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim()) {
+    out.investor = fs.investor.trim();
+    if (typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()) {
+      out.linkedInvestmentId = fs.linkedInvestmentId.trim();
+    }
+  }
+  return out;
+}
+
+// project_expenses keys the project ref as `projectId`; cash_advances (a plain Firestore
+// doc predating the camelCase convention) keys it as `project_id`. Everything else (overhead,
+// payroll) has no project of its own.
+function projectIdForFundingDoc(collection, doc) {
+  if (collection === 'project_expenses') return doc.projectId || null;
+  if (collection === 'cash_advances') return doc.project_id || null;
+  if (collection === 'reimbursements') return doc.projectId || null;
+  return null;
+}
+
+function investmentCategoryForFundingDoc(collection) {
+  if (collection === 'project_expenses') return 'Project Expense';
+  if (collection === 'cash_advances') return 'Cash Advance';
+  if (collection === 'reimbursements') return 'Reimbursement';
+  return 'Overhead';
+}
+
+function newOneOffInvestmentDoc(collection, id, doc, fs) {
+  return {
+    date: doc.date,
+    investor: fs.investor.trim(),
+    amount: Number(doc.amount) || 0,
+    category: investmentCategoryForFundingDoc(collection),
+    description: `Out-of-pocket: ${doc.description || doc.purpose || doc.category || ''}`,
+    sourceType: 'expense_sync',
+    sourceExpenseId: id,
+    sourceCollection: collection,
+    sourceExpenseProjectId: projectIdForFundingDoc(collection, doc),
+    // Anchor to the expense's own createdAt (stable across edits, no extra read)
+    // rather than re-stamping "now" on every upsert.
+    created_at: doc.createdAt || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+// Returns true on success (including a deliberate no-op), false if the sync itself threw —
+// callers whose whole purpose is "make sure this is linked" (the funding-retrofit endpoint)
+// should surface a warning rather than silently reporting success when this comes back false.
+async function syncExpenseFundingInvestment(id, collection, doc) {
+  const invRef = db.collection('investments').doc(`expense_sync_${id}`);
+  try {
+    const fs = doc && doc.fundingSource;
+    const isOutOfPocket = fs && fs.type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim();
+    const linkedId = isOutOfPocket && typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()
+      ? fs.linkedInvestmentId.trim() : null;
+
+    // Clear the back-reference off any investment row this expense used to point at, if it no
+    // longer does (funding source edited away/removed/re-linked elsewhere). Both fields are
+    // plain equality filters, so this is served by automatic single-field indexes (no composite
+    // index needed) — same idiom as the project_expenses equality-only queries elsewhere.
+    const staleLinked = await db.collection('investments')
+      .where('linkedExpenseId', '==', id)
+      .where('linkedExpenseCollection', '==', collection)
+      .get();
+    await Promise.all(staleLinked.docs
+      .filter(d => d.id !== linkedId)
+      .map(d => d.ref.update({
+        linkedExpenseId: FieldValue.delete(),
+        linkedExpenseCollection: FieldValue.delete(),
+        linkedExpenseProjectId: FieldValue.delete(),
+      })));
+
+    if (linkedId) {
+      // Linked to an EXISTING investments row (e.g. a lump-sum capital contribution) instead
+      // of a one-off auto-created one. Those rows are usually pencil-booked before the real
+      // receipt exists — no firm date/description — so once an actual expense is linked back,
+      // treat the expense as authoritative for date/description and store the back-reference
+      // so the ledger can link to the source expense. Still clean up any stale auto-created
+      // row from a prior state (e.g. the expense used to be a standalone out-of-pocket entry).
+      const linkedRef = db.collection('investments').doc(linkedId);
+      const linkedSnap = await linkedRef.get();
+      // Guard against linking to a row that belongs to a DIFFERENT investor than the one on
+      // this fundingSource — a mismatched linkedInvestmentId (stale UI state, hand-crafted API
+      // call, copy-paste error) must not silently misattribute someone else's capital
+      // contribution. Fall back to a fresh one-off row for the correct investor instead.
+      if (linkedSnap.exists && linkedSnap.data().investor === fs.investor.trim()) {
+        await invRef.delete();
+        await linkedRef.update({
+          date: doc.date,
+          description: doc.description || doc.purpose || linkedSnap.data().description || '',
+          linkedExpenseId: id,
+          linkedExpenseCollection: collection,
+          linkedExpenseProjectId: projectIdForFundingDoc(collection, doc),
+          updated_at: new Date().toISOString(),
+        });
+      } else {
+        if (linkedSnap.exists) {
+          console.warn(`syncExpenseFundingInvestment: linkedInvestmentId ${linkedId} belongs to investor "${linkedSnap.data().investor}", not "${fs.investor.trim()}" — ignoring the link and creating a new entry for ${collection}/${id}`);
+        }
+        await invRef.set(newOneOffInvestmentDoc(collection, id, doc, fs));
+      }
+    } else if (isOutOfPocket) {
+      await invRef.set(newOneOffInvestmentDoc(collection, id, doc, fs));
+    } else {
+      // Not out-of-pocket (or cleared) — remove any previously-linked row.
+      // Deleting a non-existent doc is a safe no-op in Firestore.
+      await invRef.delete();
+    }
+    return true;
+  } catch (syncErr) {
+    console.error('Expense funding investment sync failed for', collection, id, syncErr);
+    return false;
+  }
+}
 
 app.post('/api/project-expenses', async (req, res) => {
   const user = await getCurrentUser(req);
@@ -1032,6 +1207,7 @@ app.post('/api/project-expenses', async (req, res) => {
           if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
           if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
           if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
+          if (exp.remarks) doc.remarks = String(exp.remarks);
           // BIR substantiation passthrough — mirrors the single-insert path so
           // liquidation/PO-synced rows carry supplier/invoice detail into the tax ledger.
           if (exp.supplier) doc.supplier = String(exp.supplier);
@@ -1041,17 +1217,25 @@ app.post('/api/project-expenses', async (req, res) => {
           if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
           if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
           if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
+          const fundingSource = normalizeFundingSource(exp.fundingSource);
+          if (fundingSource) doc.fundingSource = fundingSource;
           batch.set(ref, doc);
           inserted.push({ id: ref.id, ...doc });
         }
         await batch.commit();
       }
+      // Best-effort: keep linked out-of-pocket investment rows in sync. Only the
+      // rows that actually carry an investor_outofpocket funding source need a
+      // write — skip the rest so a large legacy-import batch doesn't issue a
+      // no-op delete() per plain row.
+      const outOfPocketInserted = inserted.filter(exp => exp.fundingSource && exp.fundingSource.type === 'investor_outofpocket');
+      await Promise.all(outOfPocketInserted.map(exp => syncExpenseFundingInvestment(exp.id, 'project_expenses', exp)));
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     // Single insert
-    const { projectId, projectName, description, amount, date, category, sourceType,
+    const { projectId, projectName, description, remarks, amount, date, category, sourceType,
             sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = body;
+            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = body;
     if (!projectId || !amount) {
       return res.status(400).json({ success: false, error: 'projectId and amount are required' });
     }
@@ -1071,6 +1255,7 @@ app.post('/api/project-expenses', async (req, res) => {
     if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
     if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
     if (sourceCaId) doc.sourceCaId = sourceCaId;
+    if (remarks) doc.remarks = String(remarks);
     if (receiptRef) doc.receiptRef = receiptRef;
     if (supplier) doc.supplier = String(supplier);
     if (invoiceNo) doc.invoiceNo = String(invoiceNo);
@@ -1079,7 +1264,10 @@ app.post('/api/project-expenses', async (req, res) => {
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     if (typeof deductible === 'boolean') doc.deductible = deductible;
     if (deductibleReason) doc.deductibleReason = String(deductibleReason);
+    const normalizedFunding = normalizeFundingSource(fundingSource);
+    if (normalizedFunding) doc.fundingSource = normalizedFunding;
     const ref = await db.collection('project_expenses').add(doc);
+    if (doc.fundingSource) await syncExpenseFundingInvestment(ref.id, 'project_expenses', doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
   } catch (err) {
     console.error('Error creating project_expense:', err);
@@ -1099,6 +1287,7 @@ app.delete('/api/project-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     await ref.delete();
+    await syncExpenseFundingInvestment(req.params.id, 'project_expenses', {});
     res.json({ success: true });
   } catch (err) {
     console.error('Error deleting project_expense:', err);
@@ -1118,11 +1307,13 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = req.body;
+    const { description, remarks, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
+    if (remarks !== undefined) allowed.remarks = String(remarks);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
     if (category !== undefined) allowed.category = String(category);
+    if (receiptRef !== undefined) allowed.receiptRef = receiptRef;
     if (supplier !== undefined) allowed.supplier = String(supplier);
     if (invoiceNo !== undefined) allowed.invoiceNo = String(invoiceNo);
     if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
@@ -1131,16 +1322,111 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
     if (typeof deductible === 'boolean') allowed.deductible = deductible;
     else if (deductible === null) allowed.deductible = null;
     if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
+    if (fundingSource !== undefined) {
+      const nf = normalizeFundingSource(fundingSource);
+      allowed.fundingSource = (nf && nf.type === 'investor_outofpocket') ? nf : FieldValue.delete();
+    }
     if (Object.keys(allowed).length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update' });
     allowed.updatedAt = new Date().toISOString();
     await ref.update(allowed);
     const updated = await ref.get();
+    // Sync unconditionally: catches an amount/date change on an already out-of-pocket expense too.
+    await syncExpenseFundingInvestment(updated.id, 'project_expenses', updated.data());
     res.json({ success: true, expense: { id: updated.id, ...updated.data() } });
   } catch (err) {
     console.error('Error updating project_expense:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
+
+// Superadmin-only: reclassify a manually-entered / receipt-scanned project expense as an
+// employee out-of-pocket claim instead of a company-paid one. Creates a submitted liquidation
+// for the chosen employee (optionally against one of their approved CAs) and removes the
+// original project_expense in one batch, so the cost is never counted twice.
+// Shared by project_expenses and overhead_expenses — an overhead receipt an
+// employee paid out-of-pocket is just as promotable as a project one.
+const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { userId, caId } = req.body || {};
+  if (!userId) return res.status(400).json({ success: false, error: 'userId is required' });
+  try {
+    const expenseRef = db.collection(collectionName).doc(req.params.id);
+    const expenseSnap = await expenseRef.get();
+    if (!expenseSnap.exists) return res.status(404).json({ success: false, error: 'Expense not found' });
+    const expense = expenseSnap.data();
+    if (!['manual', 'receipt_scan'].includes(expense.sourceType)) {
+      return res.status(400).json({ success: false, error: 'Only manually-entered or scanned expenses can be promoted to a liquidation' });
+    }
+    const targetUserSnap = await db.collection('users').doc(String(userId)).get();
+    if (!targetUserSnap.exists) return res.status(404).json({ success: false, error: 'Employee not found' });
+    const targetUser = targetUserSnap.data();
+
+    let caRef = null;
+    if (caId) {
+      caRef = db.collection('cash_advances').doc(String(caId));
+      const caSnap = await caRef.get();
+      if (!caSnap.exists || caSnap.data().user_id !== String(userId) || caSnap.data().status !== 'approved') {
+        return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance for this employee' });
+      }
+      const bal = parseFloat(caSnap.data().balance_remaining) || 0;
+      if ((Number(expense.amount) || 0) > bal) {
+        return res.status(400).json({ success: false, error: `Expense (₱${Number(expense.amount).toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+      }
+    }
+
+    // Same LQ-#### numbering scheme as /api/liquidations/next-form-no.
+    const formNoSnap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
+    const formNos = formNoSnap.docs.map(d => d.data().form_no).filter(fn => fn && typeof fn === 'string' && fn.startsWith('LQ-'));
+    let nextNum = 1;
+    if (formNos.length > 0) {
+      const nums = formNos.map(fn => { const m = fn.match(/LQ-0*(\d+)/); return m ? parseInt(m[1], 10) : 0; }).filter(n => n > 0);
+      if (nums.length > 0) nextNum = Math.max(...nums) + 1;
+    }
+    const formNo = `LQ-${String(nextNum).padStart(4, '0')}`;
+
+    const now = Math.floor(Date.now() / 1000);
+    const nowIso = new Date().toISOString();
+    const liquidationRef = db.collection('liquidations').doc();
+    const rows = [{ category: expense.category || 'Others', description: expense.description || '', amount: Number(expense.amount) || 0 }];
+
+    const batch = db.batch();
+    batch.set(liquidationRef, {
+      user_id: String(userId),
+      form_no: formNo,
+      date_of_submission: nowIso.slice(0, 10),
+      employee_name: targetUser.full_name || targetUser.username || null,
+      employee_number: null,
+      rows_json: JSON.stringify(rows),
+      receipts_json: '[]',
+      total_amount: Number(expense.amount) || 0,
+      ca_id: caId || null,
+      status: 'submitted',
+      reimbursement_status: caId ? null : 'pending',
+      reimbursed_at: null,
+      reimbursed_by: null,
+      promotedFromExpenseId: req.params.id,
+      created_at: now,
+      updated_at: now,
+    });
+    if (caRef) {
+      batch.update(caRef, { balance_remaining: FieldValue.increment(-(Number(expense.amount) || 0)), updated_at: now });
+    }
+    batch.delete(expenseRef);
+    // Clean up any linked out-of-pocket investment row — the expense is no longer company-paid.
+    batch.delete(db.collection('investments').doc(`expense_sync_${req.params.id}`));
+    await batch.commit();
+
+    res.json({ success: true, liquidationId: liquidationRef.id, formNo });
+  } catch (err) {
+    console.error(`Error promoting ${collectionName} row to liquidation:`, err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+};
+
+app.post('/api/project-expenses/:id/promote-to-liquidation', promoteExpenseToLiquidation('project_expenses'));
+app.post('/api/overhead-expenses/:id/promote-to-liquidation', promoteExpenseToLiquidation('overhead_expenses'));
 
 // ========== CASH ADVANCES ==========
 
@@ -1232,9 +1518,16 @@ app.post('/api/cash-advances', async (req, res) => {
   if (dateRequested && /^\d{4}-\d{2}-\d{2}$/.test(String(dateRequested).trim())) {
     requestedAt = Math.floor(new Date(dateRequested + 'T12:00:00').getTime() / 1000);
   }
+  // Which investor is fronting a cash advance is an approval-time call, not a request-time
+  // one — the requester hasn't spent anything yet (unlike a project/overhead expense, where
+  // self-attesting fundingSource is coherent because the person entering it is the one who
+  // actually paid out of pocket). Only admins may set it, whether at creation or later via
+  // PATCH /api/cash-advances/:id/funding.
+  const isAdminRequester = user.role === 'superadmin' || user.role === 'admin';
+  const fundingSource = isAdminRequester ? normalizeFundingSource(req.body.fundingSource) : null;
   try {
     const caNo = await nextCaNo(projectId, new Date(requestedAt * 1000));
-    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt });
+    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt, ...(fundingSource ? { fundingSource } : {}) });
     res.status(201).json({ success: true, id: ref.id, ca_no: caNo, message: `Cash advance ${caNo} requested` });
   } catch (err) {
     console.error('Error creating cash advance:', err);
@@ -1257,9 +1550,116 @@ app.patch('/api/cash-advances/:id', async (req, res) => {
     if (ca.status !== 'pending') return res.status(400).json({ success: false, error: 'Already processed' });
     const now = Math.floor(Date.now() / 1000);
     await ref.update({ status, balance_remaining: status === 'approved' ? ca.amount : 0, approved_at: status === 'approved' ? now : null, approved_by: status === 'approved' ? user.id : null, updated_at: now });
+    // Money only actually leaves an investor's pocket once the request is approved — mirror
+    // the run's funding source onto an Investment Tracker row at that point, same idiom as
+    // syncPayrollOverheadExpenses. A rejected CA was never synced, so nothing to reverse.
+    // Re-read after our own write (not the pre-write `ca`) so a fundingSource set by a
+    // concurrent PATCH .../funding request lands correctly — this doesn't eliminate the race
+    // (neither endpoint uses a transaction, matching this codebase's existing risk tolerance
+    // for balance_remaining elsewhere), but it closes the more likely ordering.
+    if (status === 'approved') {
+      const freshCa = (await ref.get()).data();
+      await syncExpenseFundingInvestment(id, 'cash_advances', { ...freshCa, date: new Date(now * 1000).toISOString().slice(0, 10) });
+    }
     res.json({ success: true, message: status === 'approved' ? 'Cash advance approved' : 'Cash advance rejected' });
   } catch (err) {
     console.error('Error updating cash advance:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Backfills/edits the funding source on a CA independent of a status transition — needed
+// because CAs created before the funding-source feature shipped (and any CA an admin wants
+// to correct) have no way to pick up Investment Tracker linking otherwise, since the approve
+// endpoint above only reads/syncs fundingSource at the moment status flips to 'approved'.
+app.patch('/api/cash-advances/:id/funding', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  try {
+    const ref = db.collection('cash_advances').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Cash advance not found' });
+    const fundingSource = normalizeFundingSource(req.body.fundingSource);
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({ fundingSource: fundingSource || FieldValue.delete(), updated_at: now });
+    // Only an approved CA has actually drawn money — sync (or clear) its Investment Tracker
+    // link immediately, dated to the original approval (not today) so historical CAs land in
+    // the right period. A pending/rejected CA's funding choice just gets carried into the doc;
+    // it takes effect the next time (if ever) the approve endpoint above runs — never, for a
+    // rejected one, which is why the client hides this action for rejected CAs.
+    // Re-read after our own write (not the pre-write `ca`/`doc`) to narrow the race with a
+    // concurrent approve request landing between our read and write.
+    let syncOk = true;
+    const freshCa = (await ref.get()).data();
+    if (freshCa.status === 'approved') {
+      const syncDate = freshCa.approved_at ? new Date(freshCa.approved_at * 1000).toISOString().slice(0, 10) : new Date(now * 1000).toISOString().slice(0, 10);
+      syncOk = await syncExpenseFundingInvestment(id, 'cash_advances', { ...freshCa, date: syncDate });
+    }
+    res.json({
+      success: true,
+      message: syncOk ? 'Funding source updated' : 'Funding source saved, but updating the Investment Tracker link failed — please retry.',
+      syncWarning: !syncOk,
+    });
+  } catch (err) {
+    console.error('Error updating cash advance funding source:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: close out an approved cash advance's remaining balance — either
+// the cash physically came back ('returned') or it's being written off as a
+// realized loss ('written_off').
+app.post('/api/cash-advances/:id/close', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  const { closureType } = req.body;
+  if (closureType !== 'returned' && closureType !== 'written_off') return res.status(400).json({ success: false, error: "closureType must be 'returned' or 'written_off'" });
+  try {
+    const ref = db.collection('cash_advances').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Cash advance not found' });
+    const ca = doc.data();
+    if (ca.status !== 'approved') return res.status(400).json({ success: false, error: 'Only approved cash advances can be closed' });
+    const balance = parseFloat(ca.balance_remaining) || 0;
+    // A negative balance means the employee over-liquidated against this CA — that's
+    // a reimbursement payable, not an unused-cash closeout. Settle it from the
+    // Reimbursements page (POST /api/reimbursements/:id/pay), which pays the employee
+    // back and restores this CA's balance toward zero as a side effect.
+    if (balance < 0) return res.status(400).json({ success: false, error: 'This CA has a negative balance (company owes the employee) — settle it from the Reimbursements page instead.' });
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({ status: 'closed', closureType, closedAt: now, closedBy: user.id, balance_remaining: 0, updated_at: now });
+    let syncOk = true;
+    if (closureType === 'returned' && balance > 0) {
+      // The investment row (if any) currently reflects the FULL original advance as deployed
+      // capital. The returned portion never actually got spent — bring the row down to
+      // actually-deployed capital (original amount minus what just came back).
+      const invRef = db.collection('investments').doc(`expense_sync_${id}`);
+      const invSnap = await invRef.get();
+      if (invSnap.exists) {
+        const currentAmount = Number(invSnap.data().amount) || 0;
+        await invRef.update({ amount: Math.max(0, currentAmount - balance), updated_at: new Date().toISOString() });
+      }
+    } else if (closureType === 'written_off' && balance > 0) {
+      // The capital genuinely left and wasn't recovered — leave the investment row as-is, but
+      // book the shortfall as a real cost so it isn't a phantom gap in the P&L.
+      await db.collection('overhead_expenses').add({
+        description: `Cash advance write-off: ${ca.ca_no || id}`,
+        amount: balance,
+        date: new Date(now * 1000).toISOString().slice(0, 10),
+        category: 'Cash Advance Write-off',
+        createdAt: new Date(now * 1000).toISOString(),
+        createdBy: user.id,
+        sourceType: 'ca_writeoff',
+        sourceCaId: id,
+      });
+    }
+    res.json({ success: true, message: closureType === 'returned' ? 'Cash advance closed — cash returned' : 'Cash advance closed — written off', syncWarning: !syncOk });
+  } catch (err) {
+    console.error('Error closing cash advance:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
@@ -1293,6 +1693,8 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
       await batch.commit();
     }
     await ref.delete();
+    // Remove/unlink any Investment Tracker row this CA's approval had synced.
+    await syncExpenseFundingInvestment(id, 'cash_advances', {});
     res.json({ success: true, message: 'Cash advance deleted' });
   } catch (err) {
     console.error('Error deleting cash advance:', err);
@@ -1369,22 +1771,53 @@ app.post('/api/liquidations', async (req, res) => {
   const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
   const caId = ca_id ? String(ca_id) : null;
   try {
+    let caCoveredAmount = 0;
+    let reimbursableAmount = 0;
     if (liqStatus === 'submitted' && caId) {
       const caDoc = await db.collection('cash_advances').doc(caId).get();
       if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
       const bal = parseFloat(caDoc.data().balance_remaining) || 0;
-      if (total > bal) return res.status(400).json({ success: false, error: `Liquidation (₱${total.toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+      // An overspend no longer blocks submission — the amount beyond the CA's
+      // balance just splits off into a reimbursement claim instead (see below).
+      caCoveredAmount = Math.min(total, bal);
+      reimbursableAmount = Math.max(0, total - bal);
+    } else if (liqStatus === 'submitted' && !caId) {
+      reimbursableAmount = total;
     }
     if (liqStatus === 'submitted' && form_no) {
       const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
       if (!dupSnap.empty) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
     }
-    // No-CA submitted liquidations are out-of-pocket reimbursement claims —
-    // tracked so the requester gets paid back (see PATCH below).
-    const reimbursementStatus = liqStatus === 'submitted' && !caId ? 'pending' : null;
-    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
+    // Reimbursable amounts — out-of-pocket claims, or the slice of a liquidation
+    // that exceeds the CA's balance — are tracked so the requester gets paid
+    // back (see /api/reimbursements).
+    const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
+    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
+      // Decrement by the FULL total, not just the covered portion — a CA's
+      // balance_remaining going negative IS the "company owes this employee" signal
+      // the existing employee-balances rollup (CAFormPage.tsx) already reads.
+      // ca_covered_amount/reimbursable_amount above are kept as informational splits
+      // for display; they don't change what actually gets written to the CA balance.
       await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
+    }
+    if (liqStatus === 'submitted' && reimbursableAmount > 0) {
+      await db.collection('reimbursements').doc(ref.id).set({
+        liquidationId: ref.id,
+        formNo: form_no || null,
+        employeeId: user.id,
+        employeeName: employee_name || user.full_name || user.username || null,
+        origin: caId ? 'ca_excess' : 'no_ca',
+        amount: reimbursableAmount,
+        caId: caId || null,
+        status: 'pending',
+        fundingSource: null,
+        paidAt: null,
+        paidBy: null,
+        syncedInvestmentId: null,
+        createdAt: now,
+        updatedAt: now,
+      });
     }
     res.status(201).json({ success: true, id: ref.id, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved' });
   } catch (err) {
@@ -1411,20 +1844,45 @@ app.put('/api/liquidations/:id', async (req, res) => {
     const now = Math.floor(Date.now() / 1000);
     const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
     const caId = ca_id ? String(ca_id) : null;
+    let caCoveredAmount = 0;
+    let reimbursableAmount = 0;
     if (liqStatus === 'submitted' && caId) {
       const caDoc = await db.collection('cash_advances').doc(caId).get();
       if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
       const bal = parseFloat(caDoc.data().balance_remaining) || 0;
-      if (total > bal) return res.status(400).json({ success: false, error: `Liquidation (₱${total.toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+      caCoveredAmount = Math.min(total, bal);
+      reimbursableAmount = Math.max(0, total - bal);
+    } else if (liqStatus === 'submitted' && !caId) {
+      reimbursableAmount = total;
     }
     if (liqStatus === 'submitted' && form_no) {
       const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
       if (dupSnap.docs.some(d => d.id !== id)) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
     }
-    const reimbursementStatus = liqStatus === 'submitted' && !caId ? 'pending' : null;
-    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
+    const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
+    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
+      // Full total, matching POST above — the CA's balance_remaining can go
+      // negative, which is the existing "company owes this employee" signal.
       await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
+    }
+    if (liqStatus === 'submitted' && reimbursableAmount > 0) {
+      await db.collection('reimbursements').doc(id).set({
+        liquidationId: id,
+        formNo: form_no || null,
+        employeeId: existing.user_id,
+        employeeName: employee_name || user.full_name || user.username || null,
+        origin: caId ? 'ca_excess' : 'no_ca',
+        amount: reimbursableAmount,
+        caId: caId || null,
+        status: 'pending',
+        fundingSource: null,
+        paidAt: null,
+        paidBy: null,
+        syncedInvestmentId: null,
+        createdAt: now,
+        updatedAt: now,
+      });
     }
     res.json({ success: true, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
   } catch (err) {
@@ -1455,6 +1913,17 @@ app.patch('/api/liquidations/:id', async (req, res) => {
       reimbursed_by: reimbursement_status === 'reimbursed' ? user.id : null,
       updated_at: now,
     });
+    // Keep the first-class reimbursements doc (source of truth for GET /api/reimbursements)
+    // in sync with this legacy toggle — reimbursement docs are keyed by liquidation id.
+    const reimbursementRef = db.collection('reimbursements').doc(req.params.id);
+    const reimbursementSnap = await reimbursementRef.get();
+    if (reimbursementSnap.exists) {
+      if (reimbursement_status === 'reimbursed') {
+        await reimbursementRef.update({ status: 'paid', paidAt: now, paidBy: user.id, updatedAt: now });
+      } else if (reimbursementSnap.data().status === 'paid') {
+        await reimbursementRef.update({ status: 'pending', paidAt: null, paidBy: null, fundingSource: null, updatedAt: now });
+      }
+    }
     res.json({ success: true, message: reimbursement_status === 'reimbursed' ? 'Marked as reimbursed' : 'Reverted to pending reimbursement' });
   } catch (err) {
     console.error('Error updating liquidation reimbursement status:', err);
@@ -1462,22 +1931,23 @@ app.patch('/api/liquidations/:id', async (req, res) => {
   }
 });
 
-// Admin-only: list liquidations pending reimbursement (submitted, no CA).
+// Admin-only: list pending reimbursement claims (out-of-pocket liquidation rows,
+// and the slice of any liquidation that exceeded its CA's balance).
 app.get('/api/reimbursements', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
   try {
-    const snap = await db.collection('liquidations').where('reimbursement_status', '==', 'pending').get();
+    const snap = await db.collection('reimbursements').where('status', '==', 'pending').get();
     const rows = await Promise.all(snap.docs.map(async doc => {
-      const liq = { id: doc.id, ...doc.data() };
-      if (liq.user_id) {
-        const uDoc = await db.collection('users').doc(liq.user_id).get();
-        if (uDoc.exists) { liq.username = uDoc.data().username; liq.full_name = uDoc.data().full_name; }
+      const r = { id: doc.id, ...doc.data() };
+      if (r.employeeId) {
+        const uDoc = await db.collection('users').doc(r.employeeId).get();
+        if (uDoc.exists) { r.username = uDoc.data().username; r.full_name = uDoc.data().full_name; }
       }
-      return liq;
+      return r;
     }));
-    rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     res.json({ success: true, reimbursements: rows });
   } catch (err) {
     console.error('Error fetching reimbursements:', err);
@@ -1485,7 +1955,46 @@ app.get('/api/reimbursements', async (req, res) => {
   }
 });
 
-// Admin-only: batch-mark pending (no-CA submitted) liquidations as reimbursed.
+// Admin-only: mark a single pending reimbursement as paid, optionally recording an
+// out-of-pocket funding source so it syncs into the Investment Tracker.
+app.post('/api/reimbursements/:id/pay', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  try {
+    const ref = db.collection('reimbursements').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Reimbursement not found' });
+    const reimbursement = doc.data();
+    if (reimbursement.status !== 'pending') return res.status(400).json({ success: false, error: 'Reimbursement is not pending' });
+    const fs = normalizeFundingSource(req.body.fundingSource);
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({ status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, updatedAt: now });
+    await db.collection('liquidations').doc(reimbursement.liquidationId).update({ reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
+    // Paying a ca_excess reimbursement is the company actually handing the employee
+    // the amount their over-liquidation put the CA into the negative for — restore
+    // that CA's balance_remaining toward zero by the same amount.
+    if (reimbursement.origin === 'ca_excess' && reimbursement.caId) {
+      await db.collection('cash_advances').doc(reimbursement.caId).update({ balance_remaining: FieldValue.increment(reimbursement.amount), updated_at: now });
+    }
+    // Re-read after our own write, same defensive pattern as the CA /funding endpoint,
+    // so the sync sees the just-written fundingSource rather than a stale pre-write copy.
+    const fresh = (await ref.get()).data();
+    const syncOk = await syncExpenseFundingInvestment(id, 'reimbursements', {
+      date: new Date(now * 1000).toISOString().slice(0, 10),
+      amount: fresh.amount,
+      fundingSource: fresh.fundingSource,
+      description: `Reimbursement ${fresh.formNo || id}: ${fresh.employeeName || ''}`.trim(),
+    });
+    res.json({ success: true, message: 'Reimbursement marked paid', syncWarning: !syncOk });
+  } catch (err) {
+    console.error('Error paying reimbursement:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: batch-mark pending reimbursements as paid, optionally from a shared funding source.
 app.post('/api/reimbursements/batch-mark', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -1496,22 +2005,36 @@ app.post('/api/reimbursements/batch-mark', async (req, res) => {
   if (ids.length > 500) return res.status(400).json({ success: false, error: 'Maximum 500 ids per request' });
   try {
     const now = Math.floor(Date.now() / 1000);
+    const fs = normalizeFundingSource(req.body.fundingSource);
     const batch = db.batch();
     const skipped = [];
-    let updated = 0;
+    const toSync = [];
     for (const id of ids) {
-      const ref = db.collection('liquidations').doc(id);
+      const ref = db.collection('reimbursements').doc(id);
       const doc = await ref.get();
       if (!doc.exists) { skipped.push({ id, reason: 'not found' }); continue; }
-      const liq = doc.data();
-      if (liq.status !== 'submitted' || liq.ca_id || liq.reimbursement_status !== 'pending') {
-        skipped.push({ id, reason: 'not a pending no-CA submitted liquidation' });
-        continue;
+      const r = doc.data();
+      if (r.status !== 'pending') { skipped.push({ id, reason: 'not pending' }); continue; }
+      batch.update(ref, { status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, updatedAt: now });
+      if (r.liquidationId) {
+        batch.update(db.collection('liquidations').doc(r.liquidationId), { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
       }
-      batch.update(ref, { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id, updated_at: now });
-      updated++;
+      // Same CA-balance restoration as the single-pay endpoint, batched.
+      if (r.origin === 'ca_excess' && r.caId) {
+        batch.update(db.collection('cash_advances').doc(r.caId), { balance_remaining: FieldValue.increment(r.amount), updated_at: now });
+      }
+      toSync.push({ id, amount: r.amount, formNo: r.formNo, employeeName: r.employeeName });
     }
-    if (updated > 0) await batch.commit();
+    if (toSync.length > 0) await batch.commit();
+    for (const r of toSync) {
+      await syncExpenseFundingInvestment(r.id, 'reimbursements', {
+        date: new Date(now * 1000).toISOString().slice(0, 10),
+        amount: r.amount,
+        fundingSource: fs,
+        description: `Reimbursement ${r.formNo || r.id}: ${r.employeeName || ''}`.trim(),
+      });
+    }
+    const updated = toSync.length;
     res.json({ success: true, updated, skipped, message: `Marked ${updated} as reimbursed` });
   } catch (err) {
     console.error('Error batch-marking reimbursements:', err);
@@ -1533,13 +2056,303 @@ app.delete('/api/liquidations/:id', async (req, res) => {
     const total = parseFloat(liq.total_amount) || 0;
     const caId = liq.ca_id || null;
     const now = Math.floor(Date.now() / 1000);
-    if (liq.status === 'submitted' && caId && total > 0) {
-      await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(total), updated_at: now });
+    const reimbursementRef = db.collection('reimbursements').doc(id);
+    const reimbursementSnap = await reimbursementRef.get();
+    const reimbursement = reimbursementSnap.exists ? reimbursementSnap.data() : null;
+    if (liq.status === 'submitted' && caId) {
+      // The CA's balance_remaining was decremented by the FULL total at submission.
+      // If the reimbursable portion was already paid out, that amount was already
+      // restored to the CA balance at payment time (see POST /api/reimbursements/:id/pay)
+      // — refund only the remaining CA-covered portion here to avoid double-crediting.
+      const alreadyRestored = reimbursement && reimbursement.status === 'paid' ? (parseFloat(reimbursement.amount) || 0) : 0;
+      const refundAmount = total - alreadyRestored;
+      if (refundAmount > 0) {
+        await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(refundAmount), updated_at: now });
+      }
+    }
+    // Drop any still-pending reimbursement claim this liquidation spawned — an
+    // already-paid one stays as the payment record even though its source liquidation
+    // is gone, same reasoning as applyLiquidationRevision's paid-amount guard.
+    if (reimbursement && reimbursement.status === 'pending') {
+      await reimbursementRef.delete();
     }
     await ref.delete();
     res.json({ success: true, message: 'Liquidation deleted' });
   } catch (err) {
     console.error('Error deleting liquidation:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// ── Submitted-liquidation edit workflow ──────────────────────────────────────
+// Submitted liquidations stay closed to direct PUTs, but the filing owner (or
+// an admin) can propose an edit that a superadmin approves; a superadmin's own
+// edit applies immediately. Applying a revision reconciles the side effects of
+// the original submission — the linked CA balance delta and the
+// project_expenses rows synced from this liquidation — and snapshots the
+// before/after state to liquidation_revision_audit.
+
+function parseLiqRows(rowsJson) {
+  if (Array.isArray(rowsJson)) return rowsJson;
+  if (typeof rowsJson !== 'string') return [];
+  try { const p = JSON.parse(rowsJson || '[]'); return Array.isArray(p) ? p : []; } catch { return []; }
+}
+
+async function applyLiquidationRevision(liqId, liq, revision, approver) {
+  const now = Math.floor(Date.now() / 1000);
+  const oldRows = parseLiqRows(liq.rows_json);
+  const newRows = parseLiqRows(revision.rows_json);
+  const oldTotal = parseFloat(liq.total_amount) || 0;
+  const newTotal = parseFloat(revision.total_amount) || 0;
+
+  // CA reconciliation: only the delta moves on balance_remaining (raw, uncapped —
+  // same as POST/PUT above, a negative balance is the "company owes this employee"
+  // signal, not an error). ca_covered_amount/reimbursable_amount are recomputed as
+  // an informational split against what the CA's balance was before THIS
+  // liquidation's own prior effect (i.e. undoing oldTotal), so the split reflects
+  // the revision as if it were a fresh submission against that same starting point.
+  let newCaCoveredAmount = 0;
+  let newReimbursableAmount = newTotal;
+  let caRef = null;
+  let caDelta = 0;
+  if (liq.ca_id) {
+    caRef = db.collection('cash_advances').doc(String(liq.ca_id));
+    const caDoc = await caRef.get();
+    if (caDoc.exists) {
+      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
+      const balBeforeThisLiquidation = bal + oldTotal;
+      newCaCoveredAmount = Math.min(newTotal, Math.max(0, balBeforeThisLiquidation));
+      newReimbursableAmount = Math.max(0, newTotal - balBeforeThisLiquidation);
+      caDelta = newTotal - oldTotal;
+    } else {
+      caRef = null; // nothing to write balance_remaining onto
+    }
+  }
+
+  // A revision may not silently change an amount that's already been paid out —
+  // reject it and let the payment discrepancy be resolved by hand first.
+  const reimbursementRef = db.collection('reimbursements').doc(liqId);
+  const reimbursementSnap = await reimbursementRef.get();
+  const existingReimbursement = reimbursementSnap.exists ? reimbursementSnap.data() : null;
+  if (existingReimbursement && existingReimbursement.status === 'paid' && (parseFloat(existingReimbursement.amount) || 0) !== newReimbursableAmount) {
+    throw Object.assign(new Error('This revision would change an already-paid reimbursement amount — resolve the payment discrepancy manually before revising.'), { status: 400 });
+  }
+
+  if (caRef && caDelta !== 0) {
+    await caRef.update({ balance_remaining: FieldValue.increment(-caDelta), updated_at: now });
+  }
+
+  // project_expenses re-sync: update/delete docs previously synced from this
+  // liquidation, and create docs only for rows that are new in the revision.
+  // Rows that were never synced (older filings predate the client-side sync)
+  // stay unsynced so applying a fix doesn't retroactively inject historical
+  // costs into the P&L.
+  const liqDescription = (row) => liq.form_no
+    ? `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`
+    : ((row.particulars || '').trim() || 'Liquidation');
+  const expSnap = await db.collection('project_expenses').where('sourceLiquidationId', '==', liqId).get();
+  const expByRowId = new Map();
+  expSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) expByRowId.set(rid, d); });
+  const oldRowIds = new Set(oldRows.map(r => r.id));
+  const newById = new Map(newRows.map(r => [r.id, r]));
+  const batch = db.batch();
+  for (const [rowId, expDoc] of expByRowId) {
+    const row = newById.get(rowId);
+    if (!row || !row.projectId || !(Number(row.amount) > 0)) { batch.delete(expDoc.ref); continue; }
+    batch.update(expDoc.ref, {
+      projectId: String(row.projectId),
+      projectName: (row.projectName || '').trim() || '—',
+      description: liqDescription(row),
+      amount: Number(row.amount) || 0,
+      date: row.date || expDoc.data().date || null,
+      category: (row.category || '').trim() || 'Others',
+    });
+  }
+  for (const row of newRows) {
+    if (oldRowIds.has(row.id) || expByRowId.has(row.id)) continue;
+    if (!row.projectId || !(Number(row.amount) > 0)) continue;
+    const doc = {
+      projectId: String(row.projectId),
+      projectName: (row.projectName || '').trim() || '—',
+      description: liqDescription(row),
+      amount: Number(row.amount) || 0,
+      date: row.date || new Date().toISOString().slice(0, 10),
+      category: (row.category || '').trim() || 'Others',
+      createdAt: new Date().toISOString(),
+      createdBy: revision.proposed_by || approver.id,
+      sourceType: 'liquidation_sync',
+      sourceLiquidationId: liqId,
+      sourceLiquidationRowId: row.id,
+    };
+    if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
+    if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
+    if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
+    if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+    batch.set(db.collection('project_expenses').doc(), doc);
+  }
+  await batch.commit();
+
+  // Reconcile the reimbursements doc to the re-split amount. Skip touching a
+  // doc that's already 'paid' — the throw-guard above already proved its
+  // amount is unchanged, so re-setting it back to 'pending' would silently
+  // reverse a real payment.
+  if (newReimbursableAmount > 0) {
+    if (!existingReimbursement || existingReimbursement.status !== 'paid') {
+      const reimbursementUpdate = {
+        liquidationId: liqId,
+        formNo: liq.form_no || null,
+        employeeId: liq.user_id,
+        employeeName: (revision.employee_name ?? liq.employee_name) || null,
+        origin: liq.ca_id ? 'ca_excess' : 'no_ca',
+        amount: newReimbursableAmount,
+        caId: liq.ca_id || null,
+        status: 'pending',
+        fundingSource: null,
+        paidAt: null,
+        paidBy: null,
+        syncedInvestmentId: null,
+        updatedAt: now,
+      };
+      if (!existingReimbursement) reimbursementUpdate.createdAt = now;
+      await reimbursementRef.set(reimbursementUpdate, { merge: true });
+    }
+  } else if (existingReimbursement && existingReimbursement.status === 'pending') {
+    await reimbursementRef.delete();
+  }
+
+  await db.collection('liquidation_revision_audit').add({
+    liquidation_id: liqId,
+    form_no: liq.form_no || null,
+    action: 'applied',
+    before: { rows_json: liq.rows_json, total_amount: oldTotal, employee_name: liq.employee_name || null, date_of_submission: liq.date_of_submission || null },
+    after: { rows_json: JSON.stringify(newRows), total_amount: newTotal, employee_name: revision.employee_name ?? liq.employee_name ?? null, date_of_submission: revision.date_of_submission ?? liq.date_of_submission ?? null },
+    proposed_by: revision.proposed_by || approver.id,
+    proposed_by_name: revision.proposed_by_name || null,
+    approved_by: approver.id,
+    note: revision.note || null,
+    created_at: now,
+  });
+
+  const finalReimbursementStatus = newReimbursableAmount > 0
+    ? ((existingReimbursement && existingReimbursement.status === 'paid') ? 'reimbursed' : 'pending')
+    : null;
+  const update = {
+    rows_json: JSON.stringify(newRows),
+    total_amount: newTotal,
+    ca_covered_amount: newCaCoveredAmount,
+    reimbursable_amount: newReimbursableAmount,
+    reimbursement_status: finalReimbursementStatus,
+    updated_at: now,
+    pending_revision: FieldValue.delete(),
+  };
+  if (revision.employee_name != null) update.employee_name = revision.employee_name;
+  if (revision.date_of_submission != null) update.date_of_submission = revision.date_of_submission;
+  if (revision.receipts_json != null) update.receipts_json = revision.receipts_json;
+  await db.collection('liquidations').doc(liqId).update(update);
+}
+
+// Owner or admin proposes an edit to a submitted liquidation; superadmin's own
+// proposal applies immediately (no self-approval round-trip).
+app.post('/api/liquidations/:id/propose-edit', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role === 'viewer') return res.status(403).json({ success: false, error: 'Forbidden' });
+  const { id } = req.params;
+  try {
+    const ref = db.collection('liquidations').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+    if (!isAdmin && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
+    if (liq.status !== 'submitted') return res.status(400).json({ success: false, error: 'Only submitted liquidations use the edit-approval flow — edit the draft directly' });
+    const { rows_json, receipts_json, total_amount, employee_name, date_of_submission, note } = req.body;
+    const rows = parseLiqRows(rows_json);
+    if (rows.length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
+    const total = parseFloat(total_amount) || 0;
+    // Early CA check for fast feedback; approval re-validates against the live balance.
+    if (liq.ca_id) {
+      const caDoc = await db.collection('cash_advances').doc(String(liq.ca_id)).get();
+      if (caDoc.exists) {
+        const available = (parseFloat(caDoc.data().balance_remaining) || 0) + (parseFloat(liq.total_amount) || 0);
+        if (total > available) return res.status(400).json({ success: false, error: `Revised total (₱${total.toFixed(2)}) exceeds the CA's available balance (₱${available.toFixed(2)})` });
+      }
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const revision = {
+      rows_json: JSON.stringify(rows),
+      receipts_json: receipts_json != null ? (typeof receipts_json === 'string' ? receipts_json : JSON.stringify(receipts_json)) : null,
+      total_amount: total,
+      employee_name: employee_name ?? null,
+      date_of_submission: date_of_submission ?? null,
+      note: (note || '').trim() || null,
+      proposed_by: user.id,
+      proposed_by_name: user.full_name || user.username || null,
+      proposed_at: now,
+    };
+    if (user.role === 'superadmin') {
+      await applyLiquidationRevision(id, liq, revision, user);
+      return res.json({ success: true, applied: true, message: 'Edit applied' });
+    }
+    if (liq.pending_revision && liq.pending_revision.proposed_by !== user.id) {
+      return res.status(409).json({ success: false, error: `An edit by ${liq.pending_revision.proposed_by_name || 'another user'} is already pending approval` });
+    }
+    await ref.update({ pending_revision: revision, updated_at: now });
+    res.json({ success: true, applied: false, message: 'Edit submitted for superadmin approval' });
+  } catch (err) {
+    if (err && err.status === 400) return res.status(400).json({ success: false, error: err.message });
+    console.error('Error proposing liquidation edit:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/liquidations/:id/revision/approve', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { id } = req.params;
+  try {
+    const doc = await db.collection('liquidations').doc(id).get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    if (!liq.pending_revision) return res.status(400).json({ success: false, error: 'No pending edit on this liquidation' });
+    await applyLiquidationRevision(id, liq, liq.pending_revision, user);
+    res.json({ success: true, message: 'Edit approved and applied' });
+  } catch (err) {
+    if (err && err.status === 400) return res.status(400).json({ success: false, error: err.message });
+    console.error('Error approving liquidation revision:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/liquidations/:id/revision/reject', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { id } = req.params;
+  const { reason } = req.body || {};
+  try {
+    const ref = db.collection('liquidations').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    if (!liq.pending_revision) return res.status(400).json({ success: false, error: 'No pending edit on this liquidation' });
+    const now = Math.floor(Date.now() / 1000);
+    await db.collection('liquidation_revision_audit').add({
+      liquidation_id: id,
+      form_no: liq.form_no || null,
+      action: 'rejected',
+      proposed_revision: liq.pending_revision,
+      proposed_by: liq.pending_revision.proposed_by || null,
+      proposed_by_name: liq.pending_revision.proposed_by_name || null,
+      rejected_by: user.id,
+      reason: (reason || '').trim() || null,
+      created_at: now,
+    });
+    await ref.update({ pending_revision: FieldValue.delete(), updated_at: now });
+    res.json({ success: true, message: 'Edit rejected' });
+  } catch (err) {
+    console.error('Error rejecting liquidation revision:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
@@ -1806,7 +2619,7 @@ app.put('/api/investments/target', async (req, res) => {
 });
 
 // ========== PAYROLL ROUTES ==========
-// Restricted to superadmin and admin roles only.
+// Restricted to TJC and RJR usernames only.
 
 const PAYROLL_ROLES = ['superadmin', 'admin'];
 
@@ -1815,6 +2628,105 @@ async function requirePayrollAccess(req, res) {
   if (!user) { res.status(401).json({ error: 'Unauthorized' }); return null; }
   if (!PAYROLL_ROLES.includes(user.role)) { res.status(403).json({ error: 'Payroll access restricted' }); return null; }
   return user;
+}
+
+// Editing/deleting an already-created run rewrites figures that have already flowed into the
+// company P&L (overhead sync) — restricted to superadmin on top of the normal payroll whitelist.
+async function requireSuperadminPayrollAccess(req, res) {
+  const user = await requirePayrollAccess(req, res);
+  if (!user) return null;
+  if (user.role !== 'superadmin') { res.status(403).json({ error: 'Superadmin only' }); return null; }
+  return user;
+}
+
+// Read-only: lets the tax_filer role (plus whoever already has full payroll access) see the
+// OFFICE-employee breakdown behind a run's synced overhead totals, without granting any of the
+// broader payroll admin routes gated by requirePayrollAccess above.
+async function requireTaxLedgerPayrollAccess(req, res) {
+  const user = await getCurrentUser(req);
+  if (!user) { res.status(401).json({ error: 'Unauthorized' }); return null; }
+  if (user.role !== 'tax_filer' && !PAYROLL_ROLES.includes(user.role)) { res.status(403).json({ error: 'Forbidden' }); return null; }
+  return user;
+}
+
+// Posts/updates/removes the OFFICE-staff payroll cost rows in overhead_expenses for a run,
+// keyed on deterministic ids so recompute always overwrites (never duplicates) them — same
+// idempotent idiom used on approve. Also mirrors the funding source onto (or off of) an
+// Investment Tracker entry. Best-effort by design; caller decides whether a failure here
+// should block its own response.
+async function syncPayrollOverheadExpenses(runId, runData, user) {
+  const ref = db.collection('payroll_runs').doc(runId);
+  const payslipsSnap = await ref.collection('payslips').get();
+  let totalOfficeGross = 0;
+  let totalOfficeERGovt = 0;
+  payslipsSnap.forEach((pSnap) => {
+    const p = pSnap.data();
+    if (p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE') {
+      totalOfficeGross += Number(p.grossPay || 0);
+      totalOfficeERGovt += Number(p.erSSS || 0) + Number(p.erPhilhealth || 0) + Number(p.erPagibig || 0);
+    }
+  });
+
+  const expenseDate = runData.payDate || runData.periodEnd || new Date().toISOString().slice(0, 10);
+  const fundingSource = normalizeFundingSource(runData.fundingSource);
+  const baseDoc = {
+    date: expenseDate,
+    sourceType: 'payroll_sync',
+    sourceRunId: runId,
+    createdAt: new Date().toISOString(),
+    createdBy: user.id || user.username,
+    ...(fundingSource ? { fundingSource } : {}),
+  };
+
+  const batch = db.batch();
+  const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
+  const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
+  let salariesDoc = null;
+  let govtDoc = null;
+  if (totalOfficeGross > 0) {
+    salariesDoc = {
+      ...baseDoc,
+      description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Office salaries`,
+      amount: totalOfficeGross,
+      category: 'Salaries & Wages',
+    };
+    batch.set(salariesRef, salariesDoc);
+  } else {
+    batch.delete(salariesRef);
+  }
+  if (totalOfficeERGovt > 0) {
+    govtDoc = {
+      ...baseDoc,
+      description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Employer gov't contributions`,
+      amount: totalOfficeERGovt,
+      category: 'Government Contributions',
+    };
+    batch.set(govtRef, govtDoc);
+  } else {
+    batch.delete(govtRef);
+  }
+  await batch.commit();
+
+  await Promise.all([
+    syncExpenseFundingInvestment(salariesRef.id, 'overhead_expenses', salariesDoc || {}),
+    syncExpenseFundingInvestment(govtRef.id, 'overhead_expenses', govtDoc || {}),
+  ]);
+}
+
+// Removes any overhead_expenses rows (and their linked Investment Tracker entries) previously
+// posted for a run — used when deleting a run outright, or editing an APPROVED/PAID run back
+// down to DRAFT, so a payroll run that's no longer "live" doesn't leave phantom OPEX behind.
+async function reversePayrollOverheadExpenses(runId) {
+  const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
+  const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
+  const batch = db.batch();
+  batch.delete(salariesRef);
+  batch.delete(govtRef);
+  await batch.commit();
+  await Promise.all([
+    syncExpenseFundingInvestment(salariesRef.id, 'overhead_expenses', {}),
+    syncExpenseFundingInvestment(govtRef.id, 'overhead_expenses', {}),
+  ]);
 }
 
 function isSuperadmin(user) {
@@ -1870,6 +2782,8 @@ app.post('/api/payroll/runs', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   try {
     const data = { ...req.body, status: 'DRAFT', createdBy: user.username, createdAt: new Date().toISOString() };
+    const normalizedFunding = normalizeFundingSource(data.fundingSource);
+    if (normalizedFunding) data.fundingSource = normalizedFunding; else delete data.fundingSource;
     const ref = await db.collection('payroll_runs').add(data);
     res.status(201).json({ id: ref.id, ...data });
   } catch (err) { res.status(500).json({ error: 'Failed to create payroll run' }); }
@@ -1888,65 +2802,107 @@ app.post('/api/payroll/runs/:id/approve', async (req, res) => {
     const nextStatus = runData.status === 'PAID' ? 'PAID' : 'APPROVED';
     await ref.update({ status: nextStatus, approvedBy: user.username, approvedAt: new Date().toISOString() });
 
-    // --- Overhead sync (best-effort; must never fail the approval) ---
-    // Posts OFFICE-staff payroll cost into overhead_expenses so it flows into the company P&L OPEX.
-    // Uses DETERMINISTIC doc ids keyed on the run, so re-approving overwrites (never duplicates) the
-    // rows and stays correct even under concurrent approve calls — no read-then-write race, no index.
+    // Overhead sync is best-effort and must never fail the approval itself.
     let overheadSynced = false;
     try {
-      const payslipsSnap = await ref.collection('payslips').get();
-      let totalOfficeGross = 0;
-      let totalOfficeERGovt = 0;
-      payslipsSnap.forEach((pSnap) => {
-        const p = pSnap.data();
-        if (p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE') {
-          totalOfficeGross += Number(p.grossPay || 0);
-          totalOfficeERGovt += Number(p.erSSS || 0) + Number(p.erPhilhealth || 0) + Number(p.erPagibig || 0);
-        }
-      });
-
-      const expenseDate = runData.payDate || runData.periodEnd || new Date().toISOString().slice(0, 10);
-      const baseDoc = {
-        date: expenseDate,
-        sourceType: 'payroll_sync',
-        sourceRunId: runId,
-        createdAt: new Date().toISOString(),
-        createdBy: user.id || user.username,
-      };
-
-      const batch = db.batch();
-      const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
-      const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
-      // set when > 0, otherwise delete any stale row from a prior approve (delete of a missing doc is a no-op).
-      if (totalOfficeGross > 0) {
-        batch.set(salariesRef, {
-          ...baseDoc,
-          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Office salaries`,
-          amount: totalOfficeGross,
-          category: 'Salaries & Wages',
-        });
-      } else {
-        batch.delete(salariesRef);
-      }
-      if (totalOfficeERGovt > 0) {
-        batch.set(govtRef, {
-          ...baseDoc,
-          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Employer gov't contributions`,
-          amount: totalOfficeERGovt,
-          category: 'Government Contributions',
-        });
-      } else {
-        batch.delete(govtRef);
-      }
-      await batch.commit();
+      await syncPayrollOverheadExpenses(runId, runData, user);
       overheadSynced = true;
     } catch (syncErr) {
       console.error('Payroll overhead sync failed for run', runId, syncErr);
     }
-    // --- end overhead sync ---
 
     res.json({ success: true, overheadSynced });
   } catch (err) { res.status(500).json({ error: 'Failed to approve run' }); }
+});
+
+// Superadmin-only: rewrite an existing run's period/funding/payslips and, if its target status
+// changes, reconcile the overhead_expenses sync accordingly (post it if now APPROVED/PAID, pull
+// it back out if downgraded to DRAFT). Existing payslip docs not present in the new set are
+// deleted so removing an employee from the run actually removes their entry, not just leaves it
+// stale.
+app.put('/api/payroll/runs/:id', async (req, res) => {
+  const user = await requireSuperadminPayrollAccess(req, res); if (!user) return;
+  try {
+    const runId = req.params.id;
+    const ref = db.collection('payroll_runs').doc(runId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
+    const existing = doc.data();
+
+    const { payslips, status, id, createdAt, createdBy, ...runFields } = req.body;
+    if (!Array.isArray(payslips)) return res.status(400).json({ error: 'payslips must be an array' });
+    const nextStatus = ['DRAFT', 'APPROVED', 'PAID'].includes(status) ? status : existing.status;
+
+    const normalizedFunding = normalizeFundingSource(runFields.fundingSource);
+    const updates = { ...runFields, status: nextStatus, updatedBy: user.username, updatedAt: new Date().toISOString() };
+    // Unlike the create endpoint's `.add()`, this is an `.update()` on an existing doc — simply
+    // omitting the key would leave a stale fundingSource in place, so an explicit FieldValue.delete()
+    // is required to actually clear it when funding is switched back to corporate_bank.
+    updates.fundingSource = normalizedFunding || FieldValue.delete();
+    if (nextStatus === 'APPROVED' && existing.status !== 'APPROVED') { updates.approvedBy = user.username; updates.approvedAt = new Date().toISOString(); }
+    if (nextStatus === 'PAID' && existing.status !== 'PAID') { updates.paidAt = new Date().toISOString(); }
+    await ref.update(updates);
+
+    // Replace the payslip set: drop rows for employees no longer included, overwrite the rest.
+    const payslipsCol = ref.collection('payslips');
+    const existingSlipsSnap = await payslipsCol.get();
+    const nextIds = new Set(payslips.map((p) => p.employeeId));
+    const batch = db.batch();
+    existingSlipsSnap.forEach((d) => { if (!nextIds.has(d.id)) batch.delete(d.ref); });
+    payslips.forEach((slip) => {
+      const slipRef = slip.employeeId ? payslipsCol.doc(slip.employeeId) : payslipsCol.doc();
+      batch.set(slipRef, slip);
+    });
+    await batch.commit();
+
+    let overheadSynced = false;
+    try {
+      if (nextStatus === 'APPROVED' || nextStatus === 'PAID') {
+        // Re-fetch rather than reuse the local `updates` object — it may still hold an unresolved
+        // FieldValue.delete() sentinel for fundingSource, which the sync helper can't interpret.
+        const freshData = (await ref.get()).data();
+        await syncPayrollOverheadExpenses(runId, freshData, user);
+        overheadSynced = true;
+      } else {
+        await reversePayrollOverheadExpenses(runId);
+      }
+    } catch (syncErr) {
+      console.error('Payroll overhead sync failed while editing run', runId, syncErr);
+    }
+
+    res.json({ success: true, overheadSynced });
+  } catch (err) { res.status(500).json({ error: 'Failed to update payroll run' }); }
+});
+
+// Superadmin-only: delete a run outright, cascading to its payslips/DTR subcollections and
+// reversing any overhead_expenses rows (and linked Investment Tracker entries) it had posted —
+// so a deleted run doesn't leave phantom OPEX behind in the company P&L.
+app.delete('/api/payroll/runs/:id', async (req, res) => {
+  const user = await requireSuperadminPayrollAccess(req, res); if (!user) return;
+  try {
+    const runId = req.params.id;
+    const ref = db.collection('payroll_runs').doc(runId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
+
+    try {
+      await reversePayrollOverheadExpenses(runId);
+    } catch (syncErr) {
+      console.error('Overhead reversal failed for deleted run', runId, syncErr);
+    }
+
+    const [payslipsSnap, dtrSnap] = await Promise.all([
+      ref.collection('payslips').get(),
+      ref.collection('dtrEntries').get(),
+    ]);
+    const batch = db.batch();
+    payslipsSnap.forEach((d) => batch.delete(d.ref));
+    dtrSnap.forEach((d) => batch.delete(d.ref));
+    batch.delete(ref);
+    await batch.commit();
+
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete payroll run' }); }
 });
 
 app.post('/api/payroll/runs/:id/pay', async (req, res) => {
@@ -1990,14 +2946,7 @@ app.get('/api/payroll/runs/:runId/payslips', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   try {
     const snap = await db.collection('payroll_runs').doc(req.params.runId).collection('payslips').get();
-    let payslips = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (!isSuperadmin(user)) {
-      payslips = payslips.map(p => ({
-        ...p,
-        employeeSnapshot: p.employeeSnapshot ? stripRates(p.employeeSnapshot) : p.employeeSnapshot,
-      }));
-    }
-    res.json(payslips);
+    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
   } catch (err) { res.status(500).json({ error: 'Failed to fetch payslips' }); }
 });
 
@@ -2008,25 +2957,27 @@ app.post('/api/payroll/runs/:runId/payslips', async (req, res) => {
   try {
     const col = db.collection('payroll_runs').doc(req.params.runId).collection('payslips');
     const batch = db.batch();
-    for (const slip of payslips) {
-      // Use the employee's linked userId as doc ID so my-payslips can look it up.
-      // Fall back to employeeId for employees without a linked user account.
-      let docId = slip.employeeId;
-      if (slip.employeeSnapshot?.userId) {
-        docId = slip.employeeSnapshot.userId;
-      } else if (slip.employeeId) {
-        // Check if this employee has a userId in Firestore
-        const empDoc = await db.collection('payroll_employees').doc(slip.employeeId).get();
-        if (empDoc.exists && empDoc.data().userId) {
-          docId = empDoc.data().userId;
-        }
-      }
-      const ref = docId ? col.doc(docId) : col.doc();
+    payslips.forEach(slip => {
+      const ref = slip.employeeId ? col.doc(slip.employeeId) : col.doc();
       batch.set(ref, slip, { merge: true });
-    }
+    });
     await batch.commit();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to save payslips' }); }
+});
+
+// OFFICE-only, rate-stripped payslip breakdown for a run — the per-employee detail behind the
+// two lump-sum "Overhead (Payroll)" rows the Tax Filer Ledger already shows. FIELD payslips are
+// excluded (their cost isn't synced into overhead_expenses, so they're irrelevant to those rows).
+app.get('/api/payroll/runs/:runId/office-breakdown', async (req, res) => {
+  const user = await requireTaxLedgerPayrollAccess(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('payroll_runs').doc(req.params.runId).collection('payslips').get();
+    const office = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(p => p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE');
+    res.json(isSuperadmin(user) ? office : office.map(p => ({ ...p, employeeSnapshot: stripRates(p.employeeSnapshot) })));
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch payroll breakdown' }); }
 });
 
 // ── Employee Payslip (self-service) ────────────────────────────────────────
@@ -4323,7 +5274,9 @@ app.get('/api/overhead-expenses', async (req, res) => {
   try {
     const { year, category } = req.query;
     let query = db.collection('overhead_expenses');
-    if (!isAdmin) query = query.where('createdBy', '==', user.id);
+    // tax_filer needs full visibility for BIR substantiation (Tax Filer Ledger) — it's a
+    // read-only role; write access stays admin/owner-gated separately in the PATCH handler below.
+    if (!isAdmin && user.role !== 'tax_filer') query = query.where('createdBy', '==', user.id);
     if (category) query = query.where('category', '==', String(category));
     const snap = await query.get();
     let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -4361,6 +5314,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
             sourceType: exp.sourceType || 'manual',
           };
           if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
+          if (exp.remarks) doc.remarks = String(exp.remarks);
           if (exp.supplier) doc.supplier = String(exp.supplier);
           if (exp.invoiceNo) doc.invoiceNo = String(exp.invoiceNo);
           if (exp.invoiceType) doc.invoiceType = String(exp.invoiceType);
@@ -4368,15 +5322,19 @@ app.post('/api/overhead-expenses', async (req, res) => {
           if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
           if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
           if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
+          const fundingSource = normalizeFundingSource(exp.fundingSource);
+          if (fundingSource) doc.fundingSource = fundingSource;
           batch.set(ref, doc);
           inserted.push({ id: ref.id, ...doc });
         }
         await batch.commit();
       }
+      const outOfPocketInserted = inserted.filter(exp => exp.fundingSource && exp.fundingSource.type === 'investor_outofpocket');
+      await Promise.all(outOfPocketInserted.map(exp => syncExpenseFundingInvestment(exp.id, 'overhead_expenses', exp)));
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
-    const { description, amount, date, category, sourceType, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = body;
+    const { description, remarks, amount, date, category, sourceType, receiptRef,
+            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
       description: description || '',
@@ -4388,6 +5346,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
       sourceType: sourceType || 'manual',
     };
     if (receiptRef) doc.receiptRef = receiptRef;
+    if (remarks) doc.remarks = String(remarks);
     if (supplier) doc.supplier = String(supplier);
     if (invoiceNo) doc.invoiceNo = String(invoiceNo);
     if (invoiceType) doc.invoiceType = String(invoiceType);
@@ -4395,7 +5354,10 @@ app.post('/api/overhead-expenses', async (req, res) => {
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     if (typeof deductible === 'boolean') doc.deductible = deductible;
     if (deductibleReason) doc.deductibleReason = String(deductibleReason);
+    const normalizedFunding = normalizeFundingSource(fundingSource);
+    if (normalizedFunding) doc.fundingSource = normalizedFunding;
     const ref = await db.collection('overhead_expenses').add(doc);
+    if (doc.fundingSource) await syncExpenseFundingInvestment(ref.id, 'overhead_expenses', doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
   } catch (err) {
     console.error('Error creating overhead_expense:', err);
@@ -4415,8 +5377,9 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = req.body;
+    const { description, remarks, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
+    if (remarks !== undefined) allowed.remarks = String(remarks);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
     if (category !== undefined) allowed.category = String(category);
@@ -4429,9 +5392,14 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
     if (typeof deductible === 'boolean') allowed.deductible = deductible;
     else if (deductible === null) allowed.deductible = null;
     if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
+    if (fundingSource !== undefined) {
+      const nf = normalizeFundingSource(fundingSource);
+      allowed.fundingSource = (nf && nf.type === 'investor_outofpocket') ? nf : FieldValue.delete();
+    }
     allowed.updatedAt = new Date().toISOString();
     await ref.update(allowed);
     const updated = await ref.get();
+    await syncExpenseFundingInvestment(updated.id, 'overhead_expenses', updated.data());
     res.json({ success: true, expense: { id: updated.id, ...updated.data() } });
   } catch (err) {
     console.error('Error updating overhead_expense:', err);
@@ -4451,67 +5419,115 @@ app.delete('/api/overhead-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     await ref.delete();
+    await syncExpenseFundingInvestment(req.params.id, 'overhead_expenses', {});
     res.json({ success: true });
   } catch (err) {
     console.error('Error deleting overhead_expense:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Overhead <-> project expense transfer. Since the two collections stay separate
+// (unification is UI-layer only), "move this expense" is a copy-into-target +
+// delete-original, done in one Firestore batch so the cost can never exist in
+// both (or neither) collection. Sync-sourced rows are refused: their origin job
+// (PO/liquidation/payroll re-sync) would recreate the original and double-count.
+// ---------------------------------------------------------------------------
+const SYNC_SOURCE_TYPES_NO_CONVERT = new Set(['po_sync', 'liquidation_sync', 'payroll_sync']);
+
+function convertibleExpenseOrError(docSnap, user, isAdmin) {
+  if (!docSnap.exists) return { error: { status: 404, message: 'Not found' } };
+  const data = docSnap.data();
+  if (!isAdmin && data.createdBy !== user.id) return { error: { status: 403, message: 'Forbidden' } };
+  if (SYNC_SOURCE_TYPES_NO_CONVERT.has(data.sourceType) || docSnap.id.startsWith('payroll_sync_')) {
+    return { error: { status: 400, message: 'System-synced expenses cannot be moved — the source sync would recreate them.' } };
+  }
+  return { data };
+}
+
+// Fields shared by both collections that survive a move unchanged.
+function portableExpenseFields(data) {
+  const out = {
+    description: data.description || '',
+    amount: Number(data.amount) || 0,
+    date: data.date,
+    category: data.category || 'Others',
+    createdAt: data.createdAt,
+    createdBy: data.createdBy,
+    sourceType: data.sourceType || 'manual',
+  };
+  for (const k of ['receiptRef', 'supplier', 'invoiceNo', 'invoiceType', 'vat', 'tin', 'deductible', 'deductibleReason', 'fundingSource']) {
+    if (data[k] !== undefined) out[k] = data[k];
+  }
+  return out;
+}
+
+app.post('/api/overhead-expenses/:id/convert-to-project', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { projectId, projectName, category } = req.body;
+    if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
+    const oldRef = db.collection('overhead_expenses').doc(req.params.id);
+    const snap = await oldRef.get();
+    const { data, error } = convertibleExpenseOrError(snap, user, isAdmin);
+    if (error) return res.status(error.status).json({ success: false, error: error.message });
+    const newDoc = {
+      ...portableExpenseFields(data),
+      projectId: String(projectId),
+      projectName: projectName || '',
+      updatedAt: new Date().toISOString(),
+    };
+    if (category) newDoc.category = String(category);
+    const newRef = db.collection('project_expenses').doc();
+    const batch = db.batch();
+    batch.set(newRef, newDoc);
+    batch.delete(oldRef);
+    await batch.commit();
+    // The old id no longer exists — clear any investments row linked to it, then
+    // re-link under the new id/collection.
+    await syncExpenseFundingInvestment(req.params.id, 'overhead_expenses', {});
+    await syncExpenseFundingInvestment(newRef.id, 'project_expenses', newDoc);
+    res.json({ success: true, expense: { ...newDoc, id: newRef.id } });
+  } catch (err) {
+    console.error('Error converting overhead_expense to project:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/project-expenses/:id/convert-to-overhead', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { category } = req.body || {};
+    const oldRef = db.collection('project_expenses').doc(req.params.id);
+    const snap = await oldRef.get();
+    const { data, error } = convertibleExpenseOrError(snap, user, isAdmin);
+    if (error) return res.status(error.status).json({ success: false, error: error.message });
+    // projectId/projectName and PO/liquidation/CA linkage fields are meaningless on
+    // an overhead row — portableExpenseFields already excludes them.
+    const newDoc = {
+      ...portableExpenseFields(data),
+      updatedAt: new Date().toISOString(),
+    };
+    if (category) newDoc.category = String(category);
+    const newRef = db.collection('overhead_expenses').doc();
+    const batch = db.batch();
+    batch.set(newRef, newDoc);
+    batch.delete(oldRef);
+    await batch.commit();
+    await syncExpenseFundingInvestment(req.params.id, 'project_expenses', {});
+    await syncExpenseFundingInvestment(newRef.id, 'overhead_expenses', newDoc);
+    res.json({ success: true, expense: { ...newDoc, id: newRef.id } });
+  } catch (err) {
+    console.error('Error converting project_expense to overhead:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
 // ========== END OVERHEAD EXPENSES ==========
-
-// ========== PRICELISTS ==========
-
-app.get('/api/pricelists/filters', async (req, res) => {
-  try {
-    const snap = await db.collection('pricelist_items').get();
-    const items = snap.docs.map((d) => d.data());
-    const suppliers = [...new Set(items.map((i) => i.supplier).filter(Boolean))].sort();
-    const brands = [...new Set(items.map((i) => i.brand).filter(Boolean))].sort();
-    const categories = [...new Set(items.map((i) => i.category).filter(Boolean))].sort();
-    const poles = [...new Set(items.map((i) => i.poles).filter((p) => p != null))].sort((a, b) => a - b);
-    res.json({ success: true, suppliers, brands, categories, poles });
-  } catch (err) {
-    console.error('[pricelists] get filters failed:', err);
-    res.status(500).json({ error: 'Failed to get pricelist filters' });
-  }
-});
-
-app.get('/api/pricelists', async (req, res) => {
-  try {
-    const snap = await db.collection('pricelist_items').orderBy('category').orderBy('catalogNo').get();
-    let items = snap.docs.map((d) => {
-      const { id: _stored, ...data } = d.data();
-      return { ...data, id: d.id };
-    });
-
-    // In-memory filtering
-    const { supplier, brand, category, poles, minPrice, maxPrice, search } = req.query;
-    if (supplier) items = items.filter((i) => i.supplier === supplier);
-    if (brand) items = items.filter((i) => i.brand === brand);
-    if (category) {
-      const cats = Array.isArray(category) ? category : [category];
-      items = items.filter((i) => cats.includes(i.category));
-    }
-    if (poles) items = items.filter((i) => i.poles === Number(poles));
-    if (minPrice) items = items.filter((i) => i.sellingPrice >= Number(minPrice));
-    if (maxPrice) items = items.filter((i) => i.sellingPrice <= Number(maxPrice));
-    if (search) {
-      const q = String(search).toLowerCase();
-      items = items.filter((i) =>
-        (i.catalogNo || '').toLowerCase().includes(q) ||
-        (i.description || '').toLowerCase().includes(q) ||
-        (i.abbRefNo || '').toLowerCase().includes(q) ||
-        (i.sepEquivalent || '').toLowerCase().includes(q) ||
-        (i.categoryLabel || '').toLowerCase().includes(q)
-      );
-    }
-
-    res.json({ success: true, items });
-  } catch (err) {
-    console.error('[pricelists] get items failed:', err);
-    res.status(500).json({ error: 'Failed to get pricelist items' });
-  }
-});
 
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {

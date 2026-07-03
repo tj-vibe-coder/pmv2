@@ -19,7 +19,6 @@ import {
   Payments as PaymentsIcon,
   Paid as PaidIcon,
   Build as BuildIcon,
-  RequestQuote as OverheadIcon,
   Summarize as PnLIcon,
   ReceiptLong as TaxLedgerIcon,
 } from '@mui/icons-material';
@@ -198,7 +197,8 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
         </List>
       </Collapse>
 
-      {/* Investment Tracker */}
+      {/* Investment Tracker — hidden from tax_filer (capital ledger, not a BIR substantiation source) */}
+      {user?.role !== 'tax_filer' && (
       <ListItem disablePadding sx={{ mb: 0.5 }}>
         <Tooltip title={isExpanded ? '' : 'Investment Tracker'} placement="right" arrow>
           <ListItemButton
@@ -220,29 +220,7 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
           </ListItemButton>
         </Tooltip>
       </ListItem>
-
-      {/* Overhead Expenses */}
-      <ListItem disablePadding sx={{ mb: 0.5 }}>
-        <Tooltip title={isExpanded ? '' : 'Overhead Expenses'} placement="right" arrow>
-          <ListItemButton
-            selected={location.pathname === '/finance/overhead-expenses'}
-            onClick={() => navigate('/finance/overhead-expenses')}
-            sx={navBtnSx(location.pathname === '/finance/overhead-expenses')}
-          >
-            <ListItemIcon sx={iconSx()}>
-              <OverheadIcon />
-            </ListItemIcon>
-            {isExpanded && (
-              <ListItemText
-                primary="Overhead Expenses"
-                secondary="Non-project company expenses"
-                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                sx={{ color: 'white' }}
-              />
-            )}
-          </ListItemButton>
-        </Tooltip>
-      </ListItem>
+      )}
 
       {/* Profit & Loss — superadmin only */}
       {user?.role === 'superadmin' && (

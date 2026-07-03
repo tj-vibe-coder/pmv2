@@ -111,11 +111,32 @@ export const INVESTMENT_CATEGORIES = [
   'Project Expense',
   'Startup Expense',
   'Overhead',
+  'Cash Advance',
   'Liquidation',
   'Flight',
 ] as const;
 
 export type InvestmentCategoryType = typeof INVESTMENT_CATEGORIES[number];
+
+export const INVESTORS = [
+  'TJ Caballero',
+  'RJ Rivera',
+  'Renzel Punongbayan',
+  'Nylle Harold Managa',
+] as const;
+
+export type InvestorType = typeof INVESTORS[number];
+
+// Marks an expense as paid directly by an investor out of pocket (rather than
+// from the corporate bank account) so it can be auto-linked to a matching
+// `investments` row server-side instead of being re-entered by hand.
+export interface FundingSource {
+  type: 'corporate_bank' | 'investor_outofpocket';
+  /** Optional: draw against an EXISTING investments row (e.g. a lump-sum capital
+   * contribution) instead of auto-creating a new one-off row for this expense. */
+  linkedInvestmentId?: string;
+  investor?: string;
+}
 
 const CATEGORY_ALIAS_MAP: Record<string, string> = {
   'Accomodation': 'Accommodation',

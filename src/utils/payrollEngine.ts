@@ -23,14 +23,15 @@ export function resolveRateType(emp: Pick<Employee, 'rateType' | 'employeeType'>
 /**
  * Compute basic pay.
  * DAILY basis: dailyRate × workingDays
- * MONTHLY basis: monthlyRate ÷ 2 (semi-monthly cut-off)
+ * MONTHLY basis: monthlyRate divided per the employee's own payFrequency (full for MONTHLY, ÷2 for
+ * SEMI_MONTHLY, ÷4.33 for WEEKLY) — same divisor government contributions already use via
+ * toPerPeriod(), so a run's basic pay and its statutory deductions stay on the same cadence.
  */
 export function computeBasicPay(employee: Employee, workingDays: number): number {
   if (resolveRateType(employee) === 'DAILY') {
     return (employee.dailyRate ?? 0) * workingDays;
   }
-  // MONTHLY — semi-monthly split
-  return (employee.monthlyRate ?? 0) / 2;
+  return toPerPeriod(employee.monthlyRate ?? 0, employee.payFrequency);
 }
 
 // ─── Overtime ─────────────────────────────────────────────────────────────────
@@ -200,9 +201,15 @@ export function computePayslip(
     ? dailyRate * 26 // standard 26 working days/month
     : emp.monthlyRate ?? 0;
 
-  const sss = computeSSS(monthlyBasic, rates);
-  const ph = computePhilhealth(monthlyBasic, rates);
-  const pagibig = computePagibig(monthlyBasic, rates);
+  // Per-agency remittance toggles (undefined defaults to enabled — see Employee type).
+  const sssOn = emp.sssEnabled !== false;
+  const phOn = emp.philhealthEnabled !== false;
+  const piOn = emp.pagibigEnabled !== false;
+  const taxOn = emp.withholdingTaxEnabled !== false;
+
+  const sss = sssOn ? computeSSS(monthlyBasic, rates) : { employee: 0, employer: 0 };
+  const ph = phOn ? computePhilhealth(monthlyBasic, rates) : { employee: 0, employer: 0 };
+  const pagibig = piOn ? computePagibig(monthlyBasic, rates) : { employee: 0, employer: 0 };
 
   const freq = emp.payFrequency;
   // Employee share zeroed when deductions are off; employer share always computed.
@@ -231,7 +238,7 @@ export function computePayslip(
     grossEarnings - empSSS - empPH - empPI - mealAllowance
   );
   const annualTaxable = annualize(taxablePerPeriod, freq);
-  const withholdingTax = applyDeductions ? round2(computePerPeriodTax(annualTaxable, freq)) : 0;
+  const withholdingTax = (applyDeductions && taxOn) ? round2(computePerPeriodTax(annualTaxable, freq)) : 0;
 
   const totalDeductions = round2(
     empSSS + empPH + empPI + withholdingTax + tardinessDeduction
@@ -274,6 +281,7 @@ export function computePayslip(
     totalDeductions,
     netPay,
     computedAt: new Date().toISOString(),
+    dtrInput: dtr,
   };
 }
 

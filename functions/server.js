@@ -958,6 +958,97 @@ app.post('/api/project-expenses/migrate-from-localstorage', async (req, res) => 
   }
 });
 
+// ---------------------------------------------------------------------------
+// Funding-source -> investments sync (best-effort, deterministic-id upsert).
+// When an expense is paid directly out of an investor's pocket instead of the
+// corporate bank account, mirror it into a LINKED investments row so it does
+// not have to be re-keyed by hand and cannot be double-counted. Same idiom as
+// the payroll_sync_* overhead sync: a deterministic doc id keyed on the source
+// expense, upsert on out-of-pocket, delete otherwise. Never throws to caller.
+// ---------------------------------------------------------------------------
+function normalizeFundingSource(fs) {
+  if (!fs || typeof fs !== 'object') return null;
+  const type = fs.type === 'investor_outofpocket' ? 'investor_outofpocket' : 'corporate_bank';
+  const out = { type };
+  if (type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim()) {
+    out.investor = fs.investor.trim();
+    if (typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()) {
+      out.linkedInvestmentId = fs.linkedInvestmentId.trim();
+    }
+  }
+  return out;
+}
+
+async function syncExpenseFundingInvestment(id, collection, doc) {
+  const invRef = db.collection('investments').doc(`expense_sync_${id}`);
+  try {
+    const fs = doc && doc.fundingSource;
+    const isOutOfPocket = fs && fs.type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim();
+    const linkedId = isOutOfPocket && typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()
+      ? fs.linkedInvestmentId.trim() : null;
+
+    // Clear the back-reference off any investment row this expense used to point at, if it no
+    // longer does (funding source edited away/removed/re-linked elsewhere). Both fields are
+    // plain equality filters, so this is served by automatic single-field indexes (no composite
+    // index needed) — same idiom as the project_expenses equality-only queries elsewhere.
+    const staleLinked = await db.collection('investments')
+      .where('linkedExpenseId', '==', id)
+      .where('linkedExpenseCollection', '==', collection)
+      .get();
+    await Promise.all(staleLinked.docs
+      .filter(d => d.id !== linkedId)
+      .map(d => d.ref.update({
+        linkedExpenseId: FieldValue.delete(),
+        linkedExpenseCollection: FieldValue.delete(),
+        linkedExpenseProjectId: FieldValue.delete(),
+      })));
+
+    if (linkedId) {
+      // Linked to an EXISTING investments row (e.g. a lump-sum capital contribution) instead
+      // of a one-off auto-created one. Those rows are usually pencil-booked before the real
+      // receipt exists — no firm date/description — so once an actual expense is linked back,
+      // treat the expense as authoritative for date/description and store the back-reference
+      // so the ledger can link to the source expense. Still clean up any stale auto-created
+      // row from a prior state (e.g. the expense used to be a standalone out-of-pocket entry).
+      await invRef.delete();
+      const linkedRef = db.collection('investments').doc(linkedId);
+      const linkedSnap = await linkedRef.get();
+      if (linkedSnap.exists) {
+        await linkedRef.update({
+          date: doc.date,
+          description: doc.description || linkedSnap.data().description || '',
+          linkedExpenseId: id,
+          linkedExpenseCollection: collection,
+          linkedExpenseProjectId: collection === 'project_expenses' ? (doc.projectId || null) : null,
+          updated_at: new Date().toISOString(),
+        });
+      }
+    } else if (isOutOfPocket) {
+      await invRef.set({
+        date: doc.date,
+        investor: fs.investor.trim(),
+        amount: Number(doc.amount) || 0,
+        category: collection === 'project_expenses' ? 'Project Expense' : 'Overhead',
+        description: `Out-of-pocket: ${doc.description || doc.category || ''}`,
+        sourceType: 'expense_sync',
+        sourceExpenseId: id,
+        sourceCollection: collection,
+        sourceExpenseProjectId: collection === 'project_expenses' ? (doc.projectId || null) : null,
+        // Anchor to the expense's own createdAt (stable across edits, no extra read)
+        // rather than re-stamping "now" on every upsert.
+        created_at: doc.createdAt || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    } else {
+      // Not out-of-pocket (or cleared) — remove any previously-linked row.
+      // Deleting a non-existent doc is a safe no-op in Firestore.
+      await invRef.delete();
+    }
+  } catch (syncErr) {
+    console.error('Expense funding investment sync failed for', collection, id, syncErr);
+  }
+}
+
 app.post('/api/project-expenses', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -1041,17 +1132,25 @@ app.post('/api/project-expenses', async (req, res) => {
           if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
           if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
           if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
+          const fundingSource = normalizeFundingSource(exp.fundingSource);
+          if (fundingSource) doc.fundingSource = fundingSource;
           batch.set(ref, doc);
           inserted.push({ id: ref.id, ...doc });
         }
         await batch.commit();
       }
+      // Best-effort: keep linked out-of-pocket investment rows in sync. Only the
+      // rows that actually carry an investor_outofpocket funding source need a
+      // write — skip the rest so a large legacy-import batch doesn't issue a
+      // no-op delete() per plain row.
+      const outOfPocketInserted = inserted.filter(exp => exp.fundingSource && exp.fundingSource.type === 'investor_outofpocket');
+      await Promise.all(outOfPocketInserted.map(exp => syncExpenseFundingInvestment(exp.id, 'project_expenses', exp)));
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     // Single insert
     const { projectId, projectName, description, amount, date, category, sourceType,
             sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = body;
+            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = body;
     if (!projectId || !amount) {
       return res.status(400).json({ success: false, error: 'projectId and amount are required' });
     }
@@ -1079,7 +1178,10 @@ app.post('/api/project-expenses', async (req, res) => {
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     if (typeof deductible === 'boolean') doc.deductible = deductible;
     if (deductibleReason) doc.deductibleReason = String(deductibleReason);
+    const normalizedFunding = normalizeFundingSource(fundingSource);
+    if (normalizedFunding) doc.fundingSource = normalizedFunding;
     const ref = await db.collection('project_expenses').add(doc);
+    if (doc.fundingSource) await syncExpenseFundingInvestment(ref.id, 'project_expenses', doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
   } catch (err) {
     console.error('Error creating project_expense:', err);
@@ -1099,6 +1201,7 @@ app.delete('/api/project-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     await ref.delete();
+    await syncExpenseFundingInvestment(req.params.id, 'project_expenses', {});
     res.json({ success: true });
   } catch (err) {
     console.error('Error deleting project_expense:', err);
@@ -1118,11 +1221,12 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = req.body;
+    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
     if (category !== undefined) allowed.category = String(category);
+    if (receiptRef !== undefined) allowed.receiptRef = receiptRef;
     if (supplier !== undefined) allowed.supplier = String(supplier);
     if (invoiceNo !== undefined) allowed.invoiceNo = String(invoiceNo);
     if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
@@ -1131,13 +1235,103 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
     if (typeof deductible === 'boolean') allowed.deductible = deductible;
     else if (deductible === null) allowed.deductible = null;
     if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
+    if (fundingSource !== undefined) {
+      const nf = normalizeFundingSource(fundingSource);
+      allowed.fundingSource = (nf && nf.type === 'investor_outofpocket') ? nf : FieldValue.delete();
+    }
     if (Object.keys(allowed).length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update' });
     allowed.updatedAt = new Date().toISOString();
     await ref.update(allowed);
     const updated = await ref.get();
+    // Sync unconditionally: catches an amount/date change on an already out-of-pocket expense too.
+    await syncExpenseFundingInvestment(updated.id, 'project_expenses', updated.data());
     res.json({ success: true, expense: { id: updated.id, ...updated.data() } });
   } catch (err) {
     console.error('Error updating project_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Superadmin-only: reclassify a manually-entered / receipt-scanned project expense as an
+// employee out-of-pocket claim instead of a company-paid one. Creates a submitted liquidation
+// for the chosen employee (optionally against one of their approved CAs) and removes the
+// original project_expense in one batch, so the cost is never counted twice.
+app.post('/api/project-expenses/:id/promote-to-liquidation', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { userId, caId } = req.body || {};
+  if (!userId) return res.status(400).json({ success: false, error: 'userId is required' });
+  try {
+    const expenseRef = db.collection('project_expenses').doc(req.params.id);
+    const expenseSnap = await expenseRef.get();
+    if (!expenseSnap.exists) return res.status(404).json({ success: false, error: 'Expense not found' });
+    const expense = expenseSnap.data();
+    if (!['manual', 'receipt_scan'].includes(expense.sourceType)) {
+      return res.status(400).json({ success: false, error: 'Only manually-entered or scanned expenses can be promoted to a liquidation' });
+    }
+    const targetUserSnap = await db.collection('users').doc(String(userId)).get();
+    if (!targetUserSnap.exists) return res.status(404).json({ success: false, error: 'Employee not found' });
+    const targetUser = targetUserSnap.data();
+
+    let caRef = null;
+    if (caId) {
+      caRef = db.collection('cash_advances').doc(String(caId));
+      const caSnap = await caRef.get();
+      if (!caSnap.exists || caSnap.data().user_id !== String(userId) || caSnap.data().status !== 'approved') {
+        return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance for this employee' });
+      }
+      const bal = parseFloat(caSnap.data().balance_remaining) || 0;
+      if ((Number(expense.amount) || 0) > bal) {
+        return res.status(400).json({ success: false, error: `Expense (₱${Number(expense.amount).toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+      }
+    }
+
+    // Same LQ-#### numbering scheme as /api/liquidations/next-form-no.
+    const formNoSnap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
+    const formNos = formNoSnap.docs.map(d => d.data().form_no).filter(fn => fn && typeof fn === 'string' && fn.startsWith('LQ-'));
+    let nextNum = 1;
+    if (formNos.length > 0) {
+      const nums = formNos.map(fn => { const m = fn.match(/LQ-0*(\d+)/); return m ? parseInt(m[1], 10) : 0; }).filter(n => n > 0);
+      if (nums.length > 0) nextNum = Math.max(...nums) + 1;
+    }
+    const formNo = `LQ-${String(nextNum).padStart(4, '0')}`;
+
+    const now = Math.floor(Date.now() / 1000);
+    const nowIso = new Date().toISOString();
+    const liquidationRef = db.collection('liquidations').doc();
+    const rows = [{ category: expense.category || 'Others', description: expense.description || '', amount: Number(expense.amount) || 0 }];
+
+    const batch = db.batch();
+    batch.set(liquidationRef, {
+      user_id: String(userId),
+      form_no: formNo,
+      date_of_submission: nowIso.slice(0, 10),
+      employee_name: targetUser.full_name || targetUser.username || null,
+      employee_number: null,
+      rows_json: JSON.stringify(rows),
+      receipts_json: '[]',
+      total_amount: Number(expense.amount) || 0,
+      ca_id: caId || null,
+      status: 'submitted',
+      reimbursement_status: caId ? null : 'pending',
+      reimbursed_at: null,
+      reimbursed_by: null,
+      promotedFromExpenseId: req.params.id,
+      created_at: now,
+      updated_at: now,
+    });
+    if (caRef) {
+      batch.update(caRef, { balance_remaining: FieldValue.increment(-(Number(expense.amount) || 0)), updated_at: now });
+    }
+    batch.delete(expenseRef);
+    // Clean up any linked out-of-pocket investment row — the expense is no longer company-paid.
+    batch.delete(db.collection('investments').doc(`expense_sync_${req.params.id}`));
+    await batch.commit();
+
+    res.json({ success: true, liquidationId: liquidationRef.id, formNo });
+  } catch (err) {
+    console.error('Error promoting project_expense to liquidation:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
@@ -3881,6 +4075,15 @@ function normalizeReceipt(raw) {
   const customerAddress = (typeof raw.customerAddress === 'string' && raw.customerAddress.trim().length > 0) ? raw.customerAddress.trim() : null;
   const customerValidation = validateCustomerInfo(customerName, customerTin, customerAddress);
 
+  const hasCustomerIssues = customerValidation.issues.length > 0;
+  const finalDeductible = hasCustomerIssues ? false : deductible;
+  const issuesPrefix = hasCustomerIssues
+    ? customerValidation.issues.join('; ')
+    : null;
+  const finalDeductibleReason = hasCustomerIssues
+    ? (deductibleReason ? `${issuesPrefix}. ${deductibleReason}` : issuesPrefix)
+    : deductibleReason;
+
   return {
     vendor: typeof raw.vendor === 'string' ? raw.vendor : null,
     description: (typeof raw.description === 'string' && raw.description.trim().length > 0) ? raw.description.trim() : null,
@@ -3894,8 +4097,8 @@ function normalizeReceipt(raw) {
     total: safeNum(raw.total),
     paymentMethod: typeof raw.paymentMethod === 'string' ? raw.paymentMethod : null,
     suggestedCategory,
-    deductible,
-    deductibleReason,
+    deductible: finalDeductible,
+    deductibleReason: finalDeductibleReason,
     customerName,
     customerTin,
     customerAddress,
@@ -4203,15 +4406,19 @@ app.post('/api/overhead-expenses', async (req, res) => {
           if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
           if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
           if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
+          const fundingSource = normalizeFundingSource(exp.fundingSource);
+          if (fundingSource) doc.fundingSource = fundingSource;
           batch.set(ref, doc);
           inserted.push({ id: ref.id, ...doc });
         }
         await batch.commit();
       }
+      const outOfPocketInserted = inserted.filter(exp => exp.fundingSource && exp.fundingSource.type === 'investor_outofpocket');
+      await Promise.all(outOfPocketInserted.map(exp => syncExpenseFundingInvestment(exp.id, 'overhead_expenses', exp)));
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     const { description, amount, date, category, sourceType, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = body;
+            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
       description: description || '',
@@ -4230,7 +4437,10 @@ app.post('/api/overhead-expenses', async (req, res) => {
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     if (typeof deductible === 'boolean') doc.deductible = deductible;
     if (deductibleReason) doc.deductibleReason = String(deductibleReason);
+    const normalizedFunding = normalizeFundingSource(fundingSource);
+    if (normalizedFunding) doc.fundingSource = normalizedFunding;
     const ref = await db.collection('overhead_expenses').add(doc);
+    if (doc.fundingSource) await syncExpenseFundingInvestment(ref.id, 'overhead_expenses', doc);
     res.status(201).json({ success: true, expense: { id: ref.id, ...doc } });
   } catch (err) {
     console.error('Error creating overhead_expense:', err);
@@ -4250,7 +4460,7 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason } = req.body;
+    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
@@ -4264,9 +4474,14 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
     if (typeof deductible === 'boolean') allowed.deductible = deductible;
     else if (deductible === null) allowed.deductible = null;
     if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
+    if (fundingSource !== undefined) {
+      const nf = normalizeFundingSource(fundingSource);
+      allowed.fundingSource = (nf && nf.type === 'investor_outofpocket') ? nf : FieldValue.delete();
+    }
     allowed.updatedAt = new Date().toISOString();
     await ref.update(allowed);
     const updated = await ref.get();
+    await syncExpenseFundingInvestment(updated.id, 'overhead_expenses', updated.data());
     res.json({ success: true, expense: { id: updated.id, ...updated.data() } });
   } catch (err) {
     console.error('Error updating overhead_expense:', err);
@@ -4286,9 +4501,111 @@ app.delete('/api/overhead-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     await ref.delete();
+    await syncExpenseFundingInvestment(req.params.id, 'overhead_expenses', {});
     res.json({ success: true });
   } catch (err) {
     console.error('Error deleting overhead_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Overhead <-> project expense transfer. Since the two collections stay separate
+// (unification is UI-layer only), "move this expense" is a copy-into-target +
+// delete-original, done in one Firestore batch so the cost can never exist in
+// both (or neither) collection. Sync-sourced rows are refused: their origin job
+// (PO/liquidation/payroll re-sync) would recreate the original and double-count.
+// ---------------------------------------------------------------------------
+const SYNC_SOURCE_TYPES_NO_CONVERT = new Set(['po_sync', 'liquidation_sync', 'payroll_sync']);
+
+function convertibleExpenseOrError(docSnap, user, isAdmin) {
+  if (!docSnap.exists) return { error: { status: 404, message: 'Not found' } };
+  const data = docSnap.data();
+  if (!isAdmin && data.createdBy !== user.id) return { error: { status: 403, message: 'Forbidden' } };
+  if (SYNC_SOURCE_TYPES_NO_CONVERT.has(data.sourceType) || docSnap.id.startsWith('payroll_sync_')) {
+    return { error: { status: 400, message: 'System-synced expenses cannot be moved — the source sync would recreate them.' } };
+  }
+  return { data };
+}
+
+// Fields shared by both collections that survive a move unchanged.
+function portableExpenseFields(data) {
+  const out = {
+    description: data.description || '',
+    amount: Number(data.amount) || 0,
+    date: data.date,
+    category: data.category || 'Others',
+    createdAt: data.createdAt,
+    createdBy: data.createdBy,
+    sourceType: data.sourceType || 'manual',
+  };
+  for (const k of ['receiptRef', 'supplier', 'invoiceNo', 'invoiceType', 'vat', 'tin', 'deductible', 'deductibleReason', 'fundingSource']) {
+    if (data[k] !== undefined) out[k] = data[k];
+  }
+  return out;
+}
+
+app.post('/api/overhead-expenses/:id/convert-to-project', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { projectId, projectName, category } = req.body;
+    if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
+    const oldRef = db.collection('overhead_expenses').doc(req.params.id);
+    const snap = await oldRef.get();
+    const { data, error } = convertibleExpenseOrError(snap, user, isAdmin);
+    if (error) return res.status(error.status).json({ success: false, error: error.message });
+    const newDoc = {
+      ...portableExpenseFields(data),
+      projectId: String(projectId),
+      projectName: projectName || '',
+      updatedAt: new Date().toISOString(),
+    };
+    if (category) newDoc.category = String(category);
+    const newRef = db.collection('project_expenses').doc();
+    const batch = db.batch();
+    batch.set(newRef, newDoc);
+    batch.delete(oldRef);
+    await batch.commit();
+    // The old id no longer exists — clear any investments row linked to it, then
+    // re-link under the new id/collection.
+    await syncExpenseFundingInvestment(req.params.id, 'overhead_expenses', {});
+    await syncExpenseFundingInvestment(newRef.id, 'project_expenses', newDoc);
+    res.json({ success: true, expense: { ...newDoc, id: newRef.id } });
+  } catch (err) {
+    console.error('Error converting overhead_expense to project:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/project-expenses/:id/convert-to-overhead', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  try {
+    const { category } = req.body || {};
+    const oldRef = db.collection('project_expenses').doc(req.params.id);
+    const snap = await oldRef.get();
+    const { data, error } = convertibleExpenseOrError(snap, user, isAdmin);
+    if (error) return res.status(error.status).json({ success: false, error: error.message });
+    // projectId/projectName and PO/liquidation/CA linkage fields are meaningless on
+    // an overhead row — portableExpenseFields already excludes them.
+    const newDoc = {
+      ...portableExpenseFields(data),
+      updatedAt: new Date().toISOString(),
+    };
+    if (category) newDoc.category = String(category);
+    const newRef = db.collection('overhead_expenses').doc();
+    const batch = db.batch();
+    batch.set(newRef, newDoc);
+    batch.delete(oldRef);
+    await batch.commit();
+    await syncExpenseFundingInvestment(req.params.id, 'project_expenses', {});
+    await syncExpenseFundingInvestment(newRef.id, 'overhead_expenses', newDoc);
+    res.json({ success: true, expense: { ...newDoc, id: newRef.id } });
+  } catch (err) {
+    console.error('Error converting project_expense to overhead:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });

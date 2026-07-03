@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Typography,
@@ -26,12 +26,25 @@ import {
   LinearProgress,
   Alert,
   Snackbar,
+  IconButton,
+  CircularProgress,
 } from '@mui/material';
-import { FileDownload as FileDownloadIcon, ReceiptLong as ReceiptLongIcon } from '@mui/icons-material';
+import {
+  FileDownload as FileDownloadIcon,
+  ReceiptLong as ReceiptLongIcon,
+  OpenInNew as OpenInNewIcon,
+  Close as CloseIcon,
+  DragIndicator as DragIndicatorIcon,
+  ExpandMore as ExpandMoreIcon,
+  ExpandLess as ExpandLessIcon,
+} from '@mui/icons-material';
 import { API_BASE } from '../../config/api';
 import { accountFor } from '../../data/financeCategories';
 import { fetchOverheadExpenses, OverheadExpense } from '../../services/overheadExpenseService';
+import { getOfficePayrollBreakdown } from '../../utils/firebasePayroll';
+import { Payslip } from '../../types/Payroll';
 import { useAuth } from '../../contexts/AuthContext';
+import { fetchDriveItemBlob } from '../../services/onedriveFolderService';
 
 const NET_PACIFIC_COLORS = {
   primary:   '#2c5aa0',
@@ -105,9 +118,18 @@ interface LedgerRow {
   deductibleReason: string;
   countInTotal: boolean; // payroll runs are informational (already synced into overhead)
   isSyncedPayroll?: boolean; // overhead rows posted by the payroll-approval sync
+  syncRunId?: string; // payroll run id this synced overhead row was posted from (drill-down key)
   projectId?: string;
   receiptRef?: ReceiptRef;
   runStatus?: string;
+}
+
+// Deterministic sync doc ids are `payroll_sync_{runId}_salaries` / `payroll_sync_{runId}_govt`
+// (see syncPayrollOverheadExpenses in server.js) — recover the run id from the id itself rather
+// than adding a field, same idiom `isSyncedPayroll` below already uses.
+function payrollSyncRunId(id: string): string | undefined {
+  const m = /^payroll_sync_(.+)_(salaries|govt)$/.exec(id);
+  return m ? m[1] : undefined;
 }
 
 const SOURCE_LABEL: Record<LedgerSource, string> = {
@@ -145,7 +167,9 @@ function monthInPeriod(month: number, period: PeriodFilter): boolean {
 }
 
 // --- Lazy receipt thumbnail / link cell ---------------------------------
-const ReceiptCell: React.FC<{ row: LedgerRow }> = ({ row }) => {
+// Click opens the floating receipt viewer pane (same pattern as Expense Monitoring)
+// instead of a new tab, so the tax filer can review a receipt without losing the ledger.
+const ReceiptCell: React.FC<{ row: LedgerRow; onOpen: (row: LedgerRow) => void }> = ({ row, onOpen }) => {
   const [thumb, setThumb] = useState<string | null>(null);
   const oneDriveId = row.receiptRef?.oneDriveId;
   const webUrl = row.receiptRef?.webUrl;
@@ -177,24 +201,21 @@ const ReceiptCell: React.FC<{ row: LedgerRow }> = ({ row }) => {
     return <Chip size="small" label="No receipt" variant="outlined" sx={{ color: 'text.secondary' }} />;
   }
 
-  const openHref = webUrl || `${API}/onedrive/item/${encodeURIComponent(oneDriveId || '')}/content`;
-
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
       {thumb ? (
         <Tooltip title={row.receiptRef?.filename || 'Open receipt'}>
-          <a href={openHref} target="_blank" rel="noopener noreferrer">
-            <Box
-              component="img"
-              src={thumb}
-              alt="receipt"
-              sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, border: '1px solid', borderColor: 'divider', display: 'block' }}
-            />
-          </a>
+          <Box
+            component="img"
+            src={thumb}
+            alt="receipt"
+            onClick={() => onOpen(row)}
+            sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, border: '1px solid', borderColor: 'divider', cursor: 'pointer' }}
+          />
         </Tooltip>
       ) : (
-        <Link href={openHref} target="_blank" rel="noopener noreferrer" underline="hover" sx={{ fontSize: '0.8rem' }}>
-          View
+        <Link component="button" type="button" onClick={() => onOpen(row)} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, fontSize: '0.8rem' }}>
+          <OpenInNewIcon fontSize="inherit" /> View
         </Link>
       )}
     </Box>
@@ -220,6 +241,64 @@ const TaxFilerLedgerPage: React.FC = () => {
   const [toast, setToast] = useState<{ msg: string; sev: 'success' | 'error' } | null>(null);
   // tax_filer is read-only; everyone else (accounting/admin) can correct the flag inline.
   const canEdit = !isTaxFiler;
+
+  // Per-employee breakdown behind a synced "Overhead (Payroll)" row, expanded on click.
+  // Cached by run id so toggling the salaries/govt row pair for the same run doesn't re-fetch.
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+  const [breakdownByRun, setBreakdownByRun] = useState<Record<string, Payslip[]>>({});
+  const [breakdownLoadingRunId, setBreakdownLoadingRunId] = useState<string | null>(null);
+  const [breakdownErrorRunId, setBreakdownErrorRunId] = useState<string | null>(null);
+
+  const toggleBreakdown = async (runId: string) => {
+    if (expandedRunId === runId) { setExpandedRunId(null); return; }
+    setExpandedRunId(runId);
+    if (breakdownByRun[runId]) return;
+    setBreakdownLoadingRunId(runId);
+    setBreakdownErrorRunId(null);
+    try {
+      const slips = await getOfficePayrollBreakdown(runId);
+      setBreakdownByRun((prev) => ({ ...prev, [runId]: slips }));
+    } catch {
+      setBreakdownErrorRunId(runId);
+    } finally {
+      setBreakdownLoadingRunId(null);
+    }
+  };
+
+  // Floating draggable receipt viewer pane (ported from Expense Monitoring).
+  const [viewer, setViewer] = useState<{ row: LedgerRow; url: string | null } | null>(null);
+  const [viewerPos, setViewerPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const viewerDragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+
+  useEffect(() => () => { if (viewer?.url) URL.revokeObjectURL(viewer.url); }, [viewer]);
+
+  const openReceiptViewer = async (row: LedgerRow) => {
+    if (!row.receiptRef?.oneDriveId) return;
+    setViewerPos({ x: 0, y: 0 });
+    setViewer({ row, url: null });
+    try {
+      const blob = await fetchDriveItemBlob('server', 'server', row.receiptRef.oneDriveId);
+      setViewer((prev) => (prev && prev.row.id === row.id ? { ...prev, url: URL.createObjectURL(blob) } : prev));
+    } catch {
+      setToast({ msg: 'Could not load the receipt image. Use "Open in OneDrive" instead.', sev: 'error' });
+    }
+  };
+
+  const onViewerDragStart = (e: React.PointerEvent) => {
+    viewerDragRef.current = { startX: e.clientX, startY: e.clientY, baseX: viewerPos.x, baseY: viewerPos.y };
+    const onMove = (ev: PointerEvent) => {
+      const d = viewerDragRef.current;
+      if (!d) return;
+      setViewerPos({ x: d.baseX + ev.clientX - d.startX, y: d.baseY + ev.clientY - d.startY });
+    };
+    const onUp = () => {
+      viewerDragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -267,12 +346,18 @@ const TaxFilerLedgerPage: React.FC = () => {
           });
         });
 
+        const syncedPayrollRunIds = new Set<string>();
+
         overhead.forEach((e, i) => {
           const category = e.category || 'Others';
           // Office payroll posted by the payroll-approval sync lands in overhead_expenses
           // with deterministic doc ids prefixed `payroll_sync_`. Flag it so the tax filer
           // can tell synced labor apart from manually-entered overhead.
           const isSyncedPayroll = (e.id || '').startsWith('payroll_sync_');
+          if (isSyncedPayroll) {
+            const runId = payrollSyncRunId(e.id || '');
+            if (runId) syncedPayrollRunIds.add(runId);
+          }
           out.push({
             id: e.id || `oh-${i}`,
             source: 'overhead',
@@ -290,12 +375,15 @@ const TaxFilerLedgerPage: React.FC = () => {
             deductibleReason: e.deductibleReason || '',
             countInTotal: true,
             isSyncedPayroll,
+            syncRunId: isSyncedPayroll ? payrollSyncRunId(e.id || '') : undefined,
             receiptRef: e.receiptRef,
           });
         });
 
         payrollRuns
-          .filter((run) => yearOf(run.payDate || run.periodEnd) === year)
+          // Once a run has synced into overhead_expenses, its "Overhead (Payroll)" row
+          // is the reference — showing this row too would duplicate the same period.
+          .filter((run) => yearOf(run.payDate || run.periodEnd) === year && !syncedPayrollRunIds.has(run.id || ''))
           .forEach((run, i) => {
             out.push({
               id: run.id || `pay-${i}`,
@@ -551,14 +639,29 @@ const TaxFilerLedgerPage: React.FC = () => {
                     <TableRow><TableCell colSpan={13} align="center" sx={{ color: 'text.secondary', py: 4 }}>No records for {period === 'all' ? year : `${year} ${period.toUpperCase()}`}.</TableCell></TableRow>
                   ) : (
                     filtered.map((r) => (
-                      <TableRow key={`${r.source}-${r.id}`} hover>
+                      <React.Fragment key={`${r.source}-${r.id}`}>
+                      <TableRow hover>
                         <TableCell>
-                          <Chip
-                            size="small"
-                            label={r.isSyncedPayroll ? 'Overhead (Payroll)' : SOURCE_LABEL[r.source]}
-                            color={r.source === 'project' ? 'primary' : r.source === 'overhead' ? 'secondary' : 'default'}
-                            variant="outlined"
-                          />
+                          {r.isSyncedPayroll && r.syncRunId ? (
+                            <Tooltip title={expandedRunId === r.syncRunId ? 'Hide employee breakdown' : 'View employee breakdown'}>
+                              <Chip
+                                size="small"
+                                label="Overhead (Payroll)"
+                                color="secondary"
+                                variant="outlined"
+                                icon={expandedRunId === r.syncRunId ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                                onClick={() => toggleBreakdown(r.syncRunId as string)}
+                                sx={{ cursor: 'pointer' }}
+                              />
+                            </Tooltip>
+                          ) : (
+                            <Chip
+                              size="small"
+                              label={SOURCE_LABEL[r.source]}
+                              color={r.source === 'project' ? 'primary' : r.source === 'overhead' ? 'secondary' : 'default'}
+                              variant="outlined"
+                            />
+                          )}
                         </TableCell>
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>{r.date ? String(r.date).slice(0, 10) : '-'}</TableCell>
                         <TableCell sx={{ maxWidth: 240 }}>{r.description}{r.runStatus ? ` (${r.runStatus})` : ''}</TableCell>
@@ -607,8 +710,49 @@ const TaxFilerLedgerPage: React.FC = () => {
                             </Tooltip>
                           )}
                         </TableCell>
-                        <TableCell><ReceiptCell row={r} /></TableCell>
+                        <TableCell><ReceiptCell row={r} onOpen={openReceiptViewer} /></TableCell>
                       </TableRow>
+                      {r.isSyncedPayroll && r.syncRunId && expandedRunId === r.syncRunId && (
+                        <TableRow>
+                          <TableCell colSpan={13} sx={{ bgcolor: '#f8fafc', py: 2 }}>
+                            {breakdownLoadingRunId === r.syncRunId ? (
+                              <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}><CircularProgress size={20} /></Box>
+                            ) : breakdownErrorRunId === r.syncRunId ? (
+                              <Alert severity="error">Failed to load the employee breakdown for this run.</Alert>
+                            ) : (breakdownByRun[r.syncRunId] || []).length === 0 ? (
+                              <Typography variant="body2" color="text.secondary">No office-employee payslips found for this run.</Typography>
+                            ) : (
+                              <Table size="small">
+                                <TableHead>
+                                  <TableRow>
+                                    {['Employee', 'Designation', 'Gross Pay', 'SSS (EE)', 'PhilHealth (EE)', 'Pag-IBIG (EE)', 'Withholding Tax', 'SSS (ER)', 'PhilHealth (ER)', 'Pag-IBIG (ER)', 'Net Pay'].map((h) => (
+                                      <TableCell key={h} sx={{ fontWeight: 600, fontSize: '0.75rem' }}>{h}</TableCell>
+                                    ))}
+                                  </TableRow>
+                                </TableHead>
+                                <TableBody>
+                                  {(breakdownByRun[r.syncRunId] || []).map((p) => (
+                                    <TableRow key={p.employeeId}>
+                                      <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{p.employeeSnapshot?.name || '—'}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{p.employeeSnapshot?.designation || '—'}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.grossPay) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.empSSS) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.empPhilhealth) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.empPagibig) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.withholdingTax) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.erSSS) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.erPhilhealth) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem' }}>{formatPHP(Number(p.erPagibig) || 0)}</TableCell>
+                                      <TableCell sx={{ fontSize: '0.8rem', fontWeight: 600 }}>{formatPHP(Number(p.netPay) || 0)}</TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      </React.Fragment>
                     ))
                   )}
                 </TableBody>
@@ -616,9 +760,57 @@ const TaxFilerLedgerPage: React.FC = () => {
             </TableContainer>
           </Paper>
           <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 1.5 }}>
-            Payroll runs are listed for reference only and are not added to the totals: office payroll is already posted into Overhead (Salaries &amp; Wages / Government Contributions) by the payroll-approval sync, so counting it here would double it. Overhead rows tagged "Overhead (Payroll)" are that synced labor.
+            Payroll runs appear as a "Payroll" reference row only until they sync to overhead. Once a run posts into Overhead (Salaries &amp; Wages / Government Contributions) via the payroll-approval sync, its "Overhead (Payroll)" row supersedes the reference row (so the same period isn't listed twice) and is what counts toward the totals — click it to see the per-employee breakdown (office staff only; field-crew labor isn't synced here).
           </Typography>
         </>
+      )}
+      {/* Floating draggable receipt viewer pane (ported from Expense Monitoring) */}
+      {viewer && (
+        <Paper
+          elevation={8}
+          sx={{
+            position: 'fixed',
+            top: `calc(15% + ${viewerPos.y}px)`,
+            left: `calc(50% + ${viewerPos.x}px)`,
+            transform: 'translateX(-50%)',
+            zIndex: (theme) => theme.zIndex.modal + 1,
+            width: 380,
+            maxWidth: '92vw',
+            borderRadius: 2,
+            overflow: 'hidden',
+          }}
+        >
+          <Box
+            onPointerDown={onViewerDragStart}
+            sx={{
+              display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
+              bgcolor: NET_PACIFIC_COLORS.primary, color: 'white',
+              cursor: 'move', userSelect: 'none', touchAction: 'none',
+            }}
+          >
+            <DragIndicatorIcon fontSize="small" sx={{ opacity: 0.7 }} />
+            <Typography variant="subtitle2" sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {viewer.row.description || viewer.row.category} — {formatPHP(viewer.row.amount)}
+            </Typography>
+            <IconButton size="small" onClick={() => setViewer(null)} sx={{ color: 'white' }} title="Close">
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Box>
+          <Box sx={{ p: 1.5, maxHeight: '60vh', overflow: 'auto', textAlign: 'center', bgcolor: '#f8fafc' }}>
+            {viewer.url ? (
+              <Box component="img" src={viewer.url} alt="receipt" sx={{ maxWidth: '100%', borderRadius: 1 }} />
+            ) : (
+              <Box sx={{ py: 6 }}><CircularProgress size={28} /></Box>
+            )}
+          </Box>
+          {viewer.row.receiptRef?.webUrl && (
+            <Box sx={{ px: 1.5, py: 1, borderTop: '1px solid #e2e8f0', textAlign: 'right' }}>
+              <Link href={viewer.row.receiptRef.webUrl} target="_blank" rel="noopener" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                <OpenInNewIcon fontSize="inherit" /> Open in OneDrive
+              </Link>
+            </Box>
+          )}
+        </Paper>
       )}
       <Snackbar
         open={!!toast}

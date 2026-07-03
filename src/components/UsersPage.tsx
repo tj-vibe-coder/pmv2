@@ -17,7 +17,14 @@ import {
   MenuItem,
   IconButton,
   Stack,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  InputLabel,
+  FormControl,
 } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import SaveIcon from '@mui/icons-material/Save';
 import CloseIcon from '@mui/icons-material/Close';
@@ -79,6 +86,18 @@ export default function UsersPage() {
     } catch { /* ignore — payroll link is optional */ }
   }, []);
 
+  const [addOpen, setAddOpen] = useState(false);
+  const [addUsername, setAddUsername] = useState('');
+  const [addEmail, setAddEmail] = useState('');
+  const [addPassword, setAddPassword] = useState('');
+  const [addFullName, setAddFullName] = useState('');
+  const [addDesignation, setAddDesignation] = useState('');
+  const [addContactNumber, setAddContactNumber] = useState('');
+  const [addRole, setAddRole] = useState<string>('user');
+  const [addApproved, setAddApproved] = useState<number>(1);
+  const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
   const fetchUsers = useCallback(async () => {
     const token = localStorage.getItem('netpacific_token');
     if (!token) {
@@ -136,6 +155,56 @@ export default function UsersPage() {
 
   const cancelEdit = () => {
     setEditingId(null);
+  };
+
+  const openAddDialog = () => {
+    setAddUsername('');
+    setAddEmail('');
+    setAddPassword('');
+    setAddFullName('');
+    setAddDesignation('');
+    setAddContactNumber('');
+    setAddRole('user');
+    setAddApproved(1);
+    setAddError(null);
+    setAddOpen(true);
+  };
+
+  const createUser = async () => {
+    const token = localStorage.getItem('netpacific_token');
+    if (!token) return;
+    if (!addUsername.trim()) { setAddError('Username is required'); return; }
+    if (!addEmail.trim()) { setAddError('Email is required'); return; }
+    if (addPassword.length < 6) { setAddError('Password must be at least 6 characters long'); return; }
+    setAddSaving(true);
+    setAddError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/users`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: addUsername.trim(),
+          email: addEmail.trim(),
+          password: addPassword,
+          full_name: addFullName.trim() || null,
+          designation: addDesignation.trim() || null,
+          contact_number: addContactNumber.trim() || null,
+          role: addRole,
+          approved: addApproved,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success && data.user) {
+        setUsers((prev) => [...prev, data.user]);
+        setAddOpen(false);
+      } else {
+        setAddError(data.error || 'Failed to create user');
+      }
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : 'Network error');
+    } finally {
+      setAddSaving(false);
+    }
   };
 
   const saveUser = async () => {
@@ -260,12 +329,24 @@ export default function UsersPage() {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h5" sx={{ fontWeight: 600, color: theme.primary, mb: 2 }}>
-        User Management
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Manage account identity, contact details, company position, access role, approval status, and password resets.
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 2 }}>
+        <Box>
+          <Typography variant="h5" sx={{ fontWeight: 600, color: theme.primary }}>
+            User Management
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Manage account identity, contact details, company position, access role, approval status, and password resets.
+          </Typography>
+        </Box>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={openAddDialog}
+          sx={{ bgcolor: theme.primary, '&:hover': { bgcolor: theme.secondary } }}
+        >
+          Add User
+        </Button>
+      </Box>
 
       {error && (
         <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>
@@ -495,6 +576,98 @@ export default function UsersPage() {
           </Table>
         </TableContainer>
       )}
+
+      <Dialog open={addOpen} onClose={() => !addSaving && setAddOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Add User</DialogTitle>
+        <DialogContent>
+          {addError && (
+            <Alert severity="error" onClose={() => setAddError(null)} sx={{ mb: 2 }}>
+              {addError}
+            </Alert>
+          )}
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <TextField
+              label="Username"
+              value={addUsername}
+              onChange={(e) => setAddUsername(e.target.value)}
+              fullWidth
+              autoFocus
+            />
+            <TextField
+              label="Email"
+              type="email"
+              value={addEmail}
+              onChange={(e) => setAddEmail(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="Password"
+              type="password"
+              value={addPassword}
+              onChange={(e) => setAddPassword(e.target.value)}
+              helperText="At least 6 characters"
+              fullWidth
+            />
+            <TextField
+              label="Full name"
+              value={addFullName}
+              onChange={(e) => setAddFullName(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="Company position"
+              value={addDesignation}
+              onChange={(e) => setAddDesignation(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="Contact number"
+              value={addContactNumber}
+              onChange={(e) => setAddContactNumber(e.target.value)}
+              placeholder="+63 ..."
+              fullWidth
+            />
+            <FormControl fullWidth>
+              <InputLabel id="add-user-role-label">Access Role</InputLabel>
+              <Select
+                labelId="add-user-role-label"
+                label="Access Role"
+                value={addRole}
+                onChange={(e) => setAddRole(e.target.value)}
+              >
+                {ROLES.map((r) => (
+                  <MenuItem key={r} value={r}>{r}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl fullWidth>
+              <InputLabel id="add-user-approved-label">Approved</InputLabel>
+              <Select
+                labelId="add-user-approved-label"
+                label="Approved"
+                value={addApproved}
+                onChange={(e) => setAddApproved(Number(e.target.value))}
+              >
+                <MenuItem value={1}>Yes — can log in immediately</MenuItem>
+                <MenuItem value={0}>No — pending approval</MenuItem>
+              </Select>
+            </FormControl>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAddOpen(false)} disabled={addSaving}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={createUser}
+            disabled={addSaving}
+            sx={{ bgcolor: theme.primary, '&:hover': { bgcolor: theme.secondary } }}
+          >
+            {addSaving ? 'Creating…' : 'Create User'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

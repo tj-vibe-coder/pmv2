@@ -1,13 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Chip, IconButton, Button, CircularProgress, Alert,
+  TableHead, TableRow, TableSortLabel, Chip, IconButton, Button, CircularProgress, Alert,
+  Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
 import { PayrollRun } from '../../types/Payroll';
-import { getPayrollRuns, approvePayrollRun, markRunPaid } from '../../utils/firebasePayroll';
+import { getPayrollRuns, approvePayrollRun, markRunPaid, deletePayrollRun } from '../../utils/firebasePayroll';
+import { useAuth } from '../../contexts/AuthContext';
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
@@ -21,12 +25,19 @@ const STATUS_COLORS: Record<string, 'default' | 'primary' | 'success'> = {
 interface Props {
   onNewRun: () => void;
   onViewRun: (run: PayrollRun) => void;
+  onEditRun: (run: PayrollRun) => void;
 }
 
-const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun }) => {
+const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun, onEditRun }) => {
+  const { user } = useAuth();
+  const isSuperadmin = user?.role === 'superadmin';
   const [runs, setRuns] = useState<PayrollRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<PayrollRun | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [sortKey, setSortKey] = useState<'period' | 'payDate' | 'status' | 'createdBy'>('period');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const load = async () => {
     try {
@@ -41,6 +52,43 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun }) => {
 
   useEffect(() => { load(); }, []);
 
+  const sortedRuns = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...runs].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case 'payDate': cmp = String(a.payDate).localeCompare(String(b.payDate)); break;
+        case 'status': cmp = a.status.localeCompare(b.status); break;
+        case 'createdBy': cmp = (a.createdBy || '').localeCompare(b.createdBy || ''); break;
+        case 'period':
+        default: cmp = String(a.periodStart).localeCompare(String(b.periodStart)); break;
+      }
+      return cmp * dir;
+    });
+  }, [runs, sortKey, sortDir]);
+
+  const handleSort = (key: typeof sortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+
+  // Header row background is dark navy — force white text/icon (TableSortLabel doesn't inherit color).
+  const sortLabel = (key: typeof sortKey, text: string) => (
+    <TableSortLabel
+      active={sortKey === key}
+      direction={sortKey === key ? sortDir : 'asc'}
+      onClick={() => handleSort(key)}
+      sx={{
+        color: 'white',
+        '&:hover': { color: 'white' },
+        '&.Mui-active': { color: 'white' },
+        '& .MuiTableSortLabel-icon': { color: 'white !important' },
+      }}
+    >
+      {text}
+    </TableSortLabel>
+  );
+
   const handleApprove = async (runId: string) => {
     try {
       await approvePayrollRun(runId);
@@ -53,6 +101,17 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun }) => {
       await markRunPaid(runId);
       load();
     } catch { setError('Failed to mark run as paid.'); }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await deletePayrollRun(deleteTarget.id);
+      setDeleteTarget(null);
+      load();
+    } catch { setError('Failed to delete payroll run.'); }
+    finally { setDeleting(false); }
   };
 
   return (
@@ -76,19 +135,21 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun }) => {
           <Table>
             <TableHead sx={{ bgcolor: '#2c3242' }}>
               <TableRow>
-                {['Period', 'Pay Date', 'Status', 'Created By', 'Actions'].map((h) => (
-                  <TableCell key={h} sx={{ color: 'white', fontWeight: 600 }}>{h}</TableCell>
-                ))}
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>{sortLabel('period', 'Period')}</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>{sortLabel('payDate', 'Pay Date')}</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>{sortLabel('status', 'Status')}</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>{sortLabel('createdBy', 'Created By')}</TableCell>
+                <TableCell sx={{ color: 'white', fontWeight: 600 }}>Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {runs.length === 0 ? (
+              {sortedRuns.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                     No payroll runs yet. Create your first run.
                   </TableCell>
                 </TableRow>
-              ) : runs.map((run) => (
+              ) : sortedRuns.map((run) => (
                 <TableRow key={run.id} hover>
                   <TableCell>
                     {fmtDate(run.periodStart)} – {fmtDate(run.periodEnd)}
@@ -113,6 +174,16 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun }) => {
                         Mark Paid
                       </Button>
                     )}
+                    {isSuperadmin && (
+                      <>
+                        <IconButton size="small" onClick={() => onEditRun(run)} title="Edit (superadmin)">
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton size="small" color="error" onClick={() => setDeleteTarget(run)} title="Delete (superadmin)">
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -120,6 +191,24 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun }) => {
           </Table>
         </TableContainer>
       )}
+
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)}>
+        <DialogTitle>Delete Payroll Run?</DialogTitle>
+        <DialogContent>
+          <Typography>
+            This permanently deletes the {deleteTarget?.status.toLowerCase()} run for{' '}
+            {deleteTarget && `${fmtDate(deleteTarget.periodStart)} – ${fmtDate(deleteTarget.periodEnd)}`}, all its payslips,
+            and — if it was approved or paid — reverses the overhead expense entries it posted to the company P&L.
+            This cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={handleDelete} disabled={deleting}>
+            {deleting ? <CircularProgress size={20} /> : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
