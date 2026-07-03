@@ -19,6 +19,8 @@ import GovernmentContribTable from './GovernmentContribTable';
 import PayslipCard from './PayslipCard';
 import PayrollSettings from './PayrollSettings';
 import HolidayManager from './HolidayManager';
+import WorkSitesManager from './WorkSitesManager';
+import EmployeeHoursDashboard from './EmployeeHoursDashboard';
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 2 }).format(n);
@@ -41,7 +43,7 @@ const KPICard: React.FC<KPICardProps> = ({ icon, label, value, color }) => (
   </Paper>
 );
 
-type TabView = 'register' | 'employees' | 'new_run' | 'view_run' | 'view_dtr' | 'gov_contrib' | 'holidays' | 'settings';
+type TabView = 'register' | 'employees' | 'new_run' | 'view_run' | 'view_dtr' | 'view_hours' | 'gov_contrib' | 'holidays' | 'settings' | 'sites';
 
 const PayrollDashboard: React.FC = () => {
   const { user } = useAuth();
@@ -88,7 +90,7 @@ const PayrollDashboard: React.FC = () => {
 
   const PIE_COLORS = ['#2853c0', '#4f7bc8', '#82b1ff', '#f44336'];
 
-  const TAB_VIEWS: TabView[] = ['register', 'employees', 'gov_contrib', 'holidays', 'settings'];
+  const TAB_VIEWS: TabView[] = ['register', 'employees', 'gov_contrib', 'holidays', 'settings', 'sites'];
 
   const handleTabChange = (_: React.SyntheticEvent, val: number) => {
     setTab(val);
@@ -119,6 +121,14 @@ const PayrollDashboard: React.FC = () => {
 
   if (view === 'view_dtr' && selectedEmployee) {
     return <DTRPage
+      employeeId={String(selectedEmployee.userId)}
+      employeeName={selectedEmployee.name}
+      onBack={() => { setView('employees'); setTab(1); setSelectedEmployee(null); }}
+    />;
+  }
+
+  if (view === 'view_hours' && selectedEmployee) {
+    return <EmployeeHoursDashboard
       employeeId={String(selectedEmployee.userId)}
       employeeName={selectedEmployee.name}
       onBack={() => { setView('employees'); setTab(1); setSelectedEmployee(null); }}
@@ -175,6 +185,7 @@ const PayrollDashboard: React.FC = () => {
           <Tab label="Gov't Remittances" />
           <Tab label="Holidays" />
           <Tab label="Settings" />
+          <Tab label="Work Sites" />
         </Tabs>
         <Box sx={{ p: 3 }}>
           {tab === 0 && (
@@ -183,10 +194,14 @@ const PayrollDashboard: React.FC = () => {
               onViewRun={(run) => { setSelectedRunId(run.id); setView('view_run'); }}
             />
           )}
-          {tab === 1 && <EmployeeList onViewDTR={(emp) => { setSelectedEmployee(emp); setView('view_dtr'); }} />}
+          {tab === 1 && <EmployeeList
+            onViewDTR={(emp) => { setSelectedEmployee(emp); setView('view_dtr'); }}
+            onViewDashboard={(emp) => { setSelectedEmployee(emp); setView('view_hours'); }}
+          />}
           {tab === 2 && <GovernmentContribTable />}
           {tab === 3 && <HolidayManager />}
           {tab === 4 && <PayrollSettings />}
+          {tab === 5 && <WorkSitesManager />}
         </Box>
       </Paper>
     </Box>

@@ -3443,6 +3443,73 @@ app.delete('/api/dtr/:id', async (req, res) => {
   }
 });
 
+// ─── Work Sites ───────────────────────────────────────────────────────────────
+// Named locations (name + coordinates) used to attribute clocked hours to a site
+// on the per-employee hours dashboard. Reads: any active user. Writes: payroll.
+app.get('/api/work-sites', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('work_sites').orderBy('name').get();
+    const sites = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+    res.json({ success: true, sites });
+  } catch (e) {
+    console.error('GET /api/work-sites error:', e);
+    res.status(500).json({ error: 'Failed to get work sites' });
+  }
+});
+
+app.post('/api/work-sites', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { name, lat, lng, radiusMeters } = req.body || {};
+  if (!name || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
+    return res.status(400).json({ error: 'name, lat, lng are required' });
+  }
+  try {
+    const now = new Date().toISOString();
+    const site = {
+      name: String(name).trim(),
+      lat: Number(lat),
+      lng: Number(lng),
+      radiusMeters: Number(radiusMeters) > 0 ? Number(radiusMeters) : 150,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const ref = await db.collection('work_sites').add(site);
+    res.status(201).json({ ...site, id: ref.id });
+  } catch (e) {
+    console.error('POST /api/work-sites error:', e);
+    res.status(500).json({ error: 'Failed to create work site' });
+  }
+});
+
+app.put('/api/work-sites/:id', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const { id: _id, ...body } = req.body || {};
+    const updates = { updatedAt: new Date().toISOString() };
+    if (body.name != null) updates.name = String(body.name).trim();
+    if (Number.isFinite(Number(body.lat))) updates.lat = Number(body.lat);
+    if (Number.isFinite(Number(body.lng))) updates.lng = Number(body.lng);
+    if (Number(body.radiusMeters) > 0) updates.radiusMeters = Number(body.radiusMeters);
+    await db.collection('work_sites').doc(req.params.id).update(updates);
+    res.json({ success: true });
+  } catch (e) {
+    console.error('PUT /api/work-sites/:id error:', e);
+    res.status(500).json({ error: 'Failed to update work site' });
+  }
+});
+
+app.delete('/api/work-sites/:id', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    await db.collection('work_sites').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (e) {
+    console.error('DELETE /api/work-sites/:id error:', e);
+    res.status(500).json({ error: 'Failed to delete work site' });
+  }
+});
+
 // ========== ONEDRIVE / MICROSOFT GRAPH HEALTH ==========
 // Smoke test for server-side app-only Graph auth. Never exposes token/secret.
 app.get('/api/onedrive/health', async (req, res) => {
