@@ -346,12 +346,18 @@ const TaxFilerLedgerPage: React.FC = () => {
           });
         });
 
+        const syncedPayrollRunIds = new Set<string>();
+
         overhead.forEach((e, i) => {
           const category = e.category || 'Others';
           // Office payroll posted by the payroll-approval sync lands in overhead_expenses
           // with deterministic doc ids prefixed `payroll_sync_`. Flag it so the tax filer
           // can tell synced labor apart from manually-entered overhead.
           const isSyncedPayroll = (e.id || '').startsWith('payroll_sync_');
+          if (isSyncedPayroll) {
+            const runId = payrollSyncRunId(e.id || '');
+            if (runId) syncedPayrollRunIds.add(runId);
+          }
           out.push({
             id: e.id || `oh-${i}`,
             source: 'overhead',
@@ -375,7 +381,9 @@ const TaxFilerLedgerPage: React.FC = () => {
         });
 
         payrollRuns
-          .filter((run) => yearOf(run.payDate || run.periodEnd) === year)
+          // Once a run has synced into overhead_expenses, its "Overhead (Payroll)" row
+          // is the reference — showing this row too would duplicate the same period.
+          .filter((run) => yearOf(run.payDate || run.periodEnd) === year && !syncedPayrollRunIds.has(run.id || ''))
           .forEach((run, i) => {
             out.push({
               id: run.id || `pay-${i}`,
@@ -752,7 +760,7 @@ const TaxFilerLedgerPage: React.FC = () => {
             </TableContainer>
           </Paper>
           <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 1.5 }}>
-            Payroll runs are listed for reference only and are not added to the totals: office payroll is already posted into Overhead (Salaries &amp; Wages / Government Contributions) by the payroll-approval sync, so counting it here would double it. Overhead rows tagged "Overhead (Payroll)" are that synced labor — click one to see the per-employee breakdown (office staff only; field-crew labor isn't synced here).
+            Payroll runs appear as a "Payroll" reference row only until they sync to overhead. Once a run posts into Overhead (Salaries &amp; Wages / Government Contributions) via the payroll-approval sync, its "Overhead (Payroll)" row supersedes the reference row (so the same period isn't listed twice) and is what counts toward the totals — click it to see the per-employee breakdown (office staff only; field-crew labor isn't synced here).
           </Typography>
         </>
       )}
