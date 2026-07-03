@@ -157,7 +157,9 @@ export function computePayslip(
   // basis; a monthly salary is treated as all-inclusive. Rate basis, not the
   // FIELD/OFFICE classification, drives this.
   const isDaily = resolveRateType(emp) === 'DAILY';
-  // Per-employee toggles (absent = enabled, preserving legacy behavior).
+  // Per-employee toggles (absent = enabled, preserving legacy behavior). OT hours
+  // are always recorded for monitoring; whether they're paid is governed here by
+  // applyOvertimePay (set false per employee when the contract has no OT pay).
   const payOvertime = emp.applyOvertimePay !== false;
   const applyDeductions = emp.applyDeductions !== false;
 
