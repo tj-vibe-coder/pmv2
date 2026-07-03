@@ -35,6 +35,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import type { DTREntry, DayType } from '../../types/Payroll';
 import { isPaidDate, type PaidPeriod } from '../../utils/dtr';
+import { enqueuePunch, flushQueue, queueCount } from '../../utils/offlineQueue';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 
@@ -195,6 +196,7 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
+  const [pendingSync, setPendingSync] = useState(0);
 
   // Fetch all entries for this employee
   const fetchEntries = useCallback(async () => {
@@ -216,6 +218,26 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
   }, [employeeId]);
 
   useEffect(() => { fetchEntries(); }, [fetchEntries]);
+
+  // Flush offline-queued punches, then reflect what's left.
+  const syncNow = useCallback(async () => {
+    if (queueCount() === 0) { setPendingSync(0); return; }
+    const { synced, failed } = await flushQueue(API_BASE);
+    setPendingSync(queueCount());
+    if (synced > 0) {
+      setFeedback({ severity: failed ? 'warning' : 'success', message: `Synced ${synced} offline punch${synced === 1 ? '' : 'es'}${failed ? ` · ${failed} still pending` : ''}.` });
+      await fetchEntries();
+    }
+  }, [fetchEntries]);
+
+  // On load and whenever the connection returns, push anything queued offline.
+  useEffect(() => {
+    setPendingSync(queueCount());
+    if (navigator.onLine) syncNow();
+    const onOnline = () => syncNow();
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [syncNow]);
 
   // Projects the employee can charge a day to (best-effort; picker just stays empty on failure).
   useEffect(() => {
@@ -375,6 +397,7 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
     const token = localStorage.getItem('netpacific_token');
     let saved = 0;
     let errors = 0;
+    let queued = 0;
     for (const row of dirtyRows) {
       const body = {
         employeeId,
@@ -393,30 +416,31 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
         clockInLocation: row.isAbsent ? null : (row.clockInLocation ?? null),
         clockOutLocation: row.isAbsent ? null : (row.clockOutLocation ?? null),
       };
+      const url = row.existingId ? `${API_BASE}/api/dtr/${row.existingId}` : `${API_BASE}/api/dtr`;
+      const method = row.existingId ? 'PUT' : 'POST';
       try {
-        const url = row.existingId ? `${API_BASE}/api/dtr/${row.existingId}` : `${API_BASE}/api/dtr`;
-        const method = row.existingId ? 'PUT' : 'POST';
         const res = await fetch(url, {
           method,
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify(body),
         });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({})) as { error?: string };
-          throw new Error(err.error || 'Save failed');
-        }
-        saved++;
-      } catch {
+        if (res.ok) { saved++; continue; }
+        // Server reached but rejected (validation / auth / paid-lock): a real error, don't queue.
         errors++;
+      } catch {
+        // Network failure (no signal): stash the punch to sync when back online.
+        enqueuePunch({ key: `${employeeId}:${row.dateStr}`, employeeId, entryDate: row.dateStr, existingId: row.existingId, body, queuedAt: new Date().toISOString() });
+        queued++;
       }
     }
     setSaving(false);
-    if (errors > 0) {
-      setFeedback({ severity: 'warning', message: `Saved ${saved} entries, ${errors} failed. Check for duplicate dates.` });
-    } else {
-      setFeedback({ severity: 'success', message: `Saved ${saved} entries.` });
-    }
-    await fetchEntries();
+    setPendingSync(queueCount());
+    const parts: string[] = [];
+    if (saved) parts.push(`Saved ${saved}`);
+    if (queued) parts.push(`${queued} queued offline (syncs when online)`);
+    if (errors) parts.push(`${errors} failed`);
+    setFeedback({ severity: errors ? 'warning' : queued ? 'warning' : 'success', message: parts.join(' · ') || 'No changes.' });
+    if (saved || errors) await fetchEntries();
   };
 
   const prevMonth = () => {
@@ -659,6 +683,16 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
           <Chip label={`${monthTotal} hrs`} size="small" color="primary" variant="outlined" />
           {dirtyRows.length > 0 && (
             <Chip label={`${dirtyRows.length} unsaved`} size="small" color="warning" variant="outlined" />
+          )}
+          {pendingSync > 0 && (
+            <Chip
+              label={`${pendingSync} pending sync — tap to retry`}
+              size="small"
+              color="error"
+              variant="outlined"
+              onClick={syncNow}
+              clickable
+            />
           )}
         </Box>
       </Paper>
