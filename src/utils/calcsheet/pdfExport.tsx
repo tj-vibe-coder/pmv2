@@ -7,6 +7,8 @@ import { resolveContact } from '../../types/Client';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP, NUM,
 } from './calc';
+import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
+import { quotationRefNo } from './codes';
 
 // ─── Branding ────────────────────────────────────────────────────────────────
 const PRIMARY = '#2c5aa0';
@@ -221,7 +223,7 @@ interface Props {
 function QuotationDoc({ quotation, project, recipient, customer, salesContacts }: Props) {
   const totals = computeTotals(quotation);
   const issuer = ISSUER_INFO[quotation.kind];
-  const refNo = `${project.code.replace(/-[A-Z]{3}-\d{2}$/, '')}-${(recipient?.code ?? 'XXX').slice(0, 3)}-${quotation.revision}`;
+  const refNo = quotationRefNo(project.code, recipient?.code, quotation.revision);
   const logoUrl = typeof window !== 'undefined' ? `${window.location.origin}${issuer.logo}` : issuer.logo;
   const dateSent = quotationDate(quotation.dateSent);
 
@@ -631,17 +633,22 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             <Text style={styles.termsTitle}>Terms and Conditions</Text>
             <Text style={styles.termSubtitle}>Scope of Work</Text>
             <Text style={styles.termText}>
-              {to.scopeOfWork
-                ? to.scopeOfWork
-                : '- The scope of work shall be limited strictly to the items, specifications, and services explicitly stated in this proposal. Any additional works, modifications, or deviations not covered herein shall be treated as a Variation Order and shall be subject to separate quotation, approval, and corresponding adjustment in price and delivery schedule.'}
+              {to.scopeOfWork || DEFAULT_SCOPE_OF_WORK}
             </Text>
           </View>
 
+          {to.exclusions && (
+            <>
+              <Text style={styles.termSubtitle}>Exclusions</Text>
+              {to.exclusions.split('\n').filter(Boolean).map((line, i) => (
+                <Text key={i} style={styles.termText}>{line}</Text>
+              ))}
+            </>
+          )}
+
           <Text style={styles.termSubtitle}>Basis of Proposal</Text>
           <Text style={styles.termText}>
-            {to.basisOfProposal
-              ? to.basisOfProposal
-              : `- This offer is based on the technical documents, drawings, specifications, and other references provided by the Client at the time of quotation. ${issuer.name} reserves the right to revise pricing, scope, and schedule should there be significant changes, inconsistencies, or incomplete information discovered after award.`}
+            {to.basisOfProposal || defaultBasisOfProposal(issuer.name)}
           </Text>
 
           <Text style={styles.termSubtitle}>Validity of Offer</Text>
@@ -650,16 +657,9 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
           </Text>
 
           <Text style={styles.termSubtitle}>Delivery</Text>
-          {to.deliveryLines
-            ? to.deliveryLines.split('\n').filter(Boolean).map((line, i) => (
-                <Text key={i} style={styles.termText}>{line}</Text>
-              ))
-            : (
-              <>
-                <Text style={styles.termText}>- {quotation.deliveryTerms || 'Delivery is 1-2 weeks, upon receipt of a technically and commercially clarified purchase order.'}</Text>
-                <Text style={styles.termText}>- Delivery terms shall be DDP – Client's Plant Site, unless otherwise specified.</Text>
-              </>
-            )}
+          {(to.deliveryLines || defaultDeliveryText(quotation.deliveryTerms)).split('\n').filter(Boolean).map((line, i) => (
+            <Text key={i} style={styles.termText}>{line}</Text>
+          ))}
 
           <Text style={styles.termSubtitle}>Payment Terms</Text>
           <Text style={styles.termText}>- {quotation.paymentTerms}.</Text>
@@ -670,9 +670,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             from project completion and acceptance, covering defects in materials and workmanship under normal operating conditions.
           </Text>
           <Text style={styles.termText}>
-            {to.warrantyExclusion
-              ? to.warrantyExclusion
-              : '- Warranty excludes improper installation, unauthorized modifications, misuse, abnormal conditions, power surges, environmental damage, or force majeure events.'}
+            {to.warrantyExclusion || DEFAULT_WARRANTY_EXCLUSION}
           </Text>
         </View>
 
@@ -758,7 +756,7 @@ export async function exportQuotationPdf(
 
   const modifiedBytes = await pdfDoc.save();
   const modifiedBlob = new Blob([modifiedBytes], { type: 'application/pdf' });
-  const filename = `${project.code.replace(/-[A-Z]{3}-\d{2}$/, '')}-${(recipient?.code ?? 'XXX').slice(0, 3)}-${quotation.revision}.pdf`;
+  const filename = `${quotationRefNo(project.code, recipient?.code, quotation.revision)}.pdf`;
   if (options.save !== false) {
     saveAs(modifiedBlob, filename);
   }

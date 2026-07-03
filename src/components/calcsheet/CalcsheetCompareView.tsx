@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { Box, Chip, FormControl, InputLabel, MenuItem, Paper, Select, Stack, Typography } from '@mui/material';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
+import { quotationRefNo } from '../../utils/calcsheet/codes';
 import { resolveContact } from '../../types/Client';
 import type { Quotation } from '../../types/Quotation';
 
@@ -58,7 +59,9 @@ export default function CompareView() {
       <InputLabel>{lbl}</InputLabel>
       <Select label={lbl} value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((q) => (
-          <MenuItem key={q.id} value={q.id}>{project.code}-{q.revision} · {q.kind}</MenuItem>
+          <MenuItem key={q.id} value={q.id}>
+            {quotationRefNo(project.code, clients.find((c) => c.id === q.recipientId)?.code, q.revision)} · {q.kind}
+          </MenuItem>
         ))}
       </Select>
     </FormControl>
@@ -74,7 +77,7 @@ export default function CompareView() {
           <Stack direction="row" spacing={1} alignItems="center">
             <Chip size="small" label={q.kind} color={color} />
             <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
-              {project.code}-{q.revision}
+              {quotationRefNo(project.code, recipient?.code, q.revision)}
             </Typography>
           </Stack>
           <Box>

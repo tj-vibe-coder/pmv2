@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, LoginCredentials, AuthResponse } from '../types/User';
 import { API_BASE } from '../config/api';
+import { clearLastPage } from '../utils/lastPage';
 
 interface AuthContextType {
   user: User | null;
@@ -120,6 +121,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setUser(null);
     localStorage.removeItem('netpacific_user');
     localStorage.removeItem('netpacific_token');
+    clearLastPage();
   };
 
   const value: AuthContextType = {

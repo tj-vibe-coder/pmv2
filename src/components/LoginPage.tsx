@@ -19,6 +19,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
 import { LoginCredentials } from '../types/User';
+import { getLastPage } from '../utils/lastPage';
 
 interface RegistrationData extends LoginCredentials {
   email: string;
@@ -64,8 +65,8 @@ const LoginPage: React.FC = () => {
 
   useEffect(() => {
     if (isAuthenticated && user) {
-      const target = (user.role === 'user' || user.role === 'viewer') ? '/employee' : (user.role === 'tax_filer' ? '/finance/tax-ledger' : '/dashboard');
-      navigate(target, { replace: true });
+      const roleDefault = (user.role === 'user' || user.role === 'viewer') ? '/employee' : (user.role === 'tax_filer' ? '/finance/tax-ledger' : '/dashboard');
+      navigate(getLastPage() ?? roleDefault, { replace: true });
     }
   }, [isAuthenticated, user, navigate]);
 
@@ -92,8 +93,8 @@ const LoginPage: React.FC = () => {
       const result = await login(loginData);
       if (result.success) {
         const cachedUser = JSON.parse(localStorage.getItem('netpacific_user') || '{}');
-        const target = (cachedUser.role === 'user' || cachedUser.role === 'viewer') ? '/employee' : (cachedUser.role === 'tax_filer' ? '/finance/tax-ledger' : '/dashboard');
-        navigate(target, { replace: true });
+        const roleDefault = (cachedUser.role === 'user' || cachedUser.role === 'viewer') ? '/employee' : (cachedUser.role === 'tax_filer' ? '/finance/tax-ledger' : '/dashboard');
+        navigate(getLastPage() ?? roleDefault, { replace: true });
       } else setError(result.error || 'Login failed');
     } catch (err) {
       setError('An error occurred during login');

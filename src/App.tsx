@@ -53,6 +53,7 @@ import CalcsheetPresets from './components/calcsheet/CalcsheetPresets';
 import PricelistBrowser from './components/pricelists/PricelistBrowser';
 import ScanPage from './components/ScanPage';
 import { useQuotationStore } from './store/quotationStore';
+import { saveLastPage, getLastPage } from './utils/lastPage';
 
 const theme = createTheme({
   palette: {
@@ -192,6 +193,23 @@ const RedirectCalcsheet: React.FC = () => {
   return <Navigate to={to} replace />;
 };
 
+// Records the current route to localStorage on every navigation so the app
+// can resume here next time (root "/" and post-login land on it instead of
+// always defaulting to the Dashboard). Renders nothing.
+const LastPageTracker: React.FC = () => {
+  const location = useLocation();
+  const { isAuthenticated } = useAuth();
+  React.useEffect(() => {
+    if (!isAuthenticated) return;
+    saveLastPage(location.pathname + location.search + location.hash);
+  }, [isAuthenticated, location.pathname, location.search, location.hash]);
+  return null;
+};
+
+// Root "/" lands on whatever page the user last had open, falling back to
+// the Dashboard when nothing is saved yet (first visit, or after logout).
+const RootRedirect: React.FC = () => <Navigate to={getLastPage() ?? '/dashboard'} replace />;
+
 // Main App Layout component
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -221,6 +239,7 @@ function App() {
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <Router>
+          <LastPageTracker />
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/scan" element={<ScanPage />} />
@@ -795,7 +814,7 @@ function App() {
               path="/"
               element={
                 <ProtectedRoute>
-                  <Navigate to="/dashboard" replace />
+                  <RootRedirect />
                 </ProtectedRoute>
               }
             />
