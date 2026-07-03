@@ -19,11 +19,17 @@ import {
 import {
   Login as LoginIcon,
   Logout as LogoutIcon,
-  Person as PersonIcon
+  Person as PersonIcon,
+  Menu as MenuIcon
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 
-const Header: React.FC = () => {
+interface HeaderProps {
+  /** Mobile: toggle the navigation drawer. */
+  onMenuClick?: () => void;
+}
+
+const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -69,24 +75,42 @@ const Header: React.FC = () => {
         borderBottom: '1px solid #e0e0e0'
       }}
     >
-      <Toolbar sx={{ minHeight: '80px', px: 3 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1 }}>
+      <Toolbar sx={{ minHeight: '80px', px: { xs: 1.5, md: 3 } }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0 }}>
+          {isAuthenticated && (
+            <IconButton
+              onClick={onMenuClick}
+              aria-label="Open navigation menu"
+              edge="start"
+              sx={{ mr: 1, display: { xs: 'inline-flex', md: 'none' }, color: '#2c5aa0' }}
+            >
+              <MenuIcon />
+            </IconButton>
+          )}
           <Box
             component="img"
             src="/logo-ioct-only.svg"
             alt="IOCT Logo"
-            sx={{ height: 48, mr: 2 }}
+            sx={{ height: { xs: 36, md: 48 }, mr: { xs: 1, md: 2 }, flexShrink: 0 }}
           />
           <Typography
             variant="h5"
             component="div"
-            sx={{ fontWeight: 600, color: '#2c5aa0', letterSpacing: '0.5px' }}
+            sx={{
+              fontWeight: 600,
+              color: '#2c5aa0',
+              letterSpacing: '0.5px',
+              fontSize: { xs: '1.05rem', md: '1.5rem' },
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
           >
             {isEmployeeWorkspace ? 'Employee Portal' : isFinanceWorkspace ? 'Finance' : isSalesWorkspace ? 'Sales' : 'Project Monitoring System'}
           </Typography>
         </Box>
-        
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, md: 2 }, flexShrink: 0 }}>
           {isAuthenticated ? (
             <>
               {!isEmployeeWorkspace && (
@@ -101,6 +125,7 @@ const Header: React.FC = () => {
                   if (value === 'finance') navigate('/finance');
                 }}
                 sx={{
+                  display: { xs: 'none', md: 'inline-flex' },
                   '& .MuiToggleButton-root': {
                     textTransform: 'none',
                     fontSize: '0.8125rem',
@@ -127,6 +152,7 @@ const Header: React.FC = () => {
                 label={user?.role.toUpperCase()}
                 size="small"
                 sx={{
+                  display: { xs: 'none', sm: 'inline-flex' },
                   backgroundColor: getRoleColor(user?.role || ''),
                   color: 'white',
                   fontWeight: 600,
