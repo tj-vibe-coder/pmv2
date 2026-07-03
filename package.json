@@ -94,5 +94,15 @@
     "@types/better-sqlite3": "^7.6.13",
     "concurrently": "^9.2.1"
   },
-  "proxy": "http://localhost:3001"
+  "proxy": "http://localhost:3001",
+  "jest": {
+    "moduleNameMapper": {
+      "^react-router-dom$": "<rootDir>/node_modules/react-router-dom/dist/index.js",
+      "^react-router/dom$": "<rootDir>/node_modules/react-router/dist/development/dom-export.js",
+      "^react-router$": "<rootDir>/node_modules/react-router/dist/development/index.js"
+    },
+    "transformIgnorePatterns": [
+      "[/\\\\]node_modules[/\\\\](?!nanoid|react-app).+\\.(js|jsx|mjs|cjs|ts|tsx)$"
+    ]
+  }
 }

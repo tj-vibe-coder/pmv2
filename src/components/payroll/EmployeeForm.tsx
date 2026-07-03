@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
-  Button, TextField, MenuItem, Grid, FormControlLabel, Switch,
+  Button, TextField, MenuItem, Grid, FormControlLabel, Switch, Typography,
 } from '@mui/material';
 import { Employee, EmployeeType, PayFrequency, RateType } from '../../types/Payroll';
 import type { User } from '../../types/User';
@@ -31,11 +31,17 @@ const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
   dateHired: new Date().toISOString().split('T')[0],
   isActive: true,
   applyDeductions: true,
-  applyOvertimePay: true,
+  // OT hours are recorded for monitoring but not paid unless a contract adds it,
+  // so new employees default to OT-pay off; enable per employee when applicable.
+  applyOvertimePay: false,
   sssNumber: '',
   philhealthNumber: '',
   pagibigNumber: '',
   tinNumber: '',
+  sssEnabled: true,
+  philhealthEnabled: true,
+  pagibigEnabled: true,
+  withholdingTaxEnabled: true,
 };
 
 const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEditRate = true, users = [] }) => {
@@ -154,6 +160,37 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEdi
           </Grid>
           <Grid size={{ xs: 12, sm: 3 }}>
             <TextField fullWidth label="TIN No." value={form.tinNumber} onChange={set('tinNumber')} />
+          </Grid>
+
+          <Grid size={12}><strong>Government Remittances</strong></Grid>
+          <Grid size={12}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+              Uncheck an agency below if it isn't currently being remitted for this employee (e.g. still to be determined, or a project-based hire). That agency's contribution is skipped entirely — the payslip pays basic pay without deducting or accruing for it.
+            </Typography>
+          </Grid>
+          <Grid size={{ xs: 6, sm: 3 }}>
+            <FormControlLabel
+              control={<Switch checked={form.sssEnabled !== false} onChange={(e) => setForm((f) => ({ ...f, sssEnabled: e.target.checked }))} />}
+              label="SSS"
+            />
+          </Grid>
+          <Grid size={{ xs: 6, sm: 3 }}>
+            <FormControlLabel
+              control={<Switch checked={form.philhealthEnabled !== false} onChange={(e) => setForm((f) => ({ ...f, philhealthEnabled: e.target.checked }))} />}
+              label="PhilHealth"
+            />
+          </Grid>
+          <Grid size={{ xs: 6, sm: 3 }}>
+            <FormControlLabel
+              control={<Switch checked={form.pagibigEnabled !== false} onChange={(e) => setForm((f) => ({ ...f, pagibigEnabled: e.target.checked }))} />}
+              label="Pag-IBIG"
+            />
+          </Grid>
+          <Grid size={{ xs: 6, sm: 3 }}>
+            <FormControlLabel
+              control={<Switch checked={form.withholdingTaxEnabled !== false} onChange={(e) => setForm((f) => ({ ...f, withholdingTaxEnabled: e.target.checked }))} />}
+              label="Withholding Tax"
+            />
           </Grid>
 
           <Grid size={12}><strong>Payroll Options</strong></Grid>

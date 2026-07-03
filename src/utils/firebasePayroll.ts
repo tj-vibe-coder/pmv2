@@ -87,6 +87,36 @@ export async function markRunPaid(runId: string): Promise<void> {
   await handleResponse<void>(res);
 }
 
+export interface UpdatePayrollRunPayload {
+  periodStart: string;
+  periodEnd: string;
+  payDate: string;
+  status: PayrollRun['status'];
+  contribRates?: PayrollRun['contribRates'];
+  fundingSource?: PayrollRun['fundingSource'];
+  payslips: Payslip[];
+}
+
+// Superadmin only (server-enforced). Rewrites an existing run's period/funding/payslips and
+// reconciles the overhead_expenses P&L sync to match the run's new target status.
+export async function updatePayrollRun(runId: string, data: UpdatePayrollRunPayload): Promise<void> {
+  const res = await fetch(`${BASE}/runs/${runId}`, {
+    method: 'PUT',
+    headers: getAuthHeader(),
+    body: JSON.stringify(data),
+  });
+  await handleResponse<void>(res);
+}
+
+// Superadmin only (server-enforced). Cascades to payslips/DTR and reverses any overhead sync.
+export async function deletePayrollRun(runId: string): Promise<void> {
+  const res = await fetch(`${BASE}/runs/${runId}`, {
+    method: 'DELETE',
+    headers: getAuthHeader(),
+  });
+  await handleResponse<void>(res);
+}
+
 // ─── DTR Entries ──────────────────────────────────────────────────────────────
 
 export async function saveDTREntries(runId: string, entries: DTREntry[]): Promise<void> {
@@ -116,6 +146,13 @@ export async function savePayslips(runId: string, payslips: Payslip[]): Promise<
 
 export async function getPayslipsForRun(runId: string): Promise<Payslip[]> {
   const res = await fetch(`${BASE}/runs/${runId}/payslips`, { headers: getAuthHeader() });
+  return handleResponse<Payslip[]>(res);
+}
+
+// Rate-stripped, OFFICE-only breakdown for tax filers (and existing payroll roles) drilling into
+// a run's synced "Overhead (Payroll)" totals — narrower access than getPayslipsForRun above.
+export async function getOfficePayrollBreakdown(runId: string): Promise<Payslip[]> {
+  const res = await fetch(`${BASE}/runs/${runId}/office-breakdown`, { headers: getAuthHeader() });
   return handleResponse<Payslip[]>(res);
 }
 

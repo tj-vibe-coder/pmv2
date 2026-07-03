@@ -1,12 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box, Grid, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, MenuItem, Alert, Chip, CircularProgress,
-  Card, CardContent,
+  Card, CardContent, Tooltip, Link,
 } from '@mui/material';
-import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, ReceiptLong as ReceiptLongIcon, PostAdd as PostAddIcon } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import { INVESTORS, PROJECT_EXPENSE_CATEGORIES, OVERHEAD_CATEGORIES } from '../data/financeCategories';
+import { Project } from '../types/Project';
+import dataService from '../services/dataService';
 
 const API_BASE = '/api';
 
@@ -18,13 +22,6 @@ const NET_PACIFIC_COLORS = {
   warning: '#fdcb6e',
   info: '#74b9ff',
 };
-
-const INVESTORS = [
-  'TJ Caballero',
-  'RJ Rivera',
-  'Renzel Punongbayan',
-  'Nylle Harold Managa',
-];
 
 const INVESTOR_TARGET_PCT: Record<string, number> = {
   'TJ Caballero':        35,
@@ -60,6 +57,15 @@ interface Investment {
   description: string;
   created_at?: string;
   updated_at?: string;
+  // Present on rows auto-mirrored from an out-of-pocket expense.
+  sourceExpenseId?: string;
+  sourceCollection?: 'project_expenses' | 'overhead_expenses' | 'cash_advances';
+  sourceExpenseProjectId?: string | null;
+  // Present on manually-entered (pencil-booked) rows once an out-of-pocket
+  // expense has been linked back to them.
+  linkedExpenseId?: string;
+  linkedExpenseCollection?: 'project_expenses' | 'overhead_expenses' | 'cash_advances';
+  linkedExpenseProjectId?: string | null;
 }
 
 interface FormData {
@@ -72,12 +78,37 @@ interface FormData {
 
 const emptyForm: FormData = { date: '', investor: '', amount: '', category: '', description: '' };
 
+interface RegisterFormData {
+  scope: 'project' | 'overhead' | '';
+  projectId: string;
+  date: string;
+  amount: string;
+  category: string;
+  description: string;
+}
+
+const emptyRegisterForm: RegisterFormData = { scope: '', projectId: '', date: '', amount: '', category: '', description: '' };
+
 function formatPHP(n: number) {
   return '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
+function expenseLinkTarget(inv: Investment): string | null {
+  const collection = inv.sourceCollection || inv.linkedExpenseCollection;
+  const projectId = inv.sourceExpenseProjectId ?? inv.linkedExpenseProjectId;
+  if (!collection) return null;
+  if (collection === 'project_expenses') {
+    return projectId ? `/finance/projects/${projectId}/expenses` : '/finance/expense-monitoring';
+  }
+  if (collection === 'cash_advances') {
+    return '/finance/expense-monitoring/ca-form';
+  }
+  return '/finance/overhead-expenses';
+}
+
 const InvestmentTrackerPage: React.FC = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const token = localStorage.getItem('netpacific_token') || '';
 
   const [investments, setInvestments] = useState<Investment[]>([]);
@@ -100,6 +131,13 @@ const InvestmentTrackerPage: React.FC = () => {
   const [targetSaving, setTargetSaving] = useState(false);
 
   const [actualSpending, setActualSpending] = useState<{ total: number; count: number } | null>(null);
+
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [registerSource, setRegisterSource] = useState<Investment | null>(null);
+  const [registerForm, setRegisterForm] = useState<RegisterFormData>(emptyRegisterForm);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [registerSaving, setRegisterSaving] = useState(false);
+  const [allProjects, setAllProjects] = useState<Project[]>([]);
 
   const authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
 
@@ -207,6 +245,48 @@ const InvestmentTrackerPage: React.FC = () => {
       await load();
     } catch { }
     finally { setTargetSaving(false); }
+  };
+
+  // ── Register as Expense: create a project/overhead expense linked back to this investment ──
+  const openRegister = (inv: Investment) => {
+    setRegisterSource(inv);
+    setRegisterForm({ ...emptyRegisterForm, date: inv.date, amount: String(inv.amount), description: inv.description });
+    setRegisterError(null);
+    setRegisterOpen(true);
+    if (allProjects.length === 0) dataService.getProjects().then(setAllProjects).catch(() => {});
+  };
+  const closeRegister = () => { setRegisterOpen(false); setRegisterSource(null); };
+
+  const submitRegister = async () => {
+    if (!registerSource) return;
+    const { scope, projectId, date, amount, category, description } = registerForm;
+    if (!scope) { setRegisterError('Choose whether this is a project or overhead expense.'); return; }
+    if (scope === 'project' && !projectId) { setRegisterError('Select a project.'); return; }
+    if (!date || !amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) { setRegisterError('Enter a valid date and amount.'); return; }
+    if (!category) { setRegisterError('Select a category.'); return; }
+    setRegisterSaving(true); setRegisterError(null);
+    try {
+      const project = scope === 'project' ? allProjects.find((p) => String(p.id) === projectId) : undefined;
+      const endpoint = scope === 'project' ? 'project-expenses' : 'overhead-expenses';
+      const res = await fetch(`${API_BASE}/${endpoint}`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          ...(scope === 'project' ? { projectId, projectName: project?.project_name ?? '—' } : {}),
+          description: description.trim() || '—',
+          amount: parseFloat(amount),
+          date,
+          category,
+          sourceType: 'manual',
+          fundingSource: { type: 'investor_outofpocket', investor: registerSource.investor, linkedInvestmentId: registerSource.id },
+        }),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (!data.success) { setRegisterError(data.error || 'Failed to create expense'); return; }
+      closeRegister();
+      await load();
+    } catch { setRegisterError('Failed to create expense'); }
+    finally { setRegisterSaving(false); }
   };
 
   if (loading) return (
@@ -354,12 +434,34 @@ const InvestmentTrackerPage: React.FC = () => {
                       sx={{ backgroundColor: CATEGORY_COLORS[row.category] || '#607d8b', color: 'white', fontSize: '0.7rem', height: 20 }}
                     />
                   </TableCell>
-                  <TableCell sx={{ fontSize: '0.8rem', fontStyle: 'italic', color: 'text.secondary' }}>{row.description}</TableCell>
+                  <TableCell sx={{ fontSize: '0.8rem', fontStyle: 'italic', color: 'text.secondary' }}>
+                    {expenseLinkTarget(row) ? (
+                      <Tooltip title={(row.sourceCollection || row.linkedExpenseCollection) === 'cash_advances' ? 'View linked cash advance' : 'View linked expense'}>
+                        <Link
+                          component="button"
+                          type="button"
+                          underline="hover"
+                          onClick={() => navigate(expenseLinkTarget(row) as string)}
+                          sx={{ fontSize: 'inherit', fontStyle: 'inherit', textAlign: 'left', display: 'inline-flex', alignItems: 'center', gap: 0.5 }}
+                        >
+                          <ReceiptLongIcon sx={{ fontSize: '0.9rem' }} />
+                          {row.description}
+                        </Link>
+                      </Tooltip>
+                    ) : row.description}
+                  </TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.8rem', fontWeight: 600 }}>{row.runningTotal.toLocaleString()}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.8rem', color: row.balanceVsTarget < 0 ? 'error.main' : 'text.primary' }}>
                     {row.balanceVsTarget.toLocaleString()}
                   </TableCell>
-                  <TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                    {!expenseLinkTarget(row) && (
+                      <Tooltip title="Register as Expense">
+                        <IconButton size="small" color="primary" onClick={() => openRegister(row)} sx={{ mr: 0.5 }}>
+                          <PostAddIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                     <IconButton size="small" onClick={() => openEdit(row)} sx={{ mr: 0.5 }}>
                       <EditIcon fontSize="small" />
                     </IconButton>
@@ -481,6 +583,69 @@ const InvestmentTrackerPage: React.FC = () => {
           <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
           <Button variant="contained" color="error" onClick={confirmDelete} disabled={deleting}>
             {deleting ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Register as Expense Dialog */}
+      <Dialog open={registerOpen} onClose={closeRegister} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 600 }}>Register as Expense</DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          {registerError && <Alert severity="error" sx={{ mb: 2 }}>{registerError}</Alert>}
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Creates an expense in Expense Monitoring funded by <strong>{registerSource?.investor}</strong> (out-of-pocket),
+            linked back to this investment entry.
+          </Alert>
+          <Grid container spacing={2} sx={{ mt: 0 }}>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField select label="Expense Type *" fullWidth size="small" value={registerForm.scope}
+                onChange={(e) => setRegisterForm((f) => ({ ...f, scope: e.target.value as RegisterFormData['scope'], projectId: '', category: '' }))}>
+                <MenuItem value="project">Project Expense</MenuItem>
+                <MenuItem value="overhead">Overhead Expense</MenuItem>
+              </TextField>
+            </Grid>
+            {registerForm.scope === 'project' && (
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField select label="Project *" fullWidth size="small" value={registerForm.projectId}
+                  onChange={(e) => setRegisterForm((f) => ({ ...f, projectId: e.target.value }))}>
+                  {allProjects.map((p) => (
+                    <MenuItem key={p.id} value={String(p.id)}>{p.project_no || p.project_name}</MenuItem>
+                  ))}
+                </TextField>
+              </Grid>
+            )}
+            <Grid size={{ xs: 12, sm: registerForm.scope === 'project' ? 12 : 6 }}>
+              <TextField select label="Category *" fullWidth size="small" value={registerForm.category}
+                disabled={!registerForm.scope}
+                onChange={(e) => setRegisterForm((f) => ({ ...f, category: e.target.value }))}>
+                {(registerForm.scope === 'overhead' ? OVERHEAD_CATEGORIES : PROJECT_EXPENSE_CATEGORIES).map((cat) => (
+                  <MenuItem key={cat} value={cat}>{cat}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField label="Date *" type="date" fullWidth size="small" InputLabelProps={{ shrink: true }}
+                value={registerForm.date} onChange={(e) => setRegisterForm((f) => ({ ...f, date: e.target.value }))} />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField label="Amount (₱) *" type="number" fullWidth size="small" value={registerForm.amount}
+                onChange={(e) => setRegisterForm((f) => ({ ...f, amount: e.target.value }))} inputProps={{ min: 0 }} />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <TextField label="Description" fullWidth size="small" value={registerForm.description}
+                onChange={(e) => setRegisterForm((f) => ({ ...f, description: e.target.value }))} />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={closeRegister}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={submitRegister}
+            disabled={registerSaving}
+            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+          >
+            {registerSaving ? 'Saving…' : 'Create Expense'}
           </Button>
         </DialogActions>
       </Dialog>

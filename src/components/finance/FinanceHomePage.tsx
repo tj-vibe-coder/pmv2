@@ -159,12 +159,15 @@ const FinanceHomePage: React.FC = () => {
       icon: <ReceiptIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
       path: '/finance/expense-monitoring',
     },
-    {
-      title: 'Investment Tracker',
-      description: 'Capital contributions and the investment ledger.',
-      icon: <TrendingUpIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
-      path: '/finance/investment-tracker',
-    },
+    // Capital ledger, not a BIR substantiation source — hidden from tax_filer.
+    ...(user?.role !== 'tax_filer'
+      ? [{
+          title: 'Investment Tracker',
+          description: 'Capital contributions and the investment ledger.',
+          icon: <TrendingUpIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+          path: '/finance/investment-tracker',
+        }]
+      : []),
     ...(payrollAllowed
       ? [{
           title: 'Payroll',
@@ -236,7 +239,8 @@ const FinanceHomePage: React.FC = () => {
           )}
         </Grid>
 
-        {/* Total Investments */}
+        {/* Total Investments — hidden from tax_filer (capital ledger, not BIR substantiation) */}
+        {user?.role !== 'tax_filer' && (
         <Grid size={{ xs: 6, sm: 3 }}>
           <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
@@ -250,6 +254,7 @@ const FinanceHomePage: React.FC = () => {
             </CardContent>
           </Card>
         </Grid>
+        )}
 
         {/* Latest Payroll Run — only for authorized users */}
         {payrollAllowed && (
