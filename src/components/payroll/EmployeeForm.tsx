@@ -31,7 +31,9 @@ const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
   dateHired: new Date().toISOString().split('T')[0],
   isActive: true,
   applyDeductions: true,
-  applyOvertimePay: true,
+  // OT hours are recorded for monitoring but not paid unless a contract adds it,
+  // so new employees default to OT-pay off; enable per employee when applicable.
+  applyOvertimePay: false,
   sssNumber: '',
   philhealthNumber: '',
   pagibigNumber: '',

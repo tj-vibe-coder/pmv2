@@ -78,6 +78,17 @@ function computeHours(timeIn: string, timeOut: string): number {
   return Math.round(diff / 30) * 0.5;
 }
 
+// Hours worked beyond this many in a day are classified as overtime. OT hours are
+// recorded for monitoring; whether they are *paid* is a separate per-employee
+// setting (applyOvertimePay) handled by the payroll engine.
+const OT_DAILY_THRESHOLD_HOURS = 9;
+
+/** Split a day's total worked hours into regular (capped at the threshold) and overtime. */
+function splitWorkedHours(total: number): { regular: number; overtime: number } {
+  if (total <= OT_DAILY_THRESHOLD_HOURS) return { regular: total, overtime: 0 };
+  return { regular: OT_DAILY_THRESHOLD_HOURS, overtime: Math.round((total - OT_DAILY_THRESHOLD_HOURS) * 2) / 2 };
+}
+
 type GeoLoc = { lat: number; lng: number; accuracy: number };
 
 /** Current wall-clock time as HH:MM (24h). */
@@ -265,7 +276,9 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
         const tIn = field === 'timeIn' ? (value as string) : r.timeIn;
         const tOut = field === 'timeOut' ? (value as string) : r.timeOut;
         if (tIn && tOut) {
-          updated.regularHours = computeHours(tIn, tOut);
+          const { regular, overtime } = splitWorkedHours(computeHours(tIn, tOut));
+          updated.regularHours = regular;
+          updated.overtimeHours = overtime;
         }
       }
       // Absent clears times and hours
@@ -299,7 +312,9 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
         updated.clockOutLocation = loc ?? undefined;
       }
       if (updated.timeIn && updated.timeOut) {
-        updated.regularHours = computeHours(updated.timeIn, updated.timeOut);
+        const { regular, overtime } = splitWorkedHours(computeHours(updated.timeIn, updated.timeOut));
+        updated.regularHours = regular;
+        updated.overtimeHours = overtime;
       }
       return updated;
     }));
