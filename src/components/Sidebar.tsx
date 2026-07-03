@@ -15,6 +15,8 @@ import {
   useMediaQuery,
   Collapse,
   Tooltip,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
@@ -182,6 +184,46 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
           </Box>
         )}
       </Box>
+
+      {/* Mobile-only workspace switcher. On desktop this lives in the header
+          toggle, which is hidden on small screens — so surface it in the drawer
+          (non-employee workspaces only, matching the header's condition). */}
+      {isMobile && !isEmployeeWorkspace && (
+        <Box sx={{ px: 2, pb: 1.5 }}>
+          <ToggleButtonGroup
+            value={isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects'}
+            exclusive
+            fullWidth
+            size="small"
+            onChange={(_, v) => {
+              if (!v) return;
+              onMobileClose?.();
+              if (v === 'projects') navigate('/dashboard');
+              else if (v === 'sales') navigate('/sales');
+              else if (v === 'finance') navigate('/finance');
+            }}
+            sx={{
+              '& .MuiToggleButton-root': {
+                color: 'rgba(255,255,255,0.85)',
+                borderColor: 'rgba(255,255,255,0.3)',
+                textTransform: 'none',
+                fontSize: '0.72rem',
+                py: 0.5,
+                '&.Mui-selected': {
+                  backgroundColor: 'rgba(255,255,255,0.22)',
+                  color: 'white',
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.3)' },
+                },
+                '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' },
+              },
+            }}
+          >
+            <ToggleButton value="projects">Projects</ToggleButton>
+            <ToggleButton value="sales">Sales</ToggleButton>
+            <ToggleButton value="finance">Finance</ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
+      )}
 
       <Divider sx={{ borderColor: 'rgba(255,255,255,0.2)', mx: isExpanded ? 2 : 1 }} />
 
