@@ -2659,7 +2659,8 @@ app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
 app.get('/api/calcsheet/clients', async (req, res) => {
   try {
     const snap = await db.collection('clients').orderBy('name').get();
-    const clients = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Spread data first so a stray stored `id` field can't clobber the doc id.
+    const clients = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
     res.json({ success: true, clients });
   } catch (err) { res.status(500).json({ error: 'Failed to get clients' }); }
 });
@@ -2676,7 +2677,8 @@ app.delete('/api/calcsheet/clients/:id', (req, res) => res.status(410).json({ er
 app.get('/api/calcsheet/presets', async (req, res) => {
   try {
     const snap = await db.collection('calcsheet_presets').orderBy('group').get();
-    const presets = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Spread data first so a stray stored `id` field can't clobber the doc id.
+    const presets = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
     res.json({ success: true, presets });
   } catch (err) { res.status(500).json({ error: 'Failed to get presets' }); }
 });
@@ -3273,19 +3275,22 @@ app.get('/api/dtr/aggregate', async (req, res) => {
       agg.tardinessMinutes += Number(entry.tardinessMinutes) || 0;
     });
 
-    // Look up submitter names for each DTR employeeId (user account)
+    // Look up submitter names for each DTR employeeId (user account). Batch the
+    // reads in parallel instead of awaiting one doc at a time (was O(n) serial).
     const submitterIds = Object.keys(byEmployee);
     const submitters = {};
-    for (const uid of submitterIds) {
-      try {
-        const uDoc = await db.collection('users').doc(uid).get();
-        if (uDoc.exists) {
-          const u = uDoc.data();
-          submitters[uid] = u.full_name || u.username || uid;
-        } else {
-          submitters[uid] = uid;
-        }
-      } catch { submitters[uid] = uid; }
+    try {
+      const userDocs = await Promise.all(
+        submitterIds.map((uid) => db.collection('users').doc(uid).get().catch(() => null)),
+      );
+      submitterIds.forEach((uid, i) => {
+        const uDoc = userDocs[i];
+        const u = uDoc && uDoc.exists ? uDoc.data() : null;
+        submitters[uid] = (u && (u.full_name || u.username)) || uid;
+      });
+    } catch (e) {
+      console.error('GET /api/dtr/aggregate submitter lookup error:', e);
+      submitterIds.forEach((uid) => { submitters[uid] = submitters[uid] || uid; });
     }
 
     res.json({ success: true, aggregates: byEmployee, submitters });
@@ -3324,6 +3329,25 @@ function sanitizeLocation(loc) {
   return { lat, lng, accuracy: Number.isFinite(accuracy) ? accuracy : null };
 }
 
+// True when an employee's DTR date sits inside a PAID payroll period. Mirrors the
+// employee-portal paid-date lock (isPaidDate) so the server enforces it too — an
+// employee must not be able to edit/create a punch after that period is paid.
+async function isDtrDateLocked(employeeId, entryDate) {
+  const date = String(entryDate || '').slice(0, 10);
+  if (!employeeId || !date) return false;
+  const runs = await db.collection('payroll_runs').where('status', '==', 'PAID').get();
+  for (const run of runs.docs) {
+    const d = run.data();
+    const start = String(d.periodStart || '').slice(0, 10);
+    const end = String(d.periodEnd || '').slice(0, 10);
+    if (!start || !end || date < start || date > end) continue;
+    // Confirm this employee was actually included in the paid run.
+    const slip = await run.ref.collection('payslips').doc(String(employeeId)).get();
+    if (slip.exists) return true;
+  }
+  return false;
+}
+
 app.post('/api/dtr', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
@@ -3332,6 +3356,10 @@ app.post('/api/dtr', async (req, res) => {
   // Non-admin users can only create entries for themselves
   const isAdmin = user.role === 'superadmin' || user.role === 'admin';
   if (!isAdmin && String(employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+  // Employees can't create a punch inside an already-paid period (admins may correct).
+  if (!isAdmin && await isDtrDateLocked(employeeId, entryDate)) {
+    return res.status(409).json({ error: 'This date is in a paid payroll period and is locked.' });
+  }
   // Duplicate check
   const existing = await db.collection('dtr_entries')
     .where('employeeId', '==', employeeId)
@@ -3374,6 +3402,10 @@ app.put('/api/dtr/:id', async (req, res) => {
     const data = doc.data();
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+    // Locked once the covering payroll period is paid (admins may still correct).
+    if (!isAdmin && await isDtrDateLocked(data.employeeId, data.entryDate)) {
+      return res.status(409).json({ error: 'This date is in a paid payroll period and is locked.' });
+    }
     const { employeeId, id: _id, ...updates } = req.body;
     // Normalize location payloads so we never store arbitrary client objects.
     if ('clockInLocation' in updates) updates.clockInLocation = sanitizeLocation(updates.clockInLocation);
@@ -3399,6 +3431,10 @@ app.delete('/api/dtr/:id', async (req, res) => {
     const data = doc.data();
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+    // Locked once the covering payroll period is paid (admins may still correct).
+    if (!isAdmin && await isDtrDateLocked(data.employeeId, data.entryDate)) {
+      return res.status(409).json({ error: 'This date is in a paid payroll period and is locked.' });
+    }
     await docRef.delete();
     res.json({ success: true });
   } catch (e) {

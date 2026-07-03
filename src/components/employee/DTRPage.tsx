@@ -21,6 +21,8 @@ import {
   Tooltip,
   Link,
   CircularProgress,
+  FormControlLabel,
+  useMediaQuery,
 } from '@mui/material';
 import {
   ChevronLeft as ChevronLeftIcon,
@@ -164,6 +166,9 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
   const { user } = useAuth();
   const isAdminView = propEmployeeId != null;
   const employeeId = propEmployeeId ?? (user?.id != null ? String(user.id) : '');
+  // Below the table's min width, switch from the horizontally-scrolling grid to
+  // a stacked card-per-day layout that fits a phone screen.
+  const isNarrow = useMediaQuery('(max-width:720px)');
 
   const [viewMonth, setViewMonth] = useState(() => new Date().getMonth());
   const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
@@ -441,6 +446,104 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
     );
   };
 
+  // Phone layout: one card per day instead of a wide horizontally-scrolling row.
+  const renderDayCard = (row: DayRow, index: number, paid: boolean, isToday: boolean) => {
+    const bg = paid ? '#e8f5e9' : row.dirty ? '#fffde7' : row.isAbsent ? '#fce4ec' : isToday ? '#e8f0fe' : '#fff';
+    const capSx = { display: 'block', color: 'text.secondary', fontSize: '0.68rem', mb: 0.25 } as const;
+    return (
+      <Paper
+        key={row.dateStr}
+        variant="outlined"
+        sx={{ p: 1.25, bgcolor: bg, borderColor: isToday && !paid ? NET_PACIFIC_COLORS.primary : '#e2e8f0' }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontWeight: 700, fontSize: '0.9rem' }}>
+              {row.dayName} · {row.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+            </Typography>
+            {paid && <Chip label="Paid" size="small" color="success" sx={{ height: 18, fontSize: '0.65rem' }} />}
+            {!paid && isToday && <Chip label="Today" size="small" color="info" sx={{ height: 18, fontSize: '0.65rem' }} />}
+          </Box>
+          <FormControlLabel
+            control={
+              <Checkbox
+                size="small"
+                checked={row.isAbsent}
+                disabled={paid}
+                onChange={(e) => updateRow(index, 'isAbsent', e.target.checked)}
+                sx={{ p: 0.25 }}
+              />
+            }
+            label="Absent"
+            sx={{ m: 0, '& .MuiFormControlLabel-label': { fontSize: '0.72rem' } }}
+          />
+        </Box>
+
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 1 }}>
+          <Box>
+            <Typography component="span" sx={capSx}>Time In</Typography>
+            {renderTimeCell(row, index, 'in', paid, isToday)}
+          </Box>
+          <Box>
+            <Typography component="span" sx={capSx}>Time Out</Typography>
+            {renderTimeCell(row, index, 'out', paid, isToday)}
+          </Box>
+          <Box>
+            <Typography component="span" sx={capSx}>Reg. Hours</Typography>
+            <Typography sx={{ fontWeight: 600, fontSize: '0.85rem' }}>{row.regularHours}</Typography>
+          </Box>
+          <Box>
+            <Typography component="span" sx={capSx}>OT</Typography>
+            <TextField
+              size="small"
+              type="number"
+              value={row.overtimeHours}
+              onChange={(e) => updateRow(index, 'overtimeHours', Number(e.target.value))}
+              disabled={row.isAbsent || paid}
+              variant="standard"
+              InputProps={{ disableUnderline: true }}
+              inputProps={{ min: 0, max: 16, step: 0.5, style: { fontSize: '0.8125rem', padding: '2px 0' } }}
+              fullWidth
+            />
+          </Box>
+        </Box>
+
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
+          <Box>
+            <Typography component="span" sx={capSx}>Day Type</Typography>
+            <FormControl size="small" variant="standard" fullWidth>
+              <Select
+                value={row.dayType}
+                onChange={(e) => updateRow(index, 'dayType', e.target.value)}
+                disableUnderline
+                disabled={paid}
+                sx={{ fontSize: '0.8125rem' }}
+              >
+                {DAY_TYPES.map(dt => (
+                  <MenuItem key={dt.value} value={dt.value} sx={{ fontSize: '0.8125rem' }}>{dt.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Box>
+          <Box>
+            <Typography component="span" sx={capSx}>Remarks</Typography>
+            <TextField
+              size="small"
+              value={row.remarks}
+              onChange={(e) => updateRow(index, 'remarks', e.target.value)}
+              disabled={paid}
+              placeholder="—"
+              variant="standard"
+              InputProps={{ disableUnderline: true }}
+              inputProps={{ style: { fontSize: '0.8125rem', padding: '2px 0' } }}
+              fullWidth
+            />
+          </Box>
+        </Box>
+      </Paper>
+    );
+  };
+
   const cellSx = { py: 0.5, px: 0.5, fontSize: '0.8125rem' };
   const headerSx = { fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', py: 1, px: 0.5, whiteSpace: 'nowrap' as const };
 
@@ -491,7 +594,28 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
         </Box>
       </Paper>
 
-      {/* Weekly timesheet grid */}
+      {/* Phone: stacked day cards */}
+      {isNarrow && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 1.5 }}>
+          {rows.map((row, index) => {
+            const isToday = row.dateStr === toDateStr(new Date());
+            const paid = isPaidDate(row.dateStr, paidPeriods);
+            return renderDayCard(row, index, paid, isToday);
+          })}
+          {rows.length > 0 && (
+            <Paper variant="outlined" sx={{ p: 1, display: 'flex', justifyContent: 'space-between', bgcolor: '#f8fafc' }}>
+              <Typography sx={{ fontWeight: 600, fontSize: '0.8125rem' }}>Month Total</Typography>
+              <Typography sx={{ fontWeight: 700, fontSize: '0.8125rem' }}>
+                {rows.reduce((s, r) => s + r.regularHours, 0)} hrs
+                {rows.reduce((s, r) => s + r.overtimeHours, 0) > 0 ? ` + ${rows.reduce((s, r) => s + r.overtimeHours, 0)} OT` : ''}
+              </Typography>
+            </Paper>
+          )}
+        </Box>
+      )}
+
+      {/* Weekly timesheet grid (tablet/desktop) */}
+      {!isNarrow && (
       <TableContainer component={Paper} sx={{ mb: 1.5, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         <Table size="small" sx={{ minWidth: 700, '& td, & th': { border: '1px solid #e2e8f0' } }}>
           <TableHead>
@@ -610,6 +734,7 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
           </TableBody>
         </Table>
       </TableContainer>
+      )}
 
       {/* Save bar */}
       <Paper
