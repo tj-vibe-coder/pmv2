@@ -156,6 +156,9 @@ interface DayRow {
   overtimeHours: number;
   isAbsent: boolean;
   remarks: string;
+  // project this day's work is charged to (deployment)
+  projectId: string;
+  projectName: string;
   // captured on clock-in/out (best-effort GPS)
   clockInLocation?: GeoLoc;
   clockOutLocation?: GeoLoc;
@@ -163,6 +166,8 @@ interface DayRow {
   existingId: string | null; // Firestore doc id if already saved
   dirty: boolean; // changed since load
 }
+
+interface ProjectOption { id: string; project_name: string; project_no?: string }
 
 interface DTRPageProps {
   /** Admin view: the linked user-account id of the employee whose DTR to show/edit. Defaults to the logged-in user. */
@@ -185,6 +190,7 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
   const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
   const [rows, setRows] = useState<DayRow[]>([]);
   const [entries, setEntries] = useState<DTREntry[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [paidPeriods, setPaidPeriods] = useState<PaidPeriod[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -210,6 +216,24 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
   }, [employeeId]);
 
   useEffect(() => { fetchEntries(); }, [fetchEntries]);
+
+  // Projects the employee can charge a day to (best-effort; picker just stays empty on failure).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = localStorage.getItem('netpacific_token');
+        const res = await fetch(`${API_BASE}/api/projects`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        if (!res.ok) return;
+        const data = await res.json();
+        const list: ProjectOption[] = (Array.isArray(data) ? data : [])
+          .map((p: { id: string; project_name?: string; project_no?: string }) => ({ id: p.id, project_name: p.project_name || '(unnamed)', project_no: p.project_no }))
+          .sort((a, b) => a.project_name.localeCompare(b.project_name));
+        if (!cancelled) setProjects(list);
+      } catch { /* non-critical */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // Fetch the employee's own payslips to know which dates are already paid.
   // Best-effort: a failure just means no paid-date highlighting.
@@ -259,6 +283,8 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
         overtimeHours: existing?.overtimeHours ?? 0,
         isAbsent: existing?.isAbsent ?? false,
         remarks: existing?.remarks || '',
+        projectId: existing?.projectId || '',
+        projectName: existing?.projectName || '',
         clockInLocation: existing?.clockInLocation,
         clockOutLocation: existing?.clockOutLocation,
         existingId: existing?.id || null,
@@ -290,6 +316,12 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
       }
       return updated;
     }));
+  };
+
+  // Set the project a day is charged to, snapshotting its name for reporting.
+  const setProject = (index: number, projectId: string) => {
+    const proj = projects.find((p) => p.id === projectId);
+    setRows(prev => prev.map((r, i) => i === index ? { ...r, projectId, projectName: proj?.project_name || '', dirty: true } : r));
   };
 
   // Which cell is currently acquiring GPS (disables its button + shows spinner).
@@ -356,6 +388,8 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
         isAbsent: row.isAbsent,
         tardinessMinutes: 0,
         remarks: row.remarks,
+        projectId: row.projectId || null,
+        projectName: row.projectName || null,
         clockInLocation: row.isAbsent ? null : (row.clockInLocation ?? null),
         clockOutLocation: row.isAbsent ? null : (row.clockOutLocation ?? null),
       };
@@ -555,6 +589,26 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
             />
           </Box>
         </Box>
+
+        <Box sx={{ mt: 1 }}>
+          <Typography component="span" sx={capSx}>Project (charge to)</Typography>
+          <FormControl size="small" variant="standard" fullWidth>
+            <Select
+              value={row.projectId}
+              onChange={(e) => setProject(index, e.target.value)}
+              disableUnderline
+              disabled={paid || row.isAbsent}
+              displayEmpty
+              sx={{ fontSize: '0.8125rem' }}
+              renderValue={(v) => v ? (projects.find((p) => p.id === v)?.project_name || row.projectName || '—') : <span style={{ color: '#9e9e9e' }}>— none —</span>}
+            >
+              <MenuItem value="" sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}>— none —</MenuItem>
+              {projects.map((p) => (
+                <MenuItem key={p.id} value={p.id} sx={{ fontSize: '0.8125rem' }}>{p.project_name}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </Box>
       </Paper>
     );
   };
@@ -642,6 +696,7 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
               <TableCell sx={headerSx}>Hours</TableCell>
               <TableCell sx={headerSx}>OT</TableCell>
               <TableCell sx={headerSx}>Day Type</TableCell>
+              <TableCell sx={headerSx}>Project</TableCell>
               <TableCell sx={{ ...headerSx, textAlign: 'center' }}>Absent</TableCell>
               <TableCell sx={headerSx}>Remarks</TableCell>
             </TableRow>
@@ -708,6 +763,24 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
                       </Select>
                     </FormControl>
                   </TableCell>
+                  <TableCell sx={{ ...cellSx, width: 150 }}>
+                    <FormControl size="small" variant="standard" fullWidth>
+                      <Select
+                        value={row.projectId}
+                        onChange={(e) => setProject(index, e.target.value)}
+                        disableUnderline
+                        disabled={paid || row.isAbsent}
+                        displayEmpty
+                        sx={{ fontSize: '0.75rem' }}
+                        renderValue={(v) => v ? (projects.find((p) => p.id === v)?.project_name || row.projectName || '—') : <span style={{ color: '#9e9e9e' }}>—</span>}
+                      >
+                        <MenuItem value="" sx={{ fontSize: '0.8125rem', color: 'text.secondary' }}>— none —</MenuItem>
+                        {projects.map((p) => (
+                          <MenuItem key={p.id} value={p.id} sx={{ fontSize: '0.8125rem' }}>{p.project_name}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </TableCell>
                   <TableCell sx={{ ...cellSx, width: 50, textAlign: 'center' }}>
                     <Checkbox
                       size="small"
@@ -744,7 +817,7 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
               <TableCell sx={{ ...cellSx, fontWeight: 700, textAlign: 'right' }}>
                 {rows.reduce((s, r) => s + r.overtimeHours, 0) || '—'}
               </TableCell>
-              <TableCell colSpan={3} />
+              <TableCell colSpan={4} />
             </TableRow>
           </TableBody>
         </Table>

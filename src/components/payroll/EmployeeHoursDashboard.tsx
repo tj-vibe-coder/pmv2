@@ -15,6 +15,7 @@ const NET = '#2c5aa0';
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const NO_GPS = 'No GPS recorded';
 const OFF_SITE = 'Off-site';
+const UNASSIGNED = 'Unassigned';
 
 const authHeaders = (): Record<string, string> => {
   const token = localStorage.getItem('netpacific_token');
@@ -80,6 +81,7 @@ const EmployeeHoursDashboard: React.FC<Props> = ({ employeeId, employeeName, onB
   const stats = useMemo(() => {
     let regular = 0, extended = 0, daysWorked = 0;
     const perSite = new Map<string, number>();
+    const perProject = new Map<string, number>();
     for (const e of monthEntries) {
       const reg = Number(e.regularHours) || 0;
       const ot = Number(e.overtimeHours) || 0;
@@ -92,12 +94,14 @@ const EmployeeHoursDashboard: React.FC<Props> = ({ employeeId, employeeName, onB
       if (!loc) key = NO_GPS;
       else { const s = nearestSite(loc, sites); key = s ? s.name : OFF_SITE; }
       perSite.set(key, (perSite.get(key) ?? 0) + dayTotal);
+      const proj = (e.projectName || '').trim() || UNASSIGNED;
+      perProject.set(proj, (perProject.get(proj) ?? 0) + dayTotal);
     }
     const total = regular + extended;
-    const siteRows = Array.from(perSite.entries())
+    const toRows = (m: Map<string, number>) => Array.from(m.entries())
       .map(([name, hours]) => ({ name, hours, pct: total > 0 ? (hours / total) * 100 : 0 }))
       .sort((a, b) => b.hours - a.hours);
-    return { regular, extended, total, daysWorked, siteRows };
+    return { regular, extended, total, daysWorked, siteRows: toRows(perSite), projectRows: toRows(perProject) };
   }, [monthEntries, sites]);
 
   const prev = () => { if (month === 0) { setMonth(11); setYear((y) => y - 1); } else setMonth((m) => m - 1); };
@@ -138,6 +142,34 @@ const EmployeeHoursDashboard: React.FC<Props> = ({ employeeId, employeeName, onB
             <Grid size={{ xs: 6, md: 3 }}><KpiCard icon={<ScheduleIcon fontSize="inherit" />} label="Total hours" value={hrs(stats.total)} color="#4caf50" /></Grid>
             <Grid size={{ xs: 6, md: 3 }}><KpiCard icon={<EventAvailableIcon fontSize="inherit" />} label="Days worked" value={String(stats.daysWorked)} color="#9c27b0" /></Grid>
           </Grid>
+
+          {/* Hours per project (where to charge) */}
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NET, mb: 1 }}>Hours per project</Typography>
+          <TableContainer component={Paper} variant="outlined" sx={{ mb: 3, overflowX: 'auto' }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ '& th': { fontWeight: 600, bgcolor: '#f5f7fa' } }}>
+                  <TableCell>Project (charge to)</TableCell>
+                  <TableCell align="right">Hours</TableCell>
+                  <TableCell align="right">Share</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {stats.projectRows.length === 0 ? (
+                  <TableRow><TableCell colSpan={3} sx={{ color: 'text.secondary' }}>No hours recorded this month.</TableCell></TableRow>
+                ) : stats.projectRows.map((r) => (
+                  <TableRow key={r.name} hover>
+                    <TableCell sx={{ color: r.name === UNASSIGNED ? 'text.secondary' : 'inherit' }}>
+                      {r.name}
+                      {r.name === UNASSIGNED && <Chip size="small" label="no project" sx={{ ml: 0.5, height: 16, fontSize: '0.6rem' }} />}
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{hrs(r.hours)}</TableCell>
+                    <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{r.pct.toFixed(0)}%</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
 
           {/* Hours per site */}
           <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NET, mb: 1 }}>Hours per location</Typography>
@@ -184,12 +216,13 @@ const EmployeeHoursDashboard: React.FC<Props> = ({ employeeId, employeeName, onB
                   <TableCell>Out</TableCell>
                   <TableCell align="right">Reg</TableCell>
                   <TableCell align="right">OT</TableCell>
+                  <TableCell>Project</TableCell>
                   <TableCell>Location</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {monthEntries.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} sx={{ color: 'text.secondary' }}>No entries this month.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={7} sx={{ color: 'text.secondary' }}>No entries this month.</TableCell></TableRow>
                 ) : [...monthEntries].sort((a, b) => (a.entryDate || '').localeCompare(b.entryDate || '')).map((e) => {
                   const site = siteFor(e);
                   return (
@@ -200,6 +233,9 @@ const EmployeeHoursDashboard: React.FC<Props> = ({ employeeId, employeeName, onB
                       <TableCell align="right">{Number(e.regularHours) || 0}</TableCell>
                       <TableCell align="right" sx={{ color: (Number(e.overtimeHours) || 0) > 0 ? '#ff9800' : 'inherit', fontWeight: (Number(e.overtimeHours) || 0) > 0 ? 700 : 400 }}>
                         {Number(e.overtimeHours) || 0}
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {e.projectName || <Typography component="span" variant="body2" color="text.disabled">—</Typography>}
                       </TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>
                         {site.loc ? (

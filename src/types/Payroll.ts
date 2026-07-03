@@ -64,6 +64,8 @@ export interface DTREntry {
   tardinessMinutes: number;
   remarks?: string;
   submittedAt?: string;
+  projectId?: string;    // project this day's work is charged to (deployment)
+  projectName?: string;  // snapshot of the project name for reporting
   clockInLocation?: { lat: number; lng: number; accuracy: number };
   clockOutLocation?: { lat: number; lng: number; accuracy: number };
 }
