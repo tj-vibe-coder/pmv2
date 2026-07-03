@@ -19,6 +19,7 @@ import {
 import {
   Login as LoginIcon,
   Logout as LogoutIcon,
+  AccessTime as AccessTimeIcon,
   Person as PersonIcon,
   Menu as MenuIcon
 } from '@mui/icons-material';
@@ -36,7 +37,8 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
   const isEmployeeWorkspace = location.pathname === '/employee' || location.pathname.startsWith('/employee/');
   const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
   const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
-  const workspace = isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects';
+  const isAdminUser = user?.role === 'superadmin' || user?.role === 'admin';
+  const workspace = isEmployeeWorkspace ? 'employee' : isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects';
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
 
   const handleUserMenuClick = (event: React.MouseEvent<HTMLElement>) => {
@@ -113,7 +115,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, md: 2 }, flexShrink: 0 }}>
           {isAuthenticated ? (
             <>
-              {!isEmployeeWorkspace && (
+              {(!isEmployeeWorkspace || isAdminUser) && (
               <ToggleButtonGroup
                 value={workspace}
                 exclusive
@@ -123,6 +125,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
                   if (value === 'projects') navigate('/dashboard');
                   if (value === 'sales') navigate('/sales');
                   if (value === 'finance') navigate('/finance');
+                  if (value === 'employee') navigate('/employee');
                 }}
                 sx={{
                   display: { xs: 'none', md: 'inline-flex' },
@@ -145,6 +148,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
                 <ToggleButton value="projects">Projects</ToggleButton>
                 <ToggleButton value="sales">Sales</ToggleButton>
                 <ToggleButton value="finance">Finance</ToggleButton>
+                {isAdminUser && <ToggleButton value="employee">Employee</ToggleButton>}
               </ToggleButtonGroup>
               )}
 
@@ -189,6 +193,12 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
                     {user?.email}
                   </Typography>
                 </Box>
+                <MenuItem onClick={() => { handleUserMenuClose(); navigate('/employee'); }}>
+                  <ListItemIcon>
+                    <AccessTimeIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText primary="Employee Portal (DTR)" />
+                </MenuItem>
                 <MenuItem onClick={handleLogout}>
                   <ListItemIcon>
                     <LogoutIcon fontSize="small" />
