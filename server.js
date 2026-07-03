@@ -4302,7 +4302,7 @@ async function isDtrDateLocked(employeeId, entryDate) {
 app.post('/api/dtr', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
-  const { employeeId, entryDate, timeIn, timeOut, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks, clockInLocation, clockOutLocation } = req.body;
+  const { employeeId, entryDate, timeIn, timeOut, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks, clockInLocation, clockOutLocation, projectId, projectName } = req.body;
   if (!employeeId || !entryDate || !dayType) return res.status(400).json({ error: 'employeeId, entryDate, and dayType are required' });
   // Non-admin users can only create entries for themselves
   const isAdmin = user.role === 'superadmin' || user.role === 'admin';
@@ -4330,6 +4330,8 @@ app.post('/api/dtr', async (req, res) => {
       isAbsent: !!isAbsent,
       tardinessMinutes: Number(tardinessMinutes) || 0,
       remarks: remarks || '',
+      projectId: projectId || null,
+      projectName: projectName || null,
       clockInLocation: sanitizeLocation(clockInLocation),
       clockOutLocation: sanitizeLocation(clockOutLocation),
       submittedAt: new Date().toISOString(),
@@ -4391,6 +4393,115 @@ app.delete('/api/dtr/:id', async (req, res) => {
   } catch (e) {
     console.error('DELETE /api/dtr/:id error:', e);
     res.status(500).json({ error: 'Failed to delete DTR entry' });
+  }
+});
+
+// ─── Work Sites ───────────────────────────────────────────────────────────────
+// Named locations (name + coordinates) used to attribute clocked hours to a site
+// on the per-employee hours dashboard. Reads: any active user. Writes: payroll.
+app.get('/api/work-sites', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('work_sites').orderBy('name').get();
+    const sites = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+    res.json({ success: true, sites });
+  } catch (e) {
+    console.error('GET /api/work-sites error:', e);
+    res.status(500).json({ error: 'Failed to get work sites' });
+  }
+});
+
+// Suggest site coordinates from where employees actually clocked in: greedily
+// cluster recorded clock-in/out GPS points (~75m) and return the busiest spots.
+function haversineMeters(aLat, aLng, bLat, bLng) {
+  const R = 6371000, toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat), dLng = toRad(bLng - aLng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+app.get('/api/work-sites/suggestions', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('dtr_entries').orderBy('entryDate', 'desc').limit(2000).get();
+    const pts = [];
+    snap.docs.forEach((d) => {
+      const e = d.data();
+      for (const loc of [e.clockInLocation, e.clockOutLocation]) {
+        if (loc && Number.isFinite(Number(loc.lat)) && Number.isFinite(Number(loc.lng))) {
+          pts.push({ lat: Number(loc.lat), lng: Number(loc.lng), date: e.entryDate || '' });
+        }
+      }
+    });
+    const clusters = [];
+    for (const p of pts) {
+      const c = clusters.find((cl) => haversineMeters(cl.lat, cl.lng, p.lat, p.lng) <= 75);
+      if (c) {
+        c.lat = (c.lat * c.count + p.lat) / (c.count + 1);
+        c.lng = (c.lng * c.count + p.lng) / (c.count + 1);
+        c.count += 1;
+        if (p.date > c.lastSeen) c.lastSeen = p.date;
+      } else {
+        clusters.push({ lat: p.lat, lng: p.lng, count: 1, lastSeen: p.date });
+      }
+    }
+    clusters.sort((a, b) => b.count - a.count);
+    res.json({ success: true, points: clusters.slice(0, 30) });
+  } catch (e) {
+    console.error('GET /api/work-sites/suggestions error:', e);
+    res.status(500).json({ error: 'Failed to suggest clock-in points' });
+  }
+});
+
+app.post('/api/work-sites', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { name, lat, lng, radiusMeters } = req.body || {};
+  if (!name || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
+    return res.status(400).json({ error: 'name, lat, lng are required' });
+  }
+  try {
+    const now = new Date().toISOString();
+    const site = {
+      name: String(name).trim(),
+      lat: Number(lat),
+      lng: Number(lng),
+      radiusMeters: Number(radiusMeters) > 0 ? Number(radiusMeters) : 150,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const ref = await db.collection('work_sites').add(site);
+    res.status(201).json({ ...site, id: ref.id });
+  } catch (e) {
+    console.error('POST /api/work-sites error:', e);
+    res.status(500).json({ error: 'Failed to create work site' });
+  }
+});
+
+app.put('/api/work-sites/:id', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const { id: _id, ...body } = req.body || {};
+    const updates = { updatedAt: new Date().toISOString() };
+    if (body.name != null) updates.name = String(body.name).trim();
+    if (Number.isFinite(Number(body.lat))) updates.lat = Number(body.lat);
+    if (Number.isFinite(Number(body.lng))) updates.lng = Number(body.lng);
+    if (Number(body.radiusMeters) > 0) updates.radiusMeters = Number(body.radiusMeters);
+    await db.collection('work_sites').doc(req.params.id).update(updates);
+    res.json({ success: true });
+  } catch (e) {
+    console.error('PUT /api/work-sites/:id error:', e);
+    res.status(500).json({ error: 'Failed to update work site' });
+  }
+});
+
+app.delete('/api/work-sites/:id', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    await db.collection('work_sites').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (e) {
+    console.error('DELETE /api/work-sites/:id error:', e);
+    res.status(500).json({ error: 'Failed to delete work site' });
   }
 });
 

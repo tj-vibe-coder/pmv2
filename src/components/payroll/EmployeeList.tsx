@@ -7,6 +7,7 @@ import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import PersonOffIcon from '@mui/icons-material/PersonOff';
 import EventNoteIcon from '@mui/icons-material/EventNote';
+import InsightsIcon from '@mui/icons-material/Insights';
 import { Employee } from '../../types/Payroll';
 import type { User } from '../../types/User';
 import { getEmployees, createEmployee, updateEmployee, deactivateEmployee } from '../../utils/firebasePayroll';
@@ -24,9 +25,10 @@ const fmt = (n?: number) =>
 interface EmployeeListProps {
   /** When provided, shows a "View DTR" action per employee (admin/superadmin only). */
   onViewDTR?: (emp: Employee) => void;
+  onViewDashboard?: (emp: Employee) => void;
 }
 
-const EmployeeList: React.FC<EmployeeListProps> = ({ onViewDTR }) => {
+const EmployeeList: React.FC<EmployeeListProps> = ({ onViewDTR, onViewDashboard }) => {
   const { user } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -176,6 +178,11 @@ const EmployeeList: React.FC<EmployeeListProps> = ({ onViewDTR }) => {
                     {onViewDTR && emp.userId && (
                       <IconButton size="small" title="View DTR" onClick={() => onViewDTR(emp)}>
                         <EventNoteIcon fontSize="small" />
+                      </IconButton>
+                    )}
+                    {onViewDashboard && emp.userId && (
+                      <IconButton size="small" title="Hours dashboard" onClick={() => onViewDashboard(emp)}>
+                        <InsightsIcon fontSize="small" />
                       </IconButton>
                     )}
                     <IconButton size="small" onClick={() => { setEditing(emp); setFormOpen(true); }}>

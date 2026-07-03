@@ -64,8 +64,21 @@ export interface DTREntry {
   tardinessMinutes: number;
   remarks?: string;
   submittedAt?: string;
+  projectId?: string;    // project this day's work is charged to (deployment)
+  projectName?: string;  // snapshot of the project name for reporting
   clockInLocation?: { lat: number; lng: number; accuracy: number };
   clockOutLocation?: { lat: number; lng: number; accuracy: number };
+}
+
+/** A named location (with coordinates) used to attribute clocked hours to a site. */
+export interface WorkSite {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  radiusMeters: number; // a clock-in within this distance is attributed to the site
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface PayrollRun {
