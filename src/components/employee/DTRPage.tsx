@@ -18,11 +18,17 @@ import {
   MenuItem,
   Checkbox,
   Alert,
+  Tooltip,
+  Link,
+  CircularProgress,
 } from '@mui/material';
 import {
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
   ArrowBack as ArrowBackIcon,
+  MyLocation as MyLocationIcon,
+  LocationOn as LocationOnIcon,
+  LocationOff as LocationOffIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import type { DTREntry, DayType } from '../../types/Payroll';
@@ -70,6 +76,60 @@ function computeHours(timeIn: string, timeOut: string): number {
   return Math.round(diff / 30) * 0.5;
 }
 
+type GeoLoc = { lat: number; lng: number; accuracy: number };
+
+/** Current wall-clock time as HH:MM (24h). */
+function nowHM(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * Best-effort browser geolocation. Resolves to null (never rejects) when the
+ * API is missing, permission is denied, or it times out — clock-in still logs
+ * the time in that case.
+ */
+function getLocation(): Promise<GeoLoc | null> {
+  return new Promise((resolve) => {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+      resolve(null);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+      }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+    );
+  });
+}
+
+const mapsHref = (loc: GeoLoc) => `https://www.google.com/maps?q=${loc.lat},${loc.lng}`;
+
+/** Small pin next to a punch: green Maps link when located, grey "off" when not. */
+const LocIndicator: React.FC<{ loc?: GeoLoc; hasTime: boolean }> = ({ loc, hasTime }) => {
+  if (loc) {
+    return (
+      <Tooltip title={`Location captured · ±${Math.round(loc.accuracy)}m — open in Maps`}>
+        <Link href={mapsHref(loc)} target="_blank" rel="noopener" sx={{ display: 'inline-flex', ml: 0.25 }}>
+          <LocationOnIcon sx={{ fontSize: 15 }} color="success" />
+        </Link>
+      </Tooltip>
+    );
+  }
+  if (hasTime) {
+    return (
+      <Tooltip title="Location unavailable for this punch">
+        <LocationOffIcon sx={{ fontSize: 15, ml: 0.25 }} color="disabled" />
+      </Tooltip>
+    );
+  }
+  return null;
+};
+
 interface DayRow {
   date: Date;
   dateStr: string;
@@ -83,6 +143,9 @@ interface DayRow {
   overtimeHours: number;
   isAbsent: boolean;
   remarks: string;
+  // captured on clock-in/out (best-effort GPS)
+  clockInLocation?: GeoLoc;
+  clockOutLocation?: GeoLoc;
   // tracking
   existingId: string | null; // Firestore doc id if already saved
   dirty: boolean; // changed since load
@@ -180,6 +243,8 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
         overtimeHours: existing?.overtimeHours ?? 0,
         isAbsent: existing?.isAbsent ?? false,
         remarks: existing?.remarks || '',
+        clockInLocation: existing?.clockInLocation,
+        clockOutLocation: existing?.clockOutLocation,
         existingId: existing?.id || null,
         dirty: false,
       };
@@ -207,6 +272,38 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
       }
       return updated;
     }));
+  };
+
+  // Which cell is currently acquiring GPS (disables its button + shows spinner).
+  const [clocking, setClocking] = useState<{ index: number; field: 'in' | 'out' } | null>(null);
+
+  // Stamp the current time on a row and attach a best-effort GPS fix. Location
+  // failure never blocks the punch — the time is still recorded.
+  const handleClock = async (index: number, field: 'in' | 'out') => {
+    setClocking({ index, field });
+    const stamp = nowHM();
+    const loc = await getLocation();
+    setRows(prev => prev.map((r, i) => {
+      if (i !== index) return r;
+      const updated: DayRow = { ...r, dirty: true };
+      if (field === 'in') {
+        updated.timeIn = stamp;
+        updated.clockInLocation = loc ?? undefined;
+      } else {
+        updated.timeOut = stamp;
+        updated.clockOutLocation = loc ?? undefined;
+      }
+      if (updated.timeIn && updated.timeOut) {
+        updated.regularHours = computeHours(updated.timeIn, updated.timeOut);
+      }
+      return updated;
+    }));
+    setClocking(null);
+    setFeedback(
+      loc
+        ? { severity: 'success', message: `Clocked ${field === 'in' ? 'in' : 'out'} at ${stamp} · location captured.` }
+        : { severity: 'warning', message: `Clocked ${field === 'in' ? 'in' : 'out'} at ${stamp} — location unavailable (permission denied or GPS off).` },
+    );
   };
 
   const dirtyRows = useMemo(() => rows.filter(r => r.dirty), [rows]);
@@ -239,6 +336,8 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
         isAbsent: row.isAbsent,
         tardinessMinutes: 0,
         remarks: row.remarks,
+        clockInLocation: row.isAbsent ? null : (row.clockInLocation ?? null),
+        clockOutLocation: row.isAbsent ? null : (row.clockOutLocation ?? null),
       };
       try {
         const url = row.existingId ? `${API_BASE}/api/dtr/${row.existingId}` : `${API_BASE}/api/dtr`;
@@ -281,6 +380,66 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
   const monthLabel = `${MONTH_NAMES[viewMonth]} ${viewYear}`;
   const now = new Date();
   const isCurrentMonth = viewMonth === now.getMonth() && viewYear === now.getFullYear();
+
+  // Time In / Out cell. Today (unpaid) → Clock In/Out button that stamps the
+  // current time + GPS; other days keep the manual time picker.
+  const renderTimeCell = (row: DayRow, index: number, field: 'in' | 'out', paid: boolean, isToday: boolean) => {
+    const value = field === 'in' ? row.timeIn : row.timeOut;
+    const loc = field === 'in' ? row.clockInLocation : row.clockOutLocation;
+    const busy = clocking?.index === index && clocking.field === field;
+
+    // Manual picker for other days, paid (locked) rows, or the admin editing
+    // someone else's DTR — clock-in only makes sense on your own today's row.
+    if (!isToday || paid || isAdminView) {
+      return (
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          <TextField
+            size="small"
+            type="time"
+            value={value}
+            onChange={(e) => updateRow(index, field === 'in' ? 'timeIn' : 'timeOut', e.target.value)}
+            disabled={row.isAbsent || paid}
+            variant="standard"
+            InputProps={{ disableUnderline: true }}
+            inputProps={{ style: { fontSize: '0.8125rem', padding: '2px 0' } }}
+            fullWidth
+          />
+          <LocIndicator loc={loc} hasTime={!!value} />
+        </Box>
+      );
+    }
+
+    if (value) {
+      return (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          <Typography sx={{ fontSize: '0.8125rem', fontWeight: 600 }}>{value}</Typography>
+          <LocIndicator loc={loc} hasTime />
+          {!row.isAbsent && (
+            <Tooltip title={`Re-clock ${field} (update time & location)`}>
+              <span>
+                <IconButton size="small" onClick={() => handleClock(index, field)} disabled={busy} sx={{ p: 0.25 }}>
+                  {busy ? <CircularProgress size={13} /> : <MyLocationIcon sx={{ fontSize: 14 }} />}
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
+        </Box>
+      );
+    }
+
+    return (
+      <Button
+        size="small"
+        variant="outlined"
+        startIcon={busy ? <CircularProgress size={13} /> : <LocationOnIcon sx={{ fontSize: 16 }} />}
+        onClick={() => handleClock(index, field)}
+        disabled={row.isAbsent || busy}
+        sx={{ textTransform: 'none', py: 0.1, px: 0.75, minWidth: 0, fontSize: '0.72rem', whiteSpace: 'nowrap' }}
+      >
+        {busy ? 'Locating…' : field === 'in' ? 'Clock In' : 'Clock Out'}
+      </Button>
+    );
+  };
 
   const cellSx = { py: 0.5, px: 0.5, fontSize: '0.8125rem' };
   const headerSx = { fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', py: 1, px: 0.5, whiteSpace: 'nowrap' as const };
@@ -373,31 +532,11 @@ const DTRPage: React.FC<DTRPageProps> = ({ employeeId: propEmployeeId, employeeN
                     {paid && <Chip label="Paid" size="small" sx={{ ml: 0.5, height: 18, fontSize: '0.65rem' }} color="success" />}
                     {!paid && isToday && <Chip label="Today" size="small" sx={{ ml: 0.5, height: 18, fontSize: '0.65rem' }} color="info" />}
                   </TableCell>
-                  <TableCell sx={{ ...cellSx, width: 100 }}>
-                    <TextField
-                      size="small"
-                      type="time"
-                      value={row.timeIn}
-                      onChange={(e) => updateRow(index, 'timeIn', e.target.value)}
-                      disabled={row.isAbsent || paid}
-                      variant="standard"
-                      InputProps={{ disableUnderline: true }}
-                      inputProps={{ style: { fontSize: '0.8125rem', padding: '2px 0' } }}
-                      fullWidth
-                    />
+                  <TableCell sx={{ ...cellSx, width: 118 }}>
+                    {renderTimeCell(row, index, 'in', paid, isToday)}
                   </TableCell>
-                  <TableCell sx={{ ...cellSx, width: 100 }}>
-                    <TextField
-                      size="small"
-                      type="time"
-                      value={row.timeOut}
-                      onChange={(e) => updateRow(index, 'timeOut', e.target.value)}
-                      disabled={row.isAbsent || paid}
-                      variant="standard"
-                      InputProps={{ disableUnderline: true }}
-                      inputProps={{ style: { fontSize: '0.8125rem', padding: '2px 0' } }}
-                      fullWidth
-                    />
+                  <TableCell sx={{ ...cellSx, width: 118 }}>
+                    {renderTimeCell(row, index, 'out', paid, isToday)}
                   </TableCell>
                   <TableCell sx={{ ...cellSx, width: 60, textAlign: 'right', fontWeight: 600 }}>
                     {row.regularHours}
