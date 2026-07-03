@@ -16,6 +16,9 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 const NO_GPS = 'No GPS recorded';
 const OFF_SITE = 'Off-site';
 const UNASSIGNED = 'Unassigned';
+// Standard monthly working hours (PH: ~2080/yr ÷ 12). Hours beyond this in a
+// month are counted as Extended (OT) for monitoring.
+const MONTHLY_STANDARD_HOURS = 173.3;
 
 const authHeaders = (): Record<string, string> => {
   const token = localStorage.getItem('netpacific_token');
@@ -79,16 +82,13 @@ const EmployeeHoursDashboard: React.FC<Props> = ({ employeeId, employeeName, onB
   );
 
   const stats = useMemo(() => {
-    let regular = 0, extended = 0, daysWorked = 0;
+    let totalWorked = 0, daysWorked = 0;
     const perSite = new Map<string, number>();
     const perProject = new Map<string, number>();
     for (const e of monthEntries) {
-      const reg = Number(e.regularHours) || 0;
-      const ot = Number(e.overtimeHours) || 0;
-      const dayTotal = reg + ot;
-      regular += reg;
-      extended += ot;
-      if (reg > 0 || ot > 0) daysWorked++;
+      const dayTotal = (Number(e.regularHours) || 0) + (Number(e.overtimeHours) || 0);
+      totalWorked += dayTotal;
+      if (dayTotal > 0) daysWorked++;
       const loc = e.clockInLocation ?? e.clockOutLocation ?? null;
       let key: string;
       if (!loc) key = NO_GPS;
@@ -97,7 +97,10 @@ const EmployeeHoursDashboard: React.FC<Props> = ({ employeeId, employeeName, onB
       const proj = (e.projectName || '').trim() || UNASSIGNED;
       perProject.set(proj, (perProject.get(proj) ?? 0) + dayTotal);
     }
-    const total = regular + extended;
+    // Regular is capped at the monthly standard; anything beyond is Extended (OT).
+    const regular = Math.min(totalWorked, MONTHLY_STANDARD_HOURS);
+    const extended = Math.max(0, totalWorked - MONTHLY_STANDARD_HOURS);
+    const total = totalWorked;
     const toRows = (m: Map<string, number>) => Array.from(m.entries())
       .map(([name, hours]) => ({ name, hours, pct: total > 0 ? (hours / total) * 100 : 0 }))
       .sort((a, b) => b.hours - a.hours);
@@ -142,6 +145,9 @@ const EmployeeHoursDashboard: React.FC<Props> = ({ employeeId, employeeName, onB
             <Grid size={{ xs: 6, md: 3 }}><KpiCard icon={<ScheduleIcon fontSize="inherit" />} label="Total hours" value={hrs(stats.total)} color="#4caf50" /></Grid>
             <Grid size={{ xs: 6, md: 3 }}><KpiCard icon={<EventAvailableIcon fontSize="inherit" />} label="Days worked" value={String(stats.daysWorked)} color="#9c27b0" /></Grid>
           </Grid>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: -1.5, mb: 2 }}>
+            Standard month = {MONTHLY_STANDARD_HOURS} hrs. Hours worked beyond that are counted as Extended (OT).
+          </Typography>
 
           {/* Hours per project (where to charge) */}
           <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NET, mb: 1 }}>Hours per project</Typography>
