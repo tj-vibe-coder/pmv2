@@ -19,6 +19,7 @@ import {
 import {
   Login as LoginIcon,
   Logout as LogoutIcon,
+  AccessTime as AccessTimeIcon,
   Person as PersonIcon,
   Menu as MenuIcon
 } from '@mui/icons-material';
@@ -189,6 +190,12 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
                     {user?.email}
                   </Typography>
                 </Box>
+                <MenuItem onClick={() => { handleUserMenuClose(); navigate('/employee'); }}>
+                  <ListItemIcon>
+                    <AccessTimeIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText primary="Employee Portal (DTR)" />
+                </MenuItem>
                 <MenuItem onClick={handleLogout}>
                   <ListItemIcon>
                     <LogoutIcon fontSize="small" />
