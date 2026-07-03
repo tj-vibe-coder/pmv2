@@ -66,6 +66,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const isAdminUser = user?.role === 'superadmin' || user?.role === 'admin';
   const isEmployeeWorkspace = location.pathname === '/employee' || location.pathname.startsWith('/employee/');
   const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
   const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
@@ -186,12 +187,13 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
       </Box>
 
       {/* Mobile-only workspace switcher. On desktop this lives in the header
-          toggle, which is hidden on small screens — so surface it in the drawer
-          (non-employee workspaces only, matching the header's condition). */}
-      {isMobile && !isEmployeeWorkspace && (
+          toggle, which is hidden on small screens — so surface it in the drawer.
+          Admins also get it inside the employee workspace (+ an Employee option)
+          so they can reach and leave their own portal on a phone. */}
+      {isMobile && (!isEmployeeWorkspace || isAdminUser) && (
         <Box sx={{ px: 2, pb: 1.5 }}>
           <ToggleButtonGroup
-            value={isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects'}
+            value={isEmployeeWorkspace ? 'employee' : isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects'}
             exclusive
             fullWidth
             size="small"
@@ -201,6 +203,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
               if (v === 'projects') navigate('/dashboard');
               else if (v === 'sales') navigate('/sales');
               else if (v === 'finance') navigate('/finance');
+              else if (v === 'employee') navigate('/employee');
             }}
             sx={{
               '& .MuiToggleButton-root': {
@@ -221,6 +224,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
             <ToggleButton value="projects">Projects</ToggleButton>
             <ToggleButton value="sales">Sales</ToggleButton>
             <ToggleButton value="finance">Finance</ToggleButton>
+            {isAdminUser && <ToggleButton value="employee">Employee</ToggleButton>}
           </ToggleButtonGroup>
         </Box>
       )}
