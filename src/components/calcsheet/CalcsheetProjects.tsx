@@ -29,6 +29,8 @@ const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'e
 // Single source of truth for the status options used by the multi-select filter
 // and the inline status dropdown. Keep `inactive` here — it's part of ProjectStatus.
 const STATUS_OPTIONS: ProjectStatus[] = ['draft', 'sent', 'won', 'lost', 'inactive'];
+// Hidden from the list by default; still reachable by explicitly ticking them in the Status filter.
+const DEFAULT_HIDDEN_STATUSES: ProjectStatus[] = ['lost', 'inactive'];
 const statusLabel = (s: ProjectStatus) => s.charAt(0).toUpperCase() + s.slice(1);
 
 type SortKey = 'code' | 'name' | 'customer' | 'date' | 'status' | 'grandTotal' | 'margin';
@@ -48,7 +50,7 @@ function loadSortPref(): { key: SortKey; dir: SortDir } {
       }
     }
   } catch { /* corrupted pref — fall through to default */ }
-  return { key: 'code', dir: 'asc' };
+  return { key: 'date', dir: 'desc' }; // newest projects at the top by default
 }
 
 function saveSortPref(key: SortKey, dir: SortDir) {
@@ -290,6 +292,8 @@ export default function Projects() {
         const hay = `${p.code} ${p.name} ${p.location ?? ''} ${customer?.name ?? ''} ${customer?.code ?? ''} ${partner?.name ?? ''}`.toLowerCase();
         if (!hay.includes(s)) return false;
       }
+      // Auto-hide lost/inactive unless the user explicitly selects that status.
+      if (DEFAULT_HIDDEN_STATUSES.includes(p.status) && !statusFilter.includes(p.status)) return false;
       if (statusFilter.length > 0 && !statusFilter.includes(p.status)) return false;
       if (customerFilter !== 'all' && p.customerId !== customerFilter) return false;
       if (yearFilter !== 'all' && String(year) !== yearFilter) return false;
@@ -545,10 +549,13 @@ export default function Projects() {
               onChange={(e) => setStatusFilter(e.target.value as ProjectStatus[])}
               input={<OutlinedInput label="Status" />}
               renderValue={(selected) =>
-                selected.length === STATUS_OPTIONS.length
-                  ? 'All'
-                  : selected.map(statusLabel).join(', ')
+                selected.length === 0
+                  ? 'Active (lost/inactive hidden)'
+                  : selected.length === STATUS_OPTIONS.length
+                    ? 'All'
+                    : selected.map(statusLabel).join(', ')
               }
+              displayEmpty
             >
               {STATUS_OPTIONS.map((status) => (
                 <MenuItem key={status} value={status}>
