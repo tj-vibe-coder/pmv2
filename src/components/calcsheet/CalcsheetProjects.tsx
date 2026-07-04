@@ -216,6 +216,7 @@ export default function Projects() {
   const [yearFilter, setYearFilter] = useState<string>('all');
   const [legacyFilter, setLegacyFilter] = useState<'all' | 'legacy' | 'current'>('all');
   const [ongoingOnly, setOngoingOnly] = useState(false);
+  const [hideInactive, setHideInactive] = useState(true); // hide lost/inactive by default
   const [sortKey, setSortKey] = useState<SortKey>(() => loadSortPref().key);
   const [sortDir, setSortDir] = useState<SortDir>(() => loadSortPref().dir);
 
@@ -292,8 +293,9 @@ export default function Projects() {
         const hay = `${p.code} ${p.name} ${p.location ?? ''} ${customer?.name ?? ''} ${customer?.code ?? ''} ${partner?.name ?? ''}`.toLowerCase();
         if (!hay.includes(s)) return false;
       }
-      // Auto-hide lost/inactive unless the user explicitly selects that status.
-      if (DEFAULT_HIDDEN_STATUSES.includes(p.status) && !statusFilter.includes(p.status)) return false;
+      // "Hide lost & inactive" (ticked by default) hides them unless that status
+      // is explicitly picked in the Status filter.
+      if (hideInactive && DEFAULT_HIDDEN_STATUSES.includes(p.status) && !statusFilter.includes(p.status)) return false;
       if (statusFilter.length > 0 && !statusFilter.includes(p.status)) return false;
       if (customerFilter !== 'all' && p.customerId !== customerFilter) return false;
       if (yearFilter !== 'all' && String(year) !== yearFilter) return false;
@@ -302,7 +304,7 @@ export default function Projects() {
       if (ongoingOnly && !p.ongoing) return false;
       return true;
     });
-  }, [enriched, search, statusFilter, customerFilter, yearFilter, legacyFilter, ongoingOnly]);
+  }, [enriched, search, statusFilter, customerFilter, yearFilter, legacyFilter, ongoingOnly, hideInactive]);
 
   // Sort
   const sorted = useMemo(() => {
@@ -370,7 +372,7 @@ export default function Projects() {
 
   const clearFilters = () => {
     setSearch(''); setStatusFilter([]); setCustomerFilter('all');
-    setYearFilter('all'); setLegacyFilter('all'); setOngoingOnly(false);
+    setYearFilter('all'); setLegacyFilter('all'); setOngoingOnly(false); setHideInactive(true);
   };
 
   const anyFilterActive = search || statusFilter.length > 0 || customerFilter !== 'all'
@@ -549,13 +551,10 @@ export default function Projects() {
               onChange={(e) => setStatusFilter(e.target.value as ProjectStatus[])}
               input={<OutlinedInput label="Status" />}
               renderValue={(selected) =>
-                selected.length === 0
-                  ? 'Active (lost/inactive hidden)'
-                  : selected.length === STATUS_OPTIONS.length
-                    ? 'All'
-                    : selected.map(statusLabel).join(', ')
+                selected.length === STATUS_OPTIONS.length
+                  ? 'All'
+                  : selected.map(statusLabel).join(', ')
               }
-              displayEmpty
             >
               {STATUS_OPTIONS.map((status) => (
                 <MenuItem key={status} value={status}>
@@ -598,6 +597,10 @@ export default function Projects() {
           <FormControlLabel
             control={<Switch size="small" checked={ongoingOnly} onChange={(e) => setOngoingOnly(e.target.checked)} />}
             label={<Typography variant="caption">Active proposals only</Typography>}
+          />
+          <FormControlLabel
+            control={<Switch size="small" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} />}
+            label={<Typography variant="caption">Hide lost &amp; inactive</Typography>}
           />
           <Box sx={{ flex: 1 }} />
           <Typography variant="caption" color="text.secondary">
