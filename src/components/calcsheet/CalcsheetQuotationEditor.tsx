@@ -3,13 +3,14 @@ import { Link, useParams } from 'react-router-dom';
 import {
   Accordion, AccordionDetails, AccordionSummary,
   Alert, AlertTitle, Autocomplete, Box, Button, Checkbox, Chip, CircularProgress,
-  Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel, ListSubheader, MenuItem, Paper,
+  Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel, IconButton, ListSubheader, MenuItem, Paper,
   Snackbar, Stack, Switch, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import HistoryIcon from '@mui/icons-material/History';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DeleteIcon from '@mui/icons-material/Delete';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import { useNavigate } from 'react-router-dom';
@@ -33,6 +34,7 @@ import type {
 } from '../../types/Quotation';
 import { EditableTable } from './EditableTable';
 import type { Column } from './EditableTable';
+import DuplicateQuotationDialog from './DuplicateQuotationDialog';
 import { exportQuotationPdf } from '../../utils/calcsheet/pdfExport';
 import { exportQuotationXlsx } from '../../utils/calcsheet/xlsxExport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
@@ -133,8 +135,8 @@ export default function QuotationEditor() {
   const salesContacts = useQuotationStore((s) => s.salesContacts);
   const presets = useQuotationStore((s) => s.laborPresets);
   const update = useQuotationStore((s) => s.updateQuotation);
-  const duplicateQuotation = useQuotationStore((s) => s.duplicateQuotation);
   const fetchQuotationVersions = useQuotationStore((s) => s.fetchQuotationVersions);
+  const deleteQuotationVersion = useQuotationStore((s) => s.deleteQuotationVersion);
 
   const [draft, setDraft] = useState<Quotation | undefined>(saved);
   const [selectedSvcIds, setSelectedSvcIds] = useState<Set<string>>(new Set());
@@ -218,9 +220,11 @@ export default function QuotationEditor() {
 
   // Saved-version history (snapshots captured server-side on every save).
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [versions, setVersions] = useState<QuotationVersion[]>([]);
+  const [deletingVersionId, setDeletingVersionId] = useState<string | null>(null);
 
   // OneDrive auto-upload on export. Hooks must be declared unconditionally —
   // keep these above the early-return guard below.
@@ -356,15 +360,29 @@ export default function QuotationEditor() {
     setToast({ msg: 'Version loaded into the editor — review and click Save to keep it', sev: 'info' });
   };
 
-  const handleDuplicateToRevise = async () => {
+  const handleDeleteVersion = async (v: QuotationVersion) => {
+    const proceed = window.confirm('Permanently delete this saved snapshot? This cannot be undone.');
+    if (!proceed) return;
+    setDeletingVersionId(v.id);
+    try {
+      await deleteQuotationVersion(quotation.id, v.id);
+      setVersions((prev) => prev.filter((x) => x.id !== v.id));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setToast({ msg: `Failed to delete snapshot: ${msg}`, sev: 'warning' });
+    } finally {
+      setDeletingVersionId(null);
+    }
+  };
+
+  const handleOpenDuplicate = () => {
     if (isDirty) {
       const proceed = window.confirm(
         'You have unsaved changes. Duplicating now uses the last saved version — your draft edits will be lost.\n\nDuplicate anyway?'
       );
       if (!proceed) return;
     }
-    const copy = await duplicateQuotation(quotation.id);
-    if (copy) navigate(`/sales/calcsheet/quotations/${copy.id}`);
+    setDuplicateOpen(true);
   };
 
   // Section A — General Requirements
@@ -818,6 +836,15 @@ export default function QuotationEditor() {
             Export Excel
           </Button>
           <Button
+            startIcon={<ContentCopyIcon />}
+            variant="outlined"
+            color="inherit"
+            onClick={handleOpenDuplicate}
+            title="Duplicate this quotation, optionally into another project"
+          >
+            Duplicate
+          </Button>
+          <Button
             startIcon={<HistoryIcon />}
             variant="outlined"
             color="inherit"
@@ -845,7 +872,7 @@ export default function QuotationEditor() {
           severity="warning"
           icon={<HistoryIcon />}
           action={
-            <Button color="inherit" size="small" startIcon={<ContentCopyIcon />} onClick={handleDuplicateToRevise}>
+            <Button color="inherit" size="small" startIcon={<ContentCopyIcon />} onClick={handleOpenDuplicate}>
               Duplicate to revise
             </Button>
           }
@@ -1538,6 +1565,16 @@ export default function QuotationEditor() {
       </Paper>
 
       {/* Saved-version history */}
+      <DuplicateQuotationDialog
+        open={duplicateOpen}
+        quotation={quotation}
+        onClose={() => setDuplicateOpen(false)}
+        onDuplicated={(copy) => {
+          setDuplicateOpen(false);
+          navigate(`/sales/calcsheet/quotations/${copy.id}`);
+        }}
+      />
+
       <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
           Version history — {quotationRefNo(project.code, recipient?.code, quotation.revision)} ({quotation.kind})
@@ -1584,6 +1621,14 @@ export default function QuotationEditor() {
                             Restore
                           </Button>
                         )}
+                        <IconButton
+                          size="small"
+                          title="Delete this snapshot"
+                          disabled={deletingVersionId === v.id}
+                          onClick={() => handleDeleteVersion(v)}
+                        >
+                          {deletingVersionId === v.id ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
+                        </IconButton>
                       </TableCell>
                     </TableRow>
                   );

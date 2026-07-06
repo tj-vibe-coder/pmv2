@@ -607,9 +607,12 @@ const InvestmentTrackerPage: React.FC = () => {
             {registerForm.scope === 'project' && (
               <Grid size={{ xs: 12, sm: 6 }}>
                 <TextField select label="Project *" fullWidth size="small" value={registerForm.projectId}
-                  onChange={(e) => setRegisterForm((f) => ({ ...f, projectId: e.target.value }))}>
+                  onChange={(e) => setRegisterForm((f) => ({ ...f, projectId: e.target.value }))}
+                  SelectProps={{ MenuProps: { PaperProps: { style: { maxWidth: 480 } } } }}>
                   {allProjects.map((p) => (
-                    <MenuItem key={p.id} value={String(p.id)}>{p.project_no || p.project_name}</MenuItem>
+                    <MenuItem key={p.id} value={String(p.id)} sx={{ whiteSpace: 'normal' }}>
+                      {p.project_no ? `${p.project_no} — ${p.project_name}` : p.project_name}
+                    </MenuItem>
                   ))}
                 </TextField>
               </Grid>

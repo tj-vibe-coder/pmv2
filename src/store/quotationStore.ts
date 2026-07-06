@@ -94,12 +94,13 @@ interface Actions {
   createQuotation: (projectId: ID, kind: QuotationKind, recipientId: ID | null) => Promise<Quotation>;
   updateQuotation: (id: ID, patch: Partial<Quotation>) => Promise<Quotation>;
   deleteQuotation: (id: ID) => Promise<void>;
-  duplicateQuotation: (id: ID) => Promise<Quotation | null>;
+  duplicateQuotation: (id: ID, opts?: { projectId?: ID }) => Promise<Quotation | null>;
   // Import a fully-formed Quotation (e.g. from a legacy Excel parse) under an existing project.
   importQuotation: (q: Quotation) => Promise<Quotation>;
   // Saved-version history for a quotation (newest first). Not cached in the store —
   // fetched on demand when the History dialog opens.
   fetchQuotationVersions: (id: ID) => Promise<QuotationVersion[]>;
+  deleteQuotationVersion: (quotationId: ID, versionId: ID) => Promise<void>;
 
   // Presets
   addPreset: (p: Omit<LaborRolePreset, 'id'>) => Promise<LaborRolePreset>;
@@ -518,19 +519,36 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
     const res = await api<{ versions: QuotationVersion[] }>('GET', `/quotations/${id}/versions`);
     return res.versions ?? [];
   },
+  deleteQuotationVersion: async (quotationId, versionId) => {
+    await api('DELETE', `/quotations/${quotationId}/versions/${versionId}`);
+  },
   importQuotation: async (q) => {
     const res = await api<{ quotation: Quotation }>('POST', '/quotations', q);
     const saved = res.quotation ?? q;
     set({ quotations: [...get().quotations, saved] });
     return saved;
   },
-  duplicateQuotation: async (id) => {
+  duplicateQuotation: async (id, opts) => {
     const original = get().quotations.find((q) => q.id === id);
     if (!original) return null;
+    const targetProjectId = opts?.projectId ?? original.projectId;
+    const sameProject = String(targetProjectId) === String(original.projectId);
+
+    // Same-project duplicates bump the revision; cross-project duplicates start
+    // fresh at "00". Either way, skip past any revision that already exists for
+    // that (project, kind) — the server enforces no uniqueness on this pair.
+    const siblingRevisions = get().quotations
+      .filter((q) => String(q.projectId) === String(targetProjectId) && q.kind === original.kind)
+      .map((q) => parseInt(q.revision, 10))
+      .filter((n) => !Number.isNaN(n));
+    let nextRevisionNum = sameProject ? parseInt(original.revision, 10) + 1 : 0;
+    while (siblingRevisions.includes(nextRevisionNum)) nextRevisionNum += 1;
+
     const copy: Quotation = {
       ...original,
       id: nanoid(8),
-      revision: String(parseInt(original.revision, 10) + 1).padStart(2, '0'),
+      projectId: targetProjectId,
+      revision: String(nextRevisionNum).padStart(2, '0'),
       createdAt: now(),
       updatedAt: now(),
     };

@@ -40,6 +40,7 @@ import {
 import { onedriveConfig } from '../../config/onedriveConfig';
 import LinkIcon from '@mui/icons-material/Link';
 import DesktopMacIcon from '@mui/icons-material/DesktopMac';
+import DuplicateQuotationDialog from './DuplicateQuotationDialog';
 
 export default function ProjectDetail() {
   const { id = '' } = useParams();
@@ -50,7 +51,6 @@ export default function ProjectDetail() {
   const quotations = useMemo(() => allQuotations.filter((q) => q.projectId === id), [allQuotations, id]);
   const createQuotation = useQuotationStore((s) => s.createQuotation);
   const deleteQuotation = useQuotationStore((s) => s.deleteQuotation);
-  const duplicateQuotation = useQuotationStore((s) => s.duplicateQuotation);
   const importQuotation = useQuotationStore((s) => s.importQuotation);
   const updateProject = useQuotationStore((s) => s.updateProject);
   const syncMainProject = useQuotationStore((s) => s.syncMainProject);
@@ -60,6 +60,7 @@ export default function ProjectDetail() {
   const [oneDriveBusy, setOneDriveBusy] = useState<'proposal' | 'execution' | null>(null);
   const [oneDriveErr, setOneDriveErr] = useState<string>('');
   const [deleteTarget, setDeleteTarget] = useState<Quotation | null>(null);
+  const [duplicateTarget, setDuplicateTarget] = useState<Quotation | null>(null);
   // Non-error info message shown next to the OneDrive buttons. Used to tell the
   // user when auto-detect matched an existing historical folder (instead of
   // creating a new one) so they don't think the system silently misbehaved.
@@ -1306,7 +1307,7 @@ export default function ProjectDetail() {
                   <TableCell align="right" sx={{ fontWeight: 600 }}>{PHP(t.grandTotal)}</TableCell>
                   <TableCell align="right">
                     <IconButton size="small" component={Link} to={`/sales/calcsheet/quotations/${q.id}`}><OpenInNewIcon fontSize="small" /></IconButton>
-                    <IconButton size="small" onClick={() => duplicateQuotation(q.id)} title="Duplicate as new revision"><ContentCopyIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" onClick={() => setDuplicateTarget(q)} title="Duplicate quotation"><ContentCopyIcon fontSize="small" /></IconButton>
                     <IconButton size="small" onClick={() => setDeleteTarget(q)}><DeleteIcon fontSize="small" /></IconButton>
                   </TableCell>
                 </TableRow>
@@ -1890,6 +1891,16 @@ export default function ProjectDetail() {
           <Button onClick={() => setLinkExistingOpen(false)} disabled={linkExistingBusy}>Cancel</Button>
         </DialogActions>
       </Dialog>
+
+      <DuplicateQuotationDialog
+        open={!!duplicateTarget}
+        quotation={duplicateTarget}
+        onClose={() => setDuplicateTarget(null)}
+        onDuplicated={(copy) => {
+          setDuplicateTarget(null);
+          navigate(`/sales/calcsheet/quotations/${copy.id}`);
+        }}
+      />
 
       <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Delete quotation?</DialogTitle>
