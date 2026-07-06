@@ -30,9 +30,21 @@ export interface ProjectInvoice {
   pb_number?: string;
   scan_file?: ScanFile | null;
   notes?: string;
+  /** Counterparty this invoice is billed to. On ACTI-joint projects IOCT may bill
+   *  the partner (ACTI) or the end customer directly — it varies per invoice.
+   *  Absent/'customer' = billed to the end customer (the default, back-compatible). */
+  bill_to?: BillToKind;
+  bill_to_name?: string;
   created_at: string;
   updated_at: string;
 }
+
+export type BillToKind = 'customer' | 'acti';
+
+export const BILL_TO_OPTIONS: { label: string; value: BillToKind }[] = [
+  { label: 'End customer', value: 'customer' },
+  { label: 'ACTI (partner)', value: 'acti' },
+];
 
 export type InvoiceStatus = 'paid' | 'partial' | 'overdue' | 'unpaid';
 

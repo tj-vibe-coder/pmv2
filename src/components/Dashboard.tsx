@@ -79,6 +79,7 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: externalRefreshTrigger = 0 }) => {
   const [filters, setFilters] = useState<ProjectFilters>({});
+  const [filterActi, setFilterActi] = useState(false);
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [exportMenuAnchor, setExportMenuAnchor] = useState<null | HTMLElement>(null);
@@ -174,9 +175,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
   
   // Since we're now filtering server-side, filteredProjects is projects with client-side sorting
   const filteredProjects = useMemo(() => {
-    if (!sortConfig) return projects;
-    
-    const sortedProjects = [...projects].sort((a, b) => {
+    const base = filterActi ? projects.filter(p => p.with_acti) : projects;
+    if (!sortConfig) return base;
+
+    const sortedProjects = [...base].sort((a, b) => {
       // Backlogs = unbilled amount (sort by computed value)
       if (sortConfig.key === 'backlogs') {
         const aVal = dataService.getUnbilled(a);
@@ -206,7 +208,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     });
     
     return sortedProjects;
-  }, [projects, sortConfig]);
+  }, [projects, sortConfig, filterActi]);
 
   // Calculate summary data based on all applied filters (Backlogs = unbilled amount)
   const summary = useMemo(() => {
@@ -367,6 +369,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                 break;
               case 'updated contract balance net':
                 project.updated_contract_balance_net = parseFloat(value) || 0;
+                break;
+              case 'with acti':
+                project.with_acti = /^(yes|true|1)$/i.test((value || '').trim());
+                break;
+              case 'partner':
+                project.partner_name = value;
                 break;
               // Add more field mappings as needed
               default:
@@ -553,7 +561,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       'Retention Status',
       'Unevaluated Progress',
       'Created At',
-      'Updated At'
+      'Updated At',
+      'With ACTI',
+      'Partner'
     ];
 
     // Create CSV content with properly aligned data
@@ -615,9 +625,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           escapeCSV(project.retention_status || ''),
           escapeCSV(project.unevaluated_progress || 0),
           escapeCSV(project.created_at || ''),
-          escapeCSV(project.updated_at || '')
+          escapeCSV(project.updated_at || ''),
+          escapeCSV(project.with_acti ? 'Yes' : 'No'),
+          escapeCSV(project.partner_name || '')
         ];
-        
+
         return row.join(',');
       })
     ].join('\n');
@@ -689,7 +701,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       'Retention Status',
       'Unevaluated Progress',
       'Created At',
-      'Updated At'
+      'Updated At',
+      'With ACTI',
+      'Partner'
     ];
 
     // Create BOM for Excel UTF-8 recognition
@@ -753,9 +767,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           project.retention_status || '',
           project.unevaluated_progress || 0,
           project.created_at || '',
-          project.updated_at || ''
+          project.updated_at || '',
+          project.with_acti ? 'Yes' : 'No',
+          project.partner_name || ''
         ];
-        
+
         return row.join('\t');
       })
     ].join('\n');
@@ -1054,6 +1070,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
               </Select>
             </FormControl>
           </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <Chip
+              label="With ACTI"
+              color={filterActi ? 'primary' : 'default'}
+              variant={filterActi ? 'filled' : 'outlined'}
+              onClick={() => setFilterActi(v => !v)}
+              clickable
+            />
+          </Grid>
         </Grid>
       </Paper>
       
@@ -1224,9 +1249,21 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                     </Typography>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-                      {project.account_name}
-                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                      <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                        {project.account_name}
+                      </Typography>
+                      {project.with_acti && (
+                        <Chip
+                          label="ACTI"
+                          size="small"
+                          color="primary"
+                          variant="outlined"
+                          title={project.partner_name || 'Joint with ACTI'}
+                          sx={{ fontSize: '0.65rem', height: 18 }}
+                        />
+                      )}
+                    </Box>
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>

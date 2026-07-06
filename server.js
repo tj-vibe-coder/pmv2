@@ -660,6 +660,7 @@ app.post('/api/projects/bulk', async (req, res) => {
             contract_billed_net_percent: project.contract_billed_net_percent || 0, amount_contract_billed_net: project.amount_contract_billed_net || 0,
             for_retention_billing_percent: project.for_retention_billing_percent || 0, amount_for_retention_billing: project.amount_for_retention_billing || 0,
             retention_status: project.retention_status || '', unevaluated_progress: project.unevaluated_progress || 0,
+            with_acti: project.with_acti || false, partner_id: project.partner_id || null, partner_name: project.partner_name || '',
             created_at: now, updated_at: now,
           });
           successCount++;
@@ -3169,7 +3170,7 @@ function clientApproverFromClient(client) {
   return primary ? [primary.name, primary.position].filter(Boolean).join(' – ') : '';
 }
 
-function mapCalcsheetToMainProject(project, client, quotation, now, projectNo) {
+function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
   const amount = quotationGrandTotal(quotation);
   const year = Number.isFinite(new Date(project.date || now).getFullYear())
@@ -3239,6 +3240,9 @@ function mapCalcsheetToMainProject(project, client, quotation, now, projectNo) {
     source_module: 'calcsheet',
     executionFolderId: project.executionFolderId || '',
     executionFolderUrl: project.executionFolderUrl || '',
+    with_acti: !!withActi,
+    partner_id: (partner && partner.id) || project.partnerId || null,
+    partner_name: (partner && partner.name) || '',
   };
 }
 
@@ -3272,11 +3276,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     throw err;
   }
   const project = { id: projectDoc.id, ...projectDoc.data() };
-  const [clientDoc, qSnap] = await Promise.all([
+  const [clientDoc, partnerDoc, qSnap] = await Promise.all([
     project.customerId ? db.collection('clients').doc(String(project.customerId)).get() : Promise.resolve(null),
+    project.partnerId ? db.collection('clients').doc(String(project.partnerId)).get() : Promise.resolve(null),
     db.collection('calcsheet_quotations').where('projectId', '==', projectId).get(),
   ]);
   const client = clientDoc && clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
+  const partner = partnerDoc && partnerDoc.exists ? { id: partnerDoc.id, ...partnerDoc.data() } : null;
   const quotations = qSnap.docs.map((d) => {
     const { id: _stored, ...data } = d.data();
     return { ...data, id: d.id };
@@ -3284,6 +3290,8 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
   const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
   const selectedQuotation = ioct || acti;
+  // Joint-with-ACTI: the project carries a partner link, or an ACTI-kind quotation exists.
+  const withActi = !!project.partnerId || quotations.some((q) => q.kind === 'ACTI');
   if (!selectedQuotation) {
     const err = new Error('No IOCT or ACTI quotation found to seed contract amount');
     err.status = 400;
@@ -3320,13 +3328,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   if (linkedDoc && options.force) {
     const linkedData = linkedDoc.data() || {};
     const projectNo = linkedData.project_no || await nextIoctProjectNo(now);
-    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi);
     mainProjectId = linkedDoc.id;
     action = 'updated';
     await linkedDoc.ref.update({ ...mapped, updated_at: now });
   } else {
     const projectNo = await nextIoctProjectNo(now);
-    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi);
     action = project.mainProjectId ? 'recreated' : 'created';
     const ref = await db.collection('projects').add({ ...mapped, created_at: now, updated_at: now });
     mainProjectId = ref.id;
