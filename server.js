@@ -3593,6 +3593,23 @@ app.get('/api/calcsheet/quotations/:id/versions', async (req, res) => {
   }
 });
 
+app.delete('/api/calcsheet/quotations/:id/versions/:versionId', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const ref = db.collection('calcsheet_quotation_versions').doc(req.params.versionId);
+    const doc = await ref.get();
+    if (!doc.exists || doc.data().quotationId !== req.params.id) {
+      return res.status(404).json({ error: 'Version not found' });
+    }
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[calcsheet] delete quotation version failed:', { id: req.params.id, versionId: req.params.versionId, err: err && err.message });
+    res.status(500).json({ error: 'Failed to delete version' });
+  }
+});
+
 app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
