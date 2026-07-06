@@ -71,6 +71,13 @@ export interface Project {
   executionFolderId?: string;
   executionFolderUrl?: string;
   billing_schedule?: BillingMilestone[];
+
+  // Partner (ACTI) involvement — a project done jointly with the ACTI partner.
+  // `with_acti` is the project-level fact (is ACTI a partner here); the per-invoice
+  // counterparty ("bill to ACTI vs the end customer") lives on ProjectInvoice.bill_to.
+  with_acti?: boolean;
+  partner_id?: string | null;
+  partner_name?: string;
 }
 
 export type ProjectStatus = 'OPEN' | 'CLOSED' | 'FOR_CLOSEOUT' | 'PENDING' | 'CANCELLED';

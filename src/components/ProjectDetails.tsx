@@ -44,8 +44,8 @@ import {
   Description as DescriptionIcon,
 } from '@mui/icons-material';
 import { Project } from '../types/Project';
-import type { ProjectInvoice, BillingMilestone } from '../types/Invoice';
-import { getInvoiceStatus, computeDueDate, PAYMENT_TERMS_OPTIONS } from '../types/Invoice';
+import type { ProjectInvoice, BillingMilestone, BillToKind } from '../types/Invoice';
+import { getInvoiceStatus, computeDueDate, PAYMENT_TERMS_OPTIONS, BILL_TO_OPTIONS } from '../types/Invoice';
 import dataService from '../services/dataService';
 import EditProjectDialog from './EditProjectDialog';
 import UpdateProgressDialog from './UpdateProgressDialog';
@@ -550,7 +550,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
 
   // Invoice creation from milestone
   const [createInvoiceForMilestone, setCreateInvoiceForMilestone] = useState<BillingMilestone | null>(null);
-  const [milestoneInvoiceForm, setMilestoneInvoiceForm] = useState({ invoice_no: '', invoice_date: '', amount: '', payment_terms_days: 30, notes: '' });
+  const [milestoneInvoiceForm, setMilestoneInvoiceForm] = useState({ invoice_no: '', invoice_date: '', amount: '', payment_terms_days: 30, notes: '', bill_to: 'customer' as BillToKind });
   const [milestoneInvoiceErr, setMilestoneInvoiceErr] = useState('');
   const [milestoneInvoiceSaving, setMilestoneInvoiceSaving] = useState(false);
   const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
@@ -763,6 +763,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
       amount: suggestedAmount > 0 ? String(suggestedAmount) : '',
       payment_terms_days: defaultTermsDays,
       notes: `${milestone.label} — ${milestone.pb_number}`,
+      bill_to: project.with_acti ? 'acti' : 'customer',
     });
     setMilestoneInvoiceErr('');
     setCreateInvoiceForMilestone(milestone);
@@ -789,6 +790,10 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
         amount_collected: 0,
         notes: milestoneInvoiceForm.notes.trim() || undefined,
         pb_number: createInvoiceForMilestone.pb_number,
+        bill_to: milestoneInvoiceForm.bill_to,
+        bill_to_name: milestoneInvoiceForm.bill_to === 'acti'
+          ? (project.partner_name || 'Advance Controle Technologie Inc')
+          : (project.account_name || ''),
       };
       const token = localStorage.getItem('netpacific_token');
       const res = await fetch('/api/invoices', {
@@ -1742,6 +1747,18 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                 onChange={e => setMilestoneInvoiceForm(prev => ({ ...prev, payment_terms_days: Number(e.target.value) }))}
               >
                 {PAYMENT_TERMS_OPTIONS.map(opt => (
+                  <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl size="small" fullWidth>
+              <InputLabel>Bill To</InputLabel>
+              <Select
+                label="Bill To"
+                value={milestoneInvoiceForm.bill_to}
+                onChange={e => setMilestoneInvoiceForm(prev => ({ ...prev, bill_to: e.target.value as BillToKind }))}
+              >
+                {BILL_TO_OPTIONS.map(opt => (
                   <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
                 ))}
               </Select>

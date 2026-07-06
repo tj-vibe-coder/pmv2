@@ -14,6 +14,8 @@ import {
   Alert,
   CircularProgress,
   Paper,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import { Save as SaveIcon, Edit as EditIcon } from '@mui/icons-material';
 import dataService from '../services/dataService';
@@ -73,6 +75,9 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
     bonds_requirement: 'NO',
     client_approver: '',
     progress_billing_schedule: 'Monthly',
+    with_acti: false,
+    partner_id: null as string | null,
+    partner_name: '',
   });
 
   useEffect(() => {
@@ -111,6 +116,9 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
         bonds_requirement: project.bonds_requirement || 'NO',
         client_approver: project.client_approver || '',
         progress_billing_schedule: project.progress_billing_schedule || 'Monthly',
+        with_acti: !!project.with_acti,
+        partner_id: project.partner_id ?? null,
+        partner_name: project.partner_name || '',
       });
     }
   }, [open, project]);
@@ -164,6 +172,19 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
   };
   const clampStatusPercent = (n: number) => Math.min(100, Math.max(0, n));
 
+  const findActiClient = (): Client | null =>
+    clients.find((c) => (c.code || '').toUpperCase() === 'ACT' || /advance controle/i.test(c.name || '')) || null;
+
+  const handleActiToggle = (checked: boolean) => {
+    setFormData((prev) => {
+      if (!checked) return { ...prev, with_acti: false, partner_id: null, partner_name: '' };
+      if (prev.partner_id || prev.partner_name) return { ...prev, with_acti: true };
+      const acti = findActiClient();
+      return { ...prev, with_acti: true, partner_id: acti?.id ?? null, partner_name: acti?.name || 'Advance Controle Technologie Inc' };
+    });
+    setError(null);
+  };
+
   const handleSubmit = async () => {
     if (!project) return;
     if (!formData.project_name.trim()) {
@@ -207,6 +228,9 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
         bonds_requirement: formData.bonds_requirement,
         client_approver: formData.client_approver,
         progress_billing_schedule: formData.progress_billing_schedule,
+        with_acti: formData.with_acti,
+        partner_id: formData.with_acti ? formData.partner_id : null,
+        partner_name: formData.with_acti ? formData.partner_name : '',
       };
 
       const result = await dataService.updateProject(project.id, payload);
@@ -331,6 +355,29 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
             <Grid size={{ xs: 12, md: 6 }}>
               <TextField fullWidth label="Year" type="number" value={formData.year} onChange={handleInputChange('year')} variant="outlined" size="small" inputProps={{ min: 2000, max: 2030 }} />
             </Grid>
+          </Grid>
+
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600, color: '#1a202c' }}>
+            Partner (ACTI)
+          </Typography>
+          <Grid container spacing={2} sx={{ mb: 3 }} alignItems="center">
+            <Grid size={{ xs: 12, md: 6 }}>
+              <FormControlLabel
+                control={<Switch checked={formData.with_acti} onChange={(e) => handleActiToggle(e.target.checked)} />}
+                label="Joint project with ACTI"
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: -0.5 }}>
+                Flags this as done together with the ACTI partner (used in the With-ACTI filter).
+              </Typography>
+            </Grid>
+            {formData.with_acti && (
+              <Grid size={{ xs: 12, md: 6 }}>
+                <Typography variant="body2" color="text.secondary">
+                  Partner: <strong>{formData.partner_name || 'Advance Controle Technologie Inc'}</strong>
+                </Typography>
+              </Grid>
+            )}
           </Grid>
 
           <Divider sx={{ my: 2 }} />
