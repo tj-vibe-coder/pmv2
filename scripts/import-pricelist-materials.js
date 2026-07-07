@@ -25,7 +25,9 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 const COMMON = {
-  supplier: 'IOCT',
+  // No single supplier — this is IOCT's internally compiled list; per-item
+  // manufacturer lives in `brand`. IOCT itself is never a supplier.
+  supplier: '',
   pricelistName: 'IOCT Electrical Materials 2026',
   pricelistDate: '2026-01',
 };
