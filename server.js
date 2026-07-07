@@ -4505,6 +4505,58 @@ app.delete('/api/work-sites/:id', async (req, res) => {
   }
 });
 
+// ─── Pricelists ───────────────────────────────────────────────────────────────
+// Read-only catalog for the Sales pricelist browser (seeded by import scripts).
+// Filters applied in memory (collection is small, equality/range only).
+app.get('/api/pricelists', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('pricelist_items').get();
+    let items = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+
+    const { search, poles, minPrice, maxPrice } = req.query;
+    const categories = [].concat(req.query.category || []).filter(Boolean);
+    if (categories.length) items = items.filter((i) => categories.includes(i.category));
+    if (poles != null && poles !== '') items = items.filter((i) => Number(i.poles) === Number(poles));
+    if (minPrice != null && minPrice !== '') items = items.filter((i) => Number(i.sellingPrice) >= Number(minPrice));
+    if (maxPrice != null && maxPrice !== '') items = items.filter((i) => Number(i.sellingPrice) <= Number(maxPrice));
+    if (search) {
+      const t = String(search).toLowerCase();
+      items = items.filter((i) =>
+        [i.catalogNo, i.description, i.brand, i.category, i.abbRefNo, i.sepEquivalent]
+          .filter(Boolean).some((v) => String(v).toLowerCase().includes(t)));
+    }
+    res.json({ success: true, items });
+  } catch (e) {
+    console.error('GET /api/pricelists error:', e);
+    res.status(500).json({ error: 'Failed to fetch pricelist' });
+  }
+});
+
+app.get('/api/pricelists/filters', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('pricelist_items').get();
+    const suppliers = new Set(), brands = new Set(), categories = new Set(), poles = new Set();
+    snap.docs.forEach((d) => {
+      const i = d.data();
+      if (i.supplier) suppliers.add(i.supplier);
+      if (i.brand) brands.add(i.brand);
+      if (i.category) categories.add(i.category);
+      if (Number.isFinite(Number(i.poles)) && i.poles) poles.add(Number(i.poles));
+    });
+    res.json({
+      suppliers: Array.from(suppliers).sort(),
+      brands: Array.from(brands).sort(),
+      categories: Array.from(categories).sort(),
+      poles: Array.from(poles).sort((a, b) => a - b),
+    });
+  } catch (e) {
+    console.error('GET /api/pricelists/filters error:', e);
+    res.status(500).json({ error: 'Failed to fetch pricelist filters' });
+  }
+});
+
 // ========== ONEDRIVE / MICROSOFT GRAPH HEALTH ==========
 // Smoke test for server-side app-only Graph auth. Never exposes token/secret.
 app.get('/api/onedrive/health', async (req, res) => {

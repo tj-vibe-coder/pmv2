@@ -9,6 +9,7 @@ export interface PricelistItem {
   catalogNo: string;
   abbRefNo: string;
   description: string;
+  uom?: string;          // unit of measure (pc, m, length, box…) — materials/cables
   poles?: number;
   ampRating?: number;
   dimensions?: { w: number; d: number; h: number };

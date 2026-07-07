@@ -15,7 +15,7 @@ interface Props {
   onSelectionChange?: (selected: Set<string>) => void;
 }
 
-type SortKey = 'catalogNo' | 'description' | 'category' | 'poles' | 'ampRating' | 'sellingPrice';
+type SortKey = 'catalogNo' | 'description' | 'category' | 'brand' | 'poles' | 'ampRating' | 'sellingPrice';
 type SortDir = 'asc' | 'desc';
 
 export default function PricelistTable({ items, loading, selectable = false, selected, onSelectionChange }: Props) {
@@ -101,8 +101,10 @@ export default function PricelistTable({ items, loading, selectable = false, sel
               <TableCell sx={{ fontWeight: 600 }}>{sortLabel('catalogNo', 'Catalog No.')}</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>{sortLabel('description', 'Description')}</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>{sortLabel('category', 'Category')}</TableCell>
+              <TableCell sx={{ fontWeight: 600 }}>{sortLabel('brand', 'Brand')}</TableCell>
               <TableCell sx={{ fontWeight: 600 }} align="center">{sortLabel('poles', 'Poles')}</TableCell>
               <TableCell sx={{ fontWeight: 600 }} align="center">{sortLabel('ampRating', 'Amps')}</TableCell>
+              <TableCell sx={{ fontWeight: 600 }} align="center">UOM</TableCell>
               <TableCell sx={{ fontWeight: 600 }} align="right">{sortLabel('sellingPrice', 'Price')}</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>SEP Equiv.</TableCell>
             </TableRow>
@@ -124,8 +126,10 @@ export default function PricelistTable({ items, loading, selectable = false, sel
                 <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{item.catalogNo}</TableCell>
                 <TableCell>{item.description}</TableCell>
                 <TableCell><Chip label={item.category} size="small" variant="outlined" /></TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>{item.brand || '—'}</TableCell>
                 <TableCell align="center">{item.poles ? `${item.poles}P` : '—'}</TableCell>
                 <TableCell align="center">{item.ampRating ?? '—'}</TableCell>
+                <TableCell align="center">{item.uom || '—'}</TableCell>
                 <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{PHP(item.sellingPrice)}</TableCell>
                 <TableCell sx={{ color: 'text.secondary', fontSize: '0.85rem' }}>{item.sepEquivalent ?? '—'}</TableCell>
               </TableRow>
