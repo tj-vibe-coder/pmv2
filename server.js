@@ -4541,7 +4541,9 @@ app.get('/api/pricelists', async (req, res) => {
 
     const { search, poles, minPrice, maxPrice } = req.query;
     const categories = [].concat(req.query.category || []).filter(Boolean);
+    const brands = [].concat(req.query.brand || []).filter(Boolean);
     if (categories.length) items = items.filter((i) => categories.includes(i.category));
+    if (brands.length) items = items.filter((i) => brands.includes(i.brand));
     if (poles != null && poles !== '') items = items.filter((i) => Number(i.poles) === Number(poles));
     if (minPrice != null && minPrice !== '') items = items.filter((i) => Number(i.sellingPrice) >= Number(minPrice));
     if (maxPrice != null && maxPrice !== '') items = items.filter((i) => Number(i.sellingPrice) <= Number(maxPrice));

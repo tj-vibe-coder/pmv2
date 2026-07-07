@@ -28,10 +28,10 @@ function toComponentLines(items: PricelistItem[], existingComponents: ComponentL
     id: nanoid(),
     code: `B-${String(nextNum + idx * 10).padStart(4, '0')}`,
     description: `${item.description} [${item.catalogNo}]`,
-    brand: 'ABB',
+    brand: item.brand || '',
     partNo: item.catalogNo,
     qty: 1,
-    uom: 'pc',
+    uom: item.uom || 'pc',
     unitCost: item.sellingPrice,
     forex: 1,
     contingencyPct: 0,
@@ -85,7 +85,7 @@ export default function PricelistBrowser() {
       <Box sx={{ p: 2, pb: 0 }}>
         <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>Pricelists</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          HVC DCPI — ABB Products (March 2026) &middot; {items.length} items
+          Supplier catalog — search, filter and select items to add to a quotation &middot; {items.length} item{items.length === 1 ? '' : 's'}
         </Typography>
       </Box>
 

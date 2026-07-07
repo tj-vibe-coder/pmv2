@@ -38,6 +38,7 @@ export const usePricelistStore = create<PricelistState>((set, get) => ({
       const params = new URLSearchParams();
       if (filters.search) params.set('search', filters.search);
       if (filters.categories.length) filters.categories.forEach((c) => params.append('category', c));
+      if (filters.brands.length) filters.brands.forEach((b) => params.append('brand', b));
       if (filters.poles != null) params.set('poles', String(filters.poles));
       if (filters.minPrice != null) params.set('minPrice', String(filters.minPrice));
       if (filters.maxPrice != null) params.set('maxPrice', String(filters.maxPrice));
