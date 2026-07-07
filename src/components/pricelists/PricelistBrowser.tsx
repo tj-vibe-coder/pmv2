@@ -9,6 +9,7 @@ import { nanoid } from 'nanoid';
 import PricelistFilters from './PricelistFilters';
 import PricelistTable from './PricelistTable';
 import PricelistItemForm from './PricelistItemForm';
+import PricelistHistoryDialog from './PricelistHistoryDialog';
 import { usePricelistStore } from '../../store/pricelistStore';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { PricelistItem } from '../../types/Pricelist';
@@ -58,6 +59,7 @@ export default function PricelistBrowser() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [formOpen, setFormOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<PricelistItem | null>(null);
+  const [historyItem, setHistoryItem] = useState<PricelistItem | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [targetProjectId, setTargetProjectId] = useState('');
   const [targetQuotationId, setTargetQuotationId] = useState('');
@@ -135,6 +137,7 @@ export default function PricelistBrowser() {
             manageable
             onEdit={(item) => { setEditingItem(item); setFormOpen(true); }}
             onDelete={handleDelete}
+            onHistory={(item) => setHistoryItem(item)}
           />
         </Paper>
       </Box>
@@ -206,6 +209,8 @@ export default function PricelistBrowser() {
         onClose={() => setFormOpen(false)}
         onSave={handleSaveForm}
       />
+
+      <PricelistHistoryDialog item={historyItem} onClose={() => setHistoryItem(null)} />
 
       <Snackbar open={snackbar.open} autoHideDuration={4000} onClose={() => setSnackbar((s) => ({ ...s, open: false }))}>
         <Alert severity={snackbar.severity} onClose={() => setSnackbar((s) => ({ ...s, open: false }))}>{snackbar.message}</Alert>

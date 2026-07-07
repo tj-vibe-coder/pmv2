@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { PricelistItem, PricelistFiltersState, PricelistFilterOptions } from '../types/Pricelist';
+import type { PricelistItem, PricelistFiltersState, PricelistFilterOptions, PricelistAuditEntry } from '../types/Pricelist';
 import { EMPTY_FILTERS } from '../types/Pricelist';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
@@ -25,6 +25,7 @@ interface PricelistState {
   createItem: (item: Partial<PricelistItem>) => Promise<void>;
   updateItem: (id: string, item: Partial<PricelistItem>) => Promise<void>;
   deleteItem: (id: string) => Promise<void>;
+  fetchHistory: (id: string) => Promise<PricelistAuditEntry[]>;
 }
 
 export const usePricelistStore = create<PricelistState>((set, get) => ({
@@ -98,5 +99,16 @@ export const usePricelistStore = create<PricelistState>((set, get) => ({
     if (!res.ok) throw new Error('Failed to delete item');
     await get().fetchItems();
     await get().fetchFilters();
+  },
+
+  fetchHistory: async (id) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/pricelists/${id}/audit`, { headers: authHeaders() });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.entries || []) as PricelistAuditEntry[];
+    } catch {
+      return [];
+    }
   },
 }));

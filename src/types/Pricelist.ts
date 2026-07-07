@@ -18,8 +18,21 @@ export interface PricelistItem {
   coilVoltage?: string;
   frameSize?: number;
   kaic?: string;
-  createdAt: string;
-  updatedAt: string;
+  createdAt?: string | { _seconds?: number; seconds?: number };
+  updatedAt?: string | { _seconds?: number; seconds?: number };
+  createdBy?: string;
+  updatedBy?: string;
+}
+
+export interface PricelistAuditEntry {
+  id: string;
+  itemId: string;
+  catalogNo?: string;
+  action: 'create' | 'update' | 'delete';
+  changes?: Record<string, { from: unknown; to: unknown }>;
+  snapshot?: { description?: string; sellingPrice?: number };
+  byName?: string;
+  at: string;
 }
 
 export interface PricelistFiltersState {

@@ -4605,6 +4605,12 @@ function pricelistItemFromBody(b) {
   };
 }
 
+const PRICELIST_AUDIT_FIELDS = ['description', 'sellingPrice', 'uom', 'category', 'brand', 'supplier', 'catalogNo', 'poles', 'ampRating', 'sepEquivalent'];
+async function logPricelistAudit(entry) {
+  try { await db.collection('pricelist_audit').add(entry); }
+  catch (e) { console.warn('[pricelist] audit write failed (non-blocking):', e && e.message); }
+}
+
 app.post('/api/pricelists', async (req, res) => {
   const user = await requireActiveUser(req, res); if (!user) return;
   const b = req.body || {};
@@ -4613,11 +4619,13 @@ app.post('/api/pricelists', async (req, res) => {
   }
   try {
     const now = new Date().toISOString();
+    const who = user.full_name || user.username || String(user.id);
     const item = pricelistItemFromBody(b);
     if (!item.catalogNo) item.catalogNo = `MAN-${Date.now().toString(36).toUpperCase()}`;
-    item.createdAt = now;
-    item.updatedAt = now;
+    item.createdAt = now; item.updatedAt = now;
+    item.createdBy = who; item.updatedBy = who;
     const ref = await db.collection('pricelist_items').add(item);
+    await logPricelistAudit({ itemId: ref.id, catalogNo: item.catalogNo, action: 'create', snapshot: { description: item.description, sellingPrice: item.sellingPrice }, byId: String(user.id), byName: who, at: now });
     res.status(201).json({ ...item, id: ref.id });
   } catch (e) {
     console.error('POST /api/pricelists error:', e);
@@ -4632,9 +4640,22 @@ app.put('/api/pricelists/:id', async (req, res) => {
     return res.status(400).json({ error: 'description and a numeric sellingPrice are required' });
   }
   try {
+    const now = new Date().toISOString();
+    const who = user.full_name || user.username || String(user.id);
+    const ref = db.collection('pricelist_items').doc(req.params.id);
+    const prevSnap = await ref.get();
+    const prev = prevSnap.exists ? prevSnap.data() : {};
     const updates = pricelistItemFromBody(b);
-    updates.updatedAt = new Date().toISOString();
-    await db.collection('pricelist_items').doc(req.params.id).update(updates);
+    updates.updatedAt = now; updates.updatedBy = who;
+    await ref.update(updates);
+    const changes = {};
+    for (const f of PRICELIST_AUDIT_FIELDS) {
+      const from = prev[f] ?? null, to = updates[f] ?? null;
+      if (String(from) !== String(to)) changes[f] = { from, to };
+    }
+    if (Object.keys(changes).length) {
+      await logPricelistAudit({ itemId: req.params.id, catalogNo: updates.catalogNo, action: 'update', changes, byId: String(user.id), byName: who, at: now });
+    }
     res.json({ success: true, ...updates, id: req.params.id });
   } catch (e) {
     console.error('PUT /api/pricelists/:id error:', e);
@@ -4645,11 +4666,31 @@ app.put('/api/pricelists/:id', async (req, res) => {
 app.delete('/api/pricelists/:id', async (req, res) => {
   const user = await requireActiveUser(req, res); if (!user) return;
   try {
-    await db.collection('pricelist_items').doc(req.params.id).delete();
+    const now = new Date().toISOString();
+    const who = user.full_name || user.username || String(user.id);
+    const ref = db.collection('pricelist_items').doc(req.params.id);
+    const prevSnap = await ref.get();
+    const prev = prevSnap.exists ? prevSnap.data() : {};
+    await ref.delete();
+    await logPricelistAudit({ itemId: req.params.id, catalogNo: prev.catalogNo || null, action: 'delete', snapshot: { description: prev.description, sellingPrice: prev.sellingPrice }, byId: String(user.id), byName: who, at: now });
     res.json({ success: true });
   } catch (e) {
     console.error('DELETE /api/pricelists/:id error:', e);
     res.status(500).json({ error: 'Failed to delete pricelist item' });
+  }
+});
+
+app.get('/api/pricelists/:id/audit', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('pricelist_audit').where('itemId', '==', req.params.id).get();
+    const entries = snap.docs
+      .map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; })
+      .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    res.json({ success: true, entries });
+  } catch (e) {
+    console.error('GET /api/pricelists/:id/audit error:', e);
+    res.status(500).json({ error: 'Failed to fetch audit trail' });
   }
 });
 
