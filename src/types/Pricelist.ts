@@ -25,6 +25,7 @@ export interface PricelistItem {
 export interface PricelistFiltersState {
   search: string;
   categories: string[];
+  brands: string[];
   poles: number | null;
   minPrice: number | null;
   maxPrice: number | null;
@@ -40,6 +41,7 @@ export interface PricelistFilterOptions {
 export const EMPTY_FILTERS: PricelistFiltersState = {
   search: '',
   categories: [],
+  brands: [],
   poles: null,
   minPrice: null,
   maxPrice: null,

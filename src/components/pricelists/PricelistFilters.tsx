@@ -35,12 +35,17 @@ export default function PricelistFilters() {
     setFilters({ categories: typeof val === 'string' ? val.split(',') : val });
   };
 
+  const handleBrandChange = (e: SelectChangeEvent<string[]>) => {
+    const val = e.target.value;
+    setFilters({ brands: typeof val === 'string' ? val.split(',') : val });
+  };
+
   const handlePolesChange = (e: SelectChangeEvent<string>) => {
     const val = e.target.value;
     setFilters({ poles: val ? Number(val) : null });
   };
 
-  const hasFilters = filters.search || filters.categories.length || filters.poles != null ||
+  const hasFilters = filters.search || filters.categories.length || filters.brands.length || filters.poles != null ||
     filters.minPrice != null || filters.maxPrice != null;
 
   return (
@@ -48,7 +53,7 @@ export default function PricelistFilters() {
       <TextField
         fullWidth
         size="small"
-        placeholder="Search by catalog no., description, ABB ref, SEP equivalent..."
+        placeholder="Search by catalog no., description, brand, ABB ref, SEP equivalent..."
         value={searchLocal}
         onChange={(e) => setSearchLocal(e.target.value)}
         slotProps={{
@@ -79,6 +84,25 @@ export default function PricelistFilters() {
           >
             {filterOptions.categories.map((c) => (
               <MenuItem key={c} value={c}>{c}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        <FormControl size="small" sx={{ minWidth: 180 }}>
+          <InputLabel>Brand</InputLabel>
+          <Select
+            multiple
+            value={filters.brands}
+            onChange={handleBrandChange}
+            input={<OutlinedInput label="Brand" />}
+            renderValue={(selected) => (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                {selected.map((v) => <Chip key={v} label={v} size="small" />)}
+              </Box>
+            )}
+          >
+            {filterOptions.brands.map((b) => (
+              <MenuItem key={b} value={b}>{b}</MenuItem>
             ))}
           </Select>
         </FormControl>
