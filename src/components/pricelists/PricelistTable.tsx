@@ -1,8 +1,10 @@
 import { useState, useMemo } from 'react';
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Checkbox, Chip, TablePagination, Skeleton, Typography, Box, TableSortLabel,
+  Checkbox, Chip, TablePagination, Skeleton, Typography, Box, TableSortLabel, IconButton,
 } from '@mui/material';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
 import type { PricelistItem } from '../../types/Pricelist';
 
 const PHP = (n: number) => `₱${n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -13,12 +15,15 @@ interface Props {
   selectable?: boolean;
   selected?: Set<string>;
   onSelectionChange?: (selected: Set<string>) => void;
+  manageable?: boolean;
+  onEdit?: (item: PricelistItem) => void;
+  onDelete?: (item: PricelistItem) => void;
 }
 
 type SortKey = 'catalogNo' | 'description' | 'category' | 'brand' | 'poles' | 'ampRating' | 'sellingPrice';
 type SortDir = 'asc' | 'desc';
 
-export default function PricelistTable({ items, loading, selectable = false, selected, onSelectionChange }: Props) {
+export default function PricelistTable({ items, loading, selectable = false, selected, onSelectionChange, manageable = false, onEdit, onDelete }: Props) {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [sortKey, setSortKey] = useState<SortKey>('catalogNo');
@@ -107,6 +112,7 @@ export default function PricelistTable({ items, loading, selectable = false, sel
               <TableCell sx={{ fontWeight: 600 }} align="center">UOM</TableCell>
               <TableCell sx={{ fontWeight: 600 }} align="right">{sortLabel('sellingPrice', 'Price')}</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>SEP Equiv.</TableCell>
+              {manageable && <TableCell sx={{ fontWeight: 600 }} align="right">Actions</TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -132,6 +138,12 @@ export default function PricelistTable({ items, loading, selectable = false, sel
                 <TableCell align="center">{item.uom || '—'}</TableCell>
                 <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{PHP(item.sellingPrice)}</TableCell>
                 <TableCell sx={{ color: 'text.secondary', fontSize: '0.85rem' }}>{item.sepEquivalent ?? '—'}</TableCell>
+                {manageable && (
+                  <TableCell align="right" sx={{ whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
+                    <IconButton size="small" onClick={() => onEdit?.(item)}><EditIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" color="error" onClick={() => onDelete?.(item)}><DeleteIcon fontSize="small" /></IconButton>
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>

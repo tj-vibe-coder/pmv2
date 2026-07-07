@@ -4584,6 +4584,75 @@ app.get('/api/pricelists/filters', async (req, res) => {
   }
 });
 
+// Normalize a pricelist item payload from the manual add/edit form.
+function pricelistItemFromBody(b) {
+  const numOrNull = (v) => (v !== '' && v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  return {
+    supplier: String(b.supplier || 'IOCT').trim(),
+    brand: String(b.brand || '').trim(),
+    pricelistName: String(b.pricelistName || 'Manual entries').trim(),
+    pricelistDate: String(b.pricelistDate || new Date().toISOString().slice(0, 7)),
+    category: String(b.category || 'Uncategorized').trim(),
+    categoryLabel: String(b.categoryLabel || b.category || 'Uncategorized').trim(),
+    catalogNo: String(b.catalogNo || '').trim(),
+    abbRefNo: String(b.abbRefNo || '').trim(),
+    description: String(b.description || '').trim(),
+    uom: String(b.uom || 'pc').trim(),
+    poles: numOrNull(b.poles),
+    ampRating: numOrNull(b.ampRating),
+    sellingPrice: Number(b.sellingPrice) || 0,
+    sepEquivalent: String(b.sepEquivalent || '').trim() || null,
+  };
+}
+
+app.post('/api/pricelists', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  const b = req.body || {};
+  if (!b.description || !(Number(b.sellingPrice) >= 0)) {
+    return res.status(400).json({ error: 'description and a numeric sellingPrice are required' });
+  }
+  try {
+    const now = new Date().toISOString();
+    const item = pricelistItemFromBody(b);
+    if (!item.catalogNo) item.catalogNo = `MAN-${Date.now().toString(36).toUpperCase()}`;
+    item.createdAt = now;
+    item.updatedAt = now;
+    const ref = await db.collection('pricelist_items').add(item);
+    res.status(201).json({ ...item, id: ref.id });
+  } catch (e) {
+    console.error('POST /api/pricelists error:', e);
+    res.status(500).json({ error: 'Failed to create pricelist item' });
+  }
+});
+
+app.put('/api/pricelists/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  const b = req.body || {};
+  if (!b.description || !(Number(b.sellingPrice) >= 0)) {
+    return res.status(400).json({ error: 'description and a numeric sellingPrice are required' });
+  }
+  try {
+    const updates = pricelistItemFromBody(b);
+    updates.updatedAt = new Date().toISOString();
+    await db.collection('pricelist_items').doc(req.params.id).update(updates);
+    res.json({ success: true, ...updates, id: req.params.id });
+  } catch (e) {
+    console.error('PUT /api/pricelists/:id error:', e);
+    res.status(500).json({ error: 'Failed to update pricelist item' });
+  }
+});
+
+app.delete('/api/pricelists/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    await db.collection('pricelist_items').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (e) {
+    console.error('DELETE /api/pricelists/:id error:', e);
+    res.status(500).json({ error: 'Failed to delete pricelist item' });
+  }
+});
+
 // ========== ONEDRIVE / MICROSOFT GRAPH HEALTH ==========
 // Smoke test for server-side app-only Graph auth. Never exposes token/secret.
 app.get('/api/onedrive/health', async (req, res) => {
