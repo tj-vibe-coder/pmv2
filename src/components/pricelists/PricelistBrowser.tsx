@@ -4,9 +4,12 @@ import {
   FormControl, InputLabel, Select, MenuItem, Snackbar, Alert, Stack, Chip,
 } from '@mui/material';
 import AddShoppingCartIcon from '@mui/icons-material/AddShoppingCart';
+import AddIcon from '@mui/icons-material/Add';
 import { nanoid } from 'nanoid';
 import PricelistFilters from './PricelistFilters';
 import PricelistTable from './PricelistTable';
+import PricelistItemForm from './PricelistItemForm';
+import PricelistHistoryDialog from './PricelistHistoryDialog';
 import { usePricelistStore } from '../../store/pricelistStore';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { PricelistItem } from '../../types/Pricelist';
@@ -44,12 +47,19 @@ export default function PricelistBrowser() {
   const items = usePricelistStore((s) => s.items);
   const loading = usePricelistStore((s) => s.loading);
   const fetchFilters = usePricelistStore((s) => s.fetchFilters);
+  const filterOptions = usePricelistStore((s) => s.filterOptions);
+  const createItem = usePricelistStore((s) => s.createItem);
+  const updateItem = usePricelistStore((s) => s.updateItem);
+  const deleteItem = usePricelistStore((s) => s.deleteItem);
 
   const projects = useQuotationStore((s) => s.projects);
   const quotations = useQuotationStore((s) => s.quotations);
   const updateQuotation = useQuotationStore((s) => s.updateQuotation);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<PricelistItem | null>(null);
+  const [historyItem, setHistoryItem] = useState<PricelistItem | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [targetProjectId, setTargetProjectId] = useState('');
   const [targetQuotationId, setTargetQuotationId] = useState('');
@@ -80,13 +90,39 @@ export default function PricelistBrowser() {
     }
   }, [targetQuotationId, selectedItems, quotations, updateQuotation]);
 
+  const handleSaveForm = useCallback(async (payload: Record<string, unknown>) => {
+    if (editingItem) await updateItem(editingItem.id, payload);
+    else await createItem(payload);
+    setSnackbar({ open: true, message: editingItem ? 'Item updated' : 'Item added', severity: 'success' });
+  }, [editingItem, updateItem, createItem]);
+
+  const handleDelete = useCallback(async (item: PricelistItem) => {
+    if (!window.confirm(`Delete "${item.description}"?`)) return;
+    try {
+      await deleteItem(item.id);
+      setSnackbar({ open: true, message: 'Item deleted', severity: 'success' });
+    } catch {
+      setSnackbar({ open: true, message: 'Failed to delete item', severity: 'error' });
+    }
+  }, [deleteItem]);
+
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Box sx={{ p: 2, pb: 0 }}>
-        <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>Pricelists</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Supplier catalog — search, filter and select items to add to a quotation &middot; {items.length} item{items.length === 1 ? '' : 's'}
-        </Typography>
+      <Box sx={{ p: 2, pb: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 2 }}>
+        <Box>
+          <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>Pricelists</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Supplier catalog — search, filter and select items to add to a quotation &middot; {items.length} item{items.length === 1 ? '' : 's'}
+          </Typography>
+        </Box>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => { setEditingItem(null); setFormOpen(true); }}
+          sx={{ flexShrink: 0, backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+        >
+          Add item
+        </Button>
       </Box>
 
       <Box sx={{ px: 2, flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -98,6 +134,10 @@ export default function PricelistBrowser() {
             selectable
             selected={selected}
             onSelectionChange={setSelected}
+            manageable
+            onEdit={(item) => { setEditingItem(item); setFormOpen(true); }}
+            onDelete={handleDelete}
+            onHistory={(item) => setHistoryItem(item)}
           />
         </Paper>
       </Box>
@@ -160,6 +200,17 @@ export default function PricelistBrowser() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <PricelistItemForm
+        open={formOpen}
+        item={editingItem}
+        categoryOptions={filterOptions.categories}
+        brandOptions={filterOptions.brands}
+        onClose={() => setFormOpen(false)}
+        onSave={handleSaveForm}
+      />
+
+      <PricelistHistoryDialog item={historyItem} onClose={() => setHistoryItem(null)} />
 
       <Snackbar open={snackbar.open} autoHideDuration={4000} onClose={() => setSnackbar((s) => ({ ...s, open: false }))}>
         <Alert severity={snackbar.severity} onClose={() => setSnackbar((s) => ({ ...s, open: false }))}>{snackbar.message}</Alert>

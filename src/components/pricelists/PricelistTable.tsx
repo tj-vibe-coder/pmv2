@@ -1,9 +1,13 @@
 import { useState, useMemo } from 'react';
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Checkbox, Chip, TablePagination, Skeleton, Typography, Box, TableSortLabel,
+  Checkbox, Chip, TablePagination, Skeleton, Typography, Box, TableSortLabel, IconButton, Tooltip,
 } from '@mui/material';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import HistoryIcon from '@mui/icons-material/History';
 import type { PricelistItem } from '../../types/Pricelist';
+import { fmtDate, fmtDateTime } from './pricelistDate';
 
 const PHP = (n: number) => `₱${n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -13,12 +17,16 @@ interface Props {
   selectable?: boolean;
   selected?: Set<string>;
   onSelectionChange?: (selected: Set<string>) => void;
+  manageable?: boolean;
+  onEdit?: (item: PricelistItem) => void;
+  onDelete?: (item: PricelistItem) => void;
+  onHistory?: (item: PricelistItem) => void;
 }
 
 type SortKey = 'catalogNo' | 'description' | 'category' | 'brand' | 'poles' | 'ampRating' | 'sellingPrice';
 type SortDir = 'asc' | 'desc';
 
-export default function PricelistTable({ items, loading, selectable = false, selected, onSelectionChange }: Props) {
+export default function PricelistTable({ items, loading, selectable = false, selected, onSelectionChange, manageable = false, onEdit, onDelete, onHistory }: Props) {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [sortKey, setSortKey] = useState<SortKey>('catalogNo');
@@ -107,6 +115,8 @@ export default function PricelistTable({ items, loading, selectable = false, sel
               <TableCell sx={{ fontWeight: 600 }} align="center">UOM</TableCell>
               <TableCell sx={{ fontWeight: 600 }} align="right">{sortLabel('sellingPrice', 'Price')}</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>SEP Equiv.</TableCell>
+              {manageable && <TableCell sx={{ fontWeight: 600 }}>Last Updated</TableCell>}
+              {manageable && <TableCell sx={{ fontWeight: 600 }} align="right">Actions</TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -132,6 +142,20 @@ export default function PricelistTable({ items, loading, selectable = false, sel
                 <TableCell align="center">{item.uom || '—'}</TableCell>
                 <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{PHP(item.sellingPrice)}</TableCell>
                 <TableCell sx={{ color: 'text.secondary', fontSize: '0.85rem' }}>{item.sepEquivalent ?? '—'}</TableCell>
+                {manageable && (
+                  <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary', fontSize: '0.85rem' }}>
+                    <Tooltip title={item.updatedBy ? `${item.updatedBy} · ${fmtDateTime(item.updatedAt)}` : fmtDateTime(item.updatedAt)}>
+                      <span>{fmtDate(item.updatedAt)}{item.updatedBy ? ` · ${item.updatedBy}` : ''}</span>
+                    </Tooltip>
+                  </TableCell>
+                )}
+                {manageable && (
+                  <TableCell align="right" sx={{ whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
+                    <IconButton size="small" title="History" onClick={() => onHistory?.(item)}><HistoryIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" title="Edit" onClick={() => onEdit?.(item)}><EditIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" color="error" title="Delete" onClick={() => onDelete?.(item)}><DeleteIcon fontSize="small" /></IconButton>
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>
