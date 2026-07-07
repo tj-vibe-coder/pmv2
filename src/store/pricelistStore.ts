@@ -35,20 +35,11 @@ export const usePricelistStore = create<PricelistState>((set, get) => ({
   loading: false,
   error: null,
 
+  // Fetches the whole catalog once; filtering happens client-side (see filterItems.ts).
   fetchItems: async () => {
     set({ loading: true, error: null });
     try {
-      const { filters } = get();
-      const params = new URLSearchParams();
-      if (filters.search) params.set('search', filters.search);
-      if (filters.categories.length) filters.categories.forEach((c) => params.append('category', c));
-      if (filters.brands.length) filters.brands.forEach((b) => params.append('brand', b));
-      if (filters.poles != null) params.set('poles', String(filters.poles));
-      if (filters.minPrice != null) params.set('minPrice', String(filters.minPrice));
-      if (filters.maxPrice != null) params.set('maxPrice', String(filters.maxPrice));
-      const qs = params.toString();
-      const url = `${API_BASE}/api/pricelists${qs ? `?${qs}` : ''}`;
-      const res = await fetch(url, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/api/pricelists`, { headers: authHeaders() });
       if (!res.ok) throw new Error('Failed to fetch pricelist');
       const data = await res.json();
       set({ items: data.items, loading: false });
