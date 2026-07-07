@@ -12,7 +12,7 @@ type Draft = {
 
 const EMPTY: Draft = {
   description: '', sellingPrice: '', uom: 'pc', category: '', brand: '',
-  supplier: 'IOCT', catalogNo: '', sepEquivalent: '', poles: '', ampRating: '',
+  supplier: '', catalogNo: '', sepEquivalent: '', poles: '', ampRating: '',
 };
 
 interface Props {
@@ -22,11 +22,12 @@ interface Props {
   /** existing values to power the free-solo suggestions */
   categoryOptions: string[];
   brandOptions: string[];
+  supplierOptions?: string[];
   onClose: () => void;
   onSave: (payload: Record<string, unknown>) => Promise<void>;
 }
 
-export default function PricelistItemForm({ open, item, categoryOptions, brandOptions, onClose, onSave }: Props) {
+export default function PricelistItemForm({ open, item, categoryOptions, brandOptions, supplierOptions = [], onClose, onSave }: Props) {
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +41,7 @@ export default function PricelistItemForm({ open, item, categoryOptions, brandOp
       uom: item.uom || 'pc',
       category: item.category || '',
       brand: item.brand || '',
-      supplier: item.supplier || 'IOCT',
+      supplier: item.supplier || '',
       catalogNo: item.catalogNo || '',
       sepEquivalent: item.sepEquivalent || '',
       poles: item.poles != null ? String(item.poles) : '',
@@ -82,7 +83,8 @@ export default function PricelistItemForm({ open, item, categoryOptions, brandOp
               renderInput={(p) => <TextField {...p} label="Category" />} />
             <Autocomplete freeSolo options={brandOptions} value={draft.brand} onInputChange={(_, v) => set('brand')(v)}
               renderInput={(p) => <TextField {...p} label="Brand" />} />
-            <TextField label="Supplier" value={draft.supplier} onChange={(e) => set('supplier')(e.target.value)} />
+            <Autocomplete freeSolo options={supplierOptions} value={draft.supplier} onInputChange={(_, v) => set('supplier')(v)}
+              renderInput={(p) => <TextField {...p} label="Supplier" />} />
             <TextField label="Catalog No. (optional)" value={draft.catalogNo} onChange={(e) => set('catalogNo')(e.target.value)} />
             <TextField label="Poles (optional)" type="number" value={draft.poles} onChange={(e) => set('poles')(e.target.value)} />
             <TextField label="Amps (optional)" type="number" value={draft.ampRating} onChange={(e) => set('ampRating')(e.target.value)} />

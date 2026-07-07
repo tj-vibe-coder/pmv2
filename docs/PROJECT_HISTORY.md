@@ -306,3 +306,49 @@ In the deploy-prep commit:
 - **Concluded merge:** Staged all changes and committed the merge of `origin/main` into `rj/dev`.
 - **Verified build and tests:** `CI=true npm test` and `CI=true npm run build` both compile and pass.
 
+### Pricelist browser UX rework (2026-07-07, uncommitted on `feat/pricelist-ux`)
+
+Full UX pass over `/sales/pricelists` (TJ's branch). Root problem fixed: the selection model
+fought the filters — selection was an id `Set` resolved against the *currently filtered* rows,
+so items selected under one filter were silently dropped when adding to a quotation under
+another (count chip lied), and header select-all replaced the whole set (wiping cross-filter
+picks) while grabbing the entire filtered result, not the page.
+
+- **Selection**: now a `Map<id, PricelistItem>` in `PricelistBrowser`/`PricelistPickerDialog` —
+  survives any filter/search change. Header checkbox is page-scoped and additive
+  (Gmail-style select/deselect current page). Checkbox-only toggling; row clicks no longer
+  select (text is copyable). Floating pill action bar (absolute overlay, no layout shift).
+- **Fetch once, filter client-side**: `pricelistStore.fetchItems()` pulls the whole catalog
+  (the server filtered in memory anyway); new `filterItems.ts` applies filters locally.
+  No more fetch-per-keystroke on Min/Max price, no skeleton swap on every filter change
+  (skeleton only on initial load). New `suppliers` filter dimension (`PricelistFiltersState`).
+- **Table** (`PricelistTable`): breaking API change (`selectedIds`/`onToggleItem`/`onTogglePage`).
+  Page index clamps when the result set shrinks (was: filtered to page N past the end → empty
+  body). Contextual columns: Poles/Amps/SEP Equiv. hidden when no row in the result set has
+  them; Supplier column (with pricelistName · pricelistDate tooltip) shown only when >1 supplier
+  present. Height is flex-based inside its container; the browser page binds to
+  `calc(100vh - 96/112px)` because `AppLayout` only provides minHeight.
+- **Add-to-quotation dialog**: project picker is an Autocomplete (typeahead over 38+ projects);
+  review list of selected items with per-item qty + remove; "already in quotation" warning chip
+  when the item's catalogNo matches an existing component partNo; running total; empty-project
+  caption; post-add snackbar gains an "Open quotation" action (navigates to the editor).
+- **Polish**: delete confirm is a MUI dialog (was `window.confirm`); real Tooltips on row
+  actions; ₱ adornments on price filters; distinct empty states (no catalog vs filters exclude
+  everything, with a Clear-filters button) and a load-error Alert with Retry; item form's
+  Supplier is a freeSolo Autocomplete seeded from existing suppliers (default no longer "IOCT");
+  header count shows "N of M items" when filtered.
+- **Verified end-to-end** on TJ's machine against a mock API on 3001 (no Firestore creds/Java
+  here — see `.claude/skills/verify/SKILL.md`, local-only since `/.claude/` is gitignored):
+  cross-filter selection, page-scoped select-all, page clamp, zero fetches while typing prices,
+  dup-warning, qty→component lines (B-codes increment past existing), snackbar navigation.
+  `npx tsc --noEmit` and `CI=true npm run build` clean.
+- **Dev-environment fixes found while verifying** (same branch): (1) `src/index.tsx` registered
+  the offline service worker in dev too; `public/service-worker.js` caches assets cache-first
+  and dev `bundle.js` isn't content-hashed, so after any rebuild the SW served a stale bundle
+  and HMR fell into an infinite reload loop. Registration is now production-only, and dev
+  actively unregisters any existing SW (heals previously-affected browsers — they may need one
+  manual unregister + cache delete since the stale cached bundle re-registers itself).
+  (2) `package.json` `start:server` now pins `PORT=3001` so an environment-injected `PORT`
+  (e.g. Claude Code's preview harness setting `PORT=3000`) can't make the API server steal
+  CRA's port and kill `npm start`.
+

@@ -37,6 +37,7 @@ export interface PricelistAuditEntry {
 
 export interface PricelistFiltersState {
   search: string;
+  suppliers: string[];
   categories: string[];
   brands: string[];
   poles: number | null;
@@ -53,6 +54,7 @@ export interface PricelistFilterOptions {
 
 export const EMPTY_FILTERS: PricelistFiltersState = {
   search: '',
+  suppliers: [],
   categories: [],
   brands: [],
   poles: null,
