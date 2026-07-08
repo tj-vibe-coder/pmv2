@@ -352,3 +352,23 @@ picks) while grabbing the entire filtered result, not the page.
   (e.g. Claude Code's preview harness setting `PORT=3000`) can't make the API server steal
   CRA's port and kill `npm start`.
 
+
+### Calcsheet→Project List sync: wrong contract_amount (2026-07-08, committed on `feat/pricelist-ux`)
+
+- **Bug (found by TJ in production use)**: marking a project won and syncing reported
+  "Updated Project List record using IOCT quotation (PHP 208,600.00)" while the calcsheet
+  showed ₱350,000 — the synced `contract_amount` (and the WIP/contract-balance fields seeded
+  from it) was wrong.
+- **Root cause**: `quotationGrandTotal` in `server.js` was a hand-rolled copy of the calc
+  engine that had drifted from `src/utils/calcsheet/calc.ts`: it dropped `laborMarkupPct` on
+  engineering services, ignored `servicesPerLinePricing` and per-line general-req/component
+  `markupPct`, treated unset `servicesFromManpower` as from-manpower (client treats it as
+  manual lines), and applied the current formula to legacy quotations lacking a snapshot.
+- **Fix (commit `2d25854`)**: rewrote it as a faithful self-contained port of
+  `computeTotals`/`computeTotalsLegacy` (inline in `server.js` because the functions predeploy
+  copies only that file). Added `src/utils/calcsheet/serverGrandTotal.parity.test.ts`, which
+  extracts the function source from `server.js` (brace-matching — keep its string literals
+  brace-free) and asserts parity with the real engine across 9 quotation shapes; 7 failed
+  pre-fix. Full jest suite + `tsc --noEmit` + `node --check server.js` green.
+- **Follow-up**: already-synced projects keep the wrong amount until re-synced — after deploy,
+  use the force/update sync on the project detail page to rewrite `contract_amount`.
