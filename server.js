@@ -3137,31 +3137,82 @@ function newestQuotation(a, b) {
   return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
 }
 
+// Grand total of a calcsheet quotation — seeds contract_amount on the synced
+// Project List record. Faithful plain-JS port of the client calc engine
+// (src/utils/calcsheet/calc.ts: computeTotals + computeTotalsLegacy). It lives
+// inline because the functions deploy copies only server.js. The parity test
+// src/utils/calcsheet/serverGrandTotal.parity.test.ts extracts this function
+// from server.js and compares it against the engine — keep the two in sync,
+// and keep string literals here brace-free so the test's extraction works.
 function quotationGrandTotal(q) {
   if (!q) return 0;
-  if (q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.grandTotal))) {
-    return Number(q.legacyTotalsSnapshot.grandTotal);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const generalReqts = Array.isArray(q.generalReqts) ? q.generalReqts : [];
+  const components = Array.isArray(q.components) ? q.components : [];
+  const manpower = Array.isArray(q.manpower) ? q.manpower : [];
+  const services = Array.isArray(q.services) ? q.services : [];
+  const lineGeneralTotal = (l) => num(l.unitPrice) * num(l.qty);
+  const servicesLineSum = () => services.reduce((s, l) => s + num(l.amount), 0);
+  const finish = (subtotal) => {
+    const afterDiscount = subtotal * (1 - num(q.discountPct) / 100);
+    return afterDiscount * (1 + num(q.vatPct) / 100);
+  };
+
+  if (q.formulaVersion === 'legacy') {
+    if (q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.grandTotal))) {
+      return Number(q.legacyTotalsSnapshot.grandTotal);
+    }
+    const cont = num(q.globalContingencyPct) / 100;
+    const generalReqtsCost = generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0);
+    const generalReqtsWithContingency = q.generalReqContingencyMode === 'baked'
+      ? generalReqtsCost
+      : generalReqtsCost * (1 + cont);
+    const generalReqtsSubtotal = generalReqtsWithContingency * (1 + num(q.generalReqMarkupPct) / 100);
+    const componentsSubtotal = components.reduce((s, l) => {
+      const base = num(l.unitCost) * (num(l.forex) || 1);
+      const adjusted = base * (1 + num(l.contingencyPct) / 100 - num(l.discountPct) / 100);
+      return s + adjusted * (1 + num(q.productMarkupPct) / 100) * num(l.qty);
+    }, 0);
+    let servicesSub;
+    if (q.servicesFromManpower) {
+      const laborWithContingency = manpower.reduce((s, m) => {
+        const unit = (num(m.dailyRate) + num(m.allowance)) * (1 + cont);
+        return s + num(m.headcount) * num(m.mandays) * unit;
+      }, 0);
+      servicesSub = laborWithContingency * (1 + num(q.laborMarkupPct) / 100);
+    } else {
+      servicesSub = servicesLineSum();
+    }
+    return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
   }
-  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, Number(q.generalReqtsExportQty || 1)) : 1;
-  const engineeringServicesQty = q.servicesFromManpower !== false ? Math.max(1, Number(q.engineeringServicesQty || 1)) : 1;
-  const generalReqtsCost = (q.generalReqts || []).reduce((sum, line) => {
-    return sum + Number(line.unitPrice || 0) * Number(line.qty || 0);
+
+  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, num(q.generalReqtsExportQty) || 1) : 1;
+  const hasPerLineGenMarkup = generalReqts.some((l) => l.markupPct != null);
+  const generalReqtsSubtotal = hasPerLineGenMarkup
+    ? generalReqts.reduce((s, l) => {
+        const markup = l.markupPct != null ? num(l.markupPct) : num(q.generalReqMarkupPct);
+        return s + lineGeneralTotal(l) * (1 + markup / 100);
+      }, 0) * generalReqtsQty
+    : generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty * (1 + num(q.generalReqMarkupPct) / 100);
+  const componentsSubtotal = components.reduce((s, l) => {
+    const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
+    const adjusted = costUnit * (1 + num(l.contingencyPct) / 100);
+    const markup = l.markupPct != null ? num(l.markupPct) : num(q.productMarkupPct);
+    return s + adjusted * (1 + markup / 100) * num(l.qty);
   }, 0);
-  const generalReqtsSubtotal = generalReqtsCost * generalReqtsQty * (1 + Number(q.generalReqMarkupPct || 0) / 100);
-  const componentsSubtotal = (q.components || []).reduce((sum, line) => {
-    const base = Number(line.unitCost || 0) * Number(line.forex || 1);
-    const adjusted = base * (1 + Number(line.contingencyPct || 0) / 100) * (1 - Number(line.discountPct || 0) / 100);
-    return sum + adjusted * (1 + Number(q.productMarkupPct || 0) / 100) * Number(line.qty || 0);
-  }, 0);
-  const manpowerCost = (q.manpower || []).reduce((sum, row) => {
-    return sum + Number(row.headcount || 0) * Number(row.mandays || 0) * (Number(row.dailyRate || 0) + Number(row.allowance || 0));
-  }, 0);
-  const servicesSubtotal = q.servicesFromManpower !== false
-    ? manpowerCost * engineeringServicesQty
-    : (q.services || []).reduce((sum, line) => sum + Number(line.amount || 0), 0);
-  const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSubtotal;
-  const afterDiscount = subtotal * (1 - Number(q.discountPct || 0) / 100);
-  return afterDiscount * (1 + Number(q.vatPct || 0) / 100);
+  let servicesSub;
+  if (q.servicesFromManpower) {
+    if (q.servicesPerLinePricing) {
+      servicesSub = servicesLineSum();
+    } else {
+      const engineeringServicesQty = Math.max(1, num(q.engineeringServicesQty) || 1);
+      const manpowerCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0);
+      servicesSub = manpowerCost * engineeringServicesQty * (1 + num(q.laborMarkupPct) / 100);
+    }
+  } else {
+    servicesSub = servicesLineSum();
+  }
+  return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
 }
 
 function clientApproverFromClient(client) {
