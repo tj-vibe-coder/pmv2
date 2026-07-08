@@ -49,7 +49,8 @@ export default function PricelistTable({
   }, [page, maxPage]);
 
   // Hide breaker-specific columns when nothing in the current result set uses them (e.g. materials/cables)
-  const showSupplier = useMemo(() => new Set(items.map((i) => i.supplier).filter(Boolean)).size > 1, [items]);
+  // Blank counts as its own group so a mix of named-supplier and compiled (supplier-less) items still shows the column
+  const showSupplier = useMemo(() => new Set(items.map((i) => i.supplier || '')).size > 1, [items]);
   const showPoles = useMemo(() => items.some((i) => i.poles != null), [items]);
   const showAmps = useMemo(() => items.some((i) => i.ampRating != null), [items]);
   const showSep = useMemo(() => items.some((i) => i.sepEquivalent), [items]);
