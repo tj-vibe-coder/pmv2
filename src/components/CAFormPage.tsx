@@ -846,10 +846,13 @@ export default function CAFormPage() {
         </Alert>
       )}
 
-      <Paper sx={{ p: 3, mb: 3, border: '1px solid #e0e0e0', borderRadius: 2 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2, color: NET_PACIFIC_COLORS.primary }}>
-          Request Cash Advance
-        </Typography>
+      <Paper sx={{ mb: 3, borderRadius: 2, overflow: 'hidden', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0' }}>
+        <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0' }}>
+          <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+            Request Cash Advance
+          </Typography>
+        </Box>
+        <Box sx={{ p: 2 }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'flex-start', mb: 2 }}>
           <Autocomplete
             size="small"
@@ -948,10 +951,10 @@ export default function CAFormPage() {
         <TableContainer component={Box} sx={{ border: '1px solid #e0e0e0', borderRadius: 1, mb: 2, maxWidth: 640 }}>
           <Table size="small">
             <TableHead>
-              <TableRow sx={{ bgcolor: NET_PACIFIC_COLORS.primary + '08' }}>
-                <TableCell sx={{ fontWeight: 600, width: 160 }}>Category</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Details</TableCell>
-                <TableCell sx={{ fontWeight: 600, width: 120 }} align="right">Amount</TableCell>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', width: 160 }}>Category</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Details</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', width: 120 }} align="right">Amount</TableCell>
                 <TableCell sx={{ width: 96 }} />
               </TableRow>
             </TableHead>
@@ -1047,6 +1050,7 @@ export default function CAFormPage() {
           >
             Request CA
           </Button>
+        </Box>
         </Box>
       </Paper>
 
@@ -1151,38 +1155,41 @@ export default function CAFormPage() {
         )
       )}
 
-      <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: NET_PACIFIC_COLORS.primary }}>
-        {isAdmin ? 'All CA requests (monitor and approve)' : 'My CA requests'}
-      </Typography>
+      <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2, background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0' }}>
+        <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0' }}>
+          <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+            {isAdmin ? `All CA requests (${list.length})` : `My CA requests (${list.length})`}
+          </Typography>
+        </Box>
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
           <CircularProgress />
         </Box>
       ) : (
-        <TableContainer component={Paper} sx={{ border: '1px solid #e0e0e0', borderRadius: 1 }}>
+        <TableContainer sx={{ maxHeight: 'calc(100vh - 480px)', minHeight: 300 }}>
           <Table size="small" stickyHeader>
             <TableHead>
-              <TableRow sx={{ bgcolor: NET_PACIFIC_COLORS.primary + '12' }}>
+              <TableRow>
                 <TableCell sx={{ width: 36 }} />
-                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>CA No.</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', whiteSpace: 'nowrap' }}>CA No.</TableCell>
                 {isAdmin && (
                   <>
-                    <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>User</TableCell>
-                    <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Full name</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>User</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Full name</TableCell>
                   </>
                 )}
-                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Amount</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Balance</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Project</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Breakdown</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Status</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Requested</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }} align="right">
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Amount</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Balance</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Breakdown</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Requested</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }} align="right">
                   Actions
                 </TableCell>
               </TableRow>
             </TableHead>
-            <TableBody>
+            <TableBody sx={{ '& > tr:nth-of-type(4n+1)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
               {list.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={isAdmin ? 11 : 9} align="center" sx={{ py: 3, color: 'text.secondary' }}>
@@ -1388,6 +1395,7 @@ export default function CAFormPage() {
           </Table>
         </TableContainer>
       )}
+      </Paper>
       <PdfPreviewDialog
         open={pdfPreviewOpen}
         onClose={() => { setPdfPreviewOpen(false); setPdfPreviewBlob(null); setPdfPreviewTitle(''); }}
