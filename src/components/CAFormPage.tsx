@@ -30,6 +30,9 @@ import {
   Snackbar,
   Tooltip,
   Divider,
+  Card,
+  CardContent,
+  Grid,
 } from '@mui/material';
 import { Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, PhotoCamera as PhotoCameraIcon, AccountBalanceWallet as WalletIcon } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -46,6 +49,17 @@ import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { resolveCorporateDriveId, ensureFolder, uploadFileToFolderById, sanitizeForOneDrive } from '../services/onedriveFolderService';
 
 const CA_CATEGORIES = ['Materials', 'Accommodation', 'Allowance', 'Transportation', 'Entertainment'] as const;
+
+const NET_PACIFIC_COLORS = {
+  primary:   '#2c5aa0',
+  secondary: '#1e4a72',
+  accent1:   '#4f7bc8',
+  accent2:   '#3c6ba5',
+  success:   '#00b894',
+  warning:   '#fdcb6e',
+  error:     '#e84393',
+  info:      '#74b9ff',
+};
 
 interface BreakdownItem {
   _uid: string;
@@ -815,13 +829,13 @@ export default function CAFormPage() {
     }
   };
 
-  const theme = { primary: '#2c5aa0', secondary: '#1e4a72' };
-
   return (
-    <Box sx={{ p: 3, width: '100%' }}>
-      <Typography variant="h5" sx={{ fontWeight: 600, color: theme.primary, mb: 2 }}>
-        Cash Advance (CA) Form
-      </Typography>
+    <Box sx={{ height: '100%', overflow: 'auto', p: 3 }}>
+      <Box sx={{ mb: 1.5 }}>
+        <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
+          Cash Advance (CA) Form
+        </Typography>
+      </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Request a cash advance. Once approved, you can use it when submitting a liquidation; the liquidation amount will reduce your CA balance.
       </Typography>
@@ -833,7 +847,7 @@ export default function CAFormPage() {
       )}
 
       <Paper sx={{ p: 3, mb: 3, border: '1px solid #e0e0e0', borderRadius: 2 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2, color: theme.primary }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2, color: NET_PACIFIC_COLORS.primary }}>
           Request Cash Advance
         </Typography>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'flex-start', mb: 2 }}>
@@ -872,7 +886,7 @@ export default function CAFormPage() {
         {isAdmin && (
           <>
             <Divider sx={{ my: 2 }} />
-            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5, color: theme.primary }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5, color: NET_PACIFIC_COLORS.primary }}>
               Funded By
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
@@ -928,13 +942,13 @@ export default function CAFormPage() {
           </>
         )}
 
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: theme.primary }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: NET_PACIFIC_COLORS.primary }}>
           Breakdown by category (add child lines under Materials for item breakdown; amount is auto-computed)
         </Typography>
         <TableContainer component={Box} sx={{ border: '1px solid #e0e0e0', borderRadius: 1, mb: 2, maxWidth: 640 }}>
           <Table size="small">
             <TableHead>
-              <TableRow sx={{ bgcolor: theme.primary + '08' }}>
+              <TableRow sx={{ bgcolor: NET_PACIFIC_COLORS.primary + '08' }}>
                 <TableCell sx={{ fontWeight: 600, width: 160 }}>Category</TableCell>
                 <TableCell sx={{ fontWeight: 600 }}>Details</TableCell>
                 <TableCell sx={{ fontWeight: 600, width: 120 }} align="right">Amount</TableCell>
@@ -998,7 +1012,7 @@ export default function CAFormPage() {
           </Table>
         </TableContainer>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-          <Button size="small" startIcon={<AddIcon />} onClick={addBreakdownRow} sx={{ color: theme.primary }}>
+          <Button size="small" startIcon={<AddIcon />} onClick={addBreakdownRow} sx={{ color: NET_PACIFIC_COLORS.primary }}>
             Add line
           </Button>
           <Typography variant="body2" color="text.secondary">
@@ -1010,7 +1024,7 @@ export default function CAFormPage() {
             startIcon={<VisibilityIcon />}
             onClick={handlePreviewCurrentForm}
             disabled={!canSubmit}
-            sx={{ borderColor: theme.primary, color: theme.primary }}
+            sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
           >
             Preview PDF
           </Button>
@@ -1020,7 +1034,7 @@ export default function CAFormPage() {
             startIcon={<PictureAsPdfIcon />}
             onClick={exportCurrentFormToPDF}
             disabled={!canSubmit}
-            sx={{ borderColor: theme.primary, color: theme.primary }}
+            sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
           >
             Export to PDF (for signing)
           </Button>
@@ -1029,7 +1043,7 @@ export default function CAFormPage() {
             startIcon={<AddIcon />}
             onClick={handleRequest}
             disabled={submitting || !canSubmit || scanningRowId !== null}
-            sx={{ bgcolor: theme.primary, '&:hover': { bgcolor: theme.secondary } }}
+            sx={{ bgcolor: NET_PACIFIC_COLORS.primary, '&:hover': { bgcolor: NET_PACIFIC_COLORS.secondary } }}
           >
             Request CA
           </Button>
@@ -1038,7 +1052,7 @@ export default function CAFormPage() {
 
       {!loading && visibleEmployeeBalances.length > 0 && (
         <Paper sx={{ p: 2, mb: 3, border: '1px solid #e0e0e0', borderRadius: 2 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: theme.primary }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: NET_PACIFIC_COLORS.primary }}>
             {isAdmin ? 'Cash Advance Balances by Employee' : 'Your Cash Advance Balance'}
           </Typography>
           {isAdmin && (
@@ -1058,7 +1072,7 @@ export default function CAFormPage() {
           <TableContainer sx={{ border: '1px solid #e0e0e0', borderRadius: 1 }}>
             <Table size="small">
               <TableHead>
-                <TableRow sx={{ bgcolor: theme.primary + '08' }}>
+                <TableRow sx={{ bgcolor: NET_PACIFIC_COLORS.primary + '08' }}>
                   {isAdmin && <TableCell sx={{ fontWeight: 600 }}>Employee</TableCell>}
                   <TableCell sx={{ fontWeight: 600 }} align="right">Approved CAs</TableCell>
                   <TableCell sx={{ fontWeight: 600 }} align="right">Total Approved</TableCell>
@@ -1086,7 +1100,7 @@ export default function CAFormPage() {
         </Paper>
       )}
 
-      <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: theme.primary }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: NET_PACIFIC_COLORS.primary }}>
         {isAdmin ? 'All CA requests (monitor and approve)' : 'My CA requests'}
       </Typography>
       {loading ? (
@@ -1097,22 +1111,22 @@ export default function CAFormPage() {
         <TableContainer component={Paper} sx={{ border: '1px solid #e0e0e0', borderRadius: 1 }}>
           <Table size="small" stickyHeader>
             <TableHead>
-              <TableRow sx={{ bgcolor: theme.primary + '12' }}>
+              <TableRow sx={{ bgcolor: NET_PACIFIC_COLORS.primary + '12' }}>
                 <TableCell sx={{ width: 36 }} />
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>CA No.</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>CA No.</TableCell>
                 {isAdmin && (
                   <>
-                    <TableCell sx={{ fontWeight: 600, color: theme.primary }}>User</TableCell>
-                    <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Full name</TableCell>
+                    <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>User</TableCell>
+                    <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Full name</TableCell>
                   </>
                 )}
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Amount</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Balance</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Project</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Breakdown</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Status</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Requested</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }} align="right">
+                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Amount</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Balance</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Project</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Breakdown</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>Requested</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }} align="right">
                   Actions
                 </TableCell>
               </TableRow>
@@ -1242,7 +1256,7 @@ export default function CAFormPage() {
                           size="small"
                           startIcon={<ReceiptLongIcon />}
                           onClick={() => navigate(`${location.pathname.replace(/\/ca-form\/?$/, '/liquidation-form')}?ca_id=${ca.id}`)}
-                          sx={{ color: theme.primary, mr: 0.5 }}
+                          sx={{ color: NET_PACIFIC_COLORS.primary, mr: 0.5 }}
                           title="Submit a liquidation against this CA"
                         >
                           Liquidate
@@ -1253,7 +1267,7 @@ export default function CAFormPage() {
                           size="small"
                           startIcon={<WalletIcon />}
                           onClick={() => setCloseTarget(ca)}
-                          sx={{ color: theme.primary, mr: 0.5 }}
+                          sx={{ color: NET_PACIFIC_COLORS.primary, mr: 0.5 }}
                           title="Close out this CA's remaining unused balance"
                         >
                           Close &amp; Settle
@@ -1263,7 +1277,7 @@ export default function CAFormPage() {
                         size="small"
                         onClick={() => exportCARowToPDF(ca)}
                         title="Export to PDF (for signing)"
-                        sx={{ color: theme.primary, ml: 0.5 }}
+                        sx={{ color: NET_PACIFIC_COLORS.primary, ml: 0.5 }}
                       >
                         <PictureAsPdfIcon fontSize="small" />
                       </IconButton>
@@ -1272,7 +1286,7 @@ export default function CAFormPage() {
                           size="small"
                           onClick={() => openFundingEdit(ca)}
                           title={ca.fundingSource?.type === 'investor_outofpocket' ? `Funded by ${ca.fundingSource.investor} (out-of-pocket) — edit` : 'Edit funding source / link to Investment Tracker'}
-                          sx={{ color: ca.fundingSource?.type === 'investor_outofpocket' ? 'info.main' : theme.primary, ml: 0.5 }}
+                          sx={{ color: ca.fundingSource?.type === 'investor_outofpocket' ? 'info.main' : NET_PACIFIC_COLORS.primary, ml: 0.5 }}
                         >
                           <WalletIcon fontSize="small" />
                         </IconButton>
@@ -1301,7 +1315,7 @@ export default function CAFormPage() {
                             </Typography>
                           ) : (
                             <>
-                              <Typography variant="caption" sx={{ fontWeight: 600, color: theme.primary, display: 'block', mb: 0.5 }}>
+                              <Typography variant="caption" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, display: 'block', mb: 0.5 }}>
                                 Liquidated {liquidatedTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })} of {Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
                               </Typography>
                               {linkedLiqs.map((l) => (
@@ -1464,7 +1478,7 @@ export default function CAFormPage() {
             variant="contained"
             onClick={handleSaveFunding}
             disabled={savingFunding || fundingEditLoadingInvestments || (fundingEditType === 'investor_outofpocket' && !fundingEditInvestor)}
-            sx={{ bgcolor: theme.primary, '&:hover': { bgcolor: theme.secondary } }}
+            sx={{ bgcolor: NET_PACIFIC_COLORS.primary, '&:hover': { bgcolor: NET_PACIFIC_COLORS.secondary } }}
           >
             {savingFunding ? <CircularProgress size={20} /> : 'Save'}
           </Button>
