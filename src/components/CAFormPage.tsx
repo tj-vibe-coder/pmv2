@@ -1403,7 +1403,7 @@ export default function CAFormPage() {
         title={pdfPreviewTitle}
       />
       <Dialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)}>
-        <DialogTitle>Delete {confirmDelete?.ca_no || 'cash advance'}?</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 600 }}>Delete {confirmDelete?.ca_no || 'cash advance'}?</DialogTitle>
         <DialogContent>
           <DialogContentText>
             {confirmDelete?.status === 'approved' || confirmDelete?.status === 'rejected'
@@ -1411,7 +1411,7 @@ export default function CAFormPage() {
               : 'Delete this cash advance request? This cannot be undone.'}
           </DialogContentText>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
           <Button
             color="error"
@@ -1424,7 +1424,7 @@ export default function CAFormPage() {
         </DialogActions>
       </Dialog>
       <Dialog open={!!closeTarget} onClose={() => setCloseTarget(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Close &amp; Settle — {closeTarget?.ca_no || closeTarget?.id}</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 600 }}>Close &amp; Settle — {closeTarget?.ca_no || closeTarget?.id}</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>
             {closeTarget?.full_name || closeTarget?.username || 'This employee'} still holds an unused balance of{' '}
@@ -1463,7 +1463,7 @@ export default function CAFormPage() {
         </DialogActions>
       </Dialog>
       <Dialog open={!!fundingEditTarget} onClose={closeFundingEdit} maxWidth="sm" fullWidth>
-        <DialogTitle>
+        <DialogTitle sx={{ fontWeight: 600 }}>
           Funding Source — {fundingEditTarget?.ca_no || fundingEditTarget?.id}
         </DialogTitle>
         <DialogContent>
@@ -1531,7 +1531,7 @@ export default function CAFormPage() {
             )}
           </Box>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={closeFundingEdit} disabled={savingFunding}>Cancel</Button>
           <Button
             variant="contained"
