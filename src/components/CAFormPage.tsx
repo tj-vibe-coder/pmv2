@@ -1126,10 +1126,10 @@ export default function CAFormPage() {
                 </TableRow>
               ) : (
                 list.map((ca) => {
-                  const linkedLiqs = liquidations.filter((l) => l.ca_id === ca.id);
-                  const liquidatedTotal = linkedLiqs
-                    .filter((l) => l.status === 'submitted')
-                    .reduce((s, l) => s + (Number(l.total_amount) || 0), 0);
+                  // Drafts aren't finalized yet (still editable/discardable by the owner), so
+                  // only submitted (pending-review) liquidations count as "linked" to a CA.
+                  const linkedLiqs = liquidations.filter((l) => l.ca_id === ca.id && l.status === 'submitted');
+                  const liquidatedTotal = linkedLiqs.reduce((s, l) => s + (Number(l.total_amount) || 0), 0);
                   const expanded = expandedId === ca.id;
                   return (
                   <React.Fragment key={ca.id}>
