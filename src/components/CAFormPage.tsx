@@ -1051,53 +1051,104 @@ export default function CAFormPage() {
       </Paper>
 
       {!loading && visibleEmployeeBalances.length > 0 && (
-        <Paper sx={{ p: 2, mb: 3, border: '1px solid #e0e0e0', borderRadius: 2 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: NET_PACIFIC_COLORS.primary }}>
-            {isAdmin ? 'Cash Advance Balances by Employee' : 'Your Cash Advance Balance'}
-          </Typography>
-          {isAdmin && (
-            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 1.5 }}>
-              <Typography variant="body2">
-                Held by employees (still to liquidate):{' '}
-                <strong>{totalOutstandingHeld.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong>
+        isAdmin ? (
+          <Paper sx={{ mb: 3, borderRadius: 2, overflow: 'hidden', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0' }}>
+            <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0' }}>
+              <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+                Cash Advance Balances by Employee
               </Typography>
-              {totalCompanyOwes > 0 && (
-                <Typography variant="body2" sx={{ color: 'error.main' }}>
-                  Company owes employees (over-liquidated):{' '}
-                  <strong>{totalCompanyOwes.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong>
-                </Typography>
-              )}
             </Box>
-          )}
-          <TableContainer sx={{ border: '1px solid #e0e0e0', borderRadius: 1 }}>
-            <Table size="small">
-              <TableHead>
-                <TableRow sx={{ bgcolor: NET_PACIFIC_COLORS.primary + '08' }}>
-                  {isAdmin && <TableCell sx={{ fontWeight: 600 }}>Employee</TableCell>}
-                  <TableCell sx={{ fontWeight: 600 }} align="right">Approved CAs</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }} align="right">Total Approved</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }} align="right">Holds Unliquidated</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }} align="right">Company Owes</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {visibleEmployeeBalances.map((b) => (
-                  <TableRow key={b.userId} hover>
-                    {isAdmin && <TableCell>{b.name}</TableCell>}
-                    <TableCell align="right">{b.approvedCount}</TableCell>
-                    <TableCell align="right">{b.totalApproved.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: b.heldPositive > 0 ? 600 : undefined, color: b.heldPositive > 0 ? 'warning.main' : 'text.disabled' }}>
-                      {b.heldPositive > 0 ? b.heldPositive.toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '—'}
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontWeight: b.owedNegative > 0 ? 600 : undefined, color: b.owedNegative > 0 ? 'error.main' : 'text.disabled' }}>
-                      {b.owedNegative > 0 ? b.owedNegative.toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '—'}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Paper>
+            <Box sx={{ p: 1.5 }}>
+              <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 1.5 }}>
+                <Typography variant="body2">
+                  Held by employees (still to liquidate):{' '}
+                  <strong>{totalOutstandingHeld.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong>
+                </Typography>
+                {totalCompanyOwes > 0 && (
+                  <Typography variant="body2" sx={{ color: 'error.main' }}>
+                    Company owes employees (over-liquidated):{' '}
+                    <strong>{totalCompanyOwes.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong>
+                  </Typography>
+                )}
+              </Box>
+              <TableContainer>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Employee</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }} align="right">Approved CAs</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }} align="right">Total Approved</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }} align="right">Holds Unliquidated</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }} align="right">Company Owes</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {visibleEmployeeBalances.map((b) => (
+                      <TableRow key={b.userId} hover sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
+                        <TableCell sx={{ fontSize: '0.8rem' }}>{b.name}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }} align="right">{b.approvedCount}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }} align="right">{b.totalApproved.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', fontWeight: b.heldPositive > 0 ? 600 : undefined, color: b.heldPositive > 0 ? 'warning.main' : 'text.disabled' }}>
+                          {b.heldPositive > 0 ? b.heldPositive.toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '—'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', fontWeight: b.owedNegative > 0 ? 600 : undefined, color: b.owedNegative > 0 ? 'error.main' : 'text.disabled' }}>
+                          {b.owedNegative > 0 ? b.owedNegative.toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '—'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Box>
+          </Paper>
+        ) : (
+          <Grid container spacing={1.5} sx={{ mb: 2 }}>
+            {(() => {
+              const b = visibleEmployeeBalances[0];
+              const fmt = (n: number) => n.toLocaleString('en-PH', { minimumFractionDigits: 2 });
+              return (
+                <>
+                  <Grid size={{ xs: 6, sm: 3 }}>
+                    <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Approved CAs</Typography>
+                        <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{b.approvedCount}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.8 }}>with open balance</Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 3 }}>
+                    <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Approved</Typography>
+                        <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{fmt(b.totalApproved)}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.8 }}>sum of approved CAs</Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 3 }}>
+                    <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`, color: '#2d3436' }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Holds Unliquidated</Typography>
+                        <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{b.heldPositive > 0 ? fmt(b.heldPositive) : '—'}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.8 }}>still to liquidate</Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 3 }}>
+                    <Card sx={{ height: '100%', background: b.owedNegative > 0 ? 'linear-gradient(135deg, #e53935 0%, #ef9a9a 100%)' : `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, color: 'white' }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Company Owes</Typography>
+                        <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{b.owedNegative > 0 ? fmt(b.owedNegative) : '—'}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.8 }}>over-liquidated</Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                </>
+              );
+            })()}
+          </Grid>
+        )
       )}
 
       <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: NET_PACIFIC_COLORS.primary }}>
