@@ -47,6 +47,10 @@ Payroll module (tracked separately in CLAUDE.md §5 item 18) — this fixes CAFo
    `Box sx={{ height: '100%', overflow: 'auto', p: 3 }}` — drops the redundant `width: '100%'`
    (block-level `Box` is already full width) and gives the page an explicit scroll container
    instead of relying on `AppLayout`'s ambient scroll.
+   Note (final review): under the current `AppLayout` (min-height only, no definite height) the
+   `height: '100%'` resolves to auto, so this root change is declarative-only — the page still
+   scrolls at document level. If `AppLayout` ever gains a definite height, this page will become
+   a nested scroller by design.
 
 ## Out of scope
 
