@@ -778,6 +778,18 @@ function App() {
               }
             />
             <Route
+              path="/employee/ca-form"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <TaxFilerBlock>
+                      <CAFormPage />
+                    </TaxFilerBlock>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/employee/service-report"
               element={
                 <ProtectedRoute>

@@ -6,6 +6,7 @@ import {
   Receipt as ReceiptIcon,
   DescriptionOutlined as PayslipIcon,
   Assignment as ReportIcon,
+  Payments as PaymentsIcon,
 } from '@mui/icons-material';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0', accent1: '#4f7bc8' };
@@ -37,6 +38,12 @@ const EmployeePortalHome: React.FC = () => {
       description: 'Submit expense liquidation forms and receipts.',
       icon: <ReceiptIcon sx={{ color: NET_PACIFIC_COLORS.primary, fontSize: 28 }} />,
       path: '/employee/liquidation-form',
+    },
+    {
+      title: 'Cash Advance',
+      description: 'Request a cash advance and track its approval status and balance.',
+      icon: <PaymentsIcon sx={{ color: NET_PACIFIC_COLORS.primary, fontSize: 28 }} />,
+      path: '/employee/ca-form',
     },
   ];
 
