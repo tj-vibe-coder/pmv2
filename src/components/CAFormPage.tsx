@@ -1158,7 +1158,7 @@ export default function CAFormPage() {
       <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2, background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0' }}>
         <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0' }}>
           <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
-            {isAdmin ? `All CA requests (${list.length})` : `My CA requests (${list.length})`}
+            {isAdmin ? `All CA requests${loading ? '' : ` (${list.length})`}` : `My CA requests${loading ? '' : ` (${list.length})`}`}
           </Typography>
         </Box>
       {loading ? (
@@ -1189,7 +1189,7 @@ export default function CAFormPage() {
                 </TableCell>
               </TableRow>
             </TableHead>
-            <TableBody sx={{ '& > tr:nth-of-type(4n+1)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
+            <TableBody sx={list.length === 0 ? undefined : { '& > tr:nth-of-type(4n+1)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
               {list.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={isAdmin ? 11 : 9} align="center" sx={{ py: 3, color: 'text.secondary' }}>
@@ -1206,7 +1206,7 @@ export default function CAFormPage() {
                   return (
                   <React.Fragment key={ca.id}>
                   <TableRow hover>
-                    <TableCell sx={{ py: 0, whiteSpace: 'nowrap' }}>
+                    <TableCell sx={{ py: 0, whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
                       <IconButton
                         size="small"
                         onClick={() => setExpandedId(expanded ? null : ca.id)}
@@ -1223,7 +1223,7 @@ export default function CAFormPage() {
                         />
                       )}
                     </TableCell>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                    <TableCell sx={{ whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
                       {ca.ca_no || (
                         <Tooltip title={`Internal ID: ${ca.id}`}>
                           <span style={{ color: '#888' }}>{ca.id.slice(0, 8)}…</span>
@@ -1232,12 +1232,12 @@ export default function CAFormPage() {
                     </TableCell>
                     {isAdmin && (
                       <>
-                        <TableCell>{ca.username || '—'}</TableCell>
-                        <TableCell>{ca.full_name || '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }}>{ca.username || '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }}>{ca.full_name || '—'}</TableCell>
                       </>
                     )}
-                    <TableCell>{Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
-                    <TableCell sx={Number(ca.balance_remaining) < 0 ? { color: 'error.main', fontWeight: 600 } : undefined}>
+                    <TableCell sx={{ fontSize: '0.8rem' }}>{Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem', ...(Number(ca.balance_remaining) < 0 ? { color: 'error.main', fontWeight: 600 } : {}) }}>
                       {Number(ca.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
                       {Number(ca.amount) > 0 && (
                         <Tooltip title={`${Math.round(Math.min(100, Math.max(0, ((Number(ca.amount) - Number(ca.balance_remaining)) / Number(ca.amount)) * 100)))}% consumed`}>
@@ -1249,7 +1249,7 @@ export default function CAFormPage() {
                         </Tooltip>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem' }}>
                       {ca.project_name
                         || (ca.purpose ? (
                           <Tooltip title="No project yet — prospect / out-of-project CA">
@@ -1257,7 +1257,7 @@ export default function CAFormPage() {
                           </Tooltip>
                         ) : ca.project_id ? `#${ca.project_id}` : '—')}
                     </TableCell>
-                    <TableCell sx={{ maxWidth: 220, whiteSpace: 'pre-wrap' }}>
+                    <TableCell sx={{ maxWidth: 220, whiteSpace: 'pre-wrap', fontSize: '0.8rem' }}>
                       {(() => {
                         const b = parseBreakdown(ca.breakdown);
                         if (b.length === 0) return '—';
@@ -1269,7 +1269,7 @@ export default function CAFormPage() {
                         }).join('\n');
                       })()}
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem' }}>
                       <Chip
                         size="small"
                         label={ca.status}
@@ -1277,7 +1277,7 @@ export default function CAFormPage() {
                         sx={{ textTransform: 'capitalize' }}
                       />
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem' }}>
                       {ca.requested_at
                         ? new Date(ca.requested_at * 1000).toLocaleDateString()
                         : ca.created_at
