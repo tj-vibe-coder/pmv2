@@ -12,12 +12,14 @@ import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import HistoryIcon from '@mui/icons-material/History';
 import CloudSyncIcon from '@mui/icons-material/CloudSync';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { Link } from 'react-router-dom';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { ProjectStatus, Project } from '../../types/Quotation';
 import { format } from 'date-fns';
 import { PHP, computeTotals, ioctMargin } from '../../utils/calcsheet/calc';
 import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes';
+import { exportProjectListXlsx } from '../../utils/calcsheet/xlsxExport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { ensureProposalFolder, ensureExecutionFolder, moveProposalToExecution } from '../../services/onedriveFolderService';
@@ -93,6 +95,7 @@ export default function Projects() {
   } | null>(null);
   const [bulkLinkSummary, setBulkLinkSummary] = useState<string>('');
   const [createNotice, setCreateNotice] = useState<{ severity: 'success' | 'info' | 'warning' | 'error'; message: string } | null>(null);
+  const [exportingList, setExportingList] = useState(false);
   const oneDriveRequired = isCorporateOneDriveConfigured();
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
 
@@ -375,6 +378,26 @@ export default function Projects() {
     setYearFilter('all'); setLegacyFilter('all'); setOngoingOnly(false); setHideInactive(true);
   };
 
+  const handleExportList = async () => {
+    setExportingList(true);
+    try {
+      await exportProjectListXlsx(sorted.map(({ p, customer, partner }) => ({
+        code: p.code,
+        name: p.name,
+        customer: customer?.name ?? '',
+        partner: partner?.name ?? '',
+        date: p.date ? format(new Date(p.date), 'dd MMM yyyy') : '',
+        status: p.status,
+        ongoing: p.ongoing ? 'Yes' : '—',
+        notes: p.notes ?? '',
+      })));
+    } catch (err) {
+      setCreateNotice({ severity: 'error', message: err instanceof Error ? err.message : 'Export failed.' });
+    } finally {
+      setExportingList(false);
+    }
+  };
+
   const anyFilterActive = search || statusFilter.length > 0 || customerFilter !== 'all'
     || yearFilter !== 'all' || legacyFilter !== 'all' || ongoingOnly;
 
@@ -419,6 +442,14 @@ export default function Projects() {
               Sign in OneDrive
             </Button>
           )}
+          <Button
+            variant="outlined"
+            startIcon={<FileDownloadIcon />}
+            onClick={() => { void handleExportList(); }}
+            disabled={exportingList || sorted.length === 0}
+          >
+            Export list
+          </Button>
           <Button
             component={Link}
             to="/sales/calcsheet/import-legacy"
