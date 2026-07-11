@@ -21,6 +21,9 @@ test('workbook has a Projects sheet with header + one row per project', () => {
   expect(ws.getRow(2).getCell(6).value).toBe('sent');
   expect(ws.getRow(3).getCell(3).value).toBe('XYZ Inc');
   expect(ws.getRow(3).getCell(7).value).toBe('—');
+  // Notes lands in column 10, after the two blank checklist columns (8–9).
+  expect(ws.getRow(2).getCell(9).value ?? null).toBeNull();
+  expect(ws.getRow(2).getCell(10).value).toBe('follow up');
 });
 
 test('Updated Status data cells start blank and carry the status dropdown', () => {
@@ -40,5 +43,5 @@ test('header row is bold, frozen, and autofiltered across all 10 columns', () =>
   const ws = buildProjectListWorkbook(rows).getWorksheet('Projects')!;
   expect(ws.getRow(1).font).toMatchObject({ bold: true });
   expect(ws.views[0]).toMatchObject({ state: 'frozen', ySplit: 1 });
-  expect(ws.autoFilter).toBeTruthy();
+  expect(ws.autoFilter).toBe('A1:J1');
 });

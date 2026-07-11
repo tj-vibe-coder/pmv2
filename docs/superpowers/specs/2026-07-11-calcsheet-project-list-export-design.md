@@ -33,9 +33,10 @@ the checklist workable.
   "IOCT Calcsheet" (matches the quotation export).
 - **Filename**: `calcsheet-projects-<yyyy-MM-dd>.xlsx` via the existing `file-saver`
   dependency.
-- **Button**: "Export list" with a download icon, `size="small"` outlined, placed with
-  the projects list's existing header-bar actions; disabled when the visible list is
-  empty or while an export is in flight.
+- **Button**: "Export list" with a download icon, outlined, placed with the projects
+  list's existing header-bar actions; disabled when the visible list is empty or while
+  an export is in flight. (Final review note: shipped at default size, not `size="small"`
+  — every button in that header bar is default-size, so consistency won.)
 
 ## Changes (2 files)
 
