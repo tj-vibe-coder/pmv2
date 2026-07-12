@@ -20,6 +20,7 @@ import CloudOffIcon from '@mui/icons-material/CloudOff';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
 import type { ProjectStatus, Quotation, QuotationKind } from '../../types/Quotation';
+import { PROJECT_STATUSES, projectStatusLabel } from '../../types/Quotation';
 import { parseLegacyWorkbook } from '../../utils/calcsheet/legacyImport';
 import type { ParsedProject, ParsedQuotation } from '../../utils/calcsheet/legacyImport';
 import { parseLegacyPdf } from '../../utils/calcsheet/legacyPdfImport';
@@ -927,11 +928,9 @@ export default function ProjectDetail() {
                 InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
                 sx={{ minWidth: 80 }}
               >
-                <MenuItem value="draft">draft</MenuItem>
-                <MenuItem value="sent">sent</MenuItem>
-                <MenuItem value="won">won</MenuItem>
-                <MenuItem value="lost">lost</MenuItem>
-                <MenuItem value="inactive">inactive</MenuItem>
+                {PROJECT_STATUSES.map((s) => (
+                  <MenuItem key={s} value={s}>{projectStatusLabel(s)}</MenuItem>
+                ))}
               </TextField>
             </Box>
           </Box>
@@ -956,6 +955,10 @@ export default function ProjectDetail() {
               </Stack>
             </Box>
           )}
+          <Box>
+            <Typography variant="caption" color="text.secondary">Created by</Typography>
+            <Typography variant="body2">{project.createdByName ?? '—'}</Typography>
+          </Box>
           <Box>
             <Typography variant="caption" color="text.secondary">Date</Typography>
             <Box>

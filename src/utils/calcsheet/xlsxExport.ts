@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { format } from 'date-fns';
 import type { Client, Project, Quotation } from '../../types/Quotation';
+import { PROJECT_STATUSES } from '../../types/Quotation';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, manpowerCost,
 } from './calc';
@@ -273,13 +274,16 @@ export interface ProjectListExportRow {
   name: string;
   customer: string;
   partner: string;
-  date: string;    // 'dd MMM yyyy' or ''
+  date: string;      // 'dd MMM yyyy' or ''
   status: string;
-  ongoing: string; // 'Yes' | '—'
+  ongoing: string;   // 'Yes' | '—'
   notes: string;
+  createdBy: string; // creator display name or ''
 }
 
-const PROJECT_STATUS_DROPDOWN = '"draft,sent,won,lost,inactive"';
+// Derived from the shared status list so the Excel dropdown can never drift
+// from the app's ProjectStatus set.
+const PROJECT_STATUS_DROPDOWN = `"${PROJECT_STATUSES.join(',')}"`;
 
 export function buildProjectListWorkbook(rows: ProjectListExportRow[]): ExcelJS.Workbook {
   const wb = new ExcelJS.Workbook();
@@ -298,12 +302,13 @@ export function buildProjectListWorkbook(rows: ProjectListExportRow[]): ExcelJS.
     { header: 'Updated Status', width: 15 },
     { header: 'Remarks', width: 30 },
     { header: 'Notes', width: 40 },
+    { header: 'Created By', width: 20 },
   ];
   ws.getRow(1).font = { bold: true };
-  ws.autoFilter = 'A1:J1';
+  ws.autoFilter = 'A1:K1';
 
   rows.forEach((r, i) => {
-    ws.addRow([r.code, r.name, r.customer, r.partner, r.date, r.status, r.ongoing, null, null, r.notes]);
+    ws.addRow([r.code, r.name, r.customer, r.partner, r.date, r.status, r.ongoing, null, null, r.notes, r.createdBy]);
     // Excel dropdown on the blank Updated Status cell — the whole point of the export.
     ws.getCell(i + 2, 8).dataValidation = {
       type: 'list',

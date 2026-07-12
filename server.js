@@ -3444,8 +3444,16 @@ app.post('/api/calcsheet/projects', async (req, res) => {
     // below would overwrite ref.id with the client's nanoid in the response,
     // leaving the client with an ID that doesn't address the stored document
     // (subsequent PUTs would 500 with "Failed to update project").
-    const { id: _ignored, ...body } = req.body || {};
-    const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const { id: _ignored, createdBy: _cb, createdByName: _cbn, ...body } = req.body || {};
+    const data = {
+      ...body,
+      // Who created the opportunity — factual audit fields, always stamped from the
+      // authenticated user (client-supplied values are stripped above).
+      createdBy: user.id,
+      createdByName: user.full_name || user.username || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
     const ref = await db.collection('calcsheet_projects').add(data);
     res.json({ success: true, project: { ...data, id: ref.id } });
   } catch (err) {
@@ -3460,8 +3468,9 @@ app.put('/api/calcsheet/projects/:id', async (req, res) => {
     if (!user) return;
     // Defensively drop `id` from the update body — it's the doc identifier (from
     // the URL param) and storing it inside the document is just dead data that
-    // can mask the real ID during debugging.
-    const { id: _ignored, ...body } = req.body || {};
+    // can mask the real ID during debugging. `createdBy`/`createdByName` are
+    // stamped at creation and stay factual — never updatable.
+    const { id: _ignored, createdBy: _cb, createdByName: _cbn, ...body } = req.body || {};
     const update = { ...body, updatedAt: new Date().toISOString() };
     await db.collection('calcsheet_projects').doc(req.params.id).update(update);
     res.json({ success: true });
