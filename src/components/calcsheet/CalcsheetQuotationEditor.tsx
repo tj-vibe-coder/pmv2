@@ -407,7 +407,9 @@ export default function QuotationEditor() {
     { key: 'qty', label: 'Qty', width: 70, type: 'number', align: 'right' },
     { key: 'uom', label: 'UOM', width: 70 },
     { key: 'unitPrice', label: 'Unit Price', width: 120, type: 'number', align: 'right', step: 0.01 },
-    { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01 },
+    // Shows the global General Req. markup (greyed) until a per-line override is
+    // typed; clearing the cell falls back to the global again.
+    { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.generalReqMarkupPct || 0) },
     { key: 'total', label: 'Total', width: 130, align: 'right',
       render: (r) => {
         const base = lineGeneralTotal(r);
@@ -472,7 +474,9 @@ export default function QuotationEditor() {
     { key: 'unitCost', label: 'Unit Cost', width: 110, type: 'number', align: 'right', step: 0.01 },
     { key: 'forex', label: 'FX', width: 60, type: 'number', align: 'right', step: 0.0001 },
     { key: 'contingencyPct', label: 'Cont %', width: 80, type: 'number', align: 'right', step: 0.01 },
-    { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01 },
+    // Shows the global Product markup (greyed) until a per-line override is
+    // typed; clearing the cell falls back to the global again.
+    { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.productMarkupPct || 0) },
     { key: 'leadTimeDays', label: 'Lead Time', width: 90, type: 'number', align: 'right', min: 0 },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
       render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
