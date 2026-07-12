@@ -16,6 +16,7 @@ import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { Link } from 'react-router-dom';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { ProjectStatus, Project } from '../../types/Quotation';
+import { PROJECT_STATUSES, projectStatusLabel } from '../../types/Quotation';
 import { format } from 'date-fns';
 import { PHP, computeTotals, ioctMargin } from '../../utils/calcsheet/calc';
 import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes';
@@ -24,16 +25,15 @@ import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { ensureProposalFolder, ensureExecutionFolder, moveProposalToExecution } from '../../services/onedriveFolderService';
 
-const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error' | 'warning'> = {
-  draft: 'default', sent: 'primary', won: 'success', lost: 'error', inactive: 'warning',
+const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error' | 'warning' | 'info'> = {
+  draft: 'default', for_review: 'info', sent: 'primary', won: 'success', lost: 'error', inactive: 'warning',
 };
 
-// Single source of truth for the status options used by the multi-select filter
-// and the inline status dropdown. Keep `inactive` here — it's part of ProjectStatus.
-const STATUS_OPTIONS: ProjectStatus[] = ['draft', 'sent', 'won', 'lost', 'inactive'];
+// Status options come from the shared PROJECT_STATUSES list in types/Quotation.ts.
+const STATUS_OPTIONS: ProjectStatus[] = PROJECT_STATUSES;
 // Hidden from the list by default; still reachable by explicitly ticking them in the Status filter.
 const DEFAULT_HIDDEN_STATUSES: ProjectStatus[] = ['lost', 'inactive'];
-const statusLabel = (s: ProjectStatus) => s.charAt(0).toUpperCase() + s.slice(1);
+const statusLabel = projectStatusLabel;
 
 type SortKey = 'code' | 'name' | 'customer' | 'date' | 'status' | 'grandTotal' | 'margin';
 type SortDir = 'asc' | 'desc';
@@ -390,6 +390,7 @@ export default function Projects() {
         status: p.status,
         ongoing: p.ongoing ? 'Yes' : '—',
         notes: p.notes ?? '',
+        createdBy: p.createdByName ?? '',
       })));
     } catch (err) {
       setCreateNotice({ severity: 'error', message: err instanceof Error ? err.message : 'Export failed.' });
@@ -651,6 +652,7 @@ export default function Projects() {
               <SortHeader k="name" label="Project" />
               <SortHeader k="customer" label="Customer" />
               <TableCell>Partner</TableCell>
+              <TableCell>Created by</TableCell>
               <SortHeader k="date" label="Date" />
               <SortHeader k="status" label="Status" />
               <SortHeader k="grandTotal" label="Quotations" align="right" />
@@ -700,6 +702,7 @@ export default function Projects() {
                 </TableCell>
                 <TableCell>{customer?.name ?? '—'}</TableCell>
                 <TableCell>{partner?.name ?? '—'}</TableCell>
+                <TableCell>{p.createdByName ?? '—'}</TableCell>
                 <TableCell>{p.date ? format(new Date(p.date), 'dd MMM yyyy') : '—'}</TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={0.5} alignItems="center">
@@ -718,7 +721,7 @@ export default function Projects() {
                     >
                       {STATUS_OPTIONS.map((s) => (
                         <MenuItem key={s} value={s} dense>
-                          <Chip size="small" label={s} color={statusColors[s]} sx={{ minWidth: 60 }} />
+                          <Chip size="small" label={statusLabel(s)} color={statusColors[s]} sx={{ minWidth: 60 }} />
                         </MenuItem>
                       ))}
                     </Select>
@@ -766,7 +769,7 @@ export default function Projects() {
             })}
             {sorted.length === 0 && (
               <TableRow>
-                <TableCell colSpan={9} align="center" sx={{ color: 'text.secondary', py: 4 }}>
+                <TableCell colSpan={10} align="center" sx={{ color: 'text.secondary', py: 4 }}>
                   {projects.length === 0
                     ? 'No projects yet — click "New project" to start'
                     : 'No projects match the current filters'}
@@ -865,11 +868,9 @@ export default function Projects() {
               InputLabelProps={{ shrink: true }}
             />
             <TextField select label="Status" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}>
-              <MenuItem value="draft">Draft</MenuItem>
-              <MenuItem value="sent">Sent</MenuItem>
-              <MenuItem value="won">Won</MenuItem>
-              <MenuItem value="lost">Lost</MenuItem>
-              <MenuItem value="inactive">Inactive</MenuItem>
+              {STATUS_OPTIONS.map((s) => (
+                <MenuItem key={s} value={s}>{statusLabel(s)}</MenuItem>
+              ))}
             </TextField>
             <TextField
               select
