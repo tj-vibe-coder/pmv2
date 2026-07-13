@@ -220,6 +220,12 @@ const blankQuotation = (
   updatedAt: now(),
 });
 
+// In-flight guard: `initialized` only flips true after init's awaits resolve,
+// so two concurrent init() calls (e.g. React StrictMode's double-invoked
+// effects in dev) would both pass the state guard and run the empty-presets
+// seed-and-persist twice, creating duplicate presets. Share one promise instead.
+let initInFlight: Promise<void> | null = null;
+
 export const useQuotationStore = create<State & Actions>()((set, get) => ({
   clients: seedClients(),
   salesContacts: seedSalesContacts(),
@@ -232,6 +238,8 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
 
   init: async () => {
     if (get().initialized) return;
+    if (initInFlight) return initInFlight;
+    initInFlight = (async () => {
     try {
       const [pRes, qRes, cRes, prRes, sRes, staffRes, stRes] = await Promise.all([
         api<{ projects: Project[] }>('GET', '/projects'),
@@ -243,12 +251,32 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
         api<{ settings: CalcsheetSettings }>('GET', '/settings').catch(() => ({ settings: {} })),
       ]);
       const salesContacts = mergeSalesContactsWithUsers(seedSalesContacts(), staffRes.contacts ?? []);
+      let laborPresets: LaborRolePreset[];
+      if (prRes.presets.length) {
+        laborPresets = normalizeLaborPresets(prRes.presets);
+      } else {
+        // First run — the presets collection is empty. Persist the defaults once
+        // so their ids are stable Firestore ids on every later load. An in-memory
+        // seed would mint fresh nanoids each load, orphaning any manpower
+        // `presetId` that referenced them. Best-effort: if a POST fails (offline
+        // / not authed), fall back to the in-memory seed for that row.
+        const seeds = seedLaborPresets();
+        laborPresets = normalizeLaborPresets(
+          await Promise.all(
+            seeds.map(({ id: _drop, ...body }) =>
+              api<{ preset: LaborRolePreset }>('POST', '/presets', body)
+                .then((r) => r.preset ?? { id: _drop, ...body })
+                .catch(() => ({ id: _drop, ...body })),
+            ),
+          ),
+        );
+      }
       set({
         projects: pRes.projects ?? [],
         quotations: qRes.quotations ?? [],
         clients: cRes.clients.length ? cRes.clients : seedClients(),
         salesContacts,
-        laborPresets: prRes.presets.length ? normalizeLaborPresets(prRes.presets) : seedLaborPresets(),
+        laborPresets,
         seq: sRes.seq ?? 1,
         settings: stRes.settings ?? {},
         initialized: true,
@@ -256,7 +284,11 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
     } catch {
       // API unavailable — fall back to seed data (offline/local dev without server)
       set({ initialized: true });
+    } finally {
+      initInFlight = null;
     }
+    })();
+    return initInFlight;
   },
 
   // ── Clients (unified `/api/clients` — see consolidation) ──────────────────
