@@ -8,8 +8,21 @@ export const normInvoice = (s?: string | null): string =>
 export const normSupplier = (s?: string | null): string =>
   (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-export const amountsEqual = (a?: number | null, b?: number | null): boolean =>
-  typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 0.01;
+// Coerce to a finite number ONLY for actual numbers or non-empty numeric strings;
+// null/undefined/''/NaN all return null (never coerce to 0, which would otherwise
+// falsely match against unset/zero amounts). Mirrors server.js's toFiniteAmount —
+// keep both in sync.
+export const toFiniteAmount = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+export const amountsEqual = (a?: number | string | null, b?: number | string | null): boolean => {
+  const na = toFiniteAmount(a);
+  const nb = toFiniteAmount(b);
+  return na !== null && nb !== null && Math.abs(na - nb) < 0.01;
+};
 
 // ── Types (matches the /api/receipts/check-duplicates contract) ───────────
 
@@ -18,7 +31,7 @@ export type DuplicateMatchType = 'image_hash' | 'invoice' | 'content';
 
 export interface DuplicateMatch {
   source: DuplicateMatchSource;
-  id: string;
+  id?: string;
   liquidationId?: string;
   formNo?: string;
   projectId?: string | null;
@@ -31,6 +44,9 @@ export interface DuplicateMatch {
   matchType: DuplicateMatchType;
   createdBy?: string | null;
   createdAt?: string | null;
+  /** True when the caller isn't authorized to see this record's details (another
+   * user's data); all identifying fields above are omitted/null in that case. */
+  redacted?: boolean;
 }
 
 export interface DuplicateCheckCandidate {
@@ -70,17 +86,13 @@ export async function computeImageHash(base64: string): Promise<string> {
 // ── Server-side check ───────────────────────────────────────────────────────
 
 /**
- * Calls POST /api/receipts/check-duplicates. Never throws — any network/HTTP
- * failure (including 404 if the server half isn't deployed yet) logs a
- * console.warn and resolves to an empty Map so callers can treat duplicate
- * checking as purely additive.
+ * Calls POST /api/receipts/check-duplicates once for a single chunk (<= MAX_CANDIDATES).
+ * Never throws — any network/HTTP failure logs a console.warn and resolves to an empty
+ * array so a failed chunk simply contributes nothing.
  */
-export async function checkDuplicates(
-  candidates: DuplicateCheckCandidate[]
-): Promise<Map<string, DuplicateMatch[]>> {
-  const result = new Map<string, DuplicateMatch[]>();
-  if (!candidates.length) return result;
-  const capped = candidates.slice(0, MAX_CANDIDATES);
+async function checkDuplicatesChunk(
+  chunk: DuplicateCheckCandidate[]
+): Promise<{ key: string; matches: DuplicateMatch[] }[]> {
   try {
     const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
     const res = await fetch(`${API_BASE}/api/receipts/check-duplicates`, {
@@ -89,20 +101,39 @@ export async function checkDuplicates(
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ candidates: capped }),
+      body: JSON.stringify({ candidates: chunk }),
     });
     if (!res.ok) {
       console.warn('[receiptDuplicateService] check-duplicates returned', res.status);
-      return result;
+      return [];
     }
     const data = await res.json().catch(() => ({} as { results?: { key: string; matches: DuplicateMatch[] }[] }));
-    for (const r of data.results || []) {
+    return Array.isArray(data.results) ? data.results : [];
+  } catch (err) {
+    console.warn('[receiptDuplicateService] check-duplicates failed:', err);
+    return [];
+  }
+}
+
+/**
+ * Calls POST /api/receipts/check-duplicates, chunking candidates into groups of
+ * MAX_CANDIDATES and posting each chunk sequentially, merging results into one Map.
+ * Never throws — a failed chunk logs console.warn and contributes nothing, so callers
+ * can treat duplicate checking as purely additive.
+ */
+export async function checkDuplicates(
+  candidates: DuplicateCheckCandidate[]
+): Promise<Map<string, DuplicateMatch[]>> {
+  const result = new Map<string, DuplicateMatch[]>();
+  if (!candidates.length) return result;
+  for (let i = 0; i < candidates.length; i += MAX_CANDIDATES) {
+    const chunk = candidates.slice(i, i + MAX_CANDIDATES);
+    const results = await checkDuplicatesChunk(chunk);
+    for (const r of results) {
       if (r && typeof r.key === 'string' && Array.isArray(r.matches)) {
         result.set(r.key, r.matches);
       }
     }
-  } catch (err) {
-    console.warn('[receiptDuplicateService] check-duplicates failed:', err);
   }
   return result;
 }
@@ -174,6 +205,9 @@ const sourceLabel = (match: DuplicateMatch): string => {
 
 /** Short human sentence describing why a candidate was flagged as a possible duplicate. */
 export function describeMatch(match: DuplicateMatch): string {
+  if (match.redacted) {
+    return 'Possible duplicate of a receipt recorded by another user (details hidden).';
+  }
   const details = [peso(match.amount), match.supplier, match.date].filter(Boolean).join(', ');
   const suffix = details ? ` (${details})` : '';
   switch (match.matchType) {

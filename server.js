@@ -5301,15 +5301,26 @@ function normInvoice(s) {
 function normSupplier(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
+// Coerce to a finite number ONLY for actual numbers or non-empty numeric strings;
+// null/undefined/''/NaN all return null (never coerce to 0, which would otherwise
+// falsely match against unset/zero amounts). Mirrored client-side in
+// receiptDuplicateService.ts — keep both in sync.
+function toFiniteAmount(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 function amountsEqual(a, b) {
-  const na = Number(a);
-  const nb = Number(b);
-  return Number.isFinite(na) && Number.isFinite(nb) && Math.abs(na - nb) < 0.01;
+  const na = toFiniteAmount(a);
+  const nb = toFiniteAmount(b);
+  return na !== null && nb !== null && Math.abs(na - nb) < 0.01;
 }
 
 app.post('/api/receipts/check-duplicates', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  const isTaxFiler = user.role === 'tax_filer';
 
   const { candidates } = req.body || {};
   if (!Array.isArray(candidates) || candidates.length === 0) {
@@ -5328,10 +5339,17 @@ app.post('/api/receipts/check-duplicates', async (req, res) => {
 
     // Build a flat list of "records" (image hash, invoice, supplier, amount, date) to
     // match candidates against, tagged with enough provenance to build a match entry.
+    // `visible` mirrors the ownership/role rules of the sibling GET routes for the same
+    // collection (GET /api/project-expenses, GET /api/overhead-expenses, GET /api/liquidations)
+    // so a caller who couldn't normally see a record only gets a redacted match for it.
     const records = [];
 
+    // Sibling rule (GET /api/project-expenses): non-admin, non-tax_filer callers see only
+    // rows they created OR system-generated sync rows (po_sync/liquidation_sync/migrated).
+    const SYNC_SOURCE_TYPES = new Set(['po_sync', 'liquidation_sync', 'migrated']);
     for (const doc of projectExpSnap.docs) {
       const d = doc.data();
+      const visible = isAdmin || isTaxFiler || d.createdBy === user.id || SYNC_SOURCE_TYPES.has(d.sourceType);
       records.push({
         source: 'project_expense',
         id: doc.id,
@@ -5347,11 +5365,15 @@ app.post('/api/receipts/check-duplicates', async (req, res) => {
         imageHash: d.imageHash || null,
         createdBy: d.createdBy || null,
         createdAt: d.createdAt || null,
+        visible,
       });
     }
 
+    // Sibling rule (GET /api/overhead-expenses): non-admin, non-tax_filer callers see only
+    // rows they created.
     for (const doc of overheadExpSnap.docs) {
       const d = doc.data();
+      const visible = isAdmin || isTaxFiler || d.createdBy === user.id;
       records.push({
         source: 'overhead_expense',
         id: doc.id,
@@ -5367,54 +5389,74 @@ app.post('/api/receipts/check-duplicates', async (req, res) => {
         imageHash: d.imageHash || null,
         createdBy: d.createdBy || null,
         createdAt: d.createdAt || null,
+        visible,
       });
     }
 
+    // Sibling rule (GET /api/liquidations): non-admin callers see only liquidations whose
+    // user_id matches them (no tax_filer carve-out on this route).
     for (const doc of liqSnap.docs) {
       const d = doc.data();
+      const visible = isAdmin || d.user_id === user.id;
       let rows = [];
       let receipts = [];
-      try { rows = JSON.parse(d.rows_json || '[]'); } catch (e) { rows = []; }
-      try { receipts = JSON.parse(d.receipts_json || '[]'); } catch (e) { receipts = []; }
+      try { const parsed = JSON.parse(d.rows_json || '[]'); rows = Array.isArray(parsed) ? parsed : []; } catch (e) { rows = []; }
+      try { const parsed = JSON.parse(d.receipts_json || '[]'); receipts = Array.isArray(parsed) ? parsed : []; } catch (e) { receipts = []; }
       for (const row of rows) {
-        if (!row || !row.id) continue;
-        // Any receipt attached to this row carries its image hash (if the client set one).
-        const rowReceipt = receipts.find(r => r && r.rowId === row.id && r.imageHash);
-        records.push({
-          source: 'liquidation_row',
-          id: row.id,
-          liquidationId: doc.id,
-          formNo: d.form_no || null,
-          projectId: row.projectId || null,
-          projectName: row.projectName || null,
-          supplier: row.supplier || null,
-          invoiceNo: row.invoiceNo || null,
-          amount: row.amount,
-          date: row.date || null,
-          description: row.particulars || null,
-          imageHash: rowReceipt ? rowReceipt.imageHash : null,
-          createdBy: d.employee_name || null,
-          createdAt: null,
-        });
+        try {
+          if (!row || !row.id) continue;
+          // Any receipt attached to this row carries its image hash (if the client set one).
+          const rowReceipt = receipts.find(r => r && r.rowId === row.id && r.imageHash);
+          records.push({
+            source: 'liquidation_row',
+            id: row.id,
+            liquidationId: doc.id,
+            formNo: d.form_no || null,
+            projectId: row.projectId || null,
+            projectName: row.projectName || null,
+            supplier: row.supplier || null,
+            invoiceNo: row.invoiceNo || null,
+            amount: row.amount,
+            date: row.date || null,
+            description: row.particulars || null,
+            imageHash: rowReceipt ? rowReceipt.imageHash : null,
+            createdBy: d.employee_name || null,
+            createdAt: null,
+            visible,
+          });
+        } catch (rowErr) {
+          // Skip just this malformed row rather than failing the whole request.
+          console.error('[check-duplicates] Skipping malformed liquidation row', doc.id, rowErr.message);
+        }
       }
     }
 
-    const toMatchEntry = (rec, matchType) => ({
-      source: rec.source,
-      id: rec.id,
-      liquidationId: rec.liquidationId,
-      formNo: rec.formNo,
-      projectId: rec.projectId,
-      projectName: rec.projectName,
-      supplier: rec.supplier,
-      invoiceNo: rec.invoiceNo,
-      amount: rec.amount,
-      date: rec.date,
-      description: rec.description,
-      matchType,
-      createdBy: rec.createdBy,
-      createdAt: rec.createdAt,
-    });
+    const toMatchEntry = (rec, matchType) => {
+      if (!rec.visible) {
+        // Redact: keep only what's needed to tell the user "something matched", not what it is.
+        return {
+          source: rec.source,
+          matchType,
+          redacted: true,
+        };
+      }
+      return {
+        source: rec.source,
+        id: rec.id,
+        liquidationId: rec.liquidationId,
+        formNo: rec.formNo,
+        projectId: rec.projectId,
+        projectName: rec.projectName,
+        supplier: rec.supplier,
+        invoiceNo: rec.invoiceNo,
+        amount: rec.amount,
+        date: rec.date,
+        description: rec.description,
+        matchType,
+        createdBy: rec.createdBy,
+        createdAt: rec.createdAt,
+      };
+    };
 
     const results = candidates.map(candidate => {
       const key = candidate && candidate.key;
@@ -5763,7 +5805,7 @@ function portableExpenseFields(data) {
     createdBy: data.createdBy,
     sourceType: data.sourceType || 'manual',
   };
-  for (const k of ['receiptRef', 'supplier', 'invoiceNo', 'invoiceType', 'vat', 'tin', 'deductible', 'deductibleReason', 'fundingSource']) {
+  for (const k of ['receiptRef', 'supplier', 'invoiceNo', 'invoiceType', 'vat', 'tin', 'deductible', 'deductibleReason', 'fundingSource', 'imageHash']) {
     if (data[k] !== undefined) out[k] = data[k];
   }
   return out;

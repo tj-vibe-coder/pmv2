@@ -420,23 +420,28 @@ export default function LiquidationFormPage() {
   // existing Firestore records (server round-trip). Never throws — any
   // failure just means no warning is shown. Non-blocking: the row can still
   // be saved/submitted regardless of the outcome.
-  const checkRowForDuplicates = async (rowId: string, imageHash?: string) => {
+  //
+  // `targetRow` is passed explicitly by every call site (rather than looked up
+  // via rowsRef) so a row added in the same tick — before the rowsRef-sync
+  // useEffect has run — is still checked with its real, current fields. `others`
+  // is still read off rowsRef.current, since call sites also update the ref
+  // synchronously alongside setRows so it reflects any just-added rows too.
+  const checkRowForDuplicates = async (targetRow: LiquidationRow, imageHash?: string) => {
     try {
-      const target = rowsRef.current.find((r) => r.id === rowId);
-      if (!target) return;
-      const hasSignal = !!imageHash || !!(target.invoiceNo || '').trim() ||
-        (!!(target.supplier || '').trim() && Number(target.amount) > 0);
+      const rowId = targetRow.id;
+      const hasSignal = !!imageHash || !!(targetRow.invoiceNo || '').trim() ||
+        (!!(targetRow.supplier || '').trim() && Number(targetRow.amount) > 0);
       if (!hasSignal) return;
       const candidate: DuplicateCheckCandidate = {
-        key: target.id,
-        supplier: target.supplier || undefined,
-        invoiceNo: target.invoiceNo || undefined,
-        amount: Number(target.amount) || undefined,
-        date: target.date || undefined,
+        key: rowId,
+        supplier: targetRow.supplier || undefined,
+        invoiceNo: targetRow.invoiceNo || undefined,
+        amount: Number(targetRow.amount) || undefined,
+        date: targetRow.date || undefined,
         imageHash: imageHash || undefined,
       };
       const others: DuplicateCheckCandidate[] = rowsRef.current
-        .filter((r) => r.id !== target.id)
+        .filter((r) => r.id !== rowId)
         .map((r) => ({
           key: r.id,
           supplier: r.supplier || undefined,
@@ -452,7 +457,7 @@ export default function LiquidationFormPage() {
         return `Looks like the same receipt as "${label}" already on this form.`;
       });
       const serverMatches = await checkDuplicates([candidate]);
-      const remoteWarnings = (serverMatches.get(target.id) || []).map(describeMatch);
+      const remoteWarnings = (serverMatches.get(rowId) || []).map(describeMatch);
       const warnings = [...localWarnings, ...remoteWarnings];
       if (warnings.length > 0) {
         setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, duplicateWarnings: warnings } : r)));
@@ -463,7 +468,7 @@ export default function LiquidationFormPage() {
     }
   };
 
-  const attachReceiptFile = async (rowId: string, raw: File, precomputedHash?: string) => {
+  const attachReceiptFile = async (rowId: string, raw: File, precomputedHash?: string, targetRowOverride?: LiquidationRow) => {
     const file = await convertHeicToJpeg(raw);
     const thumbnailDataUrl = file.type.startsWith('image/') ? await generateThumbnail(file) : '';
     let imageHash = precomputedHash;
@@ -482,7 +487,8 @@ export default function LiquidationFormPage() {
       imageHash: imageHash || undefined,
     };
     setReceipts((prev) => [...prev, rec]);
-    void checkRowForDuplicates(rowId, imageHash);
+    const targetRow = targetRowOverride || rowsRef.current.find((r) => r.id === rowId);
+    if (targetRow) void checkRowForDuplicates(targetRow, imageHash);
     try {
       const folder = await ensureReceiptsFolder();
       const odToken = folder ? await getOneDriveToken() : null;
@@ -524,10 +530,12 @@ export default function LiquidationFormPage() {
       invoiceNo: f.invoiceNumber || '',
       customerInfoIssues: f.customerIssues.length ? f.customerIssues : undefined,
     };
-    setRows((prev) => [...prev, nr]);
+    const nextRows = [...rowsRef.current, nr];
+    rowsRef.current = nextRows;
+    setRows(nextRows);
     const blob = item.croppedBlob ?? item.rawFile;
     const file = blob instanceof File ? blob : new File([blob], item.rawFile.name || `receipt-${Date.now()}.jpg`, { type: 'image/jpeg' });
-    await attachReceiptFile(nr.id, file, item.imageHash);
+    await attachReceiptFile(nr.id, file, item.imageHash, nr);
     return true;
   };
 
@@ -567,14 +575,21 @@ export default function LiquidationFormPage() {
     // routes only the first to the target row and appends the rest as new rows.
     const t = scanTargetRef.current;
     let targetId: string;
+    let targetRow: LiquidationRow;
     if (t && t.pairingToken === jobToken && !t.consumed && t.rowId) {
       targetId = t.rowId;
       t.consumed = true;
-      setRows((prev) => prev.map((row) => (row.id === targetId ? applyParsed(row) : row)));
+      const nextRows = rowsRef.current.map((row) => (row.id === targetId ? applyParsed(row) : row));
+      targetRow = nextRows.find((row) => row.id === targetId) || applyParsed(newRow('', ''));
+      rowsRef.current = nextRows;
+      setRows(nextRows);
     } else {
       const nr = applyParsed(newRow('', ''));
       targetId = nr.id;
-      setRows((prev) => [...prev, nr]);
+      targetRow = nr;
+      const nextRows = [...rowsRef.current, nr];
+      rowsRef.current = nextRows;
+      setRows(nextRows);
     }
 
     const rec: ReceiptAttachment = {
@@ -606,7 +621,10 @@ export default function LiquidationFormPage() {
         hash = await computeImageHash(r.thumbnailDataUrl);
         if (hash) setReceipts((prev) => prev.map((x) => (x.id === rec.id ? { ...x, imageHash: hash } : x)));
       }
-      await checkRowForDuplicates(targetId, hash || undefined);
+      // Re-read targetRow off rowsRef in case other rows/edits landed while the hash
+      // was being computed, but fall back to the row captured at receipt-arrival time.
+      const latestTargetRow = rowsRef.current.find((r) => r.id === targetId) || targetRow;
+      await checkRowForDuplicates(latestTargetRow, hash || undefined);
     })();
   };
 

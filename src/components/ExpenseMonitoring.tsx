@@ -233,6 +233,9 @@ const ExpenseMonitoring: React.FC = () => {
   // on reset/retake/new scan. Non-blocking — a warning never prevents saving.
   const [expenseImageHash, setExpenseImageHash] = useState<string | null>(null);
   const [expenseDuplicateWarnings, setExpenseDuplicateWarnings] = useState<string[]>([]);
+  // Guards against a cancelled/retaken scan's in-flight duplicate check repopulating
+  // state after a newer scan has already started (or been cleared).
+  const scanGenRef = useRef(0);
 
   // Receipt crop step (mirrors ScanPage.tsx) before the AI parse.
   const [editUrl, setEditUrl] = useState<string | null>(null);
@@ -1048,15 +1051,21 @@ const ExpenseMonitoring: React.FC = () => {
   // Phase 2: user confirms the crop — flatten the quad, then parse with Gemini.
   const confirmScanCrop = async (quad: Quad) => {
     if (!editBlob) return;
+    // Clear any hash/warnings left over from a previous scan up front, and bump the
+    // generation counter so a stale in-flight check from a cancelled/retaken scan
+    // can't repopulate state after this one has started (or been cleared again).
+    setExpenseImageHash(null);
+    setExpenseDuplicateWarnings([]);
+    scanGenRef.current += 1;
+    const gen = scanGenRef.current;
     setIsScanning(true);
     try {
       const flattened = await perspectiveCropToBlob(editBlob, quad);
       const croppedFile = new File([flattened], `receipt-${Date.now()}.jpg`, { type: 'image/jpeg' });
       pendingReceiptRef.current = croppedFile;
       const imageBase64 = await blobToBase64(flattened);
-      // Reset any warning left over from a previous scan in this dialog session.
-      setExpenseDuplicateWarnings([]);
       const parsed = await parseReceipt(imageBase64, 'image/jpeg');
+      if (gen !== scanGenRef.current) return;
       const amt = parsed.total ?? parsed.subtotal;
       if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
       if (parsed.date) setExpenseDate(parsed.date);
@@ -1084,6 +1093,7 @@ const ExpenseMonitoring: React.FC = () => {
       }
       // Duplicate-receipt check — best-effort, never blocks the scan flow.
       const imageHash = await computeImageHash(imageBase64);
+      if (gen !== scanGenRef.current) return;
       setExpenseImageHash(imageHash || null);
       try {
         const matchesMap = await checkDuplicates([{
@@ -1094,6 +1104,7 @@ const ExpenseMonitoring: React.FC = () => {
           date: parsed.date || undefined,
           imageHash: imageHash || undefined,
         }]);
+        if (gen !== scanGenRef.current) return;
         const matches: DuplicateMatch[] = matchesMap.get('scan') || [];
         if (matches.length > 0) {
           const warnings = matches.map(describeMatch);
