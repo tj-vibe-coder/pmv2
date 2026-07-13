@@ -407,7 +407,9 @@ export default function QuotationEditor() {
     { key: 'qty', label: 'Qty', width: 70, type: 'number', align: 'right' },
     { key: 'uom', label: 'UOM', width: 70 },
     { key: 'unitPrice', label: 'Unit Price', width: 120, type: 'number', align: 'right', step: 0.01 },
-    { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01 },
+    // Shows the global General Req. markup (greyed) until a per-line override is
+    // typed; clearing the cell falls back to the global again.
+    { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.generalReqMarkupPct || 0) },
     { key: 'total', label: 'Total', width: 130, align: 'right',
       render: (r) => {
         const base = lineGeneralTotal(r);
@@ -472,7 +474,9 @@ export default function QuotationEditor() {
     { key: 'unitCost', label: 'Unit Cost', width: 110, type: 'number', align: 'right', step: 0.01 },
     { key: 'forex', label: 'FX', width: 60, type: 'number', align: 'right', step: 0.0001 },
     { key: 'contingencyPct', label: 'Cont %', width: 80, type: 'number', align: 'right', step: 0.01 },
-    { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01 },
+    // Shows the global Product markup (greyed) until a per-line override is
+    // typed; clearing the cell falls back to the global again.
+    { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.productMarkupPct || 0) },
     { key: 'leadTimeDays', label: 'Lead Time', width: 90, type: 'number', align: 'right', min: 0 },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
       render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
@@ -483,7 +487,6 @@ export default function QuotationEditor() {
   // Section C — Services
   const perLinePricing = quotation.servicesFromManpower && !!quotation.servicesPerLinePricing;
   const teamDailyRate = manpowerDailyRate(quotation.manpower);
-  const markupMult = 1 + (quotation.laborMarkupPct || 0) / 100;
   const addService = () =>
     commit('services', [
       ...quotation.services,
@@ -493,8 +496,11 @@ export default function QuotationEditor() {
   const updateServiceRow = (idx: number, key: keyof ServiceLine, value: any) => {
     const list = [...quotation.services];
     const row = { ...list[idx], [key]: value };
-    if (perLinePricing && key === 'days') {
-      row.amount = (row.days || 0) * teamDailyRate * markupMult;
+    // Amount is the single source of truth (calc + PDF/Excel print it directly),
+    // so markup edits recompute it: per-line override, else the global Labor Markup %.
+    if (perLinePricing && (key === 'days' || key === 'markupPct')) {
+      const mult = 1 + (((row.markupPct ?? quotation.laborMarkupPct) || 0) / 100);
+      row.amount = (row.days || 0) * teamDailyRate * mult;
     }
     list[idx] = row;
     setField('services', list);
@@ -542,13 +548,16 @@ export default function QuotationEditor() {
           </Stack>
         ) },
         { key: 'days', label: 'Days', width: 80, type: 'number', align: 'right', min: 0 },
-        { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01 },
+        // Shows the global Labor markup (greyed) until a per-line override is typed;
+        // editing recomputes the line amount, clearing falls back to the global.
+        { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.laborMarkupPct || 0) },
         { key: 'amount', label: 'Amount', width: 140, type: 'number', align: 'right', step: 0.01 },
       ]
     : [
+        // No markup column here: lump mode prices from manpower × Labor Markup %,
+        // and manual mode's amounts are final prices with no cost basis to mark up.
         { key: 'code', label: 'Code', width: 90, mono: true },
         { key: 'description', label: 'Description', multiline: true },
-        { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01 },
         { key: 'amount', label: 'Amount', width: 150, type: 'number', align: 'right', step: 0.01 },
       ];
 
@@ -1177,7 +1186,7 @@ export default function QuotationEditor() {
             <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} helperText="Default for product rows" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="General Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
-            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { const mult = 1 + (v || 0) / 100; setField('services', quotation.services.map((s) => (s.days || 0) > 0 ? { ...s, amount: (s.days || 0) * teamDailyRate * mult } : s)); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} sx={{ width: '100%' }} />
+            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = 1 + (((s.markupPct ?? v) || 0) / 100); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
           </Box>
