@@ -3723,8 +3723,16 @@ app.post('/api/calcsheet/presets', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    const ref = await db.collection('calcsheet_presets').add(req.body);
-    res.json({ success: true, preset: { id: ref.id, ...req.body } });
+    // Strip any client-supplied `id` before storing, and return the Firestore
+    // ref.id as the canonical id — otherwise the client's nanoid would clobber
+    // ref.id in the response (id BEFORE spread) and get persisted as a stray
+    // field, so the created preset's id would NOT match what GET returns
+    // (GET strips the field and uses d.id). That mismatch orphaned every
+    // manpower `presetId` captured in the same session on the next reload,
+    // and made same-session PUT/DELETE hit a non-existent doc id.
+    const { id: _ignored, ...data } = req.body || {};
+    const ref = await db.collection('calcsheet_presets').add(data);
+    res.json({ success: true, preset: { ...data, id: ref.id } });
   } catch (err) { res.status(500).json({ error: 'Failed to create preset' }); }
 });
 
