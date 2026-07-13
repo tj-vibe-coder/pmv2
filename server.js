@@ -1214,6 +1214,7 @@ app.post('/api/project-expenses', async (req, res) => {
           if (exp.invoiceNo) doc.invoiceNo = String(exp.invoiceNo);
           if (exp.invoiceType) doc.invoiceType = String(exp.invoiceType);
           if (exp.tin) doc.tin = String(exp.tin);
+          if (exp.imageHash) doc.imageHash = String(exp.imageHash);
           if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
           if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
           if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
@@ -1235,7 +1236,7 @@ app.post('/api/project-expenses', async (req, res) => {
     // Single insert
     const { projectId, projectName, description, remarks, amount, date, category, sourceType,
             sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = body;
+            supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = body;
     if (!projectId || !amount) {
       return res.status(400).json({ success: false, error: 'projectId and amount are required' });
     }
@@ -1261,6 +1262,7 @@ app.post('/api/project-expenses', async (req, res) => {
     if (invoiceNo) doc.invoiceNo = String(invoiceNo);
     if (invoiceType) doc.invoiceType = String(invoiceType);
     if (tin) doc.tin = String(tin);
+    if (imageHash) doc.imageHash = String(imageHash);
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     if (typeof deductible === 'boolean') doc.deductible = deductible;
     if (deductibleReason) doc.deductibleReason = String(deductibleReason);
@@ -1307,7 +1309,7 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, remarks, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
+    const { description, remarks, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
     if (remarks !== undefined) allowed.remarks = String(remarks);
     if (amount !== undefined) allowed.amount = Number(amount);
@@ -1319,6 +1321,7 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
     if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
     if (vat !== undefined && Number.isFinite(Number(vat))) allowed.vat = Number(vat);
     if (tin !== undefined) allowed.tin = String(tin);
+    if (imageHash !== undefined) allowed.imageHash = imageHash == null ? null : String(imageHash);
     if (typeof deductible === 'boolean') allowed.deductible = deductible;
     else if (deductible === null) allowed.deductible = null;
     if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
@@ -5286,6 +5289,178 @@ app.post('/api/receipts/detect-crop', async (req, res) => {
     return res.status(502).json({ ok: false, error: err.message });
   }
 });
+
+// POST /api/receipts/check-duplicates — cross-checks a batch of candidate receipts
+// (from client-side scans, before they're saved) against everything already stored:
+// project_expenses, overhead_expenses, and liquidation rows (rows_json/receipts_json).
+// In-memory scan over the three collections, same pattern as /api/finance/pnl — these
+// collections are small (a few hundred docs), no composite index needed.
+function normInvoice(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+function normSupplier(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+function amountsEqual(a, b) {
+  const na = Number(a);
+  const nb = Number(b);
+  return Number.isFinite(na) && Number.isFinite(nb) && Math.abs(na - nb) < 0.01;
+}
+
+app.post('/api/receipts/check-duplicates', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+
+  const { candidates } = req.body || {};
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    return res.status(400).json({ success: false, error: 'candidates must be a non-empty array' });
+  }
+  if (candidates.length > 25) {
+    return res.status(400).json({ success: false, error: 'candidates array exceeds max of 25' });
+  }
+
+  try {
+    const [projectExpSnap, overheadExpSnap, liqSnap] = await Promise.all([
+      db.collection('project_expenses').get(),
+      db.collection('overhead_expenses').get(),
+      db.collection('liquidations').get(),
+    ]);
+
+    // Build a flat list of "records" (image hash, invoice, supplier, amount, date) to
+    // match candidates against, tagged with enough provenance to build a match entry.
+    const records = [];
+
+    for (const doc of projectExpSnap.docs) {
+      const d = doc.data();
+      records.push({
+        source: 'project_expense',
+        id: doc.id,
+        liquidationId: null,
+        formNo: null,
+        projectId: d.projectId || null,
+        projectName: d.projectName || null,
+        supplier: d.supplier || null,
+        invoiceNo: d.invoiceNo || null,
+        amount: d.amount,
+        date: d.date || null,
+        description: d.description || null,
+        imageHash: d.imageHash || null,
+        createdBy: d.createdBy || null,
+        createdAt: d.createdAt || null,
+      });
+    }
+
+    for (const doc of overheadExpSnap.docs) {
+      const d = doc.data();
+      records.push({
+        source: 'overhead_expense',
+        id: doc.id,
+        liquidationId: null,
+        formNo: null,
+        projectId: null,
+        projectName: null,
+        supplier: d.supplier || null,
+        invoiceNo: d.invoiceNo || null,
+        amount: d.amount,
+        date: d.date || null,
+        description: d.description || null,
+        imageHash: d.imageHash || null,
+        createdBy: d.createdBy || null,
+        createdAt: d.createdAt || null,
+      });
+    }
+
+    for (const doc of liqSnap.docs) {
+      const d = doc.data();
+      let rows = [];
+      let receipts = [];
+      try { rows = JSON.parse(d.rows_json || '[]'); } catch (e) { rows = []; }
+      try { receipts = JSON.parse(d.receipts_json || '[]'); } catch (e) { receipts = []; }
+      for (const row of rows) {
+        if (!row || !row.id) continue;
+        // Any receipt attached to this row carries its image hash (if the client set one).
+        const rowReceipt = receipts.find(r => r && r.rowId === row.id && r.imageHash);
+        records.push({
+          source: 'liquidation_row',
+          id: row.id,
+          liquidationId: doc.id,
+          formNo: d.form_no || null,
+          projectId: row.projectId || null,
+          projectName: row.projectName || null,
+          supplier: row.supplier || null,
+          invoiceNo: row.invoiceNo || null,
+          amount: row.amount,
+          date: row.date || null,
+          description: row.particulars || null,
+          imageHash: rowReceipt ? rowReceipt.imageHash : null,
+          createdBy: d.employee_name || null,
+          createdAt: null,
+        });
+      }
+    }
+
+    const toMatchEntry = (rec, matchType) => ({
+      source: rec.source,
+      id: rec.id,
+      liquidationId: rec.liquidationId,
+      formNo: rec.formNo,
+      projectId: rec.projectId,
+      projectName: rec.projectName,
+      supplier: rec.supplier,
+      invoiceNo: rec.invoiceNo,
+      amount: rec.amount,
+      date: rec.date,
+      description: rec.description,
+      matchType,
+      createdBy: rec.createdBy,
+      createdAt: rec.createdAt,
+    });
+
+    const results = candidates.map(candidate => {
+      const key = candidate && candidate.key;
+      const candImageHash = candidate && candidate.imageHash ? String(candidate.imageHash) : '';
+      const candInvoice = normInvoice(candidate && candidate.invoiceNo);
+      const candSupplier = normSupplier(candidate && candidate.supplier);
+      const candAmount = candidate && candidate.amount;
+      const candDate = candidate && candidate.date ? String(candidate.date) : '';
+
+      const matches = [];
+      for (const rec of records) {
+        let matchType = null;
+
+        if (candImageHash && rec.imageHash && candImageHash === String(rec.imageHash)) {
+          matchType = 'image_hash';
+        } else {
+          const recInvoice = normInvoice(rec.invoiceNo);
+          const recSupplier = normSupplier(rec.supplier);
+          if (candInvoice && recInvoice && candInvoice === recInvoice &&
+              (candSupplier && recSupplier && candSupplier === recSupplier || amountsEqual(candAmount, rec.amount))) {
+            matchType = 'invoice';
+          } else if (candSupplier && recSupplier && candSupplier === recSupplier &&
+                     amountsEqual(candAmount, rec.amount) &&
+                     candDate && rec.date && candDate === String(rec.date)) {
+            matchType = 'content';
+          }
+        }
+
+        if (matchType) {
+          matches.push(toMatchEntry(rec, matchType));
+        }
+      }
+
+      // Strongest match first (image_hash > invoice > content), cap at 5.
+      const rank = { image_hash: 0, invoice: 1, content: 2 };
+      matches.sort((a, b) => rank[a.matchType] - rank[b.matchType]);
+
+      return { key, matches: matches.slice(0, 5) };
+    });
+
+    res.json({ success: true, results });
+  } catch (err) {
+    console.error('Error checking receipt duplicates:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
 // --- END RECEIPT PARSING BLOCK ---
 
 // ========== OVERHEAD EXPENSES ==========
@@ -5447,6 +5622,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
           if (exp.invoiceNo) doc.invoiceNo = String(exp.invoiceNo);
           if (exp.invoiceType) doc.invoiceType = String(exp.invoiceType);
           if (exp.tin) doc.tin = String(exp.tin);
+          if (exp.imageHash) doc.imageHash = String(exp.imageHash);
           if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
           if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
           if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
@@ -5462,7 +5638,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     const { description, remarks, amount, date, category, sourceType, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = body;
+            supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
       description: description || '',
@@ -5479,6 +5655,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
     if (invoiceNo) doc.invoiceNo = String(invoiceNo);
     if (invoiceType) doc.invoiceType = String(invoiceType);
     if (tin) doc.tin = String(tin);
+    if (imageHash) doc.imageHash = String(imageHash);
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     if (typeof deductible === 'boolean') doc.deductible = deductible;
     if (deductibleReason) doc.deductibleReason = String(deductibleReason);
@@ -5505,7 +5682,7 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, remarks, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
+    const { description, remarks, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
     if (remarks !== undefined) allowed.remarks = String(remarks);
     if (amount !== undefined) allowed.amount = Number(amount);
@@ -5517,6 +5694,7 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
     if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
     if (vat !== undefined && Number.isFinite(Number(vat))) allowed.vat = Number(vat);
     if (tin !== undefined) allowed.tin = String(tin);
+    if (imageHash !== undefined) allowed.imageHash = imageHash == null ? null : String(imageHash);
     if (typeof deductible === 'boolean') allowed.deductible = deductible;
     else if (deductible === null) allowed.deductible = null;
     if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);

@@ -61,6 +61,12 @@ import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem
 import { API_BASE } from '../config/api';
 import { PROJECT_EXPENSE_CATEGORIES, OVERHEAD_CATEGORIES, INVOICE_TYPES, INVESTORS, type FundingSource } from '../data/financeCategories';
 import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
+import {
+  checkDuplicates,
+  computeImageHash,
+  describeMatch,
+  type DuplicateMatch,
+} from '../services/receiptDuplicateService';
 import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress';
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
@@ -223,6 +229,10 @@ const ExpenseMonitoring: React.FC = () => {
   // AI-suggested on scan (mirrors LiquidationFormPage); reviewed/corrected later in the Tax Ledger.
   const [expenseDeductible, setExpenseDeductible] = useState<boolean | null>(null);
   const [expenseDeductibleReason, setExpenseDeductibleReason] = useState<string | null>(null);
+  // Duplicate-receipt detection: set after a scan parses successfully, cleared
+  // on reset/retake/new scan. Non-blocking — a warning never prevents saving.
+  const [expenseImageHash, setExpenseImageHash] = useState<string | null>(null);
+  const [expenseDuplicateWarnings, setExpenseDuplicateWarnings] = useState<string[]>([]);
 
   // Receipt crop step (mirrors ScanPage.tsx) before the AI parse.
   const [editUrl, setEditUrl] = useState<string | null>(null);
@@ -1030,6 +1040,8 @@ const ExpenseMonitoring: React.FC = () => {
   const retakeScan = () => {
     setEdit(null, null);
     pendingReceiptRef.current = null;
+    setExpenseImageHash(null);
+    setExpenseDuplicateWarnings([]);
     scanInputRef.current?.click();
   };
 
@@ -1042,6 +1054,8 @@ const ExpenseMonitoring: React.FC = () => {
       const croppedFile = new File([flattened], `receipt-${Date.now()}.jpg`, { type: 'image/jpeg' });
       pendingReceiptRef.current = croppedFile;
       const imageBase64 = await blobToBase64(flattened);
+      // Reset any warning left over from a previous scan in this dialog session.
+      setExpenseDuplicateWarnings([]);
       const parsed = await parseReceipt(imageBase64, 'image/jpeg');
       const amt = parsed.total ?? parsed.subtotal;
       if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
@@ -1067,6 +1081,27 @@ const ExpenseMonitoring: React.FC = () => {
         setScanSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category. Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
       } else {
         setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+      }
+      // Duplicate-receipt check — best-effort, never blocks the scan flow.
+      const imageHash = await computeImageHash(imageBase64);
+      setExpenseImageHash(imageHash || null);
+      try {
+        const matchesMap = await checkDuplicates([{
+          key: 'scan',
+          supplier: parsed.vendor || undefined,
+          invoiceNo: parsed.invoiceNumber || undefined,
+          amount: typeof amt === 'number' ? amt : undefined,
+          date: parsed.date || undefined,
+          imageHash: imageHash || undefined,
+        }]);
+        const matches: DuplicateMatch[] = matchesMap.get('scan') || [];
+        if (matches.length > 0) {
+          const warnings = matches.map(describeMatch);
+          setExpenseDuplicateWarnings(warnings);
+          setScanSnackbar({ open: true, severity: 'warning', message: `Possible duplicate receipt: ${warnings[0]}` });
+        }
+      } catch (err) {
+        console.warn('[ExpenseMonitoring] duplicate check failed:', err);
       }
       setEdit(null, null);
     } catch (err) {
@@ -1157,6 +1192,7 @@ const ExpenseMonitoring: React.FC = () => {
           ...(typeof expenseDeductible === 'boolean' ? { deductible: expenseDeductible } : {}),
           ...(expenseDeductibleReason ? { deductibleReason: expenseDeductibleReason } : {}),
           ...(receiptRef ? { receiptRef } : {}),
+          ...(expenseImageHash ? { imageHash: expenseImageHash } : {}),
         }),
       });
       const data = await res.json().catch(() => ({ success: false }));
@@ -1179,6 +1215,8 @@ const ExpenseMonitoring: React.FC = () => {
         setExpenseLinkedInvestmentId('');
         setExpenseDeductible(null);
         setExpenseDeductibleReason(null);
+        setExpenseImageHash(null);
+        setExpenseDuplicateWarnings([]);
         pendingReceiptRef.current = null;
         await fetchExpenses();
       }
@@ -1244,6 +1282,7 @@ const ExpenseMonitoring: React.FC = () => {
             startIcon={<AddIcon />}
             onClick={() => {
               setExpenseSupplier(''); setExpenseInvoiceNo(''); setExpenseInvoiceType(''); setExpenseVat(''); setExpenseTin(''); pendingReceiptRef.current = null;
+              setExpenseImageHash(null); setExpenseDuplicateWarnings([]);
               // Default the dialog's scope/project to whatever the table is filtered to.
               setExpenseScope(selectedProjectId === OVERHEAD_SENTINEL ? 'overhead' : 'project');
               if (selectedProjectId !== '' && selectedProjectId !== OVERHEAD_SENTINEL && selectedProjectId !== ALL_PROJECTS_SENTINEL) setExpenseProjectId(selectedProjectId);
@@ -1876,6 +1915,16 @@ const ExpenseMonitoring: React.FC = () => {
                   </FormControl>
                 </Grid>
               )}
+              {expenseDuplicateWarnings.length > 0 && (
+                <Grid size={{ xs: 12 }}>
+                  <Alert severity="warning" variant="outlined">
+                    Possible duplicate receipt
+                    <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                      {expenseDuplicateWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                    </ul>
+                  </Alert>
+                </Grid>
+              )}
               <Grid size={{ xs: 12 }}>
                 <Accordion variant="outlined" disableGutters sx={{ mt: 1 }}>
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -1932,7 +1981,7 @@ const ExpenseMonitoring: React.FC = () => {
             </Button>
           </Box>
           <Box>
-            <Button onClick={() => setAddExpenseOpen(false)}>Cancel</Button>
+            <Button onClick={() => { setAddExpenseOpen(false); setExpenseImageHash(null); setExpenseDuplicateWarnings([]); }}>Cancel</Button>
             <Button
               variant="contained"
               onClick={handleAddExpense}
@@ -2098,6 +2147,8 @@ const ExpenseMonitoring: React.FC = () => {
                 setExpenseInvoiceType('');
                 setExpenseVat('');
                 setExpenseTin('');
+                setExpenseImageHash(null);
+                setExpenseDuplicateWarnings([]);
                 setAddExpenseOpen(true);
                 setExpensesDialogProject(null);
               }}

@@ -50,6 +50,14 @@ import ScanToPhoneDialog, { type DeliveredReceipt } from './ScanToPhoneDialog';
 import ScanBatch, { type LiquidationScanItem } from './ScanBatch';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 import { LIQUIDATION_CATEGORIES } from '../data/financeCategories';
+import { blobToBase64 } from '../utils/receipts/imageCompress';
+import {
+  checkDuplicates,
+  computeImageHash,
+  describeMatch,
+  findLocalDuplicates,
+  type DuplicateCheckCandidate,
+} from '../services/receiptDuplicateService';
 
 interface LiquidationRow {
   id: string;
@@ -68,6 +76,9 @@ interface LiquidationRow {
   supplier?: string;
   invoiceNo?: string;
   customerInfoIssues?: string[];
+  // Human-readable duplicate-receipt warnings (local + server), set best-effort
+  // whenever a receipt is attached to this row. Never blocks saving.
+  duplicateWarnings?: string[];
 }
 
 // A scanned/photographed receipt attached to an expense row. Files live in
@@ -84,6 +95,9 @@ interface ReceiptAttachment {
   uploadedAt?: string;
   uploadStatus?: 'uploading' | 'done' | 'error';
   file?: File;
+  // SHA-256 of the raw image bytes, used for duplicate-receipt detection. Opaque
+  // to the server — serialized into receipts_json alongside the other fields.
+  imageHash?: string;
 }
 
 // ── Image helpers (same approach as ServiceReportTab) ──────────────────────
@@ -393,9 +407,71 @@ export default function LiquidationFormPage() {
     return receiptsFolderRef.current;
   };
 
-  const attachReceiptFile = async (rowId: string, raw: File) => {
+  // Mirrors of `rows`/`receipts` for use inside async duplicate-check helpers,
+  // which are kicked off right after a `setRows`/`setReceipts` call and would
+  // otherwise see a stale closure over the pre-update state.
+  const rowsRef = useRef<LiquidationRow[]>(rows);
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
+  const receiptsRef = useRef<ReceiptAttachment[]>(receipts);
+  useEffect(() => { receiptsRef.current = receipts; }, [receipts]);
+
+  // Best-effort duplicate check for a single row: compares it against every
+  // other row already on the form (local, synchronous rules) and against
+  // existing Firestore records (server round-trip). Never throws — any
+  // failure just means no warning is shown. Non-blocking: the row can still
+  // be saved/submitted regardless of the outcome.
+  const checkRowForDuplicates = async (rowId: string, imageHash?: string) => {
+    try {
+      const target = rowsRef.current.find((r) => r.id === rowId);
+      if (!target) return;
+      const hasSignal = !!imageHash || !!(target.invoiceNo || '').trim() ||
+        (!!(target.supplier || '').trim() && Number(target.amount) > 0);
+      if (!hasSignal) return;
+      const candidate: DuplicateCheckCandidate = {
+        key: target.id,
+        supplier: target.supplier || undefined,
+        invoiceNo: target.invoiceNo || undefined,
+        amount: Number(target.amount) || undefined,
+        date: target.date || undefined,
+        imageHash: imageHash || undefined,
+      };
+      const others: DuplicateCheckCandidate[] = rowsRef.current
+        .filter((r) => r.id !== target.id)
+        .map((r) => ({
+          key: r.id,
+          supplier: r.supplier || undefined,
+          invoiceNo: r.invoiceNo || undefined,
+          amount: Number(r.amount) || undefined,
+          date: r.date || undefined,
+          imageHash: receiptsRef.current.find((rc) => rc.rowId === r.id)?.imageHash || undefined,
+        }));
+      const localMatches = findLocalDuplicates(candidate, others);
+      const localWarnings = localMatches.map((m) => {
+        const row = rowsRef.current.find((r) => r.id === m.key);
+        const label = row?.particulars || row?.supplier || 'another row';
+        return `Looks like the same receipt as "${label}" already on this form.`;
+      });
+      const serverMatches = await checkDuplicates([candidate]);
+      const remoteWarnings = (serverMatches.get(target.id) || []).map(describeMatch);
+      const warnings = [...localWarnings, ...remoteWarnings];
+      if (warnings.length > 0) {
+        setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, duplicateWarnings: warnings } : r)));
+        setScanSnackbar({ open: true, severity: 'warning', message: `Possible duplicate receipt: ${warnings[0]}` });
+      }
+    } catch (err) {
+      console.warn('[LiquidationFormPage] duplicate check failed:', err);
+    }
+  };
+
+  const attachReceiptFile = async (rowId: string, raw: File, precomputedHash?: string) => {
     const file = await convertHeicToJpeg(raw);
     const thumbnailDataUrl = file.type.startsWith('image/') ? await generateThumbnail(file) : '';
+    let imageHash = precomputedHash;
+    if (!imageHash && file.type.startsWith('image/')) {
+      try {
+        imageHash = await computeImageHash(await blobToBase64(file));
+      } catch { /* best-effort */ }
+    }
     const rec: ReceiptAttachment = {
       id: `rcpt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       rowId,
@@ -403,8 +479,10 @@ export default function LiquidationFormPage() {
       thumbnailDataUrl: thumbnailDataUrl || undefined,
       uploadStatus: 'uploading',
       file,
+      imageHash: imageHash || undefined,
     };
     setReceipts((prev) => [...prev, rec]);
+    void checkRowForDuplicates(rowId, imageHash);
     try {
       const folder = await ensureReceiptsFolder();
       const odToken = folder ? await getOneDriveToken() : null;
@@ -449,7 +527,7 @@ export default function LiquidationFormPage() {
     setRows((prev) => [...prev, nr]);
     const blob = item.croppedBlob ?? item.rawFile;
     const file = blob instanceof File ? blob : new File([blob], item.rawFile.name || `receipt-${Date.now()}.jpg`, { type: 'image/jpeg' });
-    await attachReceiptFile(nr.id, file);
+    await attachReceiptFile(nr.id, file, item.imageHash);
     return true;
   };
 
@@ -518,6 +596,18 @@ export default function LiquidationFormPage() {
         ? 'Receipt received — low confidence, please verify amount, date & category.'
         : `Receipt received: ${r.filename}`,
     });
+    // Phone-delivered receipts only carry a small thumbnail (no full-res image
+    // base64 reaches the browser), so the hash is best-effort and coarser than
+    // the ScanBatch path's. Fires after the row/receipt state above so the
+    // duplicate check (delayed by the hash computation) sees the new row.
+    void (async () => {
+      let hash: string | undefined;
+      if (r.thumbnailDataUrl) {
+        hash = await computeImageHash(r.thumbnailDataUrl);
+        if (hash) setReceipts((prev) => prev.map((x) => (x.id === rec.id ? { ...x, imageHash: hash } : x)));
+      }
+      await checkRowForDuplicates(targetId, hash || undefined);
+    })();
   };
 
   // Poll the active phone scan job for delivered receipts. Runs at the PAGE level
@@ -1952,6 +2042,13 @@ export default function LiquidationFormPage() {
                         placeholder="Particulars"
                         fullWidth
                         sx={{ '& .MuiInputBase-input': { py: 0.75 } }}
+                        InputProps={row.duplicateWarnings && row.duplicateWarnings.length ? {
+                          endAdornment: (
+                            <Tooltip title={`Possible duplicate receipt: ${row.duplicateWarnings.join(' ')}`}>
+                              <WarningAmberIcon fontSize="small" color="warning" />
+                            </Tooltip>
+                          ),
+                        } : undefined}
                       />
                     </TableCell>
                     <TableCell>
