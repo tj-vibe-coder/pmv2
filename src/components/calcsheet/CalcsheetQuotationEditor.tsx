@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Accordion, AccordionDetails, AccordionSummary,
@@ -70,17 +70,39 @@ const firstLastKey = (value: string | undefined | null) => {
 };
 
 // Number input that doesn't force a leading 0 — empty when value is 0, select-all on focus.
+// Keeps its own text buffer instead of deriving the display string from `value` on every
+// keystroke — otherwise typing a trailing "0" after a decimal point (e.g. "11.50") gets
+// immediately stripped back to "11.5" because String(11.5) === '11.5'.
 function NumField({
   label, value, onChange, integer = false, sx, helperText, disabled,
 }: { label: string; value: number; onChange: (v: number) => void; integer?: boolean; sx?: any; helperText?: string; disabled?: boolean }) {
+  const [text, setText] = useState(() => (value === 0 ? '' : String(value)));
+  const lastEmitted = useRef(value);
+
+  useEffect(() => {
+    // Only resync from outside (e.g. another control writing the same field, or a reset) —
+    // not from the onChange we just fired ourselves, which would clobber in-progress typing.
+    if (value !== lastEmitted.current) {
+      setText(value === 0 ? '' : String(value));
+      lastEmitted.current = value;
+    }
+  }, [value]);
+
   return (
     <TextField
       label={label}
       size="small"
       type="number"
-      value={value === 0 ? '' : String(value)}
+      value={text}
       placeholder="0"
-      onChange={(e) => onChange((integer ? parseInt(e.target.value, 10) : parseFloat(e.target.value)) || 0)}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setText(raw);
+        const parsed = integer ? parseInt(raw, 10) : parseFloat(raw);
+        const num = Number.isFinite(parsed) ? parsed : 0;
+        lastEmitted.current = num;
+        onChange(num);
+      }}
       onFocus={(e) => e.target.select()}
       disabled={disabled}
       sx={sx}
@@ -1180,6 +1202,18 @@ export default function QuotationEditor() {
             <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { const mult = 1 + (v || 0) / 100; setField('services', quotation.services.map((s) => (s.days || 0) > 0 ? { ...s, amount: (s.days || 0) * teamDailyRate * mult } : s)); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
+            <NumField
+              label="Discount (₱)"
+              value={totals ? Math.round(totals.discount * 100) / 100 : 0}
+              onChange={(v) => {
+                if (!totals || totals.subtotal <= 0) return;
+                const pct = (v / totals.subtotal) * 100;
+                setField('discountPct', Math.min(100, Math.max(0, pct)));
+              }}
+              helperText={totals && totals.subtotal > 0 ? 'Enter an exact peso discount — % above updates to match' : 'Add line items first'}
+              disabled={isLegacy || !totals || totals.subtotal <= 0}
+              sx={{ width: '100%' }}
+            />
           </Box>
         </Stack>
       </Paper>
