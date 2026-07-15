@@ -160,12 +160,12 @@ const FinanceHomePage: React.FC = () => {
       path: '/finance/expense-monitoring',
     },
     // Capital ledger, not a BIR substantiation source — hidden from tax_filer.
-    ...(user?.role !== 'tax_filer'
+    ...(user?.role === 'superadmin'
       ? [{
-          title: 'Investment Tracker',
-          description: 'Capital contributions and the investment ledger.',
+          title: 'Founder Funding Ledger',
+          description: 'Track founder advances, repayments, and approved capital contributions.',
           icon: <TrendingUpIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
-          path: '/finance/investment-tracker',
+          path: '/finance/founder-funding',
         }]
       : []),
     ...(payrollAllowed

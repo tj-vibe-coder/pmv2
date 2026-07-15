@@ -423,7 +423,6 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel, editRun }) => {
             <TextField select label="Paid From" value={fundingType} fullWidth
               onChange={(e) => { const v = e.target.value as 'corporate_bank' | 'investor_outofpocket'; setFundingType(v); if (v !== 'investor_outofpocket') { setFundingInvestor(''); setLinkedInvestmentId(''); setLinkedInvestments([]); } }}>
               <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
-              <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
             </TextField>
             {fundingType === 'investor_outofpocket' && (
               <TextField select label="Investor" value={fundingInvestor} fullWidth onChange={(e) => handleFundingInvestorChange(e.target.value)}>

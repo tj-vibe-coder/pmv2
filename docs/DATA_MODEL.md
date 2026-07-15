@@ -50,6 +50,8 @@ phHolidays ── standalone collection
 | `created_at` | number | Yes | Unix seconds |
 | `updated_at` | number | Yes | Unix seconds |
 
+**`auth_sessions` documents:** SHA-256(token) document IDs containing `userId`, `createdAt`, and `expiresAt` in milliseconds. Raw bearer tokens are never stored server-side. Scanner sessions remain separate and cannot access Founder Funding administration.
+
 **Default users** (created on server startup via `server.js:createDefaultUsers()`):
 
 Default user passwords are loaded from environment variables
@@ -214,13 +216,51 @@ delete liquidation → balance_remaining += liquidation.total_amount
 | `rows_json` | string | JSON-encoded array of line items |
 | `total_amount` | number | |
 | `ca_id` | string\|null | Linked cash advance |
+| `founder_funding_entry_id` | string\|null | Linked `founder_funding_ledger` document for founder-paid, no-CA submissions |
+| `founder_payment_treatment` | string\|null | `"founder_advance"` or `"capital_contribution"` when founder-funded |
 | `status` | string | `"draft"` \| `"submitted"` |
 | `created_at` | number | Unix seconds |
 | `updated_at` | number | Unix seconds |
 
 **Form numbering:** Auto-generated sequence `LQ-XXXX` via `GET /api/liquidations/next-form-no`, computed from existing submitted liquidations.
 
-### 2.6 `suppliers`
+Submitted rows with a project create deterministic `project_expenses` documents keyed from the liquidation ID and row ID. The liquidation is the expense-evidence source; the linked founder-funding entry explains financing and never creates a second expense.
+
+### 2.6 `founder_funding_ledger`
+
+**Document ID:** Auto-generated for deposits/settlements; deterministic `liquidation_<liquidationId>` for liquidation funding.
+
+| Field | Type | Notes |
+|---|---|---|
+| `transactionDate` | string | `YYYY-MM-DD` |
+| `founderId` / `founderName` | string | Recognized founder identity |
+| `entryType` | string | `founder_advance`, `capital_contribution`, `repayment`, `capitalization`, or `opening_balance_adjustment` |
+| `amountCentavos` | safe integer | Exact PHP minor units; always positive |
+| `currency` | string | Always `PHP` |
+| `description` | string | Human-readable transaction purpose |
+| `source` | map | Whitelisted liquidation, cash-deposit, or legacy-reconciliation reference |
+| `settlesEntryId` | string | Required for repayments and capitalizations |
+| `settledCentavos` | safe integer | Contention/summary field on advances; updated transactionally with settlements |
+| `resolutionReference` | string | Required for direct capital and capitalization |
+| `proofRefs` | string[] | Supporting document references or URLs |
+| `status` | string | `posted` or `voided`; entries are append-only |
+| `createdAt` / `createdBy` | string | Audit actor and ISO timestamp |
+| `approvedAt` / `approvedBy` | string | Capital approval evidence |
+| `voidedAt` / `voidedBy` / `voidReason` | string | Non-destructive reversal audit |
+
+Settlements cannot exceed the posted balance of their source advance. Summary calculations reject orphaned settlements, over-settlement, cross-founder settlement, and unsafe integer aggregates.
+
+### 2.7 `company_settings/founder_funding`
+
+| Field | Type | Notes |
+|---|---|---|
+| `founderUserIds` | string[] | Approved superadmin user IDs recognized as founders |
+| `capitalTargetCentavos` | safe integer | Optional internal target; not ownership percentage |
+| `updatedAt` / `updatedBy` | string | Settings audit |
+
+The first rollout configures TJC (`user_6`) and RJR (`user_14`) through the superadmin settings API. Names are not used as authorization keys.
+
+### 2.8 `suppliers`
 
 **Document ID:** User-provided (same `id` used in client and server)
 
@@ -234,7 +274,7 @@ delete liquidation → balance_remaining += liquidation.total_amount
 | `payment_terms` | string\|null | |
 | `created_at` | string (ISO) | |
 
-### 2.7 `supplier_products`
+### 2.9 `supplier_products`
 
 **Document ID:** User-provided
 
@@ -251,7 +291,7 @@ delete liquidation → balance_remaining += liquidation.total_amount
 
 **⚠️ Important:** `POST /api/suppliers` is a **bulk replace** operation. It deletes ALL documents from both `suppliers` and `supplier_products`, then re-inserts everything. There is no incremental PATCH support.
 
-### 2.8 `project_attachments`
+### 2.10 `project_attachments`
 
 **Document ID:** Auto-generated
 
@@ -265,7 +305,7 @@ delete liquidation → balance_remaining += liquidation.total_amount
 | `uploaded_by` | string\|null | User ID |
 | `created_at` | string (ISO) | |
 
-### 2.9 `employees` (Payroll)
+### 2.11 `employees` (Payroll)
 
 **Document ID:** Auto-generated
 
@@ -288,7 +328,7 @@ delete liquidation → balance_remaining += liquidation.total_amount
 | `tinNumber` | string\|undefined | |
 | `createdAt` | string\|undefined | ISO date |
 
-### 2.10 `payrollRuns`
+### 2.12 `payrollRuns`
 
 **Document ID:** Auto-generated
 
@@ -305,7 +345,7 @@ delete liquidation → balance_remaining += liquidation.total_amount
 - `/payrollRuns/{runId}/dtrEntries/{entryId}` — DTR entries per employee per day
 - `/payrollRuns/{runId}/payslips/{employeeId}` — Computed payslip per employee
 
-### 2.11 `dtrEntries` (subcollection)
+### 2.13 `dtrEntries` (subcollection)
 
 | Field | Type | Notes |
 |---|---|---|
@@ -318,7 +358,7 @@ delete liquidation → balance_remaining += liquidation.total_amount
 | `isAbsent` | boolean | |
 | `tardinessMinutes` | number | |
 
-### 2.12 `payslips` (subcollection)
+### 2.14 `payslips` (subcollection)
 
 See `src/types/Payroll.ts::Payslip` for all fields. Key structure:
 
@@ -334,7 +374,7 @@ See `src/types/Payroll.ts::Payslip` for all fields. Key structure:
 
 **Includes:** `employeeSnapshot` — a copy of the employee document at time of computation (immutable record).
 
-### 2.13 `phHolidays`
+### 2.15 `phHolidays`
 
 | Field | Type | Notes |
 |---|---|---|
@@ -344,7 +384,7 @@ See `src/types/Payroll.ts::Payslip` for all fields. Key structure:
 
 Also has a static TypeScript source: `src/data/phHolidays.ts` (2026 holidays). The Firestore collection may be used for dynamic additions.
 
-### 2.14 `invoices`
+### 2.16 `invoices`
 
 Top-level collection for the Collections & AR dashboard. Each document represents one invoice issued against a project.
 
@@ -595,7 +635,7 @@ Helpers exported from `src/types/Invoice.ts`:
 
 | Key | Store | Format | Used By |
 |---|---|---|---|
-| `netpacific_token` | string | base64 `userId:username:timestamp` | AuthContext, all API calls |
+| `netpacific_token` | string | Opaque `sess_...` bearer token | AuthContext, all API calls |
 | `netpacific_user` | string | JSON-encoded `User` object | AuthContext (cached) |
 | `projectExpenses` | string | JSON array `[{projectId, amount}]` | Dashboard (budget tracking) |
 | `projectBudgets` | string | JSON object `{projectId: budget}` | Dashboard (budget tracking) |

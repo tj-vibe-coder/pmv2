@@ -3,6 +3,20 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const crypto = require('crypto');
+const {
+  buildLedgerEntry,
+  buildLiquidationExpenseDocs,
+  classifyNoCaLiquidation,
+  isRecognizedFounder,
+  phpToCentavos,
+  remainingCentavos,
+  summarizeFounderLedger,
+  sumLiquidationRowsCentavos,
+  validateCapitalization,
+  validateLiquidationRows,
+  validateSettlement,
+} = require('./server/founderFunding');
+const { findReconciliationCandidates, presentReconciliationCandidate } = require('./scripts/reconcile-founder-funding-ledger');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -52,15 +66,16 @@ if (require.main === module) {
 // Create default users on startup
 async function createDefaultUsers() {
   const defaults = [
-    { username: 'TJC', email: 'tyronejames.caballero@gmail.com', password: 'IOCT0201!', role: 'superadmin', full_name: 'Tyrone James Caballero', contact_number: '+63 969 162 2660', approved: 1 },
-    { username: 'admin', email: 'admin@netpacific.com', password: 'admin123', role: 'admin', full_name: null, contact_number: null, approved: 1 },
-    { username: 'user', email: 'user@netpacific.com', password: 'user123', role: 'user', full_name: null, contact_number: null, approved: 1 },
-    { username: 'projects', email: 'projects@iocontroltech.com', password: 'IOCT0201!', role: 'admin', full_name: null, contact_number: null, approved: 1 },
+    { username: 'TJC', email: process.env.DEFAULT_USER_EMAIL_TJC, password: process.env.DEFAULT_USER_PASSWORD_TJC, role: 'superadmin', full_name: 'Tyrone James Caballero', contact_number: '+63 969 162 2660', approved: 1 },
+    { username: 'admin', email: process.env.DEFAULT_USER_EMAIL_ADMIN, password: process.env.DEFAULT_USER_PASSWORD_ADMIN, role: 'admin', full_name: null, contact_number: null, approved: 1 },
+    { username: 'user', email: process.env.DEFAULT_USER_EMAIL_USER, password: process.env.DEFAULT_USER_PASSWORD_USER, role: 'user', full_name: null, contact_number: null, approved: 1 },
+    { username: 'projects', email: process.env.DEFAULT_USER_EMAIL_PROJECTS, password: process.env.DEFAULT_USER_PASSWORD_PROJECTS, role: 'admin', full_name: null, contact_number: null, approved: 1 },
   ];
   for (const u of defaults) {
     try {
       const snap = await db.collection('users').where('username', '==', u.username).limit(1).get();
       if (snap.empty) {
+        if (!u.password || !u.email) continue;
         const passwordHash = Buffer.from(u.password).toString('base64');
         const now = Math.floor(Date.now() / 1000);
         await db.collection('users').add({ username: u.username, email: u.email, password_hash: passwordHash, role: u.role, approved: u.approved, full_name: u.full_name, designation: null, contact_number: u.contact_number, created_at: now, updated_at: now });
@@ -126,13 +141,16 @@ async function getCurrentUser(req) {
       if (!sess || Date.now() > sess.expiresAt) return null;
       const su = await db.collection('users').doc(sess.userId).get();
       if (!su.exists) return null;
+      if (!isActiveUser(su.data())) return null;
       return { id: su.id, ...su.data(), scannerScope: true };
     }
-    const decoded = Buffer.from(token, 'base64').toString();
-    const [userId] = decoded.split(':');
-    if (!userId) return null;
-    const userDoc = await db.collection('users').doc(userId).get();
+    if (!token.startsWith('sess_')) return null;
+    const sessionId = crypto.createHash('sha256').update(token).digest('hex');
+    const sessionSnap = await db.collection('auth_sessions').doc(sessionId).get();
+    if (!sessionSnap.exists || Number(sessionSnap.data().expiresAt) <= Date.now()) return null;
+    const userDoc = await db.collection('users').doc(sessionSnap.data().userId).get();
     if (!userDoc.exists) return null;
+    if (!isActiveUser(userDoc.data())) return null;
     return { id: userDoc.id, ...userDoc.data() };
   } catch (e) {
     return null;
@@ -141,7 +159,7 @@ async function getCurrentUser(req) {
 
 function isActiveUser(user) {
   if (!user) return false;
-  return user.role === 'superadmin' || user.approved === 1 || user.approved === true;
+  return user.approved === 1 || user.approved === true;
 }
 
 async function requireActiveUser(req, res) {
@@ -247,8 +265,15 @@ app.post('/api/auth/login', async (req, res) => {
     const userDoc = candidates[0].doc;
     const user = userDoc.data();
     const approved = user.approved === 1 || user.approved === true;
-    if (!approved && user.role !== 'superadmin') return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
-    const token = Buffer.from(`${userDoc.id}:${user.username}:${Date.now()}`).toString('base64');
+    if (!approved) return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
+    const token = `sess_${crypto.randomBytes(32).toString('base64url')}`;
+    const sessionId = crypto.createHash('sha256').update(token).digest('hex');
+    const sessionNow = Date.now();
+    await db.collection('auth_sessions').doc(sessionId).set({
+      userId: userDoc.id,
+      createdAt: sessionNow,
+      expiresAt: sessionNow + (30 * 24 * 60 * 60 * 1000),
+    });
     res.json({ success: true, user: userResponse(userDoc.id, user), token });
   } catch (err) {
     console.error('Database error during login:', err);
@@ -304,6 +329,53 @@ async function listAllUsers(req, res) {
 }
 app.get('/api/users', listAllUsers);
 usersRouter.get('/', listAllUsers);
+
+// Superadmin-only direct create — unlike /api/auth/register (self-service,
+// role limited to user/viewer, always starts unapproved), this can set any
+// role and is approved=1 immediately so the account is usable right away.
+usersRouter.post('/', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { username, email, password, full_name, designation, contact_number, role = 'user', approved = 1 } = req.body;
+  const nextUsername = String(username || '').trim();
+  const nextEmail = String(email || '').trim();
+  const nextPassword = String(password || '');
+  if (!nextUsername) return res.status(400).json({ success: false, error: 'Username is required' });
+  if (!nextEmail) return res.status(400).json({ success: false, error: 'Email is required' });
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(nextEmail)) return res.status(400).json({ success: false, error: 'Please enter a valid email address' });
+  if (nextPassword.length < 6) return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long' });
+  if (!['superadmin', 'admin', 'user', 'viewer', 'tax_filer'].includes(role)) return res.status(400).json({ success: false, error: 'Invalid role specified' });
+  try {
+    const [uSnap, eSnap] = await Promise.all([
+      db.collection('users').where('username', '==', nextUsername).limit(1).get(),
+      db.collection('users').where('email', '==', nextEmail).limit(1).get(),
+    ]);
+    if (!uSnap.empty) return res.status(409).json({ success: false, error: 'Username already exists' });
+    if (!eSnap.empty) return res.status(409).json({ success: false, error: 'Email already exists' });
+    const passwordHash = Buffer.from(nextPassword).toString('base64');
+    const now = Math.floor(Date.now() / 1000);
+    const ref = await db.collection('users').add({
+      username: nextUsername,
+      email: nextEmail,
+      password_hash: passwordHash,
+      role,
+      approved: approved ? 1 : 0,
+      full_name: full_name ? String(full_name).trim() : null,
+      designation: designation ? String(designation).trim() : null,
+      contact_number: contact_number ? String(contact_number).trim() : null,
+      created_at: now,
+      updated_at: now,
+    });
+    console.log(`User ${nextUsername} created by superadmin ${user.username} with role: ${role}`);
+    const doc = await ref.get();
+    res.status(201).json({ success: true, message: 'User created', user: userResponse(doc.id, doc.data()) });
+  } catch (err) {
+    console.error('Error creating user:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
 
 usersRouter.get('/staff-contacts', async (req, res) => {
   const user = await getCurrentUser(req);
@@ -613,6 +685,7 @@ app.post('/api/projects/bulk', async (req, res) => {
             contract_billed_net_percent: project.contract_billed_net_percent || 0, amount_contract_billed_net: project.amount_contract_billed_net || 0,
             for_retention_billing_percent: project.for_retention_billing_percent || 0, amount_for_retention_billing: project.amount_for_retention_billing || 0,
             retention_status: project.retention_status || '', unevaluated_progress: project.unevaluated_progress || 0,
+            with_acti: project.with_acti || false, partner_id: project.partner_id || null, partner_name: project.partner_name || '',
             created_at: now, updated_at: now,
           });
           successCount++;
@@ -891,8 +964,10 @@ app.get('/api/project-expenses', async (req, res) => {
     // (PO/liquidation/migrated) have no natural per-user owner, so expose them to every finance user —
     // otherwise the per-project Expense Monitoring list would hide costs (e.g. synced PO items or
     // liquidation rows) the company P&L still counts, producing a confusing reconciliation gap.
-    // In-memory filter only, so no Firestore composite index is needed.
-    if (!isAdmin) {
+    // In-memory filter only, so no Firestore composite index is needed. tax_filer is exempted
+    // entirely — the Tax Filer Ledger needs full company expense visibility for BIR substantiation;
+    // it's a read-only role (write access stays admin/owner-gated separately in the PATCH handler).
+    if (!isAdmin && user.role !== 'tax_filer') {
       const SYNC_SOURCE_TYPES = new Set(['po_sync', 'liquidation_sync', 'migrated']);
       rows = rows.filter(r => r.createdBy === user.id || SYNC_SOURCE_TYPES.has(r.sourceType));
     }
@@ -959,94 +1034,23 @@ app.post('/api/project-expenses/migrate-from-localstorage', async (req, res) => 
 });
 
 // ---------------------------------------------------------------------------
-// Funding-source -> investments sync (best-effort, deterministic-id upsert).
-// When an expense is paid directly out of an investor's pocket instead of the
-// corporate bank account, mirror it into a LINKED investments row so it does
-// not have to be re-keyed by hand and cannot be double-counted. Same idiom as
-// the payroll_sync_* overhead sync: a deterministic doc id keyed on the source
-// expense, upsert on out-of-pocket, delete otherwise. Never throws to caller.
-// ---------------------------------------------------------------------------
+// Legacy funding-source parser. New founder-funded activity must enter through
+// a liquidation or Founder Funding Ledger transaction; investor_outofpocket is
+// deliberately discarded so older clients cannot recreate mixed-purpose logs.
 function normalizeFundingSource(fs) {
   if (!fs || typeof fs !== 'object') return null;
-  const type = fs.type === 'investor_outofpocket' ? 'investor_outofpocket' : 'corporate_bank';
-  const out = { type };
-  if (type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim()) {
-    out.investor = fs.investor.trim();
-    if (typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()) {
-      out.linkedInvestmentId = fs.linkedInvestmentId.trim();
-    }
-  }
-  return out;
+  return fs.type === 'corporate_bank' ? { type: 'corporate_bank' } : null;
 }
 
 async function syncExpenseFundingInvestment(id, collection, doc) {
-  const invRef = db.collection('investments').doc(`expense_sync_${id}`);
-  try {
-    const fs = doc && doc.fundingSource;
-    const isOutOfPocket = fs && fs.type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim();
-    const linkedId = isOutOfPocket && typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()
-      ? fs.linkedInvestmentId.trim() : null;
-
-    // Clear the back-reference off any investment row this expense used to point at, if it no
-    // longer does (funding source edited away/removed/re-linked elsewhere). Both fields are
-    // plain equality filters, so this is served by automatic single-field indexes (no composite
-    // index needed) — same idiom as the project_expenses equality-only queries elsewhere.
-    const staleLinked = await db.collection('investments')
-      .where('linkedExpenseId', '==', id)
-      .where('linkedExpenseCollection', '==', collection)
-      .get();
-    await Promise.all(staleLinked.docs
-      .filter(d => d.id !== linkedId)
-      .map(d => d.ref.update({
-        linkedExpenseId: FieldValue.delete(),
-        linkedExpenseCollection: FieldValue.delete(),
-        linkedExpenseProjectId: FieldValue.delete(),
-      })));
-
-    if (linkedId) {
-      // Linked to an EXISTING investments row (e.g. a lump-sum capital contribution) instead
-      // of a one-off auto-created one. Those rows are usually pencil-booked before the real
-      // receipt exists — no firm date/description — so once an actual expense is linked back,
-      // treat the expense as authoritative for date/description and store the back-reference
-      // so the ledger can link to the source expense. Still clean up any stale auto-created
-      // row from a prior state (e.g. the expense used to be a standalone out-of-pocket entry).
-      await invRef.delete();
-      const linkedRef = db.collection('investments').doc(linkedId);
-      const linkedSnap = await linkedRef.get();
-      if (linkedSnap.exists) {
-        await linkedRef.update({
-          date: doc.date,
-          description: doc.description || linkedSnap.data().description || '',
-          linkedExpenseId: id,
-          linkedExpenseCollection: collection,
-          linkedExpenseProjectId: collection === 'project_expenses' ? (doc.projectId || null) : null,
-          updated_at: new Date().toISOString(),
-        });
-      }
-    } else if (isOutOfPocket) {
-      await invRef.set({
-        date: doc.date,
-        investor: fs.investor.trim(),
-        amount: Number(doc.amount) || 0,
-        category: collection === 'project_expenses' ? 'Project Expense' : 'Overhead',
-        description: `Out-of-pocket: ${doc.description || doc.category || ''}`,
-        sourceType: 'expense_sync',
-        sourceExpenseId: id,
-        sourceCollection: collection,
-        sourceExpenseProjectId: collection === 'project_expenses' ? (doc.projectId || null) : null,
-        // Anchor to the expense's own createdAt (stable across edits, no extra read)
-        // rather than re-stamping "now" on every upsert.
-        created_at: doc.createdAt || new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
-    } else {
-      // Not out-of-pocket (or cleared) — remove any previously-linked row.
-      // Deleting a non-existent doc is a safe no-op in Firestore.
-      await invRef.delete();
-    }
-  } catch (syncErr) {
-    console.error('Expense funding investment sync failed for', collection, id, syncErr);
-  }
+  // Legacy compatibility shim. Founder funding is now recorded only through the
+  // append-only founder_funding_ledger and liquidation transaction. Keeping this
+  // as a successful no-op prevents older expense clients from recreating the
+  // duplicate investment rows that this migration is designed to eliminate.
+  void id;
+  void collection;
+  void doc;
+  return true;
 }
 
 app.post('/api/project-expenses', async (req, res) => {
@@ -1123,12 +1127,14 @@ app.post('/api/project-expenses', async (req, res) => {
           if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
           if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
           if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
+          if (exp.remarks) doc.remarks = String(exp.remarks);
           // BIR substantiation passthrough — mirrors the single-insert path so
           // liquidation/PO-synced rows carry supplier/invoice detail into the tax ledger.
           if (exp.supplier) doc.supplier = String(exp.supplier);
           if (exp.invoiceNo) doc.invoiceNo = String(exp.invoiceNo);
           if (exp.invoiceType) doc.invoiceType = String(exp.invoiceType);
           if (exp.tin) doc.tin = String(exp.tin);
+          if (exp.imageHash) doc.imageHash = String(exp.imageHash);
           if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
           if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
           if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
@@ -1148,9 +1154,9 @@ app.post('/api/project-expenses', async (req, res) => {
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     // Single insert
-    const { projectId, projectName, description, amount, date, category, sourceType,
+    const { projectId, projectName, description, remarks, amount, date, category, sourceType,
             sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = body;
+            supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = body;
     if (!projectId || !amount) {
       return res.status(400).json({ success: false, error: 'projectId and amount are required' });
     }
@@ -1170,11 +1176,13 @@ app.post('/api/project-expenses', async (req, res) => {
     if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
     if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
     if (sourceCaId) doc.sourceCaId = sourceCaId;
+    if (remarks) doc.remarks = String(remarks);
     if (receiptRef) doc.receiptRef = receiptRef;
     if (supplier) doc.supplier = String(supplier);
     if (invoiceNo) doc.invoiceNo = String(invoiceNo);
     if (invoiceType) doc.invoiceType = String(invoiceType);
     if (tin) doc.tin = String(tin);
+    if (imageHash) doc.imageHash = String(imageHash);
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     if (typeof deductible === 'boolean') doc.deductible = deductible;
     if (deductibleReason) doc.deductibleReason = String(deductibleReason);
@@ -1221,8 +1229,9 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
+    const { description, remarks, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
+    if (remarks !== undefined) allowed.remarks = String(remarks);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
     if (category !== undefined) allowed.category = String(category);
@@ -1232,6 +1241,7 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
     if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
     if (vat !== undefined && Number.isFinite(Number(vat))) allowed.vat = Number(vat);
     if (tin !== undefined) allowed.tin = String(tin);
+    if (imageHash !== undefined) allowed.imageHash = imageHash == null ? null : String(imageHash);
     if (typeof deductible === 'boolean') allowed.deductible = deductible;
     else if (deductible === null) allowed.deductible = null;
     if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
@@ -1256,14 +1266,16 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
 // employee out-of-pocket claim instead of a company-paid one. Creates a submitted liquidation
 // for the chosen employee (optionally against one of their approved CAs) and removes the
 // original project_expense in one batch, so the cost is never counted twice.
-app.post('/api/project-expenses/:id/promote-to-liquidation', async (req, res) => {
+// Shared by project_expenses and overhead_expenses — an overhead receipt an
+// employee paid out-of-pocket is just as promotable as a project one.
+const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
   const { userId, caId } = req.body || {};
   if (!userId) return res.status(400).json({ success: false, error: 'userId is required' });
   try {
-    const expenseRef = db.collection('project_expenses').doc(req.params.id);
+    const expenseRef = db.collection(collectionName).doc(req.params.id);
     const expenseSnap = await expenseRef.get();
     if (!expenseSnap.exists) return res.status(404).json({ success: false, error: 'Expense not found' });
     const expense = expenseSnap.data();
@@ -1331,10 +1343,13 @@ app.post('/api/project-expenses/:id/promote-to-liquidation', async (req, res) =>
 
     res.json({ success: true, liquidationId: liquidationRef.id, formNo });
   } catch (err) {
-    console.error('Error promoting project_expense to liquidation:', err);
+    console.error(`Error promoting ${collectionName} row to liquidation:`, err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
-});
+};
+
+app.post('/api/project-expenses/:id/promote-to-liquidation', promoteExpenseToLiquidation('project_expenses'));
+app.post('/api/overhead-expenses/:id/promote-to-liquidation', promoteExpenseToLiquidation('overhead_expenses'));
 
 // ========== CASH ADVANCES ==========
 
@@ -1426,9 +1441,16 @@ app.post('/api/cash-advances', async (req, res) => {
   if (dateRequested && /^\d{4}-\d{2}-\d{2}$/.test(String(dateRequested).trim())) {
     requestedAt = Math.floor(new Date(dateRequested + 'T12:00:00').getTime() / 1000);
   }
+  // Which investor is fronting a cash advance is an approval-time call, not a request-time
+  // one — the requester hasn't spent anything yet (unlike a project/overhead expense, where
+  // self-attesting fundingSource is coherent because the person entering it is the one who
+  // actually paid out of pocket). Only admins may set it, whether at creation or later via
+  // PATCH /api/cash-advances/:id/funding.
+  const isAdminRequester = user.role === 'superadmin' || user.role === 'admin';
+  const fundingSource = isAdminRequester ? normalizeFundingSource(req.body.fundingSource) : null;
   try {
     const caNo = await nextCaNo(projectId, new Date(requestedAt * 1000));
-    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt });
+    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt, ...(fundingSource ? { fundingSource } : {}) });
     res.status(201).json({ success: true, id: ref.id, ca_no: caNo, message: `Cash advance ${caNo} requested` });
   } catch (err) {
     console.error('Error creating cash advance:', err);
@@ -1451,9 +1473,116 @@ app.patch('/api/cash-advances/:id', async (req, res) => {
     if (ca.status !== 'pending') return res.status(400).json({ success: false, error: 'Already processed' });
     const now = Math.floor(Date.now() / 1000);
     await ref.update({ status, balance_remaining: status === 'approved' ? ca.amount : 0, approved_at: status === 'approved' ? now : null, approved_by: status === 'approved' ? user.id : null, updated_at: now });
+    // Money only actually leaves an investor's pocket once the request is approved — mirror
+    // the run's funding source onto an Investment Tracker row at that point, same idiom as
+    // syncPayrollOverheadExpenses. A rejected CA was never synced, so nothing to reverse.
+    // Re-read after our own write (not the pre-write `ca`) so a fundingSource set by a
+    // concurrent PATCH .../funding request lands correctly — this doesn't eliminate the race
+    // (neither endpoint uses a transaction, matching this codebase's existing risk tolerance
+    // for balance_remaining elsewhere), but it closes the more likely ordering.
+    if (status === 'approved') {
+      const freshCa = (await ref.get()).data();
+      await syncExpenseFundingInvestment(id, 'cash_advances', { ...freshCa, date: new Date(now * 1000).toISOString().slice(0, 10) });
+    }
     res.json({ success: true, message: status === 'approved' ? 'Cash advance approved' : 'Cash advance rejected' });
   } catch (err) {
     console.error('Error updating cash advance:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Backfills/edits the funding source on a CA independent of a status transition — needed
+// because CAs created before the funding-source feature shipped (and any CA an admin wants
+// to correct) have no way to pick up Investment Tracker linking otherwise, since the approve
+// endpoint above only reads/syncs fundingSource at the moment status flips to 'approved'.
+app.patch('/api/cash-advances/:id/funding', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  try {
+    const ref = db.collection('cash_advances').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Cash advance not found' });
+    const fundingSource = normalizeFundingSource(req.body.fundingSource);
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({ fundingSource: fundingSource || FieldValue.delete(), updated_at: now });
+    // Only an approved CA has actually drawn money — sync (or clear) its Investment Tracker
+    // link immediately, dated to the original approval (not today) so historical CAs land in
+    // the right period. A pending/rejected CA's funding choice just gets carried into the doc;
+    // it takes effect the next time (if ever) the approve endpoint above runs — never, for a
+    // rejected one, which is why the client hides this action for rejected CAs.
+    // Re-read after our own write (not the pre-write `ca`/`doc`) to narrow the race with a
+    // concurrent approve request landing between our read and write.
+    let syncOk = true;
+    const freshCa = (await ref.get()).data();
+    if (freshCa.status === 'approved') {
+      const syncDate = freshCa.approved_at ? new Date(freshCa.approved_at * 1000).toISOString().slice(0, 10) : new Date(now * 1000).toISOString().slice(0, 10);
+      syncOk = await syncExpenseFundingInvestment(id, 'cash_advances', { ...freshCa, date: syncDate });
+    }
+    res.json({
+      success: true,
+      message: syncOk ? 'Funding source updated' : 'Funding source saved, but updating the Investment Tracker link failed — please retry.',
+      syncWarning: !syncOk,
+    });
+  } catch (err) {
+    console.error('Error updating cash advance funding source:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: close out an approved cash advance's remaining balance — either
+// the cash physically came back ('returned') or it's being written off as a
+// realized loss ('written_off').
+app.post('/api/cash-advances/:id/close', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  const { closureType } = req.body;
+  if (closureType !== 'returned' && closureType !== 'written_off') return res.status(400).json({ success: false, error: "closureType must be 'returned' or 'written_off'" });
+  try {
+    const ref = db.collection('cash_advances').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Cash advance not found' });
+    const ca = doc.data();
+    if (ca.status !== 'approved') return res.status(400).json({ success: false, error: 'Only approved cash advances can be closed' });
+    const balance = parseFloat(ca.balance_remaining) || 0;
+    // A negative balance means the employee over-liquidated against this CA — that's
+    // a reimbursement payable, not an unused-cash closeout. Settle it from the
+    // Reimbursements page (POST /api/reimbursements/:id/pay), which pays the employee
+    // back and restores this CA's balance toward zero as a side effect.
+    if (balance < 0) return res.status(400).json({ success: false, error: 'This CA has a negative balance (company owes the employee) — settle it from the Reimbursements page instead.' });
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({ status: 'closed', closureType, closedAt: now, closedBy: user.id, balance_remaining: 0, updated_at: now });
+    let syncOk = true;
+    if (closureType === 'returned' && balance > 0) {
+      // The investment row (if any) currently reflects the FULL original advance as deployed
+      // capital. The returned portion never actually got spent — bring the row down to
+      // actually-deployed capital (original amount minus what just came back).
+      const invRef = db.collection('investments').doc(`expense_sync_${id}`);
+      const invSnap = await invRef.get();
+      if (invSnap.exists) {
+        const currentAmount = Number(invSnap.data().amount) || 0;
+        await invRef.update({ amount: Math.max(0, currentAmount - balance), updated_at: new Date().toISOString() });
+      }
+    } else if (closureType === 'written_off' && balance > 0) {
+      // The capital genuinely left and wasn't recovered — leave the investment row as-is, but
+      // book the shortfall as a real cost so it isn't a phantom gap in the P&L.
+      await db.collection('overhead_expenses').add({
+        description: `Cash advance write-off: ${ca.ca_no || id}`,
+        amount: balance,
+        date: new Date(now * 1000).toISOString().slice(0, 10),
+        category: 'Cash Advance Write-off',
+        createdAt: new Date(now * 1000).toISOString(),
+        createdBy: user.id,
+        sourceType: 'ca_writeoff',
+        sourceCaId: id,
+      });
+    }
+    res.json({ success: true, message: closureType === 'returned' ? 'Cash advance closed — cash returned' : 'Cash advance closed — written off', syncWarning: !syncOk });
+  } catch (err) {
+    console.error('Error closing cash advance:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
@@ -1487,6 +1616,8 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
       await batch.commit();
     }
     await ref.delete();
+    // Remove/unlink any Investment Tracker row this CA's approval had synced.
+    await syncExpenseFundingInvestment(id, 'cash_advances', {});
     res.json({ success: true, message: 'Cash advance deleted' });
   } catch (err) {
     console.error('Error deleting cash advance:', err);
@@ -1555,41 +1686,121 @@ app.get('/api/liquidations/:id', async (req, res) => {
 app.post('/api/liquidations', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
-  const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
-  const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
-  const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
-  const total = parseFloat(total_amount) || 0;
+  if (user.scannerScope) return res.status(403).json({ success: false, error: 'Scanner sessions cannot submit liquidations' });
+  const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id,
+          founderPaymentTreatment, capitalizationReference } = req.body;
+  const rows = parseLiqRows(rows_json);
+  const receipts = parseLiqRows(receipts_json);
+  let total = parseFloat(total_amount) || 0;
   const now = Math.floor(Date.now() / 1000);
+  const nowIso = new Date(now * 1000).toISOString();
   const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
   const caId = ca_id ? String(ca_id) : null;
+  if (!Array.isArray(rows) || rows.length > 450) return res.status(400).json({ success: false, error: 'Liquidation must contain at most 450 rows' });
+  if (!Array.isArray(receipts) || receipts.length > 100 || JSON.stringify(receipts).length > 10_000_000) return res.status(400).json({ success: false, error: 'Liquidation receipts exceed the allowed count or size' });
+  if (liqStatus === 'submitted' && total <= 0) return res.status(400).json({ success: false, error: 'Submitted liquidation total must be greater than zero' });
+  if (liqStatus === 'submitted' && !/^LQ-\d+$/.test(String(form_no || ''))) return res.status(400).json({ success: false, error: 'A valid LQ form number is required' });
   try {
-    if (liqStatus === 'submitted' && caId) {
-      const caDoc = await db.collection('cash_advances').doc(caId).get();
-      if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
-      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
-      if (total > bal) return res.status(400).json({ success: false, error: `Liquidation (₱${total.toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+    if (liqStatus === 'submitted') {
+      try {
+        validateLiquidationRows(rows);
+        const submittedCentavos = phpToCentavos(total_amount);
+        if (sumLiquidationRowsCentavos(rows) !== submittedCentavos) {
+          return res.status(400).json({ success: false, error: 'Liquidation total must equal the exact sum of its rows' });
+        }
+        total = submittedCentavos / 100;
+      } catch (validationError) {
+        return res.status(400).json({ success: false, error: validationError.message || 'Invalid liquidation amount' });
+      }
     }
     if (liqStatus === 'submitted' && form_no) {
       const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
       if (!dupSnap.empty) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
     }
-    // No-CA submitted liquidations are out-of-pocket reimbursement claims —
-    // tracked so the requester gets paid back (see PATCH below).
-    const reimbursementStatus = liqStatus === 'submitted' && !caId ? 'pending' : null;
-    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
-    if (liqStatus === 'submitted' && caId) {
-      await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
-    }
-    res.status(201).json({ success: true, id: ref.id, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved' });
+    const settings = await getFounderFundingSettings();
+    const isFounder = isRecognizedFounder(user.id, settings.founderUserIds);
+    const noCaClassification = liqStatus === 'submitted' && !caId
+      ? classifyNoCaLiquidation({ isFounder, treatment: founderPaymentTreatment, capitalizationReference }) : null;
+    const ref = db.collection('liquidations').doc();
+    const founderFundingRef = noCaClassification && noCaClassification !== 'reimbursement'
+      ? db.collection('founder_funding_ledger').doc(`liquidation_${ref.id}`) : null;
+    const formNumberRef = liqStatus === 'submitted' && form_no
+      ? db.collection('liquidation_form_numbers').doc(String(form_no)) : null;
+    const expenseDocs = liqStatus === 'submitted'
+      ? buildLiquidationExpenseDocs({ liquidationId: ref.id, formNo: form_no, userId: user.id, createdAt: nowIso, rows }) : [];
+    let reimbursableAmount = 0;
+    let caCoveredAmount = 0;
+    await db.runTransaction(async transaction => {
+      if (formNumberRef) {
+        const formNumberSnap = await transaction.get(formNumberRef);
+        if (formNumberSnap.exists) throw Object.assign(new Error(`Form no ${form_no} is already used`), { status: 409 });
+      }
+      let caRef = null;
+      if (liqStatus === 'submitted' && caId) {
+        caRef = db.collection('cash_advances').doc(caId);
+        const caDoc = await transaction.get(caRef);
+        if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') {
+          throw Object.assign(new Error('Invalid or unauthorized cash advance'), { status: 400 });
+        }
+        const balance = parseFloat(caDoc.data().balance_remaining) || 0;
+        caCoveredAmount = Math.max(0, Math.min(total, balance));
+        reimbursableAmount = Math.max(0, total - caCoveredAmount);
+      } else if (liqStatus === 'submitted' && noCaClassification === 'reimbursement') {
+        reimbursableAmount = total;
+      }
+      const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
+      transaction.set(ref, {
+        user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null,
+        employee_name: employee_name || null, employee_number: employee_number || null,
+        rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total,
+        ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId,
+        status: liqStatus, reimbursement_status: reimbursementStatus,
+        founder_funding_entry_id: founderFundingRef ? founderFundingRef.id : null,
+        founder_payment_treatment: founderFundingRef ? noCaClassification : null,
+        reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now,
+      });
+      if (formNumberRef) transaction.set(formNumberRef, { liquidationId: ref.id, reservedAt: nowIso, reservedBy: user.id });
+      for (const expense of expenseDocs) transaction.set(db.collection('project_expenses').doc(expense.id), {
+        ...expense.data, ...(caId ? { sourceCaId: caId } : {}),
+      });
+      if (caRef) transaction.update(caRef, { balance_remaining: FieldValue.increment(-total), updated_at: now });
+      if (liqStatus === 'submitted' && reimbursableAmount > 0) {
+        transaction.set(db.collection('reimbursements').doc(ref.id), {
+          liquidationId: ref.id, formNo: form_no || null, employeeId: user.id,
+          employeeName: employee_name || user.full_name || user.username || null,
+          origin: caId ? 'ca_excess' : 'no_ca', amount: reimbursableAmount, caId: caId || null,
+          status: 'pending', fundingSource: null, paidAt: null, paidBy: null,
+          syncedInvestmentId: null, createdAt: now, updatedAt: now,
+        });
+      }
+      if (founderFundingRef) {
+        const ledgerEntry = buildLedgerEntry({
+          entryType: noCaClassification, founderId: user.id,
+          founderName: user.full_name || user.username || user.id,
+          transactionDate: date_of_submission || nowIso.slice(0, 10), amount: total,
+          description: `Founder-paid liquidation ${form_no || ref.id}`,
+          source: { kind: 'liquidation', liquidationId: ref.id, liquidationFormNo: form_no || undefined },
+          resolutionReference: capitalizationReference, approvedAt: nowIso, approvedBy: user.id,
+          userId: user.id, now: nowIso,
+        });
+        transaction.set(founderFundingRef, ledgerEntry);
+      }
+    });
+    res.status(201).json({
+      success: true, id: ref.id, founderFundingEntryId: founderFundingRef ? founderFundingRef.id : null,
+      projectExpenseCount: expenseDocs.length,
+      message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved',
+    });
   } catch (err) {
     console.error('Error creating liquidation:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'Database error' });
   }
 });
 
 app.put('/api/liquidations/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.scannerScope) return res.status(403).json({ success: false, error: 'Scanner sessions cannot update liquidations' });
   const { id } = req.params;
   try {
     const ref = db.collection('liquidations').doc(id);
@@ -1598,32 +1809,116 @@ app.put('/api/liquidations/:id', async (req, res) => {
     const existing = doc.data();
     if (existing.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (existing.status === 'submitted') return res.status(400).json({ success: false, error: 'Cannot edit submitted liquidation' });
-    const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
-    const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
-    const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
-    const total = parseFloat(total_amount) || 0;
+    const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id,
+            founderPaymentTreatment, capitalizationReference } = req.body;
+    const rows = parseLiqRows(rows_json);
+    const receipts = parseLiqRows(receipts_json);
+    let total = parseFloat(total_amount) || 0;
     const now = Math.floor(Date.now() / 1000);
+    const nowIso = new Date(now * 1000).toISOString();
     const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
     const caId = ca_id ? String(ca_id) : null;
-    if (liqStatus === 'submitted' && caId) {
-      const caDoc = await db.collection('cash_advances').doc(caId).get();
-      if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
-      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
-      if (total > bal) return res.status(400).json({ success: false, error: `Liquidation (₱${total.toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+    if (!Array.isArray(rows) || rows.length > 450) return res.status(400).json({ success: false, error: 'Liquidation must contain at most 450 rows' });
+    if (!Array.isArray(receipts) || receipts.length > 100 || JSON.stringify(receipts).length > 10_000_000) return res.status(400).json({ success: false, error: 'Liquidation receipts exceed the allowed count or size' });
+    if (liqStatus === 'submitted' && total <= 0) return res.status(400).json({ success: false, error: 'Submitted liquidation total must be greater than zero' });
+    if (liqStatus === 'submitted' && !/^LQ-\d+$/.test(String(form_no || ''))) return res.status(400).json({ success: false, error: 'A valid LQ form number is required' });
+    if (liqStatus === 'submitted') {
+      try {
+        validateLiquidationRows(rows);
+        const submittedCentavos = phpToCentavos(total_amount);
+        if (sumLiquidationRowsCentavos(rows) !== submittedCentavos) {
+          return res.status(400).json({ success: false, error: 'Liquidation total must equal the exact sum of its rows' });
+        }
+        total = submittedCentavos / 100;
+      } catch (validationError) {
+        return res.status(400).json({ success: false, error: validationError.message || 'Invalid liquidation amount' });
+      }
     }
+    let caCoveredAmount = 0;
+    let reimbursableAmount = 0;
     if (liqStatus === 'submitted' && form_no) {
       const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
       if (dupSnap.docs.some(d => d.id !== id)) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
     }
-    const reimbursementStatus = liqStatus === 'submitted' && !caId ? 'pending' : null;
-    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
-    if (liqStatus === 'submitted' && caId) {
-      await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
-    }
-    res.json({ success: true, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
+    const settings = await getFounderFundingSettings();
+    const isFounder = isRecognizedFounder(user.id, settings.founderUserIds);
+    const noCaClassification = liqStatus === 'submitted' && !caId
+      ? classifyNoCaLiquidation({ isFounder, treatment: founderPaymentTreatment, capitalizationReference }) : null;
+    const founderFundingRef = noCaClassification && noCaClassification !== 'reimbursement'
+      ? db.collection('founder_funding_ledger').doc(`liquidation_${id}`) : null;
+    const formNumberRef = liqStatus === 'submitted' && form_no
+      ? db.collection('liquidation_form_numbers').doc(String(form_no)) : null;
+    const expenseDocs = liqStatus === 'submitted'
+      ? buildLiquidationExpenseDocs({ liquidationId: id, formNo: form_no, userId: user.id, createdAt: nowIso, rows }) : [];
+    await db.runTransaction(async transaction => {
+      const liveDoc = await transaction.get(ref);
+      if (!liveDoc.exists) throw Object.assign(new Error('Liquidation not found'), { status: 404 });
+      if (liveDoc.data().user_id !== user.id) throw Object.assign(new Error('Forbidden'), { status: 403 });
+      if (liveDoc.data().status === 'submitted') throw Object.assign(new Error('Cannot edit submitted liquidation'), { status: 409 });
+      if (formNumberRef) {
+        const formNumberSnap = await transaction.get(formNumberRef);
+        if (formNumberSnap.exists && formNumberSnap.data().liquidationId !== id) {
+          throw Object.assign(new Error(`Form no ${form_no} is already used`), { status: 409 });
+        }
+      }
+      let caRef = null;
+      if (liqStatus === 'submitted' && caId) {
+        caRef = db.collection('cash_advances').doc(caId);
+        const caDoc = await transaction.get(caRef);
+        if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') {
+          throw Object.assign(new Error('Invalid or unauthorized cash advance'), { status: 400 });
+        }
+        const balance = parseFloat(caDoc.data().balance_remaining) || 0;
+        caCoveredAmount = Math.max(0, Math.min(total, balance));
+        reimbursableAmount = Math.max(0, total - caCoveredAmount);
+      } else if (liqStatus === 'submitted' && noCaClassification === 'reimbursement') {
+        reimbursableAmount = total;
+      }
+      const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
+      transaction.update(ref, {
+        form_no: form_no || null, date_of_submission: date_of_submission || null,
+        employee_name: employee_name || null, employee_number: employee_number || null,
+        rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total,
+        ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId,
+        status: liqStatus, reimbursement_status: reimbursementStatus,
+        founder_funding_entry_id: founderFundingRef ? founderFundingRef.id : null,
+        founder_payment_treatment: founderFundingRef ? noCaClassification : null,
+        updated_at: now,
+      });
+      if (formNumberRef) transaction.set(formNumberRef, { liquidationId: id, reservedAt: nowIso, reservedBy: user.id });
+      for (const expense of expenseDocs) transaction.set(db.collection('project_expenses').doc(expense.id), {
+        ...expense.data, ...(caId ? { sourceCaId: caId } : {}),
+      });
+      if (caRef) transaction.update(caRef, { balance_remaining: FieldValue.increment(-total), updated_at: now });
+      if (liqStatus === 'submitted' && reimbursableAmount > 0) {
+        transaction.set(db.collection('reimbursements').doc(id), {
+          liquidationId: id, formNo: form_no || null, employeeId: existing.user_id,
+          employeeName: employee_name || user.full_name || user.username || null,
+          origin: caId ? 'ca_excess' : 'no_ca', amount: reimbursableAmount, caId: caId || null,
+          status: 'pending', fundingSource: null, paidAt: null, paidBy: null,
+          syncedInvestmentId: null, createdAt: now, updatedAt: now,
+        });
+      }
+      if (founderFundingRef) {
+        transaction.set(founderFundingRef, buildLedgerEntry({
+          entryType: noCaClassification, founderId: user.id,
+          founderName: user.full_name || user.username || user.id,
+          transactionDate: date_of_submission || nowIso.slice(0, 10), amount: total,
+          description: `Founder-paid liquidation ${form_no || id}`,
+          source: { kind: 'liquidation', liquidationId: id, liquidationFormNo: form_no || undefined },
+          resolutionReference: capitalizationReference, approvedAt: nowIso, approvedBy: user.id,
+          userId: user.id, now: nowIso,
+        }));
+      }
+    });
+    res.json({
+      success: true, id, founderFundingEntryId: founderFundingRef ? founderFundingRef.id : null,
+      projectExpenseCount: expenseDocs.length,
+      message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated',
+    });
   } catch (err) {
     console.error('Error updating liquidation:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'Database error' });
   }
 });
 
@@ -1642,6 +1937,7 @@ app.patch('/api/liquidations/:id', async (req, res) => {
     if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
     const liq = doc.data();
     if (liq.status !== 'submitted' || liq.ca_id) return res.status(400).json({ success: false, error: 'Reimbursement status only applies to submitted liquidations without a CA' });
+    if (liq.founder_funding_entry_id) return res.status(409).json({ success: false, error: 'Founder-funded liquidations settle through the Founder Funding Ledger, not reimbursement status' });
     const now = Math.floor(Date.now() / 1000);
     await ref.update({
       reimbursement_status,
@@ -1649,6 +1945,17 @@ app.patch('/api/liquidations/:id', async (req, res) => {
       reimbursed_by: reimbursement_status === 'reimbursed' ? user.id : null,
       updated_at: now,
     });
+    // Keep the first-class reimbursements doc (source of truth for GET /api/reimbursements)
+    // in sync with this legacy toggle — reimbursement docs are keyed by liquidation id.
+    const reimbursementRef = db.collection('reimbursements').doc(req.params.id);
+    const reimbursementSnap = await reimbursementRef.get();
+    if (reimbursementSnap.exists) {
+      if (reimbursement_status === 'reimbursed') {
+        await reimbursementRef.update({ status: 'paid', paidAt: now, paidBy: user.id, updatedAt: now });
+      } else if (reimbursementSnap.data().status === 'paid') {
+        await reimbursementRef.update({ status: 'pending', paidAt: null, paidBy: null, fundingSource: null, updatedAt: now });
+      }
+    }
     res.json({ success: true, message: reimbursement_status === 'reimbursed' ? 'Marked as reimbursed' : 'Reverted to pending reimbursement' });
   } catch (err) {
     console.error('Error updating liquidation reimbursement status:', err);
@@ -1656,22 +1963,23 @@ app.patch('/api/liquidations/:id', async (req, res) => {
   }
 });
 
-// Admin-only: list liquidations pending reimbursement (submitted, no CA).
+// Admin-only: list pending reimbursement claims (out-of-pocket liquidation rows,
+// and the slice of any liquidation that exceeded its CA's balance).
 app.get('/api/reimbursements', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
   try {
-    const snap = await db.collection('liquidations').where('reimbursement_status', '==', 'pending').get();
+    const snap = await db.collection('reimbursements').where('status', '==', 'pending').get();
     const rows = await Promise.all(snap.docs.map(async doc => {
-      const liq = { id: doc.id, ...doc.data() };
-      if (liq.user_id) {
-        const uDoc = await db.collection('users').doc(liq.user_id).get();
-        if (uDoc.exists) { liq.username = uDoc.data().username; liq.full_name = uDoc.data().full_name; }
+      const r = { id: doc.id, ...doc.data() };
+      if (r.employeeId) {
+        const uDoc = await db.collection('users').doc(r.employeeId).get();
+        if (uDoc.exists) { r.username = uDoc.data().username; r.full_name = uDoc.data().full_name; }
       }
-      return liq;
+      return r;
     }));
-    rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     res.json({ success: true, reimbursements: rows });
   } catch (err) {
     console.error('Error fetching reimbursements:', err);
@@ -1679,7 +1987,46 @@ app.get('/api/reimbursements', async (req, res) => {
   }
 });
 
-// Admin-only: batch-mark pending (no-CA submitted) liquidations as reimbursed.
+// Admin-only: mark a single pending reimbursement as paid, optionally recording an
+// out-of-pocket funding source so it syncs into the Investment Tracker.
+app.post('/api/reimbursements/:id/pay', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  try {
+    const ref = db.collection('reimbursements').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Reimbursement not found' });
+    const reimbursement = doc.data();
+    if (reimbursement.status !== 'pending') return res.status(400).json({ success: false, error: 'Reimbursement is not pending' });
+    const fs = normalizeFundingSource(req.body.fundingSource);
+    const now = Math.floor(Date.now() / 1000);
+    await ref.update({ status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, updatedAt: now });
+    await db.collection('liquidations').doc(reimbursement.liquidationId).update({ reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
+    // Paying a ca_excess reimbursement is the company actually handing the employee
+    // the amount their over-liquidation put the CA into the negative for — restore
+    // that CA's balance_remaining toward zero by the same amount.
+    if (reimbursement.origin === 'ca_excess' && reimbursement.caId) {
+      await db.collection('cash_advances').doc(reimbursement.caId).update({ balance_remaining: FieldValue.increment(reimbursement.amount), updated_at: now });
+    }
+    // Re-read after our own write, same defensive pattern as the CA /funding endpoint,
+    // so the sync sees the just-written fundingSource rather than a stale pre-write copy.
+    const fresh = (await ref.get()).data();
+    const syncOk = await syncExpenseFundingInvestment(id, 'reimbursements', {
+      date: new Date(now * 1000).toISOString().slice(0, 10),
+      amount: fresh.amount,
+      fundingSource: fresh.fundingSource,
+      description: `Reimbursement ${fresh.formNo || id}: ${fresh.employeeName || ''}`.trim(),
+    });
+    res.json({ success: true, message: 'Reimbursement marked paid', syncWarning: !syncOk });
+  } catch (err) {
+    console.error('Error paying reimbursement:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: batch-mark pending reimbursements as paid, optionally from a shared funding source.
 app.post('/api/reimbursements/batch-mark', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -1690,22 +2037,36 @@ app.post('/api/reimbursements/batch-mark', async (req, res) => {
   if (ids.length > 500) return res.status(400).json({ success: false, error: 'Maximum 500 ids per request' });
   try {
     const now = Math.floor(Date.now() / 1000);
+    const fs = normalizeFundingSource(req.body.fundingSource);
     const batch = db.batch();
     const skipped = [];
-    let updated = 0;
+    const toSync = [];
     for (const id of ids) {
-      const ref = db.collection('liquidations').doc(id);
+      const ref = db.collection('reimbursements').doc(id);
       const doc = await ref.get();
       if (!doc.exists) { skipped.push({ id, reason: 'not found' }); continue; }
-      const liq = doc.data();
-      if (liq.status !== 'submitted' || liq.ca_id || liq.reimbursement_status !== 'pending') {
-        skipped.push({ id, reason: 'not a pending no-CA submitted liquidation' });
-        continue;
+      const r = doc.data();
+      if (r.status !== 'pending') { skipped.push({ id, reason: 'not pending' }); continue; }
+      batch.update(ref, { status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, updatedAt: now });
+      if (r.liquidationId) {
+        batch.update(db.collection('liquidations').doc(r.liquidationId), { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
       }
-      batch.update(ref, { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id, updated_at: now });
-      updated++;
+      // Same CA-balance restoration as the single-pay endpoint, batched.
+      if (r.origin === 'ca_excess' && r.caId) {
+        batch.update(db.collection('cash_advances').doc(r.caId), { balance_remaining: FieldValue.increment(r.amount), updated_at: now });
+      }
+      toSync.push({ id, amount: r.amount, formNo: r.formNo, employeeName: r.employeeName });
     }
-    if (updated > 0) await batch.commit();
+    if (toSync.length > 0) await batch.commit();
+    for (const r of toSync) {
+      await syncExpenseFundingInvestment(r.id, 'reimbursements', {
+        date: new Date(now * 1000).toISOString().slice(0, 10),
+        amount: r.amount,
+        fundingSource: fs,
+        description: `Reimbursement ${r.formNo || r.id}: ${r.employeeName || ''}`.trim(),
+      });
+    }
+    const updated = toSync.length;
     res.json({ success: true, updated, skipped, message: `Marked ${updated} as reimbursed` });
   } catch (err) {
     console.error('Error batch-marking reimbursements:', err);
@@ -1724,16 +2085,332 @@ app.delete('/api/liquidations/:id', async (req, res) => {
     if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
     const liq = doc.data();
     if (!isAdmin && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
+    if (liq.founder_funding_entry_id) {
+      return res.status(409).json({
+        success: false,
+        error: 'Founder-funded liquidations are retained for audit. Void or settle the linked ledger entry instead.',
+      });
+    }
     const total = parseFloat(liq.total_amount) || 0;
     const caId = liq.ca_id || null;
     const now = Math.floor(Date.now() / 1000);
-    if (liq.status === 'submitted' && caId && total > 0) {
-      await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(total), updated_at: now });
+    const reimbursementRef = db.collection('reimbursements').doc(id);
+    const reimbursementSnap = await reimbursementRef.get();
+    const reimbursement = reimbursementSnap.exists ? reimbursementSnap.data() : null;
+    if (liq.status === 'submitted' && caId) {
+      // The CA's balance_remaining was decremented by the FULL total at submission.
+      // If the reimbursable portion was already paid out, that amount was already
+      // restored to the CA balance at payment time (see POST /api/reimbursements/:id/pay)
+      // — refund only the remaining CA-covered portion here to avoid double-crediting.
+      const alreadyRestored = reimbursement && reimbursement.status === 'paid' ? (parseFloat(reimbursement.amount) || 0) : 0;
+      const refundAmount = total - alreadyRestored;
+      if (refundAmount > 0) {
+        await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(refundAmount), updated_at: now });
+      }
+    }
+    // Drop any still-pending reimbursement claim this liquidation spawned — an
+    // already-paid one stays as the payment record even though its source liquidation
+    // is gone, same reasoning as applyLiquidationRevision's paid-amount guard.
+    if (reimbursement && reimbursement.status === 'pending') {
+      await reimbursementRef.delete();
     }
     await ref.delete();
+    if (/^LQ-\d+$/.test(String(liq.form_no || ''))) {
+      const formRef = db.collection('liquidation_form_numbers').doc(liq.form_no);
+      const formSnap = await formRef.get();
+      if (formSnap.exists && formSnap.data().liquidationId === id) await formRef.delete();
+    }
     res.json({ success: true, message: 'Liquidation deleted' });
   } catch (err) {
     console.error('Error deleting liquidation:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// ── Submitted-liquidation edit workflow ──────────────────────────────────────
+// Submitted liquidations stay closed to direct PUTs, but the filing owner (or
+// an admin) can propose an edit that a superadmin approves; a superadmin's own
+// edit applies immediately. Applying a revision reconciles the side effects of
+// the original submission — the linked CA balance delta and the
+// project_expenses rows synced from this liquidation — and snapshots the
+// before/after state to liquidation_revision_audit.
+
+function parseLiqRows(rowsJson) {
+  if (Array.isArray(rowsJson)) return rowsJson;
+  if (typeof rowsJson !== 'string') return [];
+  try { const p = JSON.parse(rowsJson || '[]'); return Array.isArray(p) ? p : []; } catch { return []; }
+}
+
+async function applyLiquidationRevision(liqId, liq, revision, approver) {
+  if (liq.founder_funding_entry_id) {
+    throw Object.assign(new Error('Founder-funded liquidations are immutable. Record a separate correction so the original expense and funding audit remain intact.'), { status: 400 });
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const oldRows = parseLiqRows(liq.rows_json);
+  const newRows = parseLiqRows(revision.rows_json);
+  const oldTotal = parseFloat(liq.total_amount) || 0;
+  const newTotal = parseFloat(revision.total_amount) || 0;
+  validateLiquidationRows(newRows);
+  const revisedTotalCentavos = phpToCentavos(revision.total_amount);
+  if (sumLiquidationRowsCentavos(newRows) !== revisedTotalCentavos) {
+    throw Object.assign(new Error('Liquidation total must equal the exact sum of its rows'), { status: 400 });
+  }
+  if (liq.founder_funding_entry_id && phpToCentavos(newTotal) !== phpToCentavos(oldTotal)) {
+    throw Object.assign(new Error('A founder-funded liquidation amount cannot be revised in place. Retain the original audit record and record a separate correction.'), { status: 400 });
+  }
+
+  // CA reconciliation: only the delta moves on balance_remaining (raw, uncapped —
+  // same as POST/PUT above, a negative balance is the "company owes this employee"
+  // signal, not an error). ca_covered_amount/reimbursable_amount are recomputed as
+  // an informational split against what the CA's balance was before THIS
+  // liquidation's own prior effect (i.e. undoing oldTotal), so the split reflects
+  // the revision as if it were a fresh submission against that same starting point.
+  let newCaCoveredAmount = 0;
+  let newReimbursableAmount = newTotal;
+  let caRef = null;
+  let caDelta = 0;
+  if (liq.ca_id) {
+    caRef = db.collection('cash_advances').doc(String(liq.ca_id));
+    const caDoc = await caRef.get();
+    if (caDoc.exists) {
+      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
+      const balBeforeThisLiquidation = bal + oldTotal;
+      newCaCoveredAmount = Math.min(newTotal, Math.max(0, balBeforeThisLiquidation));
+      newReimbursableAmount = Math.max(0, newTotal - balBeforeThisLiquidation);
+      caDelta = newTotal - oldTotal;
+    } else {
+      caRef = null; // nothing to write balance_remaining onto
+    }
+  }
+
+  // A revision may not silently change an amount that's already been paid out —
+  // reject it and let the payment discrepancy be resolved by hand first.
+  const reimbursementRef = db.collection('reimbursements').doc(liqId);
+  const reimbursementSnap = await reimbursementRef.get();
+  const existingReimbursement = reimbursementSnap.exists ? reimbursementSnap.data() : null;
+  if (existingReimbursement && existingReimbursement.status === 'paid' && (parseFloat(existingReimbursement.amount) || 0) !== newReimbursableAmount) {
+    throw Object.assign(new Error('This revision would change an already-paid reimbursement amount — resolve the payment discrepancy manually before revising.'), { status: 400 });
+  }
+
+  if (caRef && caDelta !== 0) {
+    await caRef.update({ balance_remaining: FieldValue.increment(-caDelta), updated_at: now });
+  }
+
+  // project_expenses re-sync: update/delete docs previously synced from this
+  // liquidation, and create docs only for rows that are new in the revision.
+  // Rows that were never synced (older filings predate the client-side sync)
+  // stay unsynced so applying a fix doesn't retroactively inject historical
+  // costs into the P&L.
+  const liqDescription = (row) => liq.form_no
+    ? `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`
+    : ((row.particulars || '').trim() || 'Liquidation');
+  const expSnap = await db.collection('project_expenses').where('sourceLiquidationId', '==', liqId).get();
+  const expByRowId = new Map();
+  expSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) expByRowId.set(rid, d); });
+  const oldRowIds = new Set(oldRows.map(r => r.id));
+  const newById = new Map(newRows.map(r => [r.id, r]));
+  const batch = db.batch();
+  for (const [rowId, expDoc] of expByRowId) {
+    const row = newById.get(rowId);
+    if (!row || !row.projectId || !(Number(row.amount) > 0)) { batch.delete(expDoc.ref); continue; }
+    batch.update(expDoc.ref, {
+      projectId: String(row.projectId),
+      projectName: (row.projectName || '').trim() || '—',
+      description: liqDescription(row),
+      amount: Number(row.amount) || 0,
+      date: row.date || expDoc.data().date || null,
+      category: (row.category || '').trim() || 'Others',
+    });
+  }
+  for (const row of newRows) {
+    if (oldRowIds.has(row.id) || expByRowId.has(row.id)) continue;
+    if (!row.projectId || !(Number(row.amount) > 0)) continue;
+    const [expense] = buildLiquidationExpenseDocs({
+      liquidationId: liqId,
+      formNo: liq.form_no,
+      userId: revision.proposed_by || approver.id,
+      createdAt: new Date().toISOString(),
+      rows: [row],
+    });
+    const expenseDoc = { ...expense.data };
+    if (liq.ca_id) expenseDoc.sourceCaId = String(liq.ca_id);
+    if (typeof row.deductible === 'boolean') expenseDoc.deductible = row.deductible;
+    batch.set(db.collection('project_expenses').doc(expense.id), expenseDoc);
+  }
+  await batch.commit();
+
+  // Reconcile the reimbursements doc to the re-split amount. Skip touching a
+  // doc that's already 'paid' — the throw-guard above already proved its
+  // amount is unchanged, so re-setting it back to 'pending' would silently
+  // reverse a real payment.
+  if (newReimbursableAmount > 0) {
+    if (!existingReimbursement || existingReimbursement.status !== 'paid') {
+      const reimbursementUpdate = {
+        liquidationId: liqId,
+        formNo: liq.form_no || null,
+        employeeId: liq.user_id,
+        employeeName: (revision.employee_name ?? liq.employee_name) || null,
+        origin: liq.ca_id ? 'ca_excess' : 'no_ca',
+        amount: newReimbursableAmount,
+        caId: liq.ca_id || null,
+        status: 'pending',
+        fundingSource: null,
+        paidAt: null,
+        paidBy: null,
+        syncedInvestmentId: null,
+        updatedAt: now,
+      };
+      if (!existingReimbursement) reimbursementUpdate.createdAt = now;
+      await reimbursementRef.set(reimbursementUpdate, { merge: true });
+    }
+  } else if (existingReimbursement && existingReimbursement.status === 'pending') {
+    await reimbursementRef.delete();
+  }
+
+  await db.collection('liquidation_revision_audit').add({
+    liquidation_id: liqId,
+    form_no: liq.form_no || null,
+    action: 'applied',
+    before: { rows_json: liq.rows_json, total_amount: oldTotal, employee_name: liq.employee_name || null, date_of_submission: liq.date_of_submission || null },
+    after: { rows_json: JSON.stringify(newRows), total_amount: newTotal, employee_name: revision.employee_name ?? liq.employee_name ?? null, date_of_submission: revision.date_of_submission ?? liq.date_of_submission ?? null },
+    proposed_by: revision.proposed_by || approver.id,
+    proposed_by_name: revision.proposed_by_name || null,
+    approved_by: approver.id,
+    note: revision.note || null,
+    created_at: now,
+  });
+
+  const finalReimbursementStatus = newReimbursableAmount > 0
+    ? ((existingReimbursement && existingReimbursement.status === 'paid') ? 'reimbursed' : 'pending')
+    : null;
+  const update = {
+    rows_json: JSON.stringify(newRows),
+    total_amount: newTotal,
+    ca_covered_amount: newCaCoveredAmount,
+    reimbursable_amount: newReimbursableAmount,
+    reimbursement_status: finalReimbursementStatus,
+    updated_at: now,
+    pending_revision: FieldValue.delete(),
+  };
+  if (revision.employee_name != null) update.employee_name = revision.employee_name;
+  if (revision.date_of_submission != null) update.date_of_submission = revision.date_of_submission;
+  if (revision.receipts_json != null) update.receipts_json = revision.receipts_json;
+  await db.collection('liquidations').doc(liqId).update(update);
+}
+
+// Owner or admin proposes an edit to a submitted liquidation; superadmin's own
+// proposal applies immediately (no self-approval round-trip).
+app.post('/api/liquidations/:id/propose-edit', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role === 'viewer') return res.status(403).json({ success: false, error: 'Forbidden' });
+  const { id } = req.params;
+  try {
+    const ref = db.collection('liquidations').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+    if (!isAdmin && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
+    if (liq.status !== 'submitted') return res.status(400).json({ success: false, error: 'Only submitted liquidations use the edit-approval flow — edit the draft directly' });
+    if (liq.founder_funding_entry_id) return res.status(409).json({ success: false, error: 'Founder-funded liquidations are immutable. Record a separate correction instead.' });
+    const { rows_json, receipts_json, total_amount, employee_name, date_of_submission, note } = req.body;
+    const rows = parseLiqRows(rows_json);
+    if (rows.length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
+    let total;
+    try {
+      validateLiquidationRows(rows);
+      const totalCentavos = phpToCentavos(total_amount);
+      if (sumLiquidationRowsCentavos(rows) !== totalCentavos) {
+        return res.status(400).json({ success: false, error: 'Liquidation total must equal the exact sum of its rows' });
+      }
+      total = totalCentavos / 100;
+    } catch (validationError) {
+      return res.status(400).json({ success: false, error: validationError.message || 'Invalid liquidation revision' });
+    }
+    // Early CA check for fast feedback; approval re-validates against the live balance.
+    if (liq.ca_id) {
+      const caDoc = await db.collection('cash_advances').doc(String(liq.ca_id)).get();
+      if (caDoc.exists) {
+        const available = (parseFloat(caDoc.data().balance_remaining) || 0) + (parseFloat(liq.total_amount) || 0);
+        if (total > available) return res.status(400).json({ success: false, error: `Revised total (₱${total.toFixed(2)}) exceeds the CA's available balance (₱${available.toFixed(2)})` });
+      }
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const revision = {
+      rows_json: JSON.stringify(rows),
+      receipts_json: receipts_json != null ? (typeof receipts_json === 'string' ? receipts_json : JSON.stringify(receipts_json)) : null,
+      total_amount: total,
+      employee_name: employee_name ?? null,
+      date_of_submission: date_of_submission ?? null,
+      note: (note || '').trim() || null,
+      proposed_by: user.id,
+      proposed_by_name: user.full_name || user.username || null,
+      proposed_at: now,
+    };
+    if (user.role === 'superadmin') {
+      await applyLiquidationRevision(id, liq, revision, user);
+      return res.json({ success: true, applied: true, message: 'Edit applied' });
+    }
+    if (liq.pending_revision && liq.pending_revision.proposed_by !== user.id) {
+      return res.status(409).json({ success: false, error: `An edit by ${liq.pending_revision.proposed_by_name || 'another user'} is already pending approval` });
+    }
+    await ref.update({ pending_revision: revision, updated_at: now });
+    res.json({ success: true, applied: false, message: 'Edit submitted for superadmin approval' });
+  } catch (err) {
+    if (err && err.status === 400) return res.status(400).json({ success: false, error: err.message });
+    console.error('Error proposing liquidation edit:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/liquidations/:id/revision/approve', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { id } = req.params;
+  try {
+    const doc = await db.collection('liquidations').doc(id).get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    if (!liq.pending_revision) return res.status(400).json({ success: false, error: 'No pending edit on this liquidation' });
+    await applyLiquidationRevision(id, liq, liq.pending_revision, user);
+    res.json({ success: true, message: 'Edit approved and applied' });
+  } catch (err) {
+    if (err && err.status === 400) return res.status(400).json({ success: false, error: err.message });
+    console.error('Error approving liquidation revision:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.post('/api/liquidations/:id/revision/reject', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { id } = req.params;
+  const { reason } = req.body || {};
+  try {
+    const ref = db.collection('liquidations').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = doc.data();
+    if (!liq.pending_revision) return res.status(400).json({ success: false, error: 'No pending edit on this liquidation' });
+    const now = Math.floor(Date.now() / 1000);
+    await db.collection('liquidation_revision_audit').add({
+      liquidation_id: id,
+      form_no: liq.form_no || null,
+      action: 'rejected',
+      proposed_revision: liq.pending_revision,
+      proposed_by: liq.pending_revision.proposed_by || null,
+      proposed_by_name: liq.pending_revision.proposed_by_name || null,
+      rejected_by: user.id,
+      reason: (reason || '').trim() || null,
+      created_at: now,
+    });
+    await ref.update({ pending_revision: FieldValue.delete(), updated_at: now });
+    res.json({ success: true, message: 'Edit rejected' });
+  } catch (err) {
+    console.error('Error rejecting liquidation revision:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
@@ -1908,7 +2585,294 @@ app.delete('/api/supplier-products/:id', async (req, res) => {
   }
 });
 
-// ========== INVESTMENT TRACKER ==========
+// ========== FOUNDER FUNDING LEDGER ==========
+// Funding entries explain how IOCT was financed. They never create expenses;
+// liquidation_sync rows remain the sole project-expense source of truth.
+const FOUNDER_FUNDING_SETTINGS_REF = () => db.collection('company_settings').doc('founder_funding');
+
+async function requireFounderFundingAdmin(req, res) {
+  const user = await getCurrentUser(req);
+  if (!user) { res.status(401).json({ success: false, error: 'Unauthorized' }); return null; }
+  if (user.scannerScope) { res.status(403).json({ success: false, error: 'Scanner sessions cannot access financial administration' }); return null; }
+  if (user.role !== 'superadmin') { res.status(403).json({ success: false, error: 'Superadmin only' }); return null; }
+  return user;
+}
+
+async function getFounderFundingSettings() {
+  const snap = await FOUNDER_FUNDING_SETTINGS_REF().get();
+  const data = snap.exists ? snap.data() : {};
+  return {
+    founderUserIds: Array.isArray(data.founderUserIds)
+      ? [...new Set(data.founderUserIds.filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))]
+      : [],
+    capitalTargetCentavos: Number.isSafeInteger(data.capitalTargetCentavos) && data.capitalTargetCentavos >= 0
+      ? data.capitalTargetCentavos : 0,
+  };
+}
+
+async function getFounderProfile(founderId, founderUserIds) {
+  if (!isRecognizedFounder(founderId, founderUserIds)) throw Object.assign(new Error('User is not a configured founder'), { status: 400 });
+  const snap = await db.collection('users').doc(founderId).get();
+  if (!snap.exists) throw Object.assign(new Error('Founder user not found'), { status: 400 });
+  const data = snap.data();
+  return { id: snap.id, name: data.full_name || data.username || snap.id };
+}
+
+function founderMutationDocumentId(prefix, userId, idempotencyKey) {
+  if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey)) {
+    throw Object.assign(new Error('A valid idempotencyKey is required'), { status: 400 });
+  }
+  const digest = crypto.createHash('sha256').update(`${prefix}:${userId}:${idempotencyKey}`).digest('hex').slice(0, 40);
+  return `${prefix}_${digest}`;
+}
+
+async function listFounderFundingEntries() {
+  const snap = await db.collection('founder_funding_ledger').get();
+  return snap.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .sort((a, b) => `${b.transactionDate || ''}:${b.createdAt || ''}`.localeCompare(`${a.transactionDate || ''}:${a.createdAt || ''}`));
+}
+
+async function loadFounderReconciliationCandidates() {
+  const [investmentSnap, liquidationSnap, expenseSnap] = await Promise.all([
+    db.collection('investments').get(),
+    db.collection('liquidations').get(),
+    db.collection('project_expenses').get(),
+  ]);
+  const investments = investmentSnap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+  const liquidations = liquidationSnap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+  const projectExpenses = expenseSnap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+  const candidates = findReconciliationCandidates({ investments, liquidations, projectExpenses });
+  return candidates.map((candidate, index) => presentReconciliationCandidate(candidate, {
+    investments,
+    liquidations,
+    index,
+  }));
+}
+
+app.get('/api/founder-funding-settings', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    const settings = await getFounderFundingSettings();
+    const founders = await Promise.all(settings.founderUserIds.map(async id => {
+      const snap = await db.collection('users').doc(id).get();
+      return snap.exists ? { id, username: snap.data().username, fullName: snap.data().full_name || null } : { id };
+    }));
+    res.json({ success: true, settings: { ...settings, founders } });
+  } catch (err) {
+    console.error('Error fetching founder funding settings:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.put('/api/founder-funding-settings', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    const ids = Array.isArray(req.body.founderUserIds)
+      ? [...new Set(req.body.founderUserIds.filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))]
+      : null;
+    if (!ids || ids.length === 0) return res.status(400).json({ success: false, error: 'At least one founder user id is required' });
+    if (ids.length > 10) return res.status(400).json({ success: false, error: 'A maximum of 10 founders may be configured' });
+    const users = await Promise.all(ids.map(id => db.collection('users').doc(id).get()));
+    if (users.some(snap => !snap.exists || snap.data().role !== 'superadmin' || !(snap.data().approved === 1 || snap.data().approved === true))) {
+      return res.status(400).json({ success: false, error: 'Every founder must be an approved superadmin user' });
+    }
+    let capitalTargetCentavos = 0;
+    if (req.body.capitalTarget != null && req.body.capitalTarget !== '') capitalTargetCentavos = phpToCentavos(req.body.capitalTarget);
+    const now = new Date().toISOString();
+    await FOUNDER_FUNDING_SETTINGS_REF().set({ founderUserIds: ids, capitalTargetCentavos, updatedAt: now, updatedBy: user.id }, { merge: true });
+    res.json({ success: true, settings: { founderUserIds: ids, capitalTargetCentavos } });
+  } catch (err) {
+    console.error('Error updating founder funding settings:', err);
+    res.status(err.status || 400).json({ success: false, error: err.status ? err.message : 'Invalid founder funding settings' });
+  }
+});
+
+app.get('/api/founder-funding-ledger', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    const entries = await listFounderFundingEntries();
+    const filtered = entries.filter(entry =>
+      (!req.query.founderId || entry.founderId === req.query.founderId) &&
+      (!req.query.entryType || entry.entryType === req.query.entryType) &&
+      (!req.query.status || entry.status === req.query.status));
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date()).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+    const periodStart = `${parts.year}-${parts.month}-01`;
+    const lastDay = new Date(Date.UTC(Number(parts.year), Number(parts.month), 0)).getUTCDate();
+    const periodEnd = `${parts.year}-${parts.month}-${String(lastDay).padStart(2, '0')}`;
+    const summary = summarizeFounderLedger(entries, { periodStart, periodEnd });
+    const reconciliation = await loadFounderReconciliationCandidates();
+    res.json({ success: true, entries: filtered, summary: { ...summary, needsReviewCount: reconciliation.length } });
+  } catch (err) {
+    console.error('Error fetching founder funding ledger:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.get('/api/founder-funding-ledger/reconciliation', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    res.json({ success: true, candidates: await loadFounderReconciliationCandidates(), readOnly: true });
+  } catch (err) {
+    console.error('Error generating founder reconciliation candidates:', err);
+    res.status(500).json({ success: false, error: 'Could not generate reconciliation candidates' });
+  }
+});
+
+app.post('/api/founder-funding-ledger/deposits', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    const settings = await getFounderFundingSettings();
+    const founder = await getFounderProfile(String(req.body.founderId || ''), settings.founderUserIds);
+    const entryType = req.body.entryType === 'capital_contribution' ? 'capital_contribution' : 'founder_advance';
+    if (entryType === 'capital_contribution') validateCapitalization({ resolutionReference: req.body.resolutionReference });
+    const now = new Date().toISOString();
+    const entry = buildLedgerEntry({
+      entryType, founderId: founder.id, founderName: founder.name,
+      transactionDate: req.body.transactionDate, amount: req.body.amount,
+      description: req.body.description || 'Founder cash deposit',
+      source: { kind: 'cash_deposit', depositReference: req.body.depositReference || undefined },
+      proofRefs: req.body.proofRefs, resolutionReference: req.body.resolutionReference,
+      userId: user.id, now,
+    });
+    const ref = db.collection('founder_funding_ledger').doc(
+      founderMutationDocumentId('deposit', user.id, req.body.idempotencyKey),
+    );
+    let persistedEntry;
+    let created = false;
+    await db.runTransaction(async transaction => {
+      const existing = await transaction.get(ref);
+      if (existing.exists) {
+        persistedEntry = existing.data();
+        return;
+      }
+      transaction.create(ref, entry);
+      persistedEntry = entry;
+      created = true;
+    });
+    res.status(created ? 201 : 200).json({ success: true, entry: { id: ref.id, ...persistedEntry }, idempotentReplay: !created });
+  } catch (err) {
+    console.error('Error creating founder deposit:', err);
+    res.status(err.status || 400).json({ success: false, error: err.message || 'Invalid founder deposit' });
+  }
+});
+
+async function createFounderSettlement(req, res, entryType) {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    const amountCentavos = phpToCentavos(req.body.amount);
+    if (entryType === 'capitalization') validateCapitalization({ resolutionReference: req.body.resolutionReference });
+    const now = new Date().toISOString();
+    const advanceRef = db.collection('founder_funding_ledger').doc(req.params.id);
+    const settlementRef = db.collection('founder_funding_ledger').doc(
+      founderMutationDocumentId(entryType, user.id, req.body.idempotencyKey),
+    );
+    let settlement;
+    let remaining;
+    let created = false;
+    await db.runTransaction(async transaction => {
+      const advanceSnap = await transaction.get(advanceRef);
+      const existingSettlement = await transaction.get(settlementRef);
+      if (!advanceSnap.exists) throw Object.assign(new Error('Founder advance not found'), { status: 404 });
+      const entry = { id: advanceSnap.id, ...advanceSnap.data() };
+      if (entry.status !== 'posted' || !['founder_advance', 'opening_balance_adjustment'].includes(entry.entryType)) {
+        throw Object.assign(new Error('Entry is not an active founder advance'), { status: 400 });
+      }
+      if (existingSettlement.exists) {
+        settlement = existingSettlement.data();
+        if (settlement.settlesEntryId !== entry.id || settlement.entryType !== entryType) {
+          throw Object.assign(new Error('Idempotency key was already used for a different settlement'), { status: 409 });
+        }
+        const priorSettled = Number.isSafeInteger(entry.settledCentavos) ? entry.settledCentavos : 0;
+        remaining = entry.amountCentavos - priorSettled;
+        return;
+      }
+      const settlementQuery = db.collection('founder_funding_ledger').where('settlesEntryId', '==', entry.id);
+      const settlementSnap = await transaction.get(settlementQuery);
+      const postedSettlementAmounts = settlementSnap.docs
+        .map(doc => doc.data()).filter(item => item.status === 'posted').map(item => item.amountCentavos);
+      const outstandingCentavos = remainingCentavos(entry.amountCentavos, postedSettlementAmounts);
+      validateSettlement({ outstandingCentavos, amountCentavos });
+      settlement = buildLedgerEntry({
+        entryType, founderId: entry.founderId, founderName: entry.founderName,
+        transactionDate: req.body.transactionDate, amountCentavos,
+        description: req.body.description || (entryType === 'repayment' ? `Repayment of ${entry.description}` : `Capitalization of ${entry.description}`),
+        source: entry.source, settlesEntryId: entry.id, proofRefs: req.body.proofRefs,
+        resolutionReference: req.body.resolutionReference,
+        approvedAt: now, approvedBy: user.id, userId: user.id, now,
+      });
+      remaining = outstandingCentavos - amountCentavos;
+      const settledCentavos = entry.amountCentavos - outstandingCentavos + amountCentavos;
+      transaction.update(advanceRef, { settledCentavos, updatedAt: now, updatedBy: user.id });
+      transaction.create(settlementRef, settlement);
+      created = true;
+    });
+    res.status(created ? 201 : 200).json({ success: true, entry: { id: settlementRef.id, ...settlement }, remainingCentavos: remaining, idempotentReplay: !created });
+  } catch (err) {
+    console.error(`Error creating founder ${entryType}:`, err);
+    res.status(err.status || 400).json({ success: false, error: err.message || 'Invalid founder settlement' });
+  }
+}
+
+app.post('/api/founder-funding-ledger/:id/repay', (req, res) => createFounderSettlement(req, res, 'repayment'));
+app.post('/api/founder-funding-ledger/:id/capitalize', (req, res) => createFounderSettlement(req, res, 'capitalization'));
+
+app.post('/api/founder-funding-ledger/:id/void', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+  if (!reason) return res.status(400).json({ success: false, error: 'Void reason is required' });
+  if (reason.length > 1000) return res.status(400).json({ success: false, error: 'Void reason must be at most 1000 characters' });
+  try {
+    const ref = db.collection('founder_funding_ledger').doc(req.params.id);
+    const now = new Date().toISOString();
+    await db.runTransaction(async transaction => {
+      const snap = await transaction.get(ref);
+      if (!snap.exists) throw Object.assign(new Error('Founder funding entry not found'), { status: 404 });
+      const entry = snap.data();
+      if (entry.status !== 'posted') throw Object.assign(new Error('Entry is already voided'), { status: 400 });
+      if (['founder_advance', 'opening_balance_adjustment'].includes(entry.entryType)) {
+        const query = db.collection('founder_funding_ledger').where('settlesEntryId', '==', snap.id);
+        const settlements = await transaction.get(query);
+        if (settlements.docs.some(doc => doc.data().status === 'posted')) {
+          throw Object.assign(new Error('Void posted settlements before voiding this advance'), { status: 409 });
+        }
+      } else if (['repayment', 'capitalization'].includes(entry.entryType)) {
+        const sourceRef = db.collection('founder_funding_ledger').doc(entry.settlesEntryId);
+        const sourceSnap = await transaction.get(sourceRef);
+        if (!sourceSnap.exists || sourceSnap.data().status !== 'posted') {
+          throw Object.assign(new Error('Source advance is unavailable'), { status: 409 });
+        }
+        const settlementQuery = db.collection('founder_funding_ledger').where('settlesEntryId', '==', entry.settlesEntryId);
+        const settlements = await transaction.get(settlementQuery);
+        const remainingPosted = settlements.docs
+          .filter(doc => doc.id !== snap.id && doc.data().status === 'posted')
+          .map(doc => doc.data().amountCentavos);
+        const remainingBalance = remainingCentavos(sourceSnap.data().amountCentavos, remainingPosted);
+        transaction.update(sourceRef, {
+          settledCentavos: sourceSnap.data().amountCentavos - remainingBalance,
+          updatedAt: now,
+          updatedBy: user.id,
+        });
+      }
+      transaction.update(ref, { status: 'voided', voidedAt: now, voidedBy: user.id, voidReason: reason });
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error voiding founder funding entry:', err);
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'Database error' });
+  }
+});
+
+// ========== LEGACY INVESTMENT TRACKER ==========
 app.get('/api/investments', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -1927,50 +2891,21 @@ app.post('/api/investments', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  const { date, investor, amount, category, description } = req.body || {};
-  if (!date || !investor || !amount || !category) return res.status(400).json({ success: false, error: 'date, investor, amount, and category are required' });
-  try {
-    const now = new Date().toISOString();
-    const ref = await db.collection('investments').add({ date, investor, amount: parseFloat(amount), category, description: description || '', created_at: now, updated_at: now });
-    res.status(201).json({ success: true, id: ref.id });
-  } catch (err) {
-    console.error('Error creating investment:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
-  }
+  return res.status(410).json({ success: false, error: 'Investment Tracker is read-only. Use the Founder Funding Ledger.' });
 });
 
 app.put('/api/investments/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  const { date, investor, amount, category, description } = req.body || {};
-  if (!date || !investor || !amount || !category) return res.status(400).json({ success: false, error: 'date, investor, amount, and category are required' });
-  try {
-    const ref = db.collection('investments').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ success: false, error: 'Investment not found' });
-    await ref.update({ date, investor, amount: parseFloat(amount), category, description: description || '', updated_at: new Date().toISOString() });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Error updating investment:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
-  }
+  return res.status(410).json({ success: false, error: 'Investment Tracker is read-only. Use the Founder Funding Ledger.' });
 });
 
 app.delete('/api/investments/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  try {
-    const ref = db.collection('investments').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ success: false, error: 'Investment not found' });
-    await ref.delete();
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Error deleting investment:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
-  }
+  return res.status(410).json({ success: false, error: 'Investment Tracker is read-only. Historical records must be reconciled through review.' });
 });
 
 app.get('/api/investments/target', async (req, res) => {
@@ -1989,26 +2924,128 @@ app.put('/api/investments/target', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
-  const { target } = req.body;
-  if (!target || isNaN(parseFloat(target))) return res.status(400).json({ success: false, error: 'Valid target amount required' });
-  try {
-    await db.collection('investment_config').doc('target').set({ target: parseFloat(target) });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, error: 'Database error' });
-  }
+  return res.status(410).json({ success: false, error: 'Investment Tracker configuration is retired.' });
 });
 
 // ========== PAYROLL ROUTES ==========
 // Restricted to TJC and RJR usernames only.
 
-const PAYROLL_USERS = ['TJC', 'RJR'];
+const PAYROLL_ROLES = ['superadmin', 'admin'];
 
 async function requirePayrollAccess(req, res) {
   const user = await getCurrentUser(req);
   if (!user) { res.status(401).json({ error: 'Unauthorized' }); return null; }
-  if (!PAYROLL_USERS.includes(user.username)) { res.status(403).json({ error: 'Payroll access restricted' }); return null; }
+  if (!PAYROLL_ROLES.includes(user.role)) { res.status(403).json({ error: 'Payroll access restricted' }); return null; }
   return user;
+}
+
+// Editing/deleting an already-created run rewrites figures that have already flowed into the
+// company P&L (overhead sync) — restricted to superadmin on top of the normal payroll whitelist.
+async function requireSuperadminPayrollAccess(req, res) {
+  const user = await requirePayrollAccess(req, res);
+  if (!user) return null;
+  if (user.role !== 'superadmin') { res.status(403).json({ error: 'Superadmin only' }); return null; }
+  return user;
+}
+
+// Read-only: lets the tax_filer role (plus whoever already has full payroll access) see the
+// OFFICE-employee breakdown behind a run's synced overhead totals, without granting any of the
+// broader payroll admin routes gated by requirePayrollAccess above.
+async function requireTaxLedgerPayrollAccess(req, res) {
+  const user = await getCurrentUser(req);
+  if (!user) { res.status(401).json({ error: 'Unauthorized' }); return null; }
+  if (user.role !== 'tax_filer' && !PAYROLL_ROLES.includes(user.role)) { res.status(403).json({ error: 'Forbidden' }); return null; }
+  return user;
+}
+
+// Posts/updates/removes the OFFICE-staff payroll cost rows in overhead_expenses for a run,
+// keyed on deterministic ids so recompute always overwrites (never duplicates) them — same
+// idempotent idiom used on approve. Also mirrors the funding source onto (or off of) an
+// Investment Tracker entry. Best-effort by design; caller decides whether a failure here
+// should block its own response.
+async function syncPayrollOverheadExpenses(runId, runData, user) {
+  const ref = db.collection('payroll_runs').doc(runId);
+  const payslipsSnap = await ref.collection('payslips').get();
+  let totalOfficeGross = 0;
+  let totalOfficeERGovt = 0;
+  payslipsSnap.forEach((pSnap) => {
+    const p = pSnap.data();
+    if (p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE') {
+      totalOfficeGross += Number(p.grossPay || 0);
+      totalOfficeERGovt += Number(p.erSSS || 0) + Number(p.erPhilhealth || 0) + Number(p.erPagibig || 0);
+    }
+  });
+
+  const expenseDate = runData.payDate || runData.periodEnd || new Date().toISOString().slice(0, 10);
+  const fundingSource = normalizeFundingSource(runData.fundingSource);
+  const baseDoc = {
+    date: expenseDate,
+    sourceType: 'payroll_sync',
+    sourceRunId: runId,
+    createdAt: new Date().toISOString(),
+    createdBy: user.id || user.username,
+    ...(fundingSource ? { fundingSource } : {}),
+  };
+
+  const batch = db.batch();
+  const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
+  const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
+  let salariesDoc = null;
+  let govtDoc = null;
+  if (totalOfficeGross > 0) {
+    salariesDoc = {
+      ...baseDoc,
+      description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Office salaries`,
+      amount: totalOfficeGross,
+      category: 'Salaries & Wages',
+    };
+    batch.set(salariesRef, salariesDoc);
+  } else {
+    batch.delete(salariesRef);
+  }
+  if (totalOfficeERGovt > 0) {
+    govtDoc = {
+      ...baseDoc,
+      description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Employer gov't contributions`,
+      amount: totalOfficeERGovt,
+      category: 'Government Contributions',
+    };
+    batch.set(govtRef, govtDoc);
+  } else {
+    batch.delete(govtRef);
+  }
+  await batch.commit();
+
+  await Promise.all([
+    syncExpenseFundingInvestment(salariesRef.id, 'overhead_expenses', salariesDoc || {}),
+    syncExpenseFundingInvestment(govtRef.id, 'overhead_expenses', govtDoc || {}),
+  ]);
+}
+
+// Removes any overhead_expenses rows (and their linked Investment Tracker entries) previously
+// posted for a run — used when deleting a run outright, or editing an APPROVED/PAID run back
+// down to DRAFT, so a payroll run that's no longer "live" doesn't leave phantom OPEX behind.
+async function reversePayrollOverheadExpenses(runId) {
+  const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
+  const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
+  const batch = db.batch();
+  batch.delete(salariesRef);
+  batch.delete(govtRef);
+  await batch.commit();
+  await Promise.all([
+    syncExpenseFundingInvestment(salariesRef.id, 'overhead_expenses', {}),
+    syncExpenseFundingInvestment(govtRef.id, 'overhead_expenses', {}),
+  ]);
+}
+
+function isSuperadmin(user) {
+  return user && user.role === 'superadmin';
+}
+
+function stripRates(obj) {
+  if (!obj) return obj;
+  const { dailyRate, monthlyRate, mealAllowance, ...rest } = obj;
+  return rest;
 }
 
 // ── Employees ──────────────────────────────────────────────────────────────
@@ -2016,7 +3053,8 @@ app.get('/api/payroll/employees', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   try {
     const snap = await db.collection('payroll_employees').orderBy('name').get();
-    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    const employees = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    res.json(isSuperadmin(user) ? employees : employees.map(e => stripRates(e)));
   } catch (err) { res.status(500).json({ error: 'Failed to fetch employees' }); }
 });
 
@@ -2053,6 +3091,8 @@ app.post('/api/payroll/runs', async (req, res) => {
   const user = await requirePayrollAccess(req, res); if (!user) return;
   try {
     const data = { ...req.body, status: 'DRAFT', createdBy: user.username, createdAt: new Date().toISOString() };
+    const normalizedFunding = normalizeFundingSource(data.fundingSource);
+    if (normalizedFunding) data.fundingSource = normalizedFunding; else delete data.fundingSource;
     const ref = await db.collection('payroll_runs').add(data);
     res.status(201).json({ id: ref.id, ...data });
   } catch (err) { res.status(500).json({ error: 'Failed to create payroll run' }); }
@@ -2071,65 +3111,107 @@ app.post('/api/payroll/runs/:id/approve', async (req, res) => {
     const nextStatus = runData.status === 'PAID' ? 'PAID' : 'APPROVED';
     await ref.update({ status: nextStatus, approvedBy: user.username, approvedAt: new Date().toISOString() });
 
-    // --- Overhead sync (best-effort; must never fail the approval) ---
-    // Posts OFFICE-staff payroll cost into overhead_expenses so it flows into the company P&L OPEX.
-    // Uses DETERMINISTIC doc ids keyed on the run, so re-approving overwrites (never duplicates) the
-    // rows and stays correct even under concurrent approve calls — no read-then-write race, no index.
+    // Overhead sync is best-effort and must never fail the approval itself.
     let overheadSynced = false;
     try {
-      const payslipsSnap = await ref.collection('payslips').get();
-      let totalOfficeGross = 0;
-      let totalOfficeERGovt = 0;
-      payslipsSnap.forEach((pSnap) => {
-        const p = pSnap.data();
-        if (p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE') {
-          totalOfficeGross += Number(p.grossPay || 0);
-          totalOfficeERGovt += Number(p.erSSS || 0) + Number(p.erPhilhealth || 0) + Number(p.erPagibig || 0);
-        }
-      });
-
-      const expenseDate = runData.payDate || runData.periodEnd || new Date().toISOString().slice(0, 10);
-      const baseDoc = {
-        date: expenseDate,
-        sourceType: 'payroll_sync',
-        sourceRunId: runId,
-        createdAt: new Date().toISOString(),
-        createdBy: user.id || user.username,
-      };
-
-      const batch = db.batch();
-      const salariesRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_salaries`);
-      const govtRef = db.collection('overhead_expenses').doc(`payroll_sync_${runId}_govt`);
-      // set when > 0, otherwise delete any stale row from a prior approve (delete of a missing doc is a no-op).
-      if (totalOfficeGross > 0) {
-        batch.set(salariesRef, {
-          ...baseDoc,
-          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Office salaries`,
-          amount: totalOfficeGross,
-          category: 'Salaries & Wages',
-        });
-      } else {
-        batch.delete(salariesRef);
-      }
-      if (totalOfficeERGovt > 0) {
-        batch.set(govtRef, {
-          ...baseDoc,
-          description: `Payroll ${runData.periodStart} to ${runData.periodEnd} — Employer gov't contributions`,
-          amount: totalOfficeERGovt,
-          category: 'Government Contributions',
-        });
-      } else {
-        batch.delete(govtRef);
-      }
-      await batch.commit();
+      await syncPayrollOverheadExpenses(runId, runData, user);
       overheadSynced = true;
     } catch (syncErr) {
       console.error('Payroll overhead sync failed for run', runId, syncErr);
     }
-    // --- end overhead sync ---
 
     res.json({ success: true, overheadSynced });
   } catch (err) { res.status(500).json({ error: 'Failed to approve run' }); }
+});
+
+// Superadmin-only: rewrite an existing run's period/funding/payslips and, if its target status
+// changes, reconcile the overhead_expenses sync accordingly (post it if now APPROVED/PAID, pull
+// it back out if downgraded to DRAFT). Existing payslip docs not present in the new set are
+// deleted so removing an employee from the run actually removes their entry, not just leaves it
+// stale.
+app.put('/api/payroll/runs/:id', async (req, res) => {
+  const user = await requireSuperadminPayrollAccess(req, res); if (!user) return;
+  try {
+    const runId = req.params.id;
+    const ref = db.collection('payroll_runs').doc(runId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
+    const existing = doc.data();
+
+    const { payslips, status, id, createdAt, createdBy, ...runFields } = req.body;
+    if (!Array.isArray(payslips)) return res.status(400).json({ error: 'payslips must be an array' });
+    const nextStatus = ['DRAFT', 'APPROVED', 'PAID'].includes(status) ? status : existing.status;
+
+    const normalizedFunding = normalizeFundingSource(runFields.fundingSource);
+    const updates = { ...runFields, status: nextStatus, updatedBy: user.username, updatedAt: new Date().toISOString() };
+    // Unlike the create endpoint's `.add()`, this is an `.update()` on an existing doc — simply
+    // omitting the key would leave a stale fundingSource in place, so an explicit FieldValue.delete()
+    // is required to actually clear it when funding is switched back to corporate_bank.
+    updates.fundingSource = normalizedFunding || FieldValue.delete();
+    if (nextStatus === 'APPROVED' && existing.status !== 'APPROVED') { updates.approvedBy = user.username; updates.approvedAt = new Date().toISOString(); }
+    if (nextStatus === 'PAID' && existing.status !== 'PAID') { updates.paidAt = new Date().toISOString(); }
+    await ref.update(updates);
+
+    // Replace the payslip set: drop rows for employees no longer included, overwrite the rest.
+    const payslipsCol = ref.collection('payslips');
+    const existingSlipsSnap = await payslipsCol.get();
+    const nextIds = new Set(payslips.map((p) => p.employeeId));
+    const batch = db.batch();
+    existingSlipsSnap.forEach((d) => { if (!nextIds.has(d.id)) batch.delete(d.ref); });
+    payslips.forEach((slip) => {
+      const slipRef = slip.employeeId ? payslipsCol.doc(slip.employeeId) : payslipsCol.doc();
+      batch.set(slipRef, slip);
+    });
+    await batch.commit();
+
+    let overheadSynced = false;
+    try {
+      if (nextStatus === 'APPROVED' || nextStatus === 'PAID') {
+        // Re-fetch rather than reuse the local `updates` object — it may still hold an unresolved
+        // FieldValue.delete() sentinel for fundingSource, which the sync helper can't interpret.
+        const freshData = (await ref.get()).data();
+        await syncPayrollOverheadExpenses(runId, freshData, user);
+        overheadSynced = true;
+      } else {
+        await reversePayrollOverheadExpenses(runId);
+      }
+    } catch (syncErr) {
+      console.error('Payroll overhead sync failed while editing run', runId, syncErr);
+    }
+
+    res.json({ success: true, overheadSynced });
+  } catch (err) { res.status(500).json({ error: 'Failed to update payroll run' }); }
+});
+
+// Superadmin-only: delete a run outright, cascading to its payslips/DTR subcollections and
+// reversing any overhead_expenses rows (and linked Investment Tracker entries) it had posted —
+// so a deleted run doesn't leave phantom OPEX behind in the company P&L.
+app.delete('/api/payroll/runs/:id', async (req, res) => {
+  const user = await requireSuperadminPayrollAccess(req, res); if (!user) return;
+  try {
+    const runId = req.params.id;
+    const ref = db.collection('payroll_runs').doc(runId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Run not found' });
+
+    try {
+      await reversePayrollOverheadExpenses(runId);
+    } catch (syncErr) {
+      console.error('Overhead reversal failed for deleted run', runId, syncErr);
+    }
+
+    const [payslipsSnap, dtrSnap] = await Promise.all([
+      ref.collection('payslips').get(),
+      ref.collection('dtrEntries').get(),
+    ]);
+    const batch = db.batch();
+    payslipsSnap.forEach((d) => batch.delete(d.ref));
+    dtrSnap.forEach((d) => batch.delete(d.ref));
+    batch.delete(ref);
+    await batch.commit();
+
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete payroll run' }); }
 });
 
 app.post('/api/payroll/runs/:id/pay', async (req, res) => {
@@ -2191,6 +3273,20 @@ app.post('/api/payroll/runs/:runId/payslips', async (req, res) => {
     await batch.commit();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to save payslips' }); }
+});
+
+// OFFICE-only, rate-stripped payslip breakdown for a run — the per-employee detail behind the
+// two lump-sum "Overhead (Payroll)" rows the Tax Filer Ledger already shows. FIELD payslips are
+// excluded (their cost isn't synced into overhead_expenses, so they're irrelevant to those rows).
+app.get('/api/payroll/runs/:runId/office-breakdown', async (req, res) => {
+  const user = await requireTaxLedgerPayrollAccess(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('payroll_runs').doc(req.params.runId).collection('payslips').get();
+    const office = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(p => p.employeeSnapshot && p.employeeSnapshot.employeeType === 'OFFICE');
+    res.json(isSuperadmin(user) ? office : office.map(p => ({ ...p, employeeSnapshot: stripRates(p.employeeSnapshot) })));
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch payroll breakdown' }); }
 });
 
 // ── Employee Payslip (self-service) ────────────────────────────────────────
@@ -2349,31 +3445,82 @@ function newestQuotation(a, b) {
   return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
 }
 
+// Grand total of a calcsheet quotation — seeds contract_amount on the synced
+// Project List record. Faithful plain-JS port of the client calc engine
+// (src/utils/calcsheet/calc.ts: computeTotals + computeTotalsLegacy). It lives
+// inline because the functions deploy copies only server.js. The parity test
+// src/utils/calcsheet/serverGrandTotal.parity.test.ts extracts this function
+// from server.js and compares it against the engine — keep the two in sync,
+// and keep string literals here brace-free so the test's extraction works.
 function quotationGrandTotal(q) {
   if (!q) return 0;
-  if (q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.grandTotal))) {
-    return Number(q.legacyTotalsSnapshot.grandTotal);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const generalReqts = Array.isArray(q.generalReqts) ? q.generalReqts : [];
+  const components = Array.isArray(q.components) ? q.components : [];
+  const manpower = Array.isArray(q.manpower) ? q.manpower : [];
+  const services = Array.isArray(q.services) ? q.services : [];
+  const lineGeneralTotal = (l) => num(l.unitPrice) * num(l.qty);
+  const servicesLineSum = () => services.reduce((s, l) => s + num(l.amount), 0);
+  const finish = (subtotal) => {
+    const afterDiscount = subtotal * (1 - num(q.discountPct) / 100);
+    return afterDiscount * (1 + num(q.vatPct) / 100);
+  };
+
+  if (q.formulaVersion === 'legacy') {
+    if (q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.grandTotal))) {
+      return Number(q.legacyTotalsSnapshot.grandTotal);
+    }
+    const cont = num(q.globalContingencyPct) / 100;
+    const generalReqtsCost = generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0);
+    const generalReqtsWithContingency = q.generalReqContingencyMode === 'baked'
+      ? generalReqtsCost
+      : generalReqtsCost * (1 + cont);
+    const generalReqtsSubtotal = generalReqtsWithContingency * (1 + num(q.generalReqMarkupPct) / 100);
+    const componentsSubtotal = components.reduce((s, l) => {
+      const base = num(l.unitCost) * (num(l.forex) || 1);
+      const adjusted = base * (1 + num(l.contingencyPct) / 100 - num(l.discountPct) / 100);
+      return s + adjusted * (1 + num(q.productMarkupPct) / 100) * num(l.qty);
+    }, 0);
+    let servicesSub;
+    if (q.servicesFromManpower) {
+      const laborWithContingency = manpower.reduce((s, m) => {
+        const unit = (num(m.dailyRate) + num(m.allowance)) * (1 + cont);
+        return s + num(m.headcount) * num(m.mandays) * unit;
+      }, 0);
+      servicesSub = laborWithContingency * (1 + num(q.laborMarkupPct) / 100);
+    } else {
+      servicesSub = servicesLineSum();
+    }
+    return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
   }
-  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, Number(q.generalReqtsExportQty || 1)) : 1;
-  const engineeringServicesQty = q.servicesFromManpower !== false ? Math.max(1, Number(q.engineeringServicesQty || 1)) : 1;
-  const generalReqtsCost = (q.generalReqts || []).reduce((sum, line) => {
-    return sum + Number(line.unitPrice || 0) * Number(line.qty || 0);
+
+  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, num(q.generalReqtsExportQty) || 1) : 1;
+  const hasPerLineGenMarkup = generalReqts.some((l) => l.markupPct != null);
+  const generalReqtsSubtotal = hasPerLineGenMarkup
+    ? generalReqts.reduce((s, l) => {
+        const markup = l.markupPct != null ? num(l.markupPct) : num(q.generalReqMarkupPct);
+        return s + lineGeneralTotal(l) * (1 + markup / 100);
+      }, 0) * generalReqtsQty
+    : generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty * (1 + num(q.generalReqMarkupPct) / 100);
+  const componentsSubtotal = components.reduce((s, l) => {
+    const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
+    const adjusted = costUnit * (1 + num(l.contingencyPct) / 100);
+    const markup = l.markupPct != null ? num(l.markupPct) : num(q.productMarkupPct);
+    return s + adjusted * (1 + markup / 100) * num(l.qty);
   }, 0);
-  const generalReqtsSubtotal = generalReqtsCost * generalReqtsQty * (1 + Number(q.generalReqMarkupPct || 0) / 100);
-  const componentsSubtotal = (q.components || []).reduce((sum, line) => {
-    const base = Number(line.unitCost || 0) * Number(line.forex || 1);
-    const adjusted = base * (1 + Number(line.contingencyPct || 0) / 100) * (1 - Number(line.discountPct || 0) / 100);
-    return sum + adjusted * (1 + Number(q.productMarkupPct || 0) / 100) * Number(line.qty || 0);
-  }, 0);
-  const manpowerCost = (q.manpower || []).reduce((sum, row) => {
-    return sum + Number(row.headcount || 0) * Number(row.mandays || 0) * (Number(row.dailyRate || 0) + Number(row.allowance || 0));
-  }, 0);
-  const servicesSubtotal = q.servicesFromManpower !== false
-    ? manpowerCost * engineeringServicesQty
-    : (q.services || []).reduce((sum, line) => sum + Number(line.amount || 0), 0);
-  const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSubtotal;
-  const afterDiscount = subtotal * (1 - Number(q.discountPct || 0) / 100);
-  return afterDiscount * (1 + Number(q.vatPct || 0) / 100);
+  let servicesSub;
+  if (q.servicesFromManpower) {
+    if (q.servicesPerLinePricing) {
+      servicesSub = servicesLineSum();
+    } else {
+      const engineeringServicesQty = Math.max(1, num(q.engineeringServicesQty) || 1);
+      const manpowerCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0);
+      servicesSub = manpowerCost * engineeringServicesQty * (1 + num(q.laborMarkupPct) / 100);
+    }
+  } else {
+    servicesSub = servicesLineSum();
+  }
+  return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
 }
 
 function clientApproverFromClient(client) {
@@ -2382,7 +3529,7 @@ function clientApproverFromClient(client) {
   return primary ? [primary.name, primary.position].filter(Boolean).join(' – ') : '';
 }
 
-function mapCalcsheetToMainProject(project, client, quotation, now, projectNo) {
+function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
   const amount = quotationGrandTotal(quotation);
   const year = Number.isFinite(new Date(project.date || now).getFullYear())
@@ -2452,6 +3599,9 @@ function mapCalcsheetToMainProject(project, client, quotation, now, projectNo) {
     source_module: 'calcsheet',
     executionFolderId: project.executionFolderId || '',
     executionFolderUrl: project.executionFolderUrl || '',
+    with_acti: !!withActi,
+    partner_id: (partner && partner.id) || project.partnerId || null,
+    partner_name: (partner && partner.name) || '',
   };
 }
 
@@ -2485,11 +3635,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     throw err;
   }
   const project = { id: projectDoc.id, ...projectDoc.data() };
-  const [clientDoc, qSnap] = await Promise.all([
+  const [clientDoc, partnerDoc, qSnap] = await Promise.all([
     project.customerId ? db.collection('clients').doc(String(project.customerId)).get() : Promise.resolve(null),
+    project.partnerId ? db.collection('clients').doc(String(project.partnerId)).get() : Promise.resolve(null),
     db.collection('calcsheet_quotations').where('projectId', '==', projectId).get(),
   ]);
   const client = clientDoc && clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
+  const partner = partnerDoc && partnerDoc.exists ? { id: partnerDoc.id, ...partnerDoc.data() } : null;
   const quotations = qSnap.docs.map((d) => {
     const { id: _stored, ...data } = d.data();
     return { ...data, id: d.id };
@@ -2497,6 +3649,8 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
   const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
   const selectedQuotation = ioct || acti;
+  // Joint-with-ACTI: the project carries a partner link, or an ACTI-kind quotation exists.
+  const withActi = !!project.partnerId || quotations.some((q) => q.kind === 'ACTI');
   if (!selectedQuotation) {
     const err = new Error('No IOCT or ACTI quotation found to seed contract amount');
     err.status = 400;
@@ -2533,13 +3687,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   if (linkedDoc && options.force) {
     const linkedData = linkedDoc.data() || {};
     const projectNo = linkedData.project_no || await nextIoctProjectNo(now);
-    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi);
     mainProjectId = linkedDoc.id;
     action = 'updated';
     await linkedDoc.ref.update({ ...mapped, updated_at: now });
   } else {
     const projectNo = await nextIoctProjectNo(now);
-    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi);
     action = project.mainProjectId ? 'recreated' : 'created';
     const ref = await db.collection('projects').add({ ...mapped, created_at: now, updated_at: now });
     mainProjectId = ref.id;
@@ -2598,8 +3752,16 @@ app.post('/api/calcsheet/projects', async (req, res) => {
     // below would overwrite ref.id with the client's nanoid in the response,
     // leaving the client with an ID that doesn't address the stored document
     // (subsequent PUTs would 500 with "Failed to update project").
-    const { id: _ignored, ...body } = req.body || {};
-    const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const { id: _ignored, createdBy: _cb, createdByName: _cbn, ...body } = req.body || {};
+    const data = {
+      ...body,
+      // Who created the opportunity — factual audit fields, always stamped from the
+      // authenticated user (client-supplied values are stripped above).
+      createdBy: user.id,
+      createdByName: user.full_name || user.username || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
     const ref = await db.collection('calcsheet_projects').add(data);
     res.json({ success: true, project: { ...data, id: ref.id } });
   } catch (err) {
@@ -2614,8 +3776,9 @@ app.put('/api/calcsheet/projects/:id', async (req, res) => {
     if (!user) return;
     // Defensively drop `id` from the update body — it's the doc identifier (from
     // the URL param) and storing it inside the document is just dead data that
-    // can mask the real ID during debugging.
-    const { id: _ignored, ...body } = req.body || {};
+    // can mask the real ID during debugging. `createdBy`/`createdByName` are
+    // stamped at creation and stay factual — never updatable.
+    const { id: _ignored, createdBy: _cb, createdByName: _cbn, ...body } = req.body || {};
     const update = { ...body, updatedAt: new Date().toISOString() };
     await db.collection('calcsheet_projects').doc(req.params.id).update(update);
     res.json({ success: true });
@@ -2806,6 +3969,23 @@ app.get('/api/calcsheet/quotations/:id/versions', async (req, res) => {
   }
 });
 
+app.delete('/api/calcsheet/quotations/:id/versions/:versionId', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const ref = db.collection('calcsheet_quotation_versions').doc(req.params.versionId);
+    const doc = await ref.get();
+    if (!doc.exists || doc.data().quotationId !== req.params.id) {
+      return res.status(404).json({ error: 'Version not found' });
+    }
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[calcsheet] delete quotation version failed:', { id: req.params.id, versionId: req.params.versionId, err: err && err.message });
+    res.status(500).json({ error: 'Failed to delete version' });
+  }
+});
+
 app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
@@ -2823,7 +4003,8 @@ app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
 app.get('/api/calcsheet/clients', async (req, res) => {
   try {
     const snap = await db.collection('clients').orderBy('name').get();
-    const clients = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Spread data first so a stray stored `id` field can't clobber the doc id.
+    const clients = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
     res.json({ success: true, clients });
   } catch (err) { res.status(500).json({ error: 'Failed to get clients' }); }
 });
@@ -2840,7 +4021,8 @@ app.delete('/api/calcsheet/clients/:id', (req, res) => res.status(410).json({ er
 app.get('/api/calcsheet/presets', async (req, res) => {
   try {
     const snap = await db.collection('calcsheet_presets').orderBy('group').get();
-    const presets = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Spread data first so a stray stored `id` field can't clobber the doc id.
+    const presets = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
     res.json({ success: true, presets });
   } catch (err) { res.status(500).json({ error: 'Failed to get presets' }); }
 });
@@ -3384,6 +4566,84 @@ app.delete('/api/completion-certificates/:id', async (req, res) => {
   }
 });
 
+// ─── DTR Aggregation (for payroll auto-populate) ────────────────────────────
+app.get('/api/dtr/aggregate', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { periodStart, periodEnd } = req.query;
+  if (!periodStart || !periodEnd) return res.status(400).json({ error: 'periodStart and periodEnd required' });
+  try {
+    // Fetch all DTR entries within the date range
+    const snap = await db.collection('dtr_entries')
+      .where('entryDate', '>=', periodStart)
+      .where('entryDate', '<=', periodEnd)
+      .get();
+
+    // Group by employeeId and aggregate
+    const byEmployee = {};
+    snap.docs.forEach(d => {
+      const entry = d.data();
+      const eid = entry.employeeId;
+      if (!byEmployee[eid]) {
+        byEmployee[eid] = {
+          employeeId: eid,
+          workingDays: 0,
+          regularHours: 0,
+          overtimeHours: 0,
+          nightDiffHours: 0,
+          tardinessMinutes: 0,
+          regularHolidayDays: 0,
+          specialHolidayDays: 0,
+          restDayOTHours: 0,
+          regularHolidayOTHours: 0,
+          regularHolidayRestDayDays: 0,
+          specialHolidayRestDayDays: 0,
+          regularHolidayRestDayOTHours: 0,
+          specialHolidayRestDayOTHours: 0,
+        };
+      }
+      const agg = byEmployee[eid];
+      if (!entry.isAbsent) {
+        // No inputted hours = no pay. A REGULAR day only counts as a working day
+        // when hours were actually recorded (computed from time-in/out on save, or
+        // entered manually for paid leave). A blank day earns nothing.
+        const hasHours = (Number(entry.regularHours) || 0) > 0;
+        if (entry.dayType === 'REGULAR') { if (hasHours) agg.workingDays++; }
+        else if (entry.dayType === 'REST_DAY') { /* rest day doesn't count as working day unless OT */ }
+        else if (entry.dayType === 'REGULAR_HOLIDAY') agg.regularHolidayDays++;
+        else if (entry.dayType === 'SPECIAL_HOLIDAY') agg.specialHolidayDays++;
+        else if (entry.dayType === 'DOUBLE_HOLIDAY') { agg.regularHolidayDays++; agg.specialHolidayDays++; }
+      }
+      agg.regularHours += Number(entry.regularHours) || 0;
+      agg.overtimeHours += Number(entry.overtimeHours) || 0;
+      agg.nightDiffHours += Number(entry.nightDiffHours) || 0;
+      agg.tardinessMinutes += Number(entry.tardinessMinutes) || 0;
+    });
+
+    // Look up submitter names for each DTR employeeId (user account). Batch the
+    // reads in parallel instead of awaiting one doc at a time (was O(n) serial).
+    const submitterIds = Object.keys(byEmployee);
+    const submitters = {};
+    try {
+      const userDocs = await Promise.all(
+        submitterIds.map((uid) => db.collection('users').doc(uid).get().catch(() => null)),
+      );
+      submitterIds.forEach((uid, i) => {
+        const uDoc = userDocs[i];
+        const u = uDoc && uDoc.exists ? uDoc.data() : null;
+        submitters[uid] = (u && (u.full_name || u.username)) || uid;
+      });
+    } catch (e) {
+      console.error('GET /api/dtr/aggregate submitter lookup error:', e);
+      submitterIds.forEach((uid) => { submitters[uid] = submitters[uid] || uid; });
+    }
+
+    res.json({ success: true, aggregates: byEmployee, submitters });
+  } catch (err) {
+    console.error('GET /api/dtr/aggregate error:', err);
+    res.status(500).json({ error: 'Failed to aggregate DTR entries' });
+  }
+});
+
 // ─── DTR Entries ────────────────────────────────────────────────────────────
 app.get('/api/dtr', async (req, res) => {
   const user = await getCurrentUser(req);
@@ -3403,14 +4663,47 @@ app.get('/api/dtr', async (req, res) => {
   }
 });
 
+// Normalize a clock-in/out GPS fix to { lat, lng, accuracy } numbers, or null.
+function sanitizeLocation(loc) {
+  if (!loc || typeof loc !== 'object') return null;
+  const lat = Number(loc.lat);
+  const lng = Number(loc.lng);
+  const accuracy = Number(loc.accuracy);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng, accuracy: Number.isFinite(accuracy) ? accuracy : null };
+}
+
+// True when an employee's DTR date sits inside a PAID payroll period. Mirrors the
+// employee-portal paid-date lock (isPaidDate) so the server enforces it too — an
+// employee must not be able to edit/create a punch after that period is paid.
+async function isDtrDateLocked(employeeId, entryDate) {
+  const date = String(entryDate || '').slice(0, 10);
+  if (!employeeId || !date) return false;
+  const runs = await db.collection('payroll_runs').where('status', '==', 'PAID').get();
+  for (const run of runs.docs) {
+    const d = run.data();
+    const start = String(d.periodStart || '').slice(0, 10);
+    const end = String(d.periodEnd || '').slice(0, 10);
+    if (!start || !end || date < start || date > end) continue;
+    // Confirm this employee was actually included in the paid run.
+    const slip = await run.ref.collection('payslips').doc(String(employeeId)).get();
+    if (slip.exists) return true;
+  }
+  return false;
+}
+
 app.post('/api/dtr', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user || !isActiveUser(user)) return res.status(401).json({ error: 'Unauthorized' });
-  const { employeeId, entryDate, timeIn, timeOut, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks } = req.body;
+  const { employeeId, entryDate, timeIn, timeOut, dayType, regularHours, overtimeHours, nightDiffHours, isAbsent, tardinessMinutes, remarks, clockInLocation, clockOutLocation, projectId, projectName } = req.body;
   if (!employeeId || !entryDate || !dayType) return res.status(400).json({ error: 'employeeId, entryDate, and dayType are required' });
   // Non-admin users can only create entries for themselves
   const isAdmin = user.role === 'superadmin' || user.role === 'admin';
   if (!isAdmin && String(employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+  // Employees can't create a punch inside an already-paid period (admins may correct).
+  if (!isAdmin && await isDtrDateLocked(employeeId, entryDate)) {
+    return res.status(409).json({ error: 'This date is in a paid payroll period and is locked.' });
+  }
   // Duplicate check
   const existing = await db.collection('dtr_entries')
     .where('employeeId', '==', employeeId)
@@ -3430,6 +4723,10 @@ app.post('/api/dtr', async (req, res) => {
       isAbsent: !!isAbsent,
       tardinessMinutes: Number(tardinessMinutes) || 0,
       remarks: remarks || '',
+      projectId: projectId || null,
+      projectName: projectName || null,
+      clockInLocation: sanitizeLocation(clockInLocation),
+      clockOutLocation: sanitizeLocation(clockOutLocation),
       submittedAt: new Date().toISOString(),
     };
     const ref = await db.collection('dtr_entries').add(entry);
@@ -3451,7 +4748,14 @@ app.put('/api/dtr/:id', async (req, res) => {
     const data = doc.data();
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+    // Locked once the covering payroll period is paid (admins may still correct).
+    if (!isAdmin && await isDtrDateLocked(data.employeeId, data.entryDate)) {
+      return res.status(409).json({ error: 'This date is in a paid payroll period and is locked.' });
+    }
     const { employeeId, id: _id, ...updates } = req.body;
+    // Normalize location payloads so we never store arbitrary client objects.
+    if ('clockInLocation' in updates) updates.clockInLocation = sanitizeLocation(updates.clockInLocation);
+    if ('clockOutLocation' in updates) updates.clockOutLocation = sanitizeLocation(updates.clockOutLocation);
     updates.submittedAt = new Date().toISOString();
     await docRef.update(updates);
     const updated = await docRef.get();
@@ -3473,11 +4777,288 @@ app.delete('/api/dtr/:id', async (req, res) => {
     const data = doc.data();
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin && String(data.employeeId) !== String(user.id)) return res.status(403).json({ error: 'Forbidden' });
+    // Locked once the covering payroll period is paid (admins may still correct).
+    if (!isAdmin && await isDtrDateLocked(data.employeeId, data.entryDate)) {
+      return res.status(409).json({ error: 'This date is in a paid payroll period and is locked.' });
+    }
     await docRef.delete();
     res.json({ success: true });
   } catch (e) {
     console.error('DELETE /api/dtr/:id error:', e);
     res.status(500).json({ error: 'Failed to delete DTR entry' });
+  }
+});
+
+// ─── Work Sites ───────────────────────────────────────────────────────────────
+// Named locations (name + coordinates) used to attribute clocked hours to a site
+// on the per-employee hours dashboard. Reads: any active user. Writes: payroll.
+app.get('/api/work-sites', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('work_sites').orderBy('name').get();
+    const sites = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+    res.json({ success: true, sites });
+  } catch (e) {
+    console.error('GET /api/work-sites error:', e);
+    res.status(500).json({ error: 'Failed to get work sites' });
+  }
+});
+
+// Suggest site coordinates from where employees actually clocked in: greedily
+// cluster recorded clock-in/out GPS points (~75m) and return the busiest spots.
+function haversineMeters(aLat, aLng, bLat, bLng) {
+  const R = 6371000, toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat), dLng = toRad(bLng - aLng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+app.get('/api/work-sites/suggestions', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('dtr_entries').orderBy('entryDate', 'desc').limit(2000).get();
+    const pts = [];
+    snap.docs.forEach((d) => {
+      const e = d.data();
+      for (const loc of [e.clockInLocation, e.clockOutLocation]) {
+        if (loc && Number.isFinite(Number(loc.lat)) && Number.isFinite(Number(loc.lng))) {
+          pts.push({ lat: Number(loc.lat), lng: Number(loc.lng), date: e.entryDate || '' });
+        }
+      }
+    });
+    const clusters = [];
+    for (const p of pts) {
+      const c = clusters.find((cl) => haversineMeters(cl.lat, cl.lng, p.lat, p.lng) <= 75);
+      if (c) {
+        c.lat = (c.lat * c.count + p.lat) / (c.count + 1);
+        c.lng = (c.lng * c.count + p.lng) / (c.count + 1);
+        c.count += 1;
+        if (p.date > c.lastSeen) c.lastSeen = p.date;
+      } else {
+        clusters.push({ lat: p.lat, lng: p.lng, count: 1, lastSeen: p.date });
+      }
+    }
+    clusters.sort((a, b) => b.count - a.count);
+    res.json({ success: true, points: clusters.slice(0, 30) });
+  } catch (e) {
+    console.error('GET /api/work-sites/suggestions error:', e);
+    res.status(500).json({ error: 'Failed to suggest clock-in points' });
+  }
+});
+
+app.post('/api/work-sites', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  const { name, lat, lng, radiusMeters } = req.body || {};
+  if (!name || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
+    return res.status(400).json({ error: 'name, lat, lng are required' });
+  }
+  try {
+    const now = new Date().toISOString();
+    const site = {
+      name: String(name).trim(),
+      lat: Number(lat),
+      lng: Number(lng),
+      radiusMeters: Number(radiusMeters) > 0 ? Number(radiusMeters) : 150,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const ref = await db.collection('work_sites').add(site);
+    res.status(201).json({ ...site, id: ref.id });
+  } catch (e) {
+    console.error('POST /api/work-sites error:', e);
+    res.status(500).json({ error: 'Failed to create work site' });
+  }
+});
+
+app.put('/api/work-sites/:id', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    const { id: _id, ...body } = req.body || {};
+    const updates = { updatedAt: new Date().toISOString() };
+    if (body.name != null) updates.name = String(body.name).trim();
+    if (Number.isFinite(Number(body.lat))) updates.lat = Number(body.lat);
+    if (Number.isFinite(Number(body.lng))) updates.lng = Number(body.lng);
+    if (Number(body.radiusMeters) > 0) updates.radiusMeters = Number(body.radiusMeters);
+    await db.collection('work_sites').doc(req.params.id).update(updates);
+    res.json({ success: true });
+  } catch (e) {
+    console.error('PUT /api/work-sites/:id error:', e);
+    res.status(500).json({ error: 'Failed to update work site' });
+  }
+});
+
+app.delete('/api/work-sites/:id', async (req, res) => {
+  const user = await requirePayrollAccess(req, res); if (!user) return;
+  try {
+    await db.collection('work_sites').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (e) {
+    console.error('DELETE /api/work-sites/:id error:', e);
+    res.status(500).json({ error: 'Failed to delete work site' });
+  }
+});
+
+// ─── Pricelists ───────────────────────────────────────────────────────────────
+// Read-only catalog for the Sales pricelist browser (seeded by import scripts).
+// Filters applied in memory (collection is small, equality/range only).
+app.get('/api/pricelists', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('pricelist_items').get();
+    let items = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+
+    const { search, poles, minPrice, maxPrice } = req.query;
+    const categories = [].concat(req.query.category || []).filter(Boolean);
+    const brands = [].concat(req.query.brand || []).filter(Boolean);
+    if (categories.length) items = items.filter((i) => categories.includes(i.category));
+    if (brands.length) items = items.filter((i) => brands.includes(i.brand));
+    if (poles != null && poles !== '') items = items.filter((i) => Number(i.poles) === Number(poles));
+    if (minPrice != null && minPrice !== '') items = items.filter((i) => Number(i.sellingPrice) >= Number(minPrice));
+    if (maxPrice != null && maxPrice !== '') items = items.filter((i) => Number(i.sellingPrice) <= Number(maxPrice));
+    if (search) {
+      const t = String(search).toLowerCase();
+      items = items.filter((i) =>
+        [i.catalogNo, i.description, i.brand, i.category, i.abbRefNo, i.sepEquivalent]
+          .filter(Boolean).some((v) => String(v).toLowerCase().includes(t)));
+    }
+    res.json({ success: true, items });
+  } catch (e) {
+    console.error('GET /api/pricelists error:', e);
+    res.status(500).json({ error: 'Failed to fetch pricelist' });
+  }
+});
+
+app.get('/api/pricelists/filters', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('pricelist_items').get();
+    const suppliers = new Set(), brands = new Set(), categories = new Set(), poles = new Set();
+    snap.docs.forEach((d) => {
+      const i = d.data();
+      if (i.supplier) suppliers.add(i.supplier);
+      if (i.brand) brands.add(i.brand);
+      if (i.category) categories.add(i.category);
+      if (Number.isFinite(Number(i.poles)) && i.poles) poles.add(Number(i.poles));
+    });
+    res.json({
+      suppliers: Array.from(suppliers).sort(),
+      brands: Array.from(brands).sort(),
+      categories: Array.from(categories).sort(),
+      poles: Array.from(poles).sort((a, b) => a - b),
+    });
+  } catch (e) {
+    console.error('GET /api/pricelists/filters error:', e);
+    res.status(500).json({ error: 'Failed to fetch pricelist filters' });
+  }
+});
+
+// Normalize a pricelist item payload from the manual add/edit form.
+function pricelistItemFromBody(b) {
+  const numOrNull = (v) => (v !== '' && v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  return {
+    supplier: String(b.supplier || 'IOCT').trim(),
+    brand: String(b.brand || '').trim(),
+    pricelistName: String(b.pricelistName || 'Manual entries').trim(),
+    pricelistDate: String(b.pricelistDate || new Date().toISOString().slice(0, 7)),
+    category: String(b.category || 'Uncategorized').trim(),
+    categoryLabel: String(b.categoryLabel || b.category || 'Uncategorized').trim(),
+    catalogNo: String(b.catalogNo || '').trim(),
+    abbRefNo: String(b.abbRefNo || '').trim(),
+    description: String(b.description || '').trim(),
+    uom: String(b.uom || 'pc').trim(),
+    poles: numOrNull(b.poles),
+    ampRating: numOrNull(b.ampRating),
+    sellingPrice: Number(b.sellingPrice) || 0,
+    sepEquivalent: String(b.sepEquivalent || '').trim() || null,
+  };
+}
+
+const PRICELIST_AUDIT_FIELDS = ['description', 'sellingPrice', 'uom', 'category', 'brand', 'supplier', 'catalogNo', 'poles', 'ampRating', 'sepEquivalent'];
+async function logPricelistAudit(entry) {
+  try { await db.collection('pricelist_audit').add(entry); }
+  catch (e) { console.warn('[pricelist] audit write failed (non-blocking):', e && e.message); }
+}
+
+app.post('/api/pricelists', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  const b = req.body || {};
+  if (!b.description || !(Number(b.sellingPrice) >= 0)) {
+    return res.status(400).json({ error: 'description and a numeric sellingPrice are required' });
+  }
+  try {
+    const now = new Date().toISOString();
+    const who = user.full_name || user.username || String(user.id);
+    const item = pricelistItemFromBody(b);
+    if (!item.catalogNo) item.catalogNo = `MAN-${Date.now().toString(36).toUpperCase()}`;
+    item.createdAt = now; item.updatedAt = now;
+    item.createdBy = who; item.updatedBy = who;
+    const ref = await db.collection('pricelist_items').add(item);
+    await logPricelistAudit({ itemId: ref.id, catalogNo: item.catalogNo, action: 'create', snapshot: { description: item.description, sellingPrice: item.sellingPrice }, byId: String(user.id), byName: who, at: now });
+    res.status(201).json({ ...item, id: ref.id });
+  } catch (e) {
+    console.error('POST /api/pricelists error:', e);
+    res.status(500).json({ error: 'Failed to create pricelist item' });
+  }
+});
+
+app.put('/api/pricelists/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  const b = req.body || {};
+  if (!b.description || !(Number(b.sellingPrice) >= 0)) {
+    return res.status(400).json({ error: 'description and a numeric sellingPrice are required' });
+  }
+  try {
+    const now = new Date().toISOString();
+    const who = user.full_name || user.username || String(user.id);
+    const ref = db.collection('pricelist_items').doc(req.params.id);
+    const prevSnap = await ref.get();
+    const prev = prevSnap.exists ? prevSnap.data() : {};
+    const updates = pricelistItemFromBody(b);
+    updates.updatedAt = now; updates.updatedBy = who;
+    await ref.update(updates);
+    const changes = {};
+    for (const f of PRICELIST_AUDIT_FIELDS) {
+      const from = prev[f] ?? null, to = updates[f] ?? null;
+      if (String(from) !== String(to)) changes[f] = { from, to };
+    }
+    if (Object.keys(changes).length) {
+      await logPricelistAudit({ itemId: req.params.id, catalogNo: updates.catalogNo, action: 'update', changes, byId: String(user.id), byName: who, at: now });
+    }
+    res.json({ success: true, ...updates, id: req.params.id });
+  } catch (e) {
+    console.error('PUT /api/pricelists/:id error:', e);
+    res.status(500).json({ error: 'Failed to update pricelist item' });
+  }
+});
+
+app.delete('/api/pricelists/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const now = new Date().toISOString();
+    const who = user.full_name || user.username || String(user.id);
+    const ref = db.collection('pricelist_items').doc(req.params.id);
+    const prevSnap = await ref.get();
+    const prev = prevSnap.exists ? prevSnap.data() : {};
+    await ref.delete();
+    await logPricelistAudit({ itemId: req.params.id, catalogNo: prev.catalogNo || null, action: 'delete', snapshot: { description: prev.description, sellingPrice: prev.sellingPrice }, byId: String(user.id), byName: who, at: now });
+    res.json({ success: true });
+  } catch (e) {
+    console.error('DELETE /api/pricelists/:id error:', e);
+    res.status(500).json({ error: 'Failed to delete pricelist item' });
+  }
+});
+
+app.get('/api/pricelists/:id/audit', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('pricelist_audit').where('itemId', '==', req.params.id).get();
+    const entries = snap.docs
+      .map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; })
+      .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    res.json({ success: true, entries });
+  } catch (e) {
+    console.error('GET /api/pricelists/:id/audit error:', e);
+    res.status(500).json({ error: 'Failed to fetch audit trail' });
   }
 });
 
@@ -4245,6 +5826,220 @@ app.post('/api/receipts/detect-crop', async (req, res) => {
     return res.status(502).json({ ok: false, error: err.message });
   }
 });
+
+// POST /api/receipts/check-duplicates — cross-checks a batch of candidate receipts
+// (from client-side scans, before they're saved) against everything already stored:
+// project_expenses, overhead_expenses, and liquidation rows (rows_json/receipts_json).
+// In-memory scan over the three collections, same pattern as /api/finance/pnl — these
+// collections are small (a few hundred docs), no composite index needed.
+function normInvoice(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+function normSupplier(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+// Coerce to a finite number ONLY for actual numbers or non-empty numeric strings;
+// null/undefined/''/NaN all return null (never coerce to 0, which would otherwise
+// falsely match against unset/zero amounts). Mirrored client-side in
+// receiptDuplicateService.ts — keep both in sync.
+function toFiniteAmount(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function amountsEqual(a, b) {
+  const na = toFiniteAmount(a);
+  const nb = toFiniteAmount(b);
+  return na !== null && nb !== null && Math.abs(na - nb) < 0.01;
+}
+
+app.post('/api/receipts/check-duplicates', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const isAdmin = user.role === 'superadmin' || user.role === 'admin';
+  const isTaxFiler = user.role === 'tax_filer';
+
+  const { candidates } = req.body || {};
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    return res.status(400).json({ success: false, error: 'candidates must be a non-empty array' });
+  }
+  if (candidates.length > 25) {
+    return res.status(400).json({ success: false, error: 'candidates array exceeds max of 25' });
+  }
+
+  try {
+    const [projectExpSnap, overheadExpSnap, liqSnap] = await Promise.all([
+      db.collection('project_expenses').get(),
+      db.collection('overhead_expenses').get(),
+      db.collection('liquidations').get(),
+    ]);
+
+    // Build a flat list of "records" (image hash, invoice, supplier, amount, date) to
+    // match candidates against, tagged with enough provenance to build a match entry.
+    // `visible` mirrors the ownership/role rules of the sibling GET routes for the same
+    // collection (GET /api/project-expenses, GET /api/overhead-expenses, GET /api/liquidations)
+    // so a caller who couldn't normally see a record only gets a redacted match for it.
+    const records = [];
+
+    // Sibling rule (GET /api/project-expenses): non-admin, non-tax_filer callers see only
+    // rows they created OR system-generated sync rows (po_sync/liquidation_sync/migrated).
+    const SYNC_SOURCE_TYPES = new Set(['po_sync', 'liquidation_sync', 'migrated']);
+    for (const doc of projectExpSnap.docs) {
+      const d = doc.data();
+      const visible = isAdmin || isTaxFiler || d.createdBy === user.id || SYNC_SOURCE_TYPES.has(d.sourceType);
+      records.push({
+        source: 'project_expense',
+        id: doc.id,
+        liquidationId: null,
+        formNo: null,
+        projectId: d.projectId || null,
+        projectName: d.projectName || null,
+        supplier: d.supplier || null,
+        invoiceNo: d.invoiceNo || null,
+        amount: d.amount,
+        date: d.date || null,
+        description: d.description || null,
+        imageHash: d.imageHash || null,
+        createdBy: d.createdBy || null,
+        createdAt: d.createdAt || null,
+        visible,
+      });
+    }
+
+    // Sibling rule (GET /api/overhead-expenses): non-admin, non-tax_filer callers see only
+    // rows they created.
+    for (const doc of overheadExpSnap.docs) {
+      const d = doc.data();
+      const visible = isAdmin || isTaxFiler || d.createdBy === user.id;
+      records.push({
+        source: 'overhead_expense',
+        id: doc.id,
+        liquidationId: null,
+        formNo: null,
+        projectId: null,
+        projectName: null,
+        supplier: d.supplier || null,
+        invoiceNo: d.invoiceNo || null,
+        amount: d.amount,
+        date: d.date || null,
+        description: d.description || null,
+        imageHash: d.imageHash || null,
+        createdBy: d.createdBy || null,
+        createdAt: d.createdAt || null,
+        visible,
+      });
+    }
+
+    // Sibling rule (GET /api/liquidations): non-admin callers see only liquidations whose
+    // user_id matches them (no tax_filer carve-out on this route).
+    for (const doc of liqSnap.docs) {
+      const d = doc.data();
+      const visible = isAdmin || d.user_id === user.id;
+      let rows = [];
+      let receipts = [];
+      try { const parsed = JSON.parse(d.rows_json || '[]'); rows = Array.isArray(parsed) ? parsed : []; } catch (e) { rows = []; }
+      try { const parsed = JSON.parse(d.receipts_json || '[]'); receipts = Array.isArray(parsed) ? parsed : []; } catch (e) { receipts = []; }
+      for (const row of rows) {
+        try {
+          if (!row || !row.id) continue;
+          // Any receipt attached to this row carries its image hash (if the client set one).
+          const rowReceipt = receipts.find(r => r && r.rowId === row.id && r.imageHash);
+          records.push({
+            source: 'liquidation_row',
+            id: row.id,
+            liquidationId: doc.id,
+            formNo: d.form_no || null,
+            projectId: row.projectId || null,
+            projectName: row.projectName || null,
+            supplier: row.supplier || null,
+            invoiceNo: row.invoiceNo || null,
+            amount: row.amount,
+            date: row.date || null,
+            description: row.particulars || null,
+            imageHash: rowReceipt ? rowReceipt.imageHash : null,
+            createdBy: d.employee_name || null,
+            createdAt: null,
+            visible,
+          });
+        } catch (rowErr) {
+          // Skip just this malformed row rather than failing the whole request.
+          console.error('[check-duplicates] Skipping malformed liquidation row', doc.id, rowErr.message);
+        }
+      }
+    }
+
+    const toMatchEntry = (rec, matchType) => {
+      if (!rec.visible) {
+        // Redact: keep only what's needed to tell the user "something matched", not what it is.
+        return {
+          source: rec.source,
+          matchType,
+          redacted: true,
+        };
+      }
+      return {
+        source: rec.source,
+        id: rec.id,
+        liquidationId: rec.liquidationId,
+        formNo: rec.formNo,
+        projectId: rec.projectId,
+        projectName: rec.projectName,
+        supplier: rec.supplier,
+        invoiceNo: rec.invoiceNo,
+        amount: rec.amount,
+        date: rec.date,
+        description: rec.description,
+        matchType,
+        createdBy: rec.createdBy,
+        createdAt: rec.createdAt,
+      };
+    };
+
+    const results = candidates.map(candidate => {
+      const key = candidate && candidate.key;
+      const candImageHash = candidate && candidate.imageHash ? String(candidate.imageHash) : '';
+      const candInvoice = normInvoice(candidate && candidate.invoiceNo);
+      const candSupplier = normSupplier(candidate && candidate.supplier);
+      const candAmount = candidate && candidate.amount;
+      const candDate = candidate && candidate.date ? String(candidate.date) : '';
+
+      const matches = [];
+      for (const rec of records) {
+        let matchType = null;
+
+        if (candImageHash && rec.imageHash && candImageHash === String(rec.imageHash)) {
+          matchType = 'image_hash';
+        } else {
+          const recInvoice = normInvoice(rec.invoiceNo);
+          const recSupplier = normSupplier(rec.supplier);
+          if (candInvoice && recInvoice && candInvoice === recInvoice &&
+              (candSupplier && recSupplier && candSupplier === recSupplier || amountsEqual(candAmount, rec.amount))) {
+            matchType = 'invoice';
+          } else if (candSupplier && recSupplier && candSupplier === recSupplier &&
+                     amountsEqual(candAmount, rec.amount) &&
+                     candDate && rec.date && candDate === String(rec.date)) {
+            matchType = 'content';
+          }
+        }
+
+        if (matchType) {
+          matches.push(toMatchEntry(rec, matchType));
+        }
+      }
+
+      // Strongest match first (image_hash > invoice > content), cap at 5.
+      const rank = { image_hash: 0, invoice: 1, content: 2 };
+      matches.sort((a, b) => rank[a.matchType] - rank[b.matchType]);
+
+      return { key, matches: matches.slice(0, 5) };
+    });
+
+    res.json({ success: true, results });
+  } catch (err) {
+    console.error('Error checking receipt duplicates:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
 // --- END RECEIPT PARSING BLOCK ---
 
 // ========== OVERHEAD EXPENSES ==========
@@ -4361,7 +6156,9 @@ app.get('/api/overhead-expenses', async (req, res) => {
   try {
     const { year, category } = req.query;
     let query = db.collection('overhead_expenses');
-    if (!isAdmin) query = query.where('createdBy', '==', user.id);
+    // tax_filer needs full visibility for BIR substantiation (Tax Filer Ledger) — it's a
+    // read-only role; write access stays admin/owner-gated separately in the PATCH handler below.
+    if (!isAdmin && user.role !== 'tax_filer') query = query.where('createdBy', '==', user.id);
     if (category) query = query.where('category', '==', String(category));
     const snap = await query.get();
     let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -4399,10 +6196,12 @@ app.post('/api/overhead-expenses', async (req, res) => {
             sourceType: exp.sourceType || 'manual',
           };
           if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
+          if (exp.remarks) doc.remarks = String(exp.remarks);
           if (exp.supplier) doc.supplier = String(exp.supplier);
           if (exp.invoiceNo) doc.invoiceNo = String(exp.invoiceNo);
           if (exp.invoiceType) doc.invoiceType = String(exp.invoiceType);
           if (exp.tin) doc.tin = String(exp.tin);
+          if (exp.imageHash) doc.imageHash = String(exp.imageHash);
           if (exp.vat != null && Number.isFinite(Number(exp.vat))) doc.vat = Number(exp.vat);
           if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
           if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
@@ -4417,8 +6216,8 @@ app.post('/api/overhead-expenses', async (req, res) => {
       await Promise.all(outOfPocketInserted.map(exp => syncExpenseFundingInvestment(exp.id, 'overhead_expenses', exp)));
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
-    const { description, amount, date, category, sourceType, receiptRef,
-            supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = body;
+    const { description, remarks, amount, date, category, sourceType, receiptRef,
+            supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
       description: description || '',
@@ -4430,10 +6229,12 @@ app.post('/api/overhead-expenses', async (req, res) => {
       sourceType: sourceType || 'manual',
     };
     if (receiptRef) doc.receiptRef = receiptRef;
+    if (remarks) doc.remarks = String(remarks);
     if (supplier) doc.supplier = String(supplier);
     if (invoiceNo) doc.invoiceNo = String(invoiceNo);
     if (invoiceType) doc.invoiceType = String(invoiceType);
     if (tin) doc.tin = String(tin);
+    if (imageHash) doc.imageHash = String(imageHash);
     if (vat != null && Number.isFinite(Number(vat))) doc.vat = Number(vat);
     if (typeof deductible === 'boolean') doc.deductible = deductible;
     if (deductibleReason) doc.deductibleReason = String(deductibleReason);
@@ -4460,8 +6261,9 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Forbidden' });
     }
     const allowed = {};
-    const { description, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, deductible, deductibleReason, fundingSource } = req.body;
+    const { description, remarks, amount, date, category, receiptRef, supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = req.body;
     if (description !== undefined) allowed.description = String(description);
+    if (remarks !== undefined) allowed.remarks = String(remarks);
     if (amount !== undefined) allowed.amount = Number(amount);
     if (date !== undefined) allowed.date = String(date);
     if (category !== undefined) allowed.category = String(category);
@@ -4471,6 +6273,7 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
     if (invoiceType !== undefined) allowed.invoiceType = String(invoiceType);
     if (vat !== undefined && Number.isFinite(Number(vat))) allowed.vat = Number(vat);
     if (tin !== undefined) allowed.tin = String(tin);
+    if (imageHash !== undefined) allowed.imageHash = imageHash == null ? null : String(imageHash);
     if (typeof deductible === 'boolean') allowed.deductible = deductible;
     else if (deductible === null) allowed.deductible = null;
     if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
@@ -4539,7 +6342,7 @@ function portableExpenseFields(data) {
     createdBy: data.createdBy,
     sourceType: data.sourceType || 'manual',
   };
-  for (const k of ['receiptRef', 'supplier', 'invoiceNo', 'invoiceType', 'vat', 'tin', 'deductible', 'deductibleReason', 'fundingSource']) {
+  for (const k of ['receiptRef', 'supplier', 'invoiceNo', 'invoiceType', 'vat', 'tin', 'deductible', 'deductibleReason', 'fundingSource', 'imageHash']) {
     if (data[k] !== undefined) out[k] = data[k];
   }
   return out;

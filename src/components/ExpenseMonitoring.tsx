@@ -1896,7 +1896,6 @@ const ExpenseMonitoring: React.FC = () => {
                     onChange={(e) => { setExpenseFundingType(e.target.value as 'corporate_bank' | 'investor_outofpocket'); if (e.target.value !== 'investor_outofpocket') setExpenseFundingInvestor(''); }}
                   >
                     <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
-                    <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>

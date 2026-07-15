@@ -21,6 +21,7 @@ import {
   Build as BuildIcon,
   Summarize as PnLIcon,
   ReceiptLong as TaxLedgerIcon,
+  AssignmentReturn as ReimbursementIcon,
 } from '@mui/icons-material';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
 
@@ -197,22 +198,47 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
         </List>
       </Collapse>
 
-      {/* Investment Tracker — hidden from tax_filer (capital ledger, not a BIR substantiation source) */}
+      {/* Reimbursements — out-of-pocket claim payouts; hidden from tax_filer (route is TaxFilerBlock'd) */}
       {user?.role !== 'tax_filer' && (
       <ListItem disablePadding sx={{ mb: 0.5 }}>
-        <Tooltip title={isExpanded ? '' : 'Investment Tracker'} placement="right" arrow>
+        <Tooltip title={isExpanded ? '' : 'Reimbursements'} placement="right" arrow>
           <ListItemButton
-            selected={location.pathname === '/finance/investment-tracker'}
-            onClick={() => navigate('/finance/investment-tracker')}
-            sx={navBtnSx(location.pathname === '/finance/investment-tracker')}
+            selected={location.pathname === '/finance/reimbursements'}
+            onClick={() => navigate('/finance/reimbursements')}
+            sx={navBtnSx(location.pathname === '/finance/reimbursements')}
+          >
+            <ListItemIcon sx={iconSx()}>
+              <ReimbursementIcon />
+            </ListItemIcon>
+            {isExpanded && (
+              <ListItemText
+                primary="Reimbursements"
+                secondary="Out-of-pocket claim payouts"
+                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                sx={{ color: 'white' }}
+              />
+            )}
+          </ListItemButton>
+        </Tooltip>
+      </ListItem>
+      )}
+
+      {/* Founder Funding Ledger — hidden from tax_filer (capital/advance funding, not an expense source) */}
+      {user?.role === 'superadmin' && (
+      <ListItem disablePadding sx={{ mb: 0.5 }}>
+        <Tooltip title={isExpanded ? '' : 'Founder Funding Ledger'} placement="right" arrow>
+          <ListItemButton
+            selected={location.pathname === '/finance/founder-funding'}
+            onClick={() => navigate('/finance/founder-funding')}
+            sx={navBtnSx(location.pathname === '/finance/founder-funding')}
           >
             <ListItemIcon sx={iconSx()}>
               <TrendingUpIcon />
             </ListItemIcon>
             {isExpanded && (
               <ListItemText
-                primary="Investment Tracker"
-                secondary="Capital and contributions"
+                primary="Founder Funding Ledger"
+                secondary="Advances and capital"
                 secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                 sx={{ color: 'white' }}
               />

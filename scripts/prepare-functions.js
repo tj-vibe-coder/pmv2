@@ -12,4 +12,18 @@ fs.copyFileSync(
   path.join(functionsDir, 'server.js')
 );
 
-console.log('Prepared functions/server.js from root server.js');
+const runtimeModules = [
+  ['server', 'founderFunding.js'],
+  ['scripts', 'reconcile-founder-funding-ledger.js'],
+];
+
+for (const [directory, filename] of runtimeModules) {
+  const destinationDirectory = path.join(functionsDir, directory);
+  fs.mkdirSync(destinationDirectory, { recursive: true });
+  fs.copyFileSync(
+    path.join(rootDir, directory, filename),
+    path.join(destinationDirectory, filename),
+  );
+}
+
+console.log('Prepared Firebase Functions server and runtime modules from root sources');

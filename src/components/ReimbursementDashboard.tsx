@@ -380,7 +380,6 @@ const ReimbursementDashboard: React.FC = () => {
             }}
           >
             <MenuItem value="corporate_bank">Corporate Bank / Petty Cash</MenuItem>
-            <MenuItem value="investor_outofpocket">Investor Out-of-Pocket</MenuItem>
           </TextField>
           {payFundingType === 'investor_outofpocket' && (
             <TextField

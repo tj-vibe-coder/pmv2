@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost:3001/api` (dev) or production Render URL.
 
-**Auth header:** `Authorization: Bearer <base64_token>`
+**Auth header:** `Authorization: Bearer <opaque_session_token>`
 
 All routes return JSON. Error responses follow `{ success: false, error: string }` or `{ error: string }`.
 
@@ -39,7 +39,7 @@ Content-Type: application/json
     "created_at": 1700000000,
     "updated_at": 1700000000
   },
-  "token": "base64encodedstring"
+  "token": "sess_<opaque-random-value>"
 }
 ```
 
@@ -53,9 +53,9 @@ Content-Type: application/json
 
 **Notes:**
 - Password is base64-encoded and compared against `password_hash` in Firestore
-- Token = `base64(userId:username:timestamp)`
-- Token is **not** a JWT — it's a simple base64 compound string
-- Users with `approved: 0` cannot log in (except superadmin)
+- Login creates a cryptographically random opaque token; only its SHA-256 digest is stored in `auth_sessions`.
+- Sessions expire after 30 days. Legacy forgeable base64 bearer tokens are rejected, so users must log in again after this rollout.
+- Users with `approved: 0` cannot log in, including superadmins
 - Approved check: `user.approved === 1 || user.approved === true`
 
 ---
@@ -112,7 +112,7 @@ Restore session by validating the stored token.
 
 ```
 GET /api/auth/me
-Authorization: Bearer <base64_token>
+Authorization: Bearer <opaque_session_token>
 ```
 
 **Response (200):**
@@ -666,6 +666,9 @@ Content-Type: application/json
 - `rows_json`: JSON string or parsed array
 - `status`: `"draft"` or `"submitted"`
 - If `submitted` and `ca_id` provided: validates CA exists, approved, and owned by user; then decrements `ca.balance_remaining -= total_amount`
+- For submitted forms, `total_amount` must equal the exact centavo sum of all rows.
+- A recognized founder submitting without a CA defaults to `founderPaymentTreatment: "company_owes_founder"`, creating one linked Founder Advance. `"capital_contribution"` additionally requires `capitalizationReference`.
+- Project expense rows and the linked founder-funding entry are written in the same Firestore transaction.
 
 **Response (201):**
 ```json
@@ -688,10 +691,58 @@ Update a draft liquidation only. Same shape as POST.
 
 ### DELETE /api/liquidations/:id
 
-- Soft-deletes the liquidation
+- Deletes eligible legacy/draft liquidations
 - If the liquidation was submitted and linked to a CA: `ca.balance_remaining += total_amount` (restores CA balance)
+- Founder-funded liquidations are retained for audit and return `409` instead of being deleted.
+- Founder-funded submitted liquidations are immutable; corrections are recorded separately rather than revising or toggling reimbursement status in place.
 
 **Response:** `{ "success": true, "message": "Liquidation deleted" }`
+
+---
+
+## Founder Funding Ledger
+
+All endpoints require an approved `superadmin`. A founder may approve their own direct capital contribution or capitalization; the actor, timestamp, and resolution/reference are retained.
+
+### GET /api/founder-funding-settings
+
+Returns recognized founder IDs, resolved user profiles, and the optional capital target.
+
+### PUT /api/founder-funding-settings
+
+Configures one or more approved superadmin user IDs as founders. Example:
+
+```json
+{ "founderUserIds": ["user_6", "user_14"] }
+```
+
+### GET /api/founder-funding-ledger
+
+Returns append-only entries plus company/per-founder summaries. Optional filters: `founderId`, `entryType`, and `status`. The summary includes outstanding advances, contributed capital, repayments in the current Manila month, and reconciliation items needing review.
+
+### GET /api/founder-funding-ledger/reconciliation
+
+Returns scored legacy Investment Tracker/liquidation/expense matches. This endpoint and the CLI are intentionally review-only; neither mutates Firestore.
+
+### POST /api/founder-funding-ledger/deposits
+
+Records a cash deposit as `founder_advance` or `capital_contribution`. Capital contributions require `resolutionReference`. Deposits do not create company expenses. A client-generated `idempotencyKey` (8–128 URL-safe characters) is required and makes retries return the original entry.
+
+### POST /api/founder-funding-ledger/:id/repay
+
+Creates an append-only repayment against an outstanding Founder Advance. Requires `idempotencyKey`.
+
+### POST /api/founder-funding-ledger/:id/capitalize
+
+Converts part or all of an outstanding advance to capital. Requires `resolutionReference` and `idempotencyKey`; concurrent settlement attempts contend on the source advance and are transactionally revalidated.
+
+### POST /api/founder-funding-ledger/:id/void
+
+Voids an entry with a required reason. An advance cannot be voided while it has posted settlements.
+
+### Legacy Investment Tracker
+
+`GET /api/investments` and `GET /api/investments/target` remain available for historical review. POST, PUT, DELETE, and target-update routes return `410 Gone`; automatic expense-to-investment syncing is retired.
 
 ---
 

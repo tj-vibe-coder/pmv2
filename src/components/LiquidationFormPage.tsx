@@ -213,56 +213,6 @@ const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
   invoiceNo: '',
 });
 
-async function addLiquidationRowsToProjectExpenses(
-  rows: LiquidationRow[],
-  liquidationId?: string,
-  formNo?: string,
-  sourceCaId?: string
-): Promise<void> {
-  try {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
-    const toAdd = rows.filter((r) => {
-      const pid = r.projectId;
-      const amt = Number(r.amount);
-      return pid !== '' && pid !== null && pid !== undefined && amt > 0;
-    });
-    if (toAdd.length === 0) return;
-    const expenses = toAdd.map((r) => {
-      const expense: Record<string, unknown> = {
-        projectId: r.projectId,
-        projectName: (r.projectName || '').trim() || '—',
-        description: formNo
-          ? `Liquidation ${formNo}: ${(r.particulars || '').trim() || 'Liquidation'}`
-          : (r.particulars || '').trim() || 'Liquidation',
-        amount: Number(r.amount),
-        date: r.date || new Date().toISOString().slice(0, 10),
-        category: (r.category || '').trim() || 'Others',
-        sourceType: 'liquidation_sync',
-        sourceLiquidationId: liquidationId,
-        sourceLiquidationRowId: r.id,
-      };
-      if (sourceCaId) expense.sourceCaId = sourceCaId;
-      // Carry BIR substantiation captured on the row into the tax ledger.
-      if ((r.supplier || '').trim()) expense.supplier = (r.supplier || '').trim();
-      if ((r.invoiceNo || '').trim()) expense.invoiceNo = (r.invoiceNo || '').trim();
-      if (typeof r.deductible === 'boolean') expense.deductible = r.deductible;
-      if ((r.deductibleReason || '').trim()) expense.deductibleReason = (r.deductibleReason || '').trim();
-      if ((r.remarks || '').trim()) expense.remarks = (r.remarks || '').trim();
-      return expense;
-    });
-    await fetch(`${API_BASE}/api/project-expenses`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ expenses }),
-    });
-  } catch (err) {
-    console.warn('[LiquidationFormPage] expense sync failed:', err);
-  }
-}
-
 export default function LiquidationFormPage() {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -290,6 +240,7 @@ export default function LiquidationFormPage() {
   const [receipts, setReceipts] = useState<ReceiptAttachment[]>([]);
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const receiptRowIdRef = useRef<string | null>(null);
+  const linkedLiquidationLoadedRef = useRef<string | null>(null);
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
   const [scanDialog, setScanDialog] = useState<{ open: boolean; rowId: string | null }>({ open: false, rowId: null });
   const [scanBatchOpen, setScanBatchOpen] = useState(false);
@@ -298,6 +249,9 @@ export default function LiquidationFormPage() {
   const [saving, setSaving] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [caId, setCaId] = useState<string | ''>('');
+  const [isRecognizedFounder, setIsRecognizedFounder] = useState(false);
+  const [founderPaymentTreatment, setFounderPaymentTreatment] = useState<'company_owes_founder' | 'capital_contribution'>('company_owes_founder');
+  const [capitalizationReference, setCapitalizationReference] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: 'date' | 'amount'; direction: 'asc' | 'desc' } | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -378,6 +332,13 @@ export default function LiquidationFormPage() {
       })
       .catch(() => {});
   }, [token]);
+  useEffect(() => {
+    if (!token || user?.role !== 'superadmin' || !user?.id) return;
+    fetch(`${API_BASE}/api/founder-funding-settings`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((response) => response.json())
+      .then((data) => setIsRecognizedFounder(Boolean(data.success && data.settings?.founderUserIds?.includes(user.id))))
+      .catch(() => setIsRecognizedFounder(false));
+  }, [token, user?.id, user?.role]);
   useEffect(() => {
     if (!token) return;
     fetch(`${API_BASE}/api/cash-advances`, { headers: { Authorization: `Bearer ${token}` } })
@@ -679,6 +640,10 @@ export default function LiquidationFormPage() {
     })),
     total_amount: totalAmount,
     ca_id: caId || null,
+    ...(!caId && isRecognizedFounder ? {
+      founderPaymentTreatment,
+      capitalizationReference: founderPaymentTreatment === 'capital_contribution' ? capitalizationReference.trim() : undefined,
+    } : {}),
     // Only successfully uploaded receipts persist — local-only files can't be
     // recovered after a reload anyway.
     receipts_json: receipts
@@ -740,6 +705,12 @@ export default function LiquidationFormPage() {
     setEmployeeName(l.employee_name || '');
     setEmployeeNumber(l.employee_number || '');
     setCaId(l.ca_id || '');
+    setFounderPaymentTreatment(
+      l.founder_payment_treatment === 'capital_contribution'
+        ? 'capital_contribution'
+        : 'company_owes_founder',
+    );
+    setCapitalizationReference(l.capitalization_reference || '');
     let raw: Record<string, unknown>[] = [];
     try {
       raw = Array.isArray(l.rows_json)
@@ -844,6 +815,17 @@ export default function LiquidationFormPage() {
     }
     setSubmitSuccess(null);
   };
+
+  // Founder Funding source links open the exact liquidation record rather than
+  // dropping the reviewer onto the generic liquidation list.
+  useEffect(() => {
+    const liquidationId = new URLSearchParams(location.search).get('liquidation_id');
+    if (!liquidationId || linkedLiquidationLoadedRef.current === liquidationId) return;
+    linkedLiquidationLoadedRef.current = liquidationId;
+    loadDraft(liquidationId, true);
+    // loadDraft intentionally reads the latest token and form setters from this render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search, token]);
 
   // Admin: flip the reimbursement status of the loaded no-CA liquidation.
   const updateReimbursement = async (next: 'pending' | 'reimbursed') => {
@@ -1065,6 +1047,10 @@ export default function LiquidationFormPage() {
       setSubmitSuccess('Add at least one row.');
       return;
     }
+    if (!caId && isRecognizedFounder && founderPaymentTreatment === 'capital_contribution' && !capitalizationReference.trim()) {
+      setSubmitSuccess('Capital contribution treatment requires a resolution or approval reference.');
+      return;
+    }
     setSaving(true);
     setSubmitSuccess(null);
     try {
@@ -1090,16 +1076,19 @@ export default function LiquidationFormPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
-        addLiquidationRowsToProjectExpenses(rows, data.id ?? draftId ?? undefined, finalFormNo, caId || undefined).catch(() => {});
         setDraftId(null);
         setLoadedOptionValue('');
         setIsViewingSubmitted(false);
         setRows([newRow('', '')]);
         setFormNo('');
         setSubmitSuccess(caId
-          ? 'Liquidation submitted. Amount applied to CA has been deducted; expenses added to project expense.'
-          : 'Liquidation submitted as an out-of-pocket reimbursement claim (pending payback); expenses added to project expense.');
+          ? 'Liquidation submitted. Amount applied to CA has been deducted; expenses were added once to project expenses.'
+          : isRecognizedFounder
+            ? `Liquidation submitted and linked as ${founderPaymentTreatment === 'capital_contribution' ? 'a capital contribution' : 'a founder advance'}.`
+            : 'Liquidation submitted as an out-of-pocket reimbursement claim (pending payback); expenses were added once to project expenses.');
         setCaId('');
+        setFounderPaymentTreatment('company_owes_founder');
+        setCapitalizationReference('');
         setReceipts([]);
         // Fetch next form number for new form
         fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } })
@@ -1726,7 +1715,7 @@ export default function LiquidationFormPage() {
                 }}
               >
                 <MenuItem value="">
-                  <em>No CA — out-of-pocket (reimbursement)</em>
+                  <em>{isRecognizedFounder ? 'No CA — personally paid by founder' : 'No CA — out-of-pocket (reimbursement)'}</em>
                 </MenuItem>
                 {availableCAs.map((ca) => (
                   <MenuItem key={ca.id} value={ca.id}>
@@ -1743,12 +1732,46 @@ export default function LiquidationFormPage() {
               )}
               {!selectedCa && caId === '' && !isViewingSubmitted && (
                 <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: 'text.secondary' }}>
-                  No CA selected — this will be tracked as a reimbursement claim.
+                  {isRecognizedFounder
+                    ? 'No CA selected — this will be linked to the Founder Funding Ledger.'
+                    : 'No CA selected — this will be tracked as a reimbursement claim.'}
                 </Typography>
               )}
             </Box>
           )}
         </Box>
+
+        {!caId && isRecognizedFounder && !isViewingSubmitted && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ fontWeight: 700, mb: 1 }}>
+              Personally paid by a recognized founder
+            </Typography>
+            <TextField
+              select
+              fullWidth
+              size="small"
+              label="Founder funding treatment"
+              value={founderPaymentTreatment}
+              onChange={(event) => setFounderPaymentTreatment(event.target.value as 'company_owes_founder' | 'capital_contribution')}
+              sx={{ bgcolor: 'background.paper', mb: founderPaymentTreatment === 'capital_contribution' ? 1.5 : 0 }}
+            >
+              <MenuItem value="company_owes_founder">Company owes founder — create founder advance</MenuItem>
+              <MenuItem value="capital_contribution">Permanent capital contribution</MenuItem>
+            </TextField>
+            {founderPaymentTreatment === 'capital_contribution' && (
+              <TextField
+                fullWidth
+                required
+                size="small"
+                label="Resolution or approval reference"
+                value={capitalizationReference}
+                onChange={(event) => setCapitalizationReference(event.target.value)}
+                helperText="The acting founder may approve their own contribution; this reference remains in the audit trail."
+                sx={{ bgcolor: 'background.paper' }}
+              />
+            )}
+          </Alert>
+        )}
 
         {overBalance && (
           <Alert severity="warning" sx={{ mb: 2 }}>

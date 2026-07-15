@@ -82,6 +82,7 @@ uncommitted.diff
 
 # Browser-tool (cui) local state
 /.cui/
+/.superpowers/
 
 # Agent memory system (local-only tooling, not app code)
 /docs/agent/

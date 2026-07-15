@@ -3,6 +3,20 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const crypto = require('crypto');
+const {
+  buildLedgerEntry,
+  buildLiquidationExpenseDocs,
+  classifyNoCaLiquidation,
+  isRecognizedFounder,
+  phpToCentavos,
+  remainingCentavos,
+  summarizeFounderLedger,
+  sumLiquidationRowsCentavos,
+  validateCapitalization,
+  validateLiquidationRows,
+  validateSettlement,
+} = require('./server/founderFunding');
+const { findReconciliationCandidates, presentReconciliationCandidate } = require('./scripts/reconcile-founder-funding-ledger');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -52,15 +66,16 @@ if (require.main === module) {
 // Create default users on startup
 async function createDefaultUsers() {
   const defaults = [
-    { username: 'TJC', email: 'tyronejames.caballero@gmail.com', password: 'IOCT0201!', role: 'superadmin', full_name: 'Tyrone James Caballero', contact_number: '+63 969 162 2660', approved: 1 },
-    { username: 'admin', email: 'admin@netpacific.com', password: 'admin123', role: 'admin', full_name: null, contact_number: null, approved: 1 },
-    { username: 'user', email: 'user@netpacific.com', password: 'user123', role: 'user', full_name: null, contact_number: null, approved: 1 },
-    { username: 'projects', email: 'projects@iocontroltech.com', password: 'IOCT0201!', role: 'admin', full_name: null, contact_number: null, approved: 1 },
+    { username: 'TJC', email: process.env.DEFAULT_USER_EMAIL_TJC, password: process.env.DEFAULT_USER_PASSWORD_TJC, role: 'superadmin', full_name: 'Tyrone James Caballero', contact_number: '+63 969 162 2660', approved: 1 },
+    { username: 'admin', email: process.env.DEFAULT_USER_EMAIL_ADMIN, password: process.env.DEFAULT_USER_PASSWORD_ADMIN, role: 'admin', full_name: null, contact_number: null, approved: 1 },
+    { username: 'user', email: process.env.DEFAULT_USER_EMAIL_USER, password: process.env.DEFAULT_USER_PASSWORD_USER, role: 'user', full_name: null, contact_number: null, approved: 1 },
+    { username: 'projects', email: process.env.DEFAULT_USER_EMAIL_PROJECTS, password: process.env.DEFAULT_USER_PASSWORD_PROJECTS, role: 'admin', full_name: null, contact_number: null, approved: 1 },
   ];
   for (const u of defaults) {
     try {
       const snap = await db.collection('users').where('username', '==', u.username).limit(1).get();
       if (snap.empty) {
+        if (!u.password || !u.email) continue;
         const passwordHash = Buffer.from(u.password).toString('base64');
         const now = Math.floor(Date.now() / 1000);
         await db.collection('users').add({ username: u.username, email: u.email, password_hash: passwordHash, role: u.role, approved: u.approved, full_name: u.full_name, designation: null, contact_number: u.contact_number, created_at: now, updated_at: now });
@@ -126,13 +141,16 @@ async function getCurrentUser(req) {
       if (!sess || Date.now() > sess.expiresAt) return null;
       const su = await db.collection('users').doc(sess.userId).get();
       if (!su.exists) return null;
+      if (!isActiveUser(su.data())) return null;
       return { id: su.id, ...su.data(), scannerScope: true };
     }
-    const decoded = Buffer.from(token, 'base64').toString();
-    const [userId] = decoded.split(':');
-    if (!userId) return null;
-    const userDoc = await db.collection('users').doc(userId).get();
+    if (!token.startsWith('sess_')) return null;
+    const sessionId = crypto.createHash('sha256').update(token).digest('hex');
+    const sessionSnap = await db.collection('auth_sessions').doc(sessionId).get();
+    if (!sessionSnap.exists || Number(sessionSnap.data().expiresAt) <= Date.now()) return null;
+    const userDoc = await db.collection('users').doc(sessionSnap.data().userId).get();
     if (!userDoc.exists) return null;
+    if (!isActiveUser(userDoc.data())) return null;
     return { id: userDoc.id, ...userDoc.data() };
   } catch (e) {
     return null;
@@ -141,7 +159,7 @@ async function getCurrentUser(req) {
 
 function isActiveUser(user) {
   if (!user) return false;
-  return user.role === 'superadmin' || user.approved === 1 || user.approved === true;
+  return user.approved === 1 || user.approved === true;
 }
 
 async function requireActiveUser(req, res) {
@@ -247,8 +265,15 @@ app.post('/api/auth/login', async (req, res) => {
     const userDoc = candidates[0].doc;
     const user = userDoc.data();
     const approved = user.approved === 1 || user.approved === true;
-    if (!approved && user.role !== 'superadmin') return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
-    const token = Buffer.from(`${userDoc.id}:${user.username}:${Date.now()}`).toString('base64');
+    if (!approved) return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
+    const token = `sess_${crypto.randomBytes(32).toString('base64url')}`;
+    const sessionId = crypto.createHash('sha256').update(token).digest('hex');
+    const sessionNow = Date.now();
+    await db.collection('auth_sessions').doc(sessionId).set({
+      userId: userDoc.id,
+      createdAt: sessionNow,
+      expiresAt: sessionNow + (30 * 24 * 60 * 60 * 1000),
+    });
     res.json({ success: true, user: userResponse(userDoc.id, user), token });
   } catch (err) {
     console.error('Database error during login:', err);
@@ -1009,129 +1034,23 @@ app.post('/api/project-expenses/migrate-from-localstorage', async (req, res) => 
 });
 
 // ---------------------------------------------------------------------------
-// Funding-source -> investments sync (best-effort, deterministic-id upsert).
-// When an expense is paid directly out of an investor's pocket instead of the
-// corporate bank account, mirror it into a LINKED investments row so it does
-// not have to be re-keyed by hand and cannot be double-counted. Same idiom as
-// the payroll_sync_* overhead sync: a deterministic doc id keyed on the source
-// expense, upsert on out-of-pocket, delete otherwise. Never throws to caller.
-// ---------------------------------------------------------------------------
+// Legacy funding-source parser. New founder-funded activity must enter through
+// a liquidation or Founder Funding Ledger transaction; investor_outofpocket is
+// deliberately discarded so older clients cannot recreate mixed-purpose logs.
 function normalizeFundingSource(fs) {
   if (!fs || typeof fs !== 'object') return null;
-  const type = fs.type === 'investor_outofpocket' ? 'investor_outofpocket' : 'corporate_bank';
-  const out = { type };
-  if (type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim()) {
-    out.investor = fs.investor.trim();
-    if (typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()) {
-      out.linkedInvestmentId = fs.linkedInvestmentId.trim();
-    }
-  }
-  return out;
+  return fs.type === 'corporate_bank' ? { type: 'corporate_bank' } : null;
 }
 
-// project_expenses keys the project ref as `projectId`; cash_advances (a plain Firestore
-// doc predating the camelCase convention) keys it as `project_id`. Everything else (overhead,
-// payroll) has no project of its own.
-function projectIdForFundingDoc(collection, doc) {
-  if (collection === 'project_expenses') return doc.projectId || null;
-  if (collection === 'cash_advances') return doc.project_id || null;
-  if (collection === 'reimbursements') return doc.projectId || null;
-  return null;
-}
-
-function investmentCategoryForFundingDoc(collection) {
-  if (collection === 'project_expenses') return 'Project Expense';
-  if (collection === 'cash_advances') return 'Cash Advance';
-  if (collection === 'reimbursements') return 'Reimbursement';
-  return 'Overhead';
-}
-
-function newOneOffInvestmentDoc(collection, id, doc, fs) {
-  return {
-    date: doc.date,
-    investor: fs.investor.trim(),
-    amount: Number(doc.amount) || 0,
-    category: investmentCategoryForFundingDoc(collection),
-    description: `Out-of-pocket: ${doc.description || doc.purpose || doc.category || ''}`,
-    sourceType: 'expense_sync',
-    sourceExpenseId: id,
-    sourceCollection: collection,
-    sourceExpenseProjectId: projectIdForFundingDoc(collection, doc),
-    // Anchor to the expense's own createdAt (stable across edits, no extra read)
-    // rather than re-stamping "now" on every upsert.
-    created_at: doc.createdAt || new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
-}
-
-// Returns true on success (including a deliberate no-op), false if the sync itself threw —
-// callers whose whole purpose is "make sure this is linked" (the funding-retrofit endpoint)
-// should surface a warning rather than silently reporting success when this comes back false.
 async function syncExpenseFundingInvestment(id, collection, doc) {
-  const invRef = db.collection('investments').doc(`expense_sync_${id}`);
-  try {
-    const fs = doc && doc.fundingSource;
-    const isOutOfPocket = fs && fs.type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim();
-    const linkedId = isOutOfPocket && typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()
-      ? fs.linkedInvestmentId.trim() : null;
-
-    // Clear the back-reference off any investment row this expense used to point at, if it no
-    // longer does (funding source edited away/removed/re-linked elsewhere). Both fields are
-    // plain equality filters, so this is served by automatic single-field indexes (no composite
-    // index needed) — same idiom as the project_expenses equality-only queries elsewhere.
-    const staleLinked = await db.collection('investments')
-      .where('linkedExpenseId', '==', id)
-      .where('linkedExpenseCollection', '==', collection)
-      .get();
-    await Promise.all(staleLinked.docs
-      .filter(d => d.id !== linkedId)
-      .map(d => d.ref.update({
-        linkedExpenseId: FieldValue.delete(),
-        linkedExpenseCollection: FieldValue.delete(),
-        linkedExpenseProjectId: FieldValue.delete(),
-      })));
-
-    if (linkedId) {
-      // Linked to an EXISTING investments row (e.g. a lump-sum capital contribution) instead
-      // of a one-off auto-created one. Those rows are usually pencil-booked before the real
-      // receipt exists — no firm date/description — so once an actual expense is linked back,
-      // treat the expense as authoritative for date/description and store the back-reference
-      // so the ledger can link to the source expense. Still clean up any stale auto-created
-      // row from a prior state (e.g. the expense used to be a standalone out-of-pocket entry).
-      const linkedRef = db.collection('investments').doc(linkedId);
-      const linkedSnap = await linkedRef.get();
-      // Guard against linking to a row that belongs to a DIFFERENT investor than the one on
-      // this fundingSource — a mismatched linkedInvestmentId (stale UI state, hand-crafted API
-      // call, copy-paste error) must not silently misattribute someone else's capital
-      // contribution. Fall back to a fresh one-off row for the correct investor instead.
-      if (linkedSnap.exists && linkedSnap.data().investor === fs.investor.trim()) {
-        await invRef.delete();
-        await linkedRef.update({
-          date: doc.date,
-          description: doc.description || doc.purpose || linkedSnap.data().description || '',
-          linkedExpenseId: id,
-          linkedExpenseCollection: collection,
-          linkedExpenseProjectId: projectIdForFundingDoc(collection, doc),
-          updated_at: new Date().toISOString(),
-        });
-      } else {
-        if (linkedSnap.exists) {
-          console.warn(`syncExpenseFundingInvestment: linkedInvestmentId ${linkedId} belongs to investor "${linkedSnap.data().investor}", not "${fs.investor.trim()}" — ignoring the link and creating a new entry for ${collection}/${id}`);
-        }
-        await invRef.set(newOneOffInvestmentDoc(collection, id, doc, fs));
-      }
-    } else if (isOutOfPocket) {
-      await invRef.set(newOneOffInvestmentDoc(collection, id, doc, fs));
-    } else {
-      // Not out-of-pocket (or cleared) — remove any previously-linked row.
-      // Deleting a non-existent doc is a safe no-op in Firestore.
-      await invRef.delete();
-    }
-    return true;
-  } catch (syncErr) {
-    console.error('Expense funding investment sync failed for', collection, id, syncErr);
-    return false;
-  }
+  // Legacy compatibility shim. Founder funding is now recorded only through the
+  // append-only founder_funding_ledger and liquidation transaction. Keeping this
+  // as a successful no-op prevents older expense clients from recreating the
+  // duplicate investment rows that this migration is designed to eliminate.
+  void id;
+  void collection;
+  void doc;
+  return true;
 }
 
 app.post('/api/project-expenses', async (req, res) => {
@@ -1767,72 +1686,121 @@ app.get('/api/liquidations/:id', async (req, res) => {
 app.post('/api/liquidations', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
-  const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
-  const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
-  const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
-  const total = parseFloat(total_amount) || 0;
+  if (user.scannerScope) return res.status(403).json({ success: false, error: 'Scanner sessions cannot submit liquidations' });
+  const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id,
+          founderPaymentTreatment, capitalizationReference } = req.body;
+  const rows = parseLiqRows(rows_json);
+  const receipts = parseLiqRows(receipts_json);
+  let total = parseFloat(total_amount) || 0;
   const now = Math.floor(Date.now() / 1000);
+  const nowIso = new Date(now * 1000).toISOString();
   const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
   const caId = ca_id ? String(ca_id) : null;
+  if (!Array.isArray(rows) || rows.length > 450) return res.status(400).json({ success: false, error: 'Liquidation must contain at most 450 rows' });
+  if (!Array.isArray(receipts) || receipts.length > 100 || JSON.stringify(receipts).length > 10_000_000) return res.status(400).json({ success: false, error: 'Liquidation receipts exceed the allowed count or size' });
+  if (liqStatus === 'submitted' && total <= 0) return res.status(400).json({ success: false, error: 'Submitted liquidation total must be greater than zero' });
+  if (liqStatus === 'submitted' && !/^LQ-\d+$/.test(String(form_no || ''))) return res.status(400).json({ success: false, error: 'A valid LQ form number is required' });
   try {
-    let caCoveredAmount = 0;
-    let reimbursableAmount = 0;
-    if (liqStatus === 'submitted' && caId) {
-      const caDoc = await db.collection('cash_advances').doc(caId).get();
-      if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
-      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
-      // An overspend no longer blocks submission — the amount beyond the CA's
-      // balance just splits off into a reimbursement claim instead (see below).
-      caCoveredAmount = Math.min(total, bal);
-      reimbursableAmount = Math.max(0, total - bal);
-    } else if (liqStatus === 'submitted' && !caId) {
-      reimbursableAmount = total;
+    if (liqStatus === 'submitted') {
+      try {
+        validateLiquidationRows(rows);
+        const submittedCentavos = phpToCentavos(total_amount);
+        if (sumLiquidationRowsCentavos(rows) !== submittedCentavos) {
+          return res.status(400).json({ success: false, error: 'Liquidation total must equal the exact sum of its rows' });
+        }
+        total = submittedCentavos / 100;
+      } catch (validationError) {
+        return res.status(400).json({ success: false, error: validationError.message || 'Invalid liquidation amount' });
+      }
     }
     if (liqStatus === 'submitted' && form_no) {
       const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
       if (!dupSnap.empty) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
     }
-    // Reimbursable amounts — out-of-pocket claims, or the slice of a liquidation
-    // that exceeds the CA's balance — are tracked so the requester gets paid
-    // back (see /api/reimbursements).
-    const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
-    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
-    if (liqStatus === 'submitted' && caId) {
-      // Decrement by the FULL total, not just the covered portion — a CA's
-      // balance_remaining going negative IS the "company owes this employee" signal
-      // the existing employee-balances rollup (CAFormPage.tsx) already reads.
-      // ca_covered_amount/reimbursable_amount above are kept as informational splits
-      // for display; they don't change what actually gets written to the CA balance.
-      await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
-    }
-    if (liqStatus === 'submitted' && reimbursableAmount > 0) {
-      await db.collection('reimbursements').doc(ref.id).set({
-        liquidationId: ref.id,
-        formNo: form_no || null,
-        employeeId: user.id,
-        employeeName: employee_name || user.full_name || user.username || null,
-        origin: caId ? 'ca_excess' : 'no_ca',
-        amount: reimbursableAmount,
-        caId: caId || null,
-        status: 'pending',
-        fundingSource: null,
-        paidAt: null,
-        paidBy: null,
-        syncedInvestmentId: null,
-        createdAt: now,
-        updatedAt: now,
+    const settings = await getFounderFundingSettings();
+    const isFounder = isRecognizedFounder(user.id, settings.founderUserIds);
+    const noCaClassification = liqStatus === 'submitted' && !caId
+      ? classifyNoCaLiquidation({ isFounder, treatment: founderPaymentTreatment, capitalizationReference }) : null;
+    const ref = db.collection('liquidations').doc();
+    const founderFundingRef = noCaClassification && noCaClassification !== 'reimbursement'
+      ? db.collection('founder_funding_ledger').doc(`liquidation_${ref.id}`) : null;
+    const formNumberRef = liqStatus === 'submitted' && form_no
+      ? db.collection('liquidation_form_numbers').doc(String(form_no)) : null;
+    const expenseDocs = liqStatus === 'submitted'
+      ? buildLiquidationExpenseDocs({ liquidationId: ref.id, formNo: form_no, userId: user.id, createdAt: nowIso, rows }) : [];
+    let reimbursableAmount = 0;
+    let caCoveredAmount = 0;
+    await db.runTransaction(async transaction => {
+      if (formNumberRef) {
+        const formNumberSnap = await transaction.get(formNumberRef);
+        if (formNumberSnap.exists) throw Object.assign(new Error(`Form no ${form_no} is already used`), { status: 409 });
+      }
+      let caRef = null;
+      if (liqStatus === 'submitted' && caId) {
+        caRef = db.collection('cash_advances').doc(caId);
+        const caDoc = await transaction.get(caRef);
+        if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') {
+          throw Object.assign(new Error('Invalid or unauthorized cash advance'), { status: 400 });
+        }
+        const balance = parseFloat(caDoc.data().balance_remaining) || 0;
+        caCoveredAmount = Math.max(0, Math.min(total, balance));
+        reimbursableAmount = Math.max(0, total - caCoveredAmount);
+      } else if (liqStatus === 'submitted' && noCaClassification === 'reimbursement') {
+        reimbursableAmount = total;
+      }
+      const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
+      transaction.set(ref, {
+        user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null,
+        employee_name: employee_name || null, employee_number: employee_number || null,
+        rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total,
+        ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId,
+        status: liqStatus, reimbursement_status: reimbursementStatus,
+        founder_funding_entry_id: founderFundingRef ? founderFundingRef.id : null,
+        founder_payment_treatment: founderFundingRef ? noCaClassification : null,
+        reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now,
       });
-    }
-    res.status(201).json({ success: true, id: ref.id, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved' });
+      if (formNumberRef) transaction.set(formNumberRef, { liquidationId: ref.id, reservedAt: nowIso, reservedBy: user.id });
+      for (const expense of expenseDocs) transaction.set(db.collection('project_expenses').doc(expense.id), {
+        ...expense.data, ...(caId ? { sourceCaId: caId } : {}),
+      });
+      if (caRef) transaction.update(caRef, { balance_remaining: FieldValue.increment(-total), updated_at: now });
+      if (liqStatus === 'submitted' && reimbursableAmount > 0) {
+        transaction.set(db.collection('reimbursements').doc(ref.id), {
+          liquidationId: ref.id, formNo: form_no || null, employeeId: user.id,
+          employeeName: employee_name || user.full_name || user.username || null,
+          origin: caId ? 'ca_excess' : 'no_ca', amount: reimbursableAmount, caId: caId || null,
+          status: 'pending', fundingSource: null, paidAt: null, paidBy: null,
+          syncedInvestmentId: null, createdAt: now, updatedAt: now,
+        });
+      }
+      if (founderFundingRef) {
+        const ledgerEntry = buildLedgerEntry({
+          entryType: noCaClassification, founderId: user.id,
+          founderName: user.full_name || user.username || user.id,
+          transactionDate: date_of_submission || nowIso.slice(0, 10), amount: total,
+          description: `Founder-paid liquidation ${form_no || ref.id}`,
+          source: { kind: 'liquidation', liquidationId: ref.id, liquidationFormNo: form_no || undefined },
+          resolutionReference: capitalizationReference, approvedAt: nowIso, approvedBy: user.id,
+          userId: user.id, now: nowIso,
+        });
+        transaction.set(founderFundingRef, ledgerEntry);
+      }
+    });
+    res.status(201).json({
+      success: true, id: ref.id, founderFundingEntryId: founderFundingRef ? founderFundingRef.id : null,
+      projectExpenseCount: expenseDocs.length,
+      message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved',
+    });
   } catch (err) {
     console.error('Error creating liquidation:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'Database error' });
   }
 });
 
 app.put('/api/liquidations/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.scannerScope) return res.status(403).json({ success: false, error: 'Scanner sessions cannot update liquidations' });
   const { id } = req.params;
   try {
     const ref = db.collection('liquidations').doc(id);
@@ -1841,57 +1809,116 @@ app.put('/api/liquidations/:id', async (req, res) => {
     const existing = doc.data();
     if (existing.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (existing.status === 'submitted') return res.status(400).json({ success: false, error: 'Cannot edit submitted liquidation' });
-    const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
-    const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
-    const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
-    const total = parseFloat(total_amount) || 0;
+    const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id,
+            founderPaymentTreatment, capitalizationReference } = req.body;
+    const rows = parseLiqRows(rows_json);
+    const receipts = parseLiqRows(receipts_json);
+    let total = parseFloat(total_amount) || 0;
     const now = Math.floor(Date.now() / 1000);
+    const nowIso = new Date(now * 1000).toISOString();
     const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
     const caId = ca_id ? String(ca_id) : null;
+    if (!Array.isArray(rows) || rows.length > 450) return res.status(400).json({ success: false, error: 'Liquidation must contain at most 450 rows' });
+    if (!Array.isArray(receipts) || receipts.length > 100 || JSON.stringify(receipts).length > 10_000_000) return res.status(400).json({ success: false, error: 'Liquidation receipts exceed the allowed count or size' });
+    if (liqStatus === 'submitted' && total <= 0) return res.status(400).json({ success: false, error: 'Submitted liquidation total must be greater than zero' });
+    if (liqStatus === 'submitted' && !/^LQ-\d+$/.test(String(form_no || ''))) return res.status(400).json({ success: false, error: 'A valid LQ form number is required' });
+    if (liqStatus === 'submitted') {
+      try {
+        validateLiquidationRows(rows);
+        const submittedCentavos = phpToCentavos(total_amount);
+        if (sumLiquidationRowsCentavos(rows) !== submittedCentavos) {
+          return res.status(400).json({ success: false, error: 'Liquidation total must equal the exact sum of its rows' });
+        }
+        total = submittedCentavos / 100;
+      } catch (validationError) {
+        return res.status(400).json({ success: false, error: validationError.message || 'Invalid liquidation amount' });
+      }
+    }
     let caCoveredAmount = 0;
     let reimbursableAmount = 0;
-    if (liqStatus === 'submitted' && caId) {
-      const caDoc = await db.collection('cash_advances').doc(caId).get();
-      if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance' });
-      const bal = parseFloat(caDoc.data().balance_remaining) || 0;
-      caCoveredAmount = Math.min(total, bal);
-      reimbursableAmount = Math.max(0, total - bal);
-    } else if (liqStatus === 'submitted' && !caId) {
-      reimbursableAmount = total;
-    }
     if (liqStatus === 'submitted' && form_no) {
       const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
       if (dupSnap.docs.some(d => d.id !== id)) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
     }
-    const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
-    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
-    if (liqStatus === 'submitted' && caId) {
-      // Full total, matching POST above — the CA's balance_remaining can go
-      // negative, which is the existing "company owes this employee" signal.
-      await db.collection('cash_advances').doc(caId).update({ balance_remaining: FieldValue.increment(-total), updated_at: now });
-    }
-    if (liqStatus === 'submitted' && reimbursableAmount > 0) {
-      await db.collection('reimbursements').doc(id).set({
-        liquidationId: id,
-        formNo: form_no || null,
-        employeeId: existing.user_id,
-        employeeName: employee_name || user.full_name || user.username || null,
-        origin: caId ? 'ca_excess' : 'no_ca',
-        amount: reimbursableAmount,
-        caId: caId || null,
-        status: 'pending',
-        fundingSource: null,
-        paidAt: null,
-        paidBy: null,
-        syncedInvestmentId: null,
-        createdAt: now,
-        updatedAt: now,
+    const settings = await getFounderFundingSettings();
+    const isFounder = isRecognizedFounder(user.id, settings.founderUserIds);
+    const noCaClassification = liqStatus === 'submitted' && !caId
+      ? classifyNoCaLiquidation({ isFounder, treatment: founderPaymentTreatment, capitalizationReference }) : null;
+    const founderFundingRef = noCaClassification && noCaClassification !== 'reimbursement'
+      ? db.collection('founder_funding_ledger').doc(`liquidation_${id}`) : null;
+    const formNumberRef = liqStatus === 'submitted' && form_no
+      ? db.collection('liquidation_form_numbers').doc(String(form_no)) : null;
+    const expenseDocs = liqStatus === 'submitted'
+      ? buildLiquidationExpenseDocs({ liquidationId: id, formNo: form_no, userId: user.id, createdAt: nowIso, rows }) : [];
+    await db.runTransaction(async transaction => {
+      const liveDoc = await transaction.get(ref);
+      if (!liveDoc.exists) throw Object.assign(new Error('Liquidation not found'), { status: 404 });
+      if (liveDoc.data().user_id !== user.id) throw Object.assign(new Error('Forbidden'), { status: 403 });
+      if (liveDoc.data().status === 'submitted') throw Object.assign(new Error('Cannot edit submitted liquidation'), { status: 409 });
+      if (formNumberRef) {
+        const formNumberSnap = await transaction.get(formNumberRef);
+        if (formNumberSnap.exists && formNumberSnap.data().liquidationId !== id) {
+          throw Object.assign(new Error(`Form no ${form_no} is already used`), { status: 409 });
+        }
+      }
+      let caRef = null;
+      if (liqStatus === 'submitted' && caId) {
+        caRef = db.collection('cash_advances').doc(caId);
+        const caDoc = await transaction.get(caRef);
+        if (!caDoc.exists || caDoc.data().user_id !== user.id || caDoc.data().status !== 'approved') {
+          throw Object.assign(new Error('Invalid or unauthorized cash advance'), { status: 400 });
+        }
+        const balance = parseFloat(caDoc.data().balance_remaining) || 0;
+        caCoveredAmount = Math.max(0, Math.min(total, balance));
+        reimbursableAmount = Math.max(0, total - caCoveredAmount);
+      } else if (liqStatus === 'submitted' && noCaClassification === 'reimbursement') {
+        reimbursableAmount = total;
+      }
+      const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
+      transaction.update(ref, {
+        form_no: form_no || null, date_of_submission: date_of_submission || null,
+        employee_name: employee_name || null, employee_number: employee_number || null,
+        rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total,
+        ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId,
+        status: liqStatus, reimbursement_status: reimbursementStatus,
+        founder_funding_entry_id: founderFundingRef ? founderFundingRef.id : null,
+        founder_payment_treatment: founderFundingRef ? noCaClassification : null,
+        updated_at: now,
       });
-    }
-    res.json({ success: true, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
+      if (formNumberRef) transaction.set(formNumberRef, { liquidationId: id, reservedAt: nowIso, reservedBy: user.id });
+      for (const expense of expenseDocs) transaction.set(db.collection('project_expenses').doc(expense.id), {
+        ...expense.data, ...(caId ? { sourceCaId: caId } : {}),
+      });
+      if (caRef) transaction.update(caRef, { balance_remaining: FieldValue.increment(-total), updated_at: now });
+      if (liqStatus === 'submitted' && reimbursableAmount > 0) {
+        transaction.set(db.collection('reimbursements').doc(id), {
+          liquidationId: id, formNo: form_no || null, employeeId: existing.user_id,
+          employeeName: employee_name || user.full_name || user.username || null,
+          origin: caId ? 'ca_excess' : 'no_ca', amount: reimbursableAmount, caId: caId || null,
+          status: 'pending', fundingSource: null, paidAt: null, paidBy: null,
+          syncedInvestmentId: null, createdAt: now, updatedAt: now,
+        });
+      }
+      if (founderFundingRef) {
+        transaction.set(founderFundingRef, buildLedgerEntry({
+          entryType: noCaClassification, founderId: user.id,
+          founderName: user.full_name || user.username || user.id,
+          transactionDate: date_of_submission || nowIso.slice(0, 10), amount: total,
+          description: `Founder-paid liquidation ${form_no || id}`,
+          source: { kind: 'liquidation', liquidationId: id, liquidationFormNo: form_no || undefined },
+          resolutionReference: capitalizationReference, approvedAt: nowIso, approvedBy: user.id,
+          userId: user.id, now: nowIso,
+        }));
+      }
+    });
+    res.json({
+      success: true, id, founderFundingEntryId: founderFundingRef ? founderFundingRef.id : null,
+      projectExpenseCount: expenseDocs.length,
+      message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated',
+    });
   } catch (err) {
     console.error('Error updating liquidation:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'Database error' });
   }
 });
 
@@ -1910,6 +1937,7 @@ app.patch('/api/liquidations/:id', async (req, res) => {
     if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
     const liq = doc.data();
     if (liq.status !== 'submitted' || liq.ca_id) return res.status(400).json({ success: false, error: 'Reimbursement status only applies to submitted liquidations without a CA' });
+    if (liq.founder_funding_entry_id) return res.status(409).json({ success: false, error: 'Founder-funded liquidations settle through the Founder Funding Ledger, not reimbursement status' });
     const now = Math.floor(Date.now() / 1000);
     await ref.update({
       reimbursement_status,
@@ -2057,6 +2085,12 @@ app.delete('/api/liquidations/:id', async (req, res) => {
     if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
     const liq = doc.data();
     if (!isAdmin && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
+    if (liq.founder_funding_entry_id) {
+      return res.status(409).json({
+        success: false,
+        error: 'Founder-funded liquidations are retained for audit. Void or settle the linked ledger entry instead.',
+      });
+    }
     const total = parseFloat(liq.total_amount) || 0;
     const caId = liq.ca_id || null;
     const now = Math.floor(Date.now() / 1000);
@@ -2081,6 +2115,11 @@ app.delete('/api/liquidations/:id', async (req, res) => {
       await reimbursementRef.delete();
     }
     await ref.delete();
+    if (/^LQ-\d+$/.test(String(liq.form_no || ''))) {
+      const formRef = db.collection('liquidation_form_numbers').doc(liq.form_no);
+      const formSnap = await formRef.get();
+      if (formSnap.exists && formSnap.data().liquidationId === id) await formRef.delete();
+    }
     res.json({ success: true, message: 'Liquidation deleted' });
   } catch (err) {
     console.error('Error deleting liquidation:', err);
@@ -2103,11 +2142,22 @@ function parseLiqRows(rowsJson) {
 }
 
 async function applyLiquidationRevision(liqId, liq, revision, approver) {
+  if (liq.founder_funding_entry_id) {
+    throw Object.assign(new Error('Founder-funded liquidations are immutable. Record a separate correction so the original expense and funding audit remain intact.'), { status: 400 });
+  }
   const now = Math.floor(Date.now() / 1000);
   const oldRows = parseLiqRows(liq.rows_json);
   const newRows = parseLiqRows(revision.rows_json);
   const oldTotal = parseFloat(liq.total_amount) || 0;
   const newTotal = parseFloat(revision.total_amount) || 0;
+  validateLiquidationRows(newRows);
+  const revisedTotalCentavos = phpToCentavos(revision.total_amount);
+  if (sumLiquidationRowsCentavos(newRows) !== revisedTotalCentavos) {
+    throw Object.assign(new Error('Liquidation total must equal the exact sum of its rows'), { status: 400 });
+  }
+  if (liq.founder_funding_entry_id && phpToCentavos(newTotal) !== phpToCentavos(oldTotal)) {
+    throw Object.assign(new Error('A founder-funded liquidation amount cannot be revised in place. Retain the original audit record and record a separate correction.'), { status: 400 });
+  }
 
   // CA reconciliation: only the delta moves on balance_remaining (raw, uncapped —
   // same as POST/PUT above, a negative balance is the "company owes this employee"
@@ -2175,24 +2225,17 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
   for (const row of newRows) {
     if (oldRowIds.has(row.id) || expByRowId.has(row.id)) continue;
     if (!row.projectId || !(Number(row.amount) > 0)) continue;
-    const doc = {
-      projectId: String(row.projectId),
-      projectName: (row.projectName || '').trim() || '—',
-      description: liqDescription(row),
-      amount: Number(row.amount) || 0,
-      date: row.date || new Date().toISOString().slice(0, 10),
-      category: (row.category || '').trim() || 'Others',
+    const [expense] = buildLiquidationExpenseDocs({
+      liquidationId: liqId,
+      formNo: liq.form_no,
+      userId: revision.proposed_by || approver.id,
       createdAt: new Date().toISOString(),
-      createdBy: revision.proposed_by || approver.id,
-      sourceType: 'liquidation_sync',
-      sourceLiquidationId: liqId,
-      sourceLiquidationRowId: row.id,
-    };
-    if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
-    if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
-    if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
-    if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
-    batch.set(db.collection('project_expenses').doc(), doc);
+      rows: [row],
+    });
+    const expenseDoc = { ...expense.data };
+    if (liq.ca_id) expenseDoc.sourceCaId = String(liq.ca_id);
+    if (typeof row.deductible === 'boolean') expenseDoc.deductible = row.deductible;
+    batch.set(db.collection('project_expenses').doc(expense.id), expenseDoc);
   }
   await batch.commit();
 
@@ -2270,10 +2313,21 @@ app.post('/api/liquidations/:id/propose-edit', async (req, res) => {
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (liq.status !== 'submitted') return res.status(400).json({ success: false, error: 'Only submitted liquidations use the edit-approval flow — edit the draft directly' });
+    if (liq.founder_funding_entry_id) return res.status(409).json({ success: false, error: 'Founder-funded liquidations are immutable. Record a separate correction instead.' });
     const { rows_json, receipts_json, total_amount, employee_name, date_of_submission, note } = req.body;
     const rows = parseLiqRows(rows_json);
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
-    const total = parseFloat(total_amount) || 0;
+    let total;
+    try {
+      validateLiquidationRows(rows);
+      const totalCentavos = phpToCentavos(total_amount);
+      if (sumLiquidationRowsCentavos(rows) !== totalCentavos) {
+        return res.status(400).json({ success: false, error: 'Liquidation total must equal the exact sum of its rows' });
+      }
+      total = totalCentavos / 100;
+    } catch (validationError) {
+      return res.status(400).json({ success: false, error: validationError.message || 'Invalid liquidation revision' });
+    }
     // Early CA check for fast feedback; approval re-validates against the live balance.
     if (liq.ca_id) {
       const caDoc = await db.collection('cash_advances').doc(String(liq.ca_id)).get();
@@ -2531,7 +2585,294 @@ app.delete('/api/supplier-products/:id', async (req, res) => {
   }
 });
 
-// ========== INVESTMENT TRACKER ==========
+// ========== FOUNDER FUNDING LEDGER ==========
+// Funding entries explain how IOCT was financed. They never create expenses;
+// liquidation_sync rows remain the sole project-expense source of truth.
+const FOUNDER_FUNDING_SETTINGS_REF = () => db.collection('company_settings').doc('founder_funding');
+
+async function requireFounderFundingAdmin(req, res) {
+  const user = await getCurrentUser(req);
+  if (!user) { res.status(401).json({ success: false, error: 'Unauthorized' }); return null; }
+  if (user.scannerScope) { res.status(403).json({ success: false, error: 'Scanner sessions cannot access financial administration' }); return null; }
+  if (user.role !== 'superadmin') { res.status(403).json({ success: false, error: 'Superadmin only' }); return null; }
+  return user;
+}
+
+async function getFounderFundingSettings() {
+  const snap = await FOUNDER_FUNDING_SETTINGS_REF().get();
+  const data = snap.exists ? snap.data() : {};
+  return {
+    founderUserIds: Array.isArray(data.founderUserIds)
+      ? [...new Set(data.founderUserIds.filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))]
+      : [],
+    capitalTargetCentavos: Number.isSafeInteger(data.capitalTargetCentavos) && data.capitalTargetCentavos >= 0
+      ? data.capitalTargetCentavos : 0,
+  };
+}
+
+async function getFounderProfile(founderId, founderUserIds) {
+  if (!isRecognizedFounder(founderId, founderUserIds)) throw Object.assign(new Error('User is not a configured founder'), { status: 400 });
+  const snap = await db.collection('users').doc(founderId).get();
+  if (!snap.exists) throw Object.assign(new Error('Founder user not found'), { status: 400 });
+  const data = snap.data();
+  return { id: snap.id, name: data.full_name || data.username || snap.id };
+}
+
+function founderMutationDocumentId(prefix, userId, idempotencyKey) {
+  if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey)) {
+    throw Object.assign(new Error('A valid idempotencyKey is required'), { status: 400 });
+  }
+  const digest = crypto.createHash('sha256').update(`${prefix}:${userId}:${idempotencyKey}`).digest('hex').slice(0, 40);
+  return `${prefix}_${digest}`;
+}
+
+async function listFounderFundingEntries() {
+  const snap = await db.collection('founder_funding_ledger').get();
+  return snap.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .sort((a, b) => `${b.transactionDate || ''}:${b.createdAt || ''}`.localeCompare(`${a.transactionDate || ''}:${a.createdAt || ''}`));
+}
+
+async function loadFounderReconciliationCandidates() {
+  const [investmentSnap, liquidationSnap, expenseSnap] = await Promise.all([
+    db.collection('investments').get(),
+    db.collection('liquidations').get(),
+    db.collection('project_expenses').get(),
+  ]);
+  const investments = investmentSnap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+  const liquidations = liquidationSnap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+  const projectExpenses = expenseSnap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+  const candidates = findReconciliationCandidates({ investments, liquidations, projectExpenses });
+  return candidates.map((candidate, index) => presentReconciliationCandidate(candidate, {
+    investments,
+    liquidations,
+    index,
+  }));
+}
+
+app.get('/api/founder-funding-settings', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    const settings = await getFounderFundingSettings();
+    const founders = await Promise.all(settings.founderUserIds.map(async id => {
+      const snap = await db.collection('users').doc(id).get();
+      return snap.exists ? { id, username: snap.data().username, fullName: snap.data().full_name || null } : { id };
+    }));
+    res.json({ success: true, settings: { ...settings, founders } });
+  } catch (err) {
+    console.error('Error fetching founder funding settings:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.put('/api/founder-funding-settings', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    const ids = Array.isArray(req.body.founderUserIds)
+      ? [...new Set(req.body.founderUserIds.filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))]
+      : null;
+    if (!ids || ids.length === 0) return res.status(400).json({ success: false, error: 'At least one founder user id is required' });
+    if (ids.length > 10) return res.status(400).json({ success: false, error: 'A maximum of 10 founders may be configured' });
+    const users = await Promise.all(ids.map(id => db.collection('users').doc(id).get()));
+    if (users.some(snap => !snap.exists || snap.data().role !== 'superadmin' || !(snap.data().approved === 1 || snap.data().approved === true))) {
+      return res.status(400).json({ success: false, error: 'Every founder must be an approved superadmin user' });
+    }
+    let capitalTargetCentavos = 0;
+    if (req.body.capitalTarget != null && req.body.capitalTarget !== '') capitalTargetCentavos = phpToCentavos(req.body.capitalTarget);
+    const now = new Date().toISOString();
+    await FOUNDER_FUNDING_SETTINGS_REF().set({ founderUserIds: ids, capitalTargetCentavos, updatedAt: now, updatedBy: user.id }, { merge: true });
+    res.json({ success: true, settings: { founderUserIds: ids, capitalTargetCentavos } });
+  } catch (err) {
+    console.error('Error updating founder funding settings:', err);
+    res.status(err.status || 400).json({ success: false, error: err.status ? err.message : 'Invalid founder funding settings' });
+  }
+});
+
+app.get('/api/founder-funding-ledger', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    const entries = await listFounderFundingEntries();
+    const filtered = entries.filter(entry =>
+      (!req.query.founderId || entry.founderId === req.query.founderId) &&
+      (!req.query.entryType || entry.entryType === req.query.entryType) &&
+      (!req.query.status || entry.status === req.query.status));
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date()).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+    const periodStart = `${parts.year}-${parts.month}-01`;
+    const lastDay = new Date(Date.UTC(Number(parts.year), Number(parts.month), 0)).getUTCDate();
+    const periodEnd = `${parts.year}-${parts.month}-${String(lastDay).padStart(2, '0')}`;
+    const summary = summarizeFounderLedger(entries, { periodStart, periodEnd });
+    const reconciliation = await loadFounderReconciliationCandidates();
+    res.json({ success: true, entries: filtered, summary: { ...summary, needsReviewCount: reconciliation.length } });
+  } catch (err) {
+    console.error('Error fetching founder funding ledger:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.get('/api/founder-funding-ledger/reconciliation', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    res.json({ success: true, candidates: await loadFounderReconciliationCandidates(), readOnly: true });
+  } catch (err) {
+    console.error('Error generating founder reconciliation candidates:', err);
+    res.status(500).json({ success: false, error: 'Could not generate reconciliation candidates' });
+  }
+});
+
+app.post('/api/founder-funding-ledger/deposits', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    const settings = await getFounderFundingSettings();
+    const founder = await getFounderProfile(String(req.body.founderId || ''), settings.founderUserIds);
+    const entryType = req.body.entryType === 'capital_contribution' ? 'capital_contribution' : 'founder_advance';
+    if (entryType === 'capital_contribution') validateCapitalization({ resolutionReference: req.body.resolutionReference });
+    const now = new Date().toISOString();
+    const entry = buildLedgerEntry({
+      entryType, founderId: founder.id, founderName: founder.name,
+      transactionDate: req.body.transactionDate, amount: req.body.amount,
+      description: req.body.description || 'Founder cash deposit',
+      source: { kind: 'cash_deposit', depositReference: req.body.depositReference || undefined },
+      proofRefs: req.body.proofRefs, resolutionReference: req.body.resolutionReference,
+      userId: user.id, now,
+    });
+    const ref = db.collection('founder_funding_ledger').doc(
+      founderMutationDocumentId('deposit', user.id, req.body.idempotencyKey),
+    );
+    let persistedEntry;
+    let created = false;
+    await db.runTransaction(async transaction => {
+      const existing = await transaction.get(ref);
+      if (existing.exists) {
+        persistedEntry = existing.data();
+        return;
+      }
+      transaction.create(ref, entry);
+      persistedEntry = entry;
+      created = true;
+    });
+    res.status(created ? 201 : 200).json({ success: true, entry: { id: ref.id, ...persistedEntry }, idempotentReplay: !created });
+  } catch (err) {
+    console.error('Error creating founder deposit:', err);
+    res.status(err.status || 400).json({ success: false, error: err.message || 'Invalid founder deposit' });
+  }
+});
+
+async function createFounderSettlement(req, res, entryType) {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  try {
+    const amountCentavos = phpToCentavos(req.body.amount);
+    if (entryType === 'capitalization') validateCapitalization({ resolutionReference: req.body.resolutionReference });
+    const now = new Date().toISOString();
+    const advanceRef = db.collection('founder_funding_ledger').doc(req.params.id);
+    const settlementRef = db.collection('founder_funding_ledger').doc(
+      founderMutationDocumentId(entryType, user.id, req.body.idempotencyKey),
+    );
+    let settlement;
+    let remaining;
+    let created = false;
+    await db.runTransaction(async transaction => {
+      const advanceSnap = await transaction.get(advanceRef);
+      const existingSettlement = await transaction.get(settlementRef);
+      if (!advanceSnap.exists) throw Object.assign(new Error('Founder advance not found'), { status: 404 });
+      const entry = { id: advanceSnap.id, ...advanceSnap.data() };
+      if (entry.status !== 'posted' || !['founder_advance', 'opening_balance_adjustment'].includes(entry.entryType)) {
+        throw Object.assign(new Error('Entry is not an active founder advance'), { status: 400 });
+      }
+      if (existingSettlement.exists) {
+        settlement = existingSettlement.data();
+        if (settlement.settlesEntryId !== entry.id || settlement.entryType !== entryType) {
+          throw Object.assign(new Error('Idempotency key was already used for a different settlement'), { status: 409 });
+        }
+        const priorSettled = Number.isSafeInteger(entry.settledCentavos) ? entry.settledCentavos : 0;
+        remaining = entry.amountCentavos - priorSettled;
+        return;
+      }
+      const settlementQuery = db.collection('founder_funding_ledger').where('settlesEntryId', '==', entry.id);
+      const settlementSnap = await transaction.get(settlementQuery);
+      const postedSettlementAmounts = settlementSnap.docs
+        .map(doc => doc.data()).filter(item => item.status === 'posted').map(item => item.amountCentavos);
+      const outstandingCentavos = remainingCentavos(entry.amountCentavos, postedSettlementAmounts);
+      validateSettlement({ outstandingCentavos, amountCentavos });
+      settlement = buildLedgerEntry({
+        entryType, founderId: entry.founderId, founderName: entry.founderName,
+        transactionDate: req.body.transactionDate, amountCentavos,
+        description: req.body.description || (entryType === 'repayment' ? `Repayment of ${entry.description}` : `Capitalization of ${entry.description}`),
+        source: entry.source, settlesEntryId: entry.id, proofRefs: req.body.proofRefs,
+        resolutionReference: req.body.resolutionReference,
+        approvedAt: now, approvedBy: user.id, userId: user.id, now,
+      });
+      remaining = outstandingCentavos - amountCentavos;
+      const settledCentavos = entry.amountCentavos - outstandingCentavos + amountCentavos;
+      transaction.update(advanceRef, { settledCentavos, updatedAt: now, updatedBy: user.id });
+      transaction.create(settlementRef, settlement);
+      created = true;
+    });
+    res.status(created ? 201 : 200).json({ success: true, entry: { id: settlementRef.id, ...settlement }, remainingCentavos: remaining, idempotentReplay: !created });
+  } catch (err) {
+    console.error(`Error creating founder ${entryType}:`, err);
+    res.status(err.status || 400).json({ success: false, error: err.message || 'Invalid founder settlement' });
+  }
+}
+
+app.post('/api/founder-funding-ledger/:id/repay', (req, res) => createFounderSettlement(req, res, 'repayment'));
+app.post('/api/founder-funding-ledger/:id/capitalize', (req, res) => createFounderSettlement(req, res, 'capitalization'));
+
+app.post('/api/founder-funding-ledger/:id/void', async (req, res) => {
+  const user = await requireFounderFundingAdmin(req, res);
+  if (!user) return;
+  const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+  if (!reason) return res.status(400).json({ success: false, error: 'Void reason is required' });
+  if (reason.length > 1000) return res.status(400).json({ success: false, error: 'Void reason must be at most 1000 characters' });
+  try {
+    const ref = db.collection('founder_funding_ledger').doc(req.params.id);
+    const now = new Date().toISOString();
+    await db.runTransaction(async transaction => {
+      const snap = await transaction.get(ref);
+      if (!snap.exists) throw Object.assign(new Error('Founder funding entry not found'), { status: 404 });
+      const entry = snap.data();
+      if (entry.status !== 'posted') throw Object.assign(new Error('Entry is already voided'), { status: 400 });
+      if (['founder_advance', 'opening_balance_adjustment'].includes(entry.entryType)) {
+        const query = db.collection('founder_funding_ledger').where('settlesEntryId', '==', snap.id);
+        const settlements = await transaction.get(query);
+        if (settlements.docs.some(doc => doc.data().status === 'posted')) {
+          throw Object.assign(new Error('Void posted settlements before voiding this advance'), { status: 409 });
+        }
+      } else if (['repayment', 'capitalization'].includes(entry.entryType)) {
+        const sourceRef = db.collection('founder_funding_ledger').doc(entry.settlesEntryId);
+        const sourceSnap = await transaction.get(sourceRef);
+        if (!sourceSnap.exists || sourceSnap.data().status !== 'posted') {
+          throw Object.assign(new Error('Source advance is unavailable'), { status: 409 });
+        }
+        const settlementQuery = db.collection('founder_funding_ledger').where('settlesEntryId', '==', entry.settlesEntryId);
+        const settlements = await transaction.get(settlementQuery);
+        const remainingPosted = settlements.docs
+          .filter(doc => doc.id !== snap.id && doc.data().status === 'posted')
+          .map(doc => doc.data().amountCentavos);
+        const remainingBalance = remainingCentavos(sourceSnap.data().amountCentavos, remainingPosted);
+        transaction.update(sourceRef, {
+          settledCentavos: sourceSnap.data().amountCentavos - remainingBalance,
+          updatedAt: now,
+          updatedBy: user.id,
+        });
+      }
+      transaction.update(ref, { status: 'voided', voidedAt: now, voidedBy: user.id, voidReason: reason });
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error voiding founder funding entry:', err);
+    res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'Database error' });
+  }
+});
+
+// ========== LEGACY INVESTMENT TRACKER ==========
 app.get('/api/investments', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -2550,50 +2891,21 @@ app.post('/api/investments', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  const { date, investor, amount, category, description } = req.body || {};
-  if (!date || !investor || !amount || !category) return res.status(400).json({ success: false, error: 'date, investor, amount, and category are required' });
-  try {
-    const now = new Date().toISOString();
-    const ref = await db.collection('investments').add({ date, investor, amount: parseFloat(amount), category, description: description || '', created_at: now, updated_at: now });
-    res.status(201).json({ success: true, id: ref.id });
-  } catch (err) {
-    console.error('Error creating investment:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
-  }
+  return res.status(410).json({ success: false, error: 'Investment Tracker is read-only. Use the Founder Funding Ledger.' });
 });
 
 app.put('/api/investments/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  const { date, investor, amount, category, description } = req.body || {};
-  if (!date || !investor || !amount || !category) return res.status(400).json({ success: false, error: 'date, investor, amount, and category are required' });
-  try {
-    const ref = db.collection('investments').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ success: false, error: 'Investment not found' });
-    await ref.update({ date, investor, amount: parseFloat(amount), category, description: description || '', updated_at: new Date().toISOString() });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Error updating investment:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
-  }
+  return res.status(410).json({ success: false, error: 'Investment Tracker is read-only. Use the Founder Funding Ledger.' });
 });
 
 app.delete('/api/investments/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  try {
-    const ref = db.collection('investments').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ success: false, error: 'Investment not found' });
-    await ref.delete();
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Error deleting investment:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
-  }
+  return res.status(410).json({ success: false, error: 'Investment Tracker is read-only. Historical records must be reconciled through review.' });
 });
 
 app.get('/api/investments/target', async (req, res) => {
@@ -2612,14 +2924,7 @@ app.put('/api/investments/target', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
-  const { target } = req.body;
-  if (!target || isNaN(parseFloat(target))) return res.status(400).json({ success: false, error: 'Valid target amount required' });
-  try {
-    await db.collection('investment_config').doc('target').set({ target: parseFloat(target) });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, error: 'Database error' });
-  }
+  return res.status(410).json({ success: false, error: 'Investment Tracker configuration is retired.' });
 });
 
 // ========== PAYROLL ROUTES ==========

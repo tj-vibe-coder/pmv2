@@ -1,5 +1,7 @@
 # Founder Funding Ledger Implementation Plan
 
+> Safety amendment (2026-07-15): implementation review disabled all reconciliation mutation paths. The delivered CLI and UI are review-only; any future apply workflow requires a separate approved design and security review.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace new Investment Tracker activity with an auditable Founder Funding Ledger that keeps founder funding separate from company expenses and connects founder-paid liquidations to one canonical expense record.
@@ -26,7 +28,7 @@
 - Modify: `src/components/CAFormPage.tsx`, `src/components/payroll/PayrollRunForm.tsx`, `src/components/ExpenseMonitoring.tsx`, and `src/components/finance/FinanceHomePage.tsx` — remove dependencies on `/api/investments` that are only used to link funding to an expense; keep non-founder employee reimbursement behavior unchanged.
 - Modify: `docs/DATA_MODEL.md`, `docs/API.md`, `docs/architecture/OVERVIEW.md`, `docs/agent/PROJECT_STATE.md`, and `docs/agent/TASK_LOG.md` — record the data model, routes, architecture decision, state, and task history.
 - Create: `docs/architecture/ADR-0002-founder-funding-ledger.md` — explain why founder advances and capital contributions are distinct from expenses.
-- Create: `scripts/reconcile-founder-funding-ledger.js` — read-only dry-run report and explicit `--apply <approved-actions.json>` processor for reviewed legacy actions.
+- Create: `scripts/reconcile-founder-funding-ledger.js` — read-only dry-run report; `--apply` is explicitly rejected.
 - Create: `scripts/reconcile-founder-funding-ledger.test.js` — matching and action-validation tests.
 
 ### Task 1: Establish tested financial primitives

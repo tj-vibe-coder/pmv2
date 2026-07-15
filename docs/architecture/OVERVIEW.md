@@ -10,7 +10,7 @@ Use this as a quick orientation file for agents and developers.
 
 ## System Overview
 
-pmv2 is a **monolithic web application** — a React 19 + TypeScript frontend served by an Express 5 backend, backed by Firebase Firestore. Auth is a custom username/password system (NOT Firebase Auth) using base64 tokens. The app is deployed on Firebase Hosting (frontend) + Cloud Functions (API), with a legacy SQLite layer for historical data migration.
+pmv2 is a **monolithic web application** — a React 19 + TypeScript frontend served by an Express 5 backend, backed by Firebase Firestore. Auth is a custom username/password system (NOT Firebase Auth) using opaque server-side Firestore sessions. The app is deployed on Firebase Hosting (frontend) + Cloud Functions (API), with a legacy SQLite layer for historical data migration.
 
 ## Main Modules
 
@@ -20,6 +20,7 @@ pmv2 is a **monolithic web application** — a React 19 + TypeScript frontend se
 | **Project Monitoring** | Dashboard, KPI charts, project CRUD, import/export | `components/Dashboard.tsx`, `components/ProjectDetails.tsx`, `services/dataService.ts` |
 | **Project List** | Detailed projects view for the main operations module | `components/ProjectMonitoringApp.tsx` |
 | **Expense Management** | Cash advances, liquidations, direct labor | `components/CAFormPage.tsx`, `components/LiquidationFormPage.tsx`, `components/ExpenseMonitoring.tsx` |
+| **Founder Funding** | Founder advances, capital contributions, repayments, and review-only legacy reconciliation | `components/FounderFundingLedgerPage.tsx`, `server/founderFunding.js`, `scripts/reconcile-founder-funding-ledger.js` |
 | **Procurement** | Material requests, delivery receipts, suppliers, purchase orders, estimates | `components/MaterialRequestFormPage.tsx`, `components/PurchaseOrderPage.tsx`, `components/SuppliersPage.tsx` |
 | **Reports** | Progress reports, service reports, completion certificates, saved-report snapshots, OneDrive attachments | `components/ReportsPage.tsx`, `components/reports/*` |
 | **Utilities** | EHS documents, ID generator, acknowledgement receipts | `components/EHSPage.tsx`, `components/IDGeneratorPage.tsx` |
@@ -36,12 +37,22 @@ User action → React Component → dataService / firebasePayroll → Express AP
 
 Auth flow:
 LoginPage → AuthContext.login() → POST /api/auth/login → server.js validates against Firestore 'users'
-  → Returns { user, token: base64(userId:username:timestamp) }
+  → Creates `auth_sessions/{sha256(token)}` and returns an opaque `sess_...` token
   → Token stored in localStorage 'netpacific_token'
   → All subsequent API calls include Authorization: Bearer <token>
 ```
 
 All API calls go through the Express backend (`server.js`), which uses Firebase Admin SDK to read/write Firestore. The frontend does NOT call Firestore directly (except for the payroll module via `firebasePayroll.ts`, which uses the client Firestore SDK).
+
+Financial source separation:
+
+```text
+Founder-paid receipt → liquidation + one deterministic project expense per project row
+                    → one linked Founder Advance (or approved direct capital entry)
+
+Repayment/capitalization → append-only settlement of that advance
+Legacy duplicates       → read-only candidate queue; no automatic historical mutation
+```
 
 ---
 
@@ -69,6 +80,7 @@ User profile fields (`full_name`, `designation`) feed report prepared-by signatu
 
 **Firestore (production)** — 13+ collections:
 - `users`, `projects` (60+ fields), `clients`, `cash_advances`, `liquidations`
+- `founder_funding_ledger`, `company_settings/founder_funding`
 - `suppliers`, `supplier_products`, `project_attachments`
 - `employees`, `payrollRuns` (with subcollections `dtrEntries`, `payslips`), `phHolidays`
 
@@ -85,12 +97,13 @@ Full schema: see `docs/DATA_MODEL.md`.
 - **Firebase Console:** https://console.firebase.google.com/project/pmv2-851ae
 - **Local dev:** `npm start` boots server (port 3001) + client (port 3000)
 - **Local writes to production Firestore** — be careful
+- Firebase predeploy runs `scripts/prepare-functions.js`, copying root `server.js` plus Founder Funding runtime modules into `functions/`; root files remain the source of truth.
 
 ---
 
 ## Known Architecture Risks
 
-- **Custom auth**: base64-encoded tokens with plaintext-equivalent passwords — not production-grade security
+- **Custom auth passwords**: passwords remain base64/plaintext-equivalent even though bearer tokens now use random, expiring server sessions
 - **No Firebase Auth**: the custom system is fragile, tokens are easy to forge, no refresh mechanism
 - **Single Express monolith**: all routes in one `server.js` (1000+ lines), no middleware layering
 - **Project filtering**: fetches ALL projects from Firestore then filters in-memory — won't scale beyond thousands of records

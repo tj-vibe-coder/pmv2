@@ -909,7 +909,6 @@ export default function CAFormPage() {
                 }}
               >
                 <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
-                <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
               </TextField>
               {fundingType === 'investor_outofpocket' && (
                 <TextField
@@ -1491,7 +1490,6 @@ export default function CAFormPage() {
               }}
             >
               <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
-              <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
             </TextField>
             {fundingEditType === 'investor_outofpocket' && (
               <TextField

@@ -27,7 +27,7 @@ import AcknowledgementReceiptPage from './components/AcknowledgementReceiptPage'
 import DirectLaborPage from './components/DirectLaborPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
 import UsersPage from './components/UsersPage';
-import InvestmentTrackerPage from './components/InvestmentTrackerPage';
+import FounderFundingLedgerPage from './components/FounderFundingLedgerPage';
 import CollectionsDashboard from './components/CollectionsDashboard';
 import PayrollDashboard from './components/payroll/PayrollDashboard';
 import PayrollGuard from './components/payroll/PayrollGuard';
@@ -413,7 +413,7 @@ function App() {
             />
             {/* ===== FINANCE WORKSPACE ===== */}
             {/* Legacy finance paths redirect into the workspace, preserving query strings */}
-            <Route path="/investment-tracker" element={<RedirectWithSearch to="/finance/investment-tracker" />} />
+            <Route path="/investment-tracker" element={<RedirectWithSearch to="/finance/founder-funding" />} />
             <Route path="/payroll" element={<RedirectWithSearch to="/finance/payroll" />} />
             <Route path="/collections" element={<RedirectWithSearch to="/finance/collections" />} />
             <Route
@@ -442,12 +442,18 @@ function App() {
             />
             <Route
               path="/finance/investment-tracker"
+              element={<RedirectWithSearch to="/finance/founder-funding" />}
+            />
+            <Route
+              path="/finance/founder-funding"
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
                     <AppLayout>
                       <TaxFilerBlock>
-                        <InvestmentTrackerPage />
+                        <SuperadminRoute>
+                          <FounderFundingLedgerPage />
+                        </SuperadminRoute>
                       </TaxFilerBlock>
                     </AppLayout>
                   </EmployeeGuard>
