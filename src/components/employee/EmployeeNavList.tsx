@@ -15,6 +15,7 @@ import {
   QrCode2 as QrCodeIcon,
   DescriptionOutlined as PayslipIcon,
   Assignment as ReportIcon,
+  Payments as PaymentsIcon,
 } from '@mui/icons-material';
 
 interface EmployeeNavListProps {
@@ -34,6 +35,7 @@ const EmployeeNavList: React.FC<EmployeeNavListProps> = ({ isExpanded, navBtnSx,
     { label: 'Payslips', icon: <PayslipIcon />, path: '/employee/payslips' },
     { label: 'Service Report', icon: <ReportIcon />, path: '/employee/service-report' },
     { label: 'Liquidation', icon: <ReceiptIcon />, path: '/employee/liquidation-form' },
+    { label: 'Cash Advance', icon: <PaymentsIcon />, path: '/employee/ca-form' },
   ];
 
   return (

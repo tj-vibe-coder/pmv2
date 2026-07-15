@@ -2,7 +2,17 @@ export type ID = string;
 
 export type QuotationKind = 'IOCT' | 'ACTI';
 
-export type ProjectStatus = 'draft' | 'sent' | 'won' | 'lost' | 'inactive';
+export type ProjectStatus = 'draft' | 'for_review' | 'sent' | 'won' | 'lost' | 'inactive';
+
+// Single runtime source of truth for the status set, in lifecycle order. Status
+// dropdowns and the XLSX export's Excel dropdown all derive from this list —
+// adding a status here propagates everywhere.
+export const PROJECT_STATUSES: ProjectStatus[] = ['draft', 'for_review', 'sent', 'won', 'lost', 'inactive'];
+
+export function projectStatusLabel(s: ProjectStatus): string {
+  if (s === 'for_review') return 'For review';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 // Re-export the unified Client + ClientContact types so calcsheet code that imports
 // from `types/Quotation` keeps working without a path change.
@@ -31,6 +41,12 @@ export interface Project {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+
+  // Who created the opportunity — stamped server-side from the authenticated user
+  // on POST and never updatable (PUT strips them). Absent on legacy/imported and
+  // pre-2026-07 projects; UI renders '—'.
+  createdBy?: string;
+  createdByName?: string;
 
   // OneDrive corporate-shared-library folder links. Populated best-effort when a
   // project is created (proposal folder) or transitions to 'won' (execution folder).

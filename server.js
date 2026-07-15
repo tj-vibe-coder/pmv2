@@ -660,6 +660,7 @@ app.post('/api/projects/bulk', async (req, res) => {
             contract_billed_net_percent: project.contract_billed_net_percent || 0, amount_contract_billed_net: project.amount_contract_billed_net || 0,
             for_retention_billing_percent: project.for_retention_billing_percent || 0, amount_for_retention_billing: project.amount_for_retention_billing || 0,
             retention_status: project.retention_status || '', unevaluated_progress: project.unevaluated_progress || 0,
+            with_acti: project.with_acti || false, partner_id: project.partner_id || null, partner_name: project.partner_name || '',
             created_at: now, updated_at: now,
           });
           successCount++;
@@ -3139,31 +3140,82 @@ function newestQuotation(a, b) {
   return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
 }
 
+// Grand total of a calcsheet quotation — seeds contract_amount on the synced
+// Project List record. Faithful plain-JS port of the client calc engine
+// (src/utils/calcsheet/calc.ts: computeTotals + computeTotalsLegacy). It lives
+// inline because the functions deploy copies only server.js. The parity test
+// src/utils/calcsheet/serverGrandTotal.parity.test.ts extracts this function
+// from server.js and compares it against the engine — keep the two in sync,
+// and keep string literals here brace-free so the test's extraction works.
 function quotationGrandTotal(q) {
   if (!q) return 0;
-  if (q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.grandTotal))) {
-    return Number(q.legacyTotalsSnapshot.grandTotal);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const generalReqts = Array.isArray(q.generalReqts) ? q.generalReqts : [];
+  const components = Array.isArray(q.components) ? q.components : [];
+  const manpower = Array.isArray(q.manpower) ? q.manpower : [];
+  const services = Array.isArray(q.services) ? q.services : [];
+  const lineGeneralTotal = (l) => num(l.unitPrice) * num(l.qty);
+  const servicesLineSum = () => services.reduce((s, l) => s + num(l.amount), 0);
+  const finish = (subtotal) => {
+    const afterDiscount = subtotal * (1 - num(q.discountPct) / 100);
+    return afterDiscount * (1 + num(q.vatPct) / 100);
+  };
+
+  if (q.formulaVersion === 'legacy') {
+    if (q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.grandTotal))) {
+      return Number(q.legacyTotalsSnapshot.grandTotal);
+    }
+    const cont = num(q.globalContingencyPct) / 100;
+    const generalReqtsCost = generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0);
+    const generalReqtsWithContingency = q.generalReqContingencyMode === 'baked'
+      ? generalReqtsCost
+      : generalReqtsCost * (1 + cont);
+    const generalReqtsSubtotal = generalReqtsWithContingency * (1 + num(q.generalReqMarkupPct) / 100);
+    const componentsSubtotal = components.reduce((s, l) => {
+      const base = num(l.unitCost) * (num(l.forex) || 1);
+      const adjusted = base * (1 + num(l.contingencyPct) / 100 - num(l.discountPct) / 100);
+      return s + adjusted * (1 + num(q.productMarkupPct) / 100) * num(l.qty);
+    }, 0);
+    let servicesSub;
+    if (q.servicesFromManpower) {
+      const laborWithContingency = manpower.reduce((s, m) => {
+        const unit = (num(m.dailyRate) + num(m.allowance)) * (1 + cont);
+        return s + num(m.headcount) * num(m.mandays) * unit;
+      }, 0);
+      servicesSub = laborWithContingency * (1 + num(q.laborMarkupPct) / 100);
+    } else {
+      servicesSub = servicesLineSum();
+    }
+    return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
   }
-  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, Number(q.generalReqtsExportQty || 1)) : 1;
-  const engineeringServicesQty = q.servicesFromManpower !== false ? Math.max(1, Number(q.engineeringServicesQty || 1)) : 1;
-  const generalReqtsCost = (q.generalReqts || []).reduce((sum, line) => {
-    return sum + Number(line.unitPrice || 0) * Number(line.qty || 0);
+
+  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, num(q.generalReqtsExportQty) || 1) : 1;
+  const hasPerLineGenMarkup = generalReqts.some((l) => l.markupPct != null);
+  const generalReqtsSubtotal = hasPerLineGenMarkup
+    ? generalReqts.reduce((s, l) => {
+        const markup = l.markupPct != null ? num(l.markupPct) : num(q.generalReqMarkupPct);
+        return s + lineGeneralTotal(l) * (1 + markup / 100);
+      }, 0) * generalReqtsQty
+    : generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty * (1 + num(q.generalReqMarkupPct) / 100);
+  const componentsSubtotal = components.reduce((s, l) => {
+    const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
+    const adjusted = costUnit * (1 + num(l.contingencyPct) / 100);
+    const markup = l.markupPct != null ? num(l.markupPct) : num(q.productMarkupPct);
+    return s + adjusted * (1 + markup / 100) * num(l.qty);
   }, 0);
-  const generalReqtsSubtotal = generalReqtsCost * generalReqtsQty * (1 + Number(q.generalReqMarkupPct || 0) / 100);
-  const componentsSubtotal = (q.components || []).reduce((sum, line) => {
-    const base = Number(line.unitCost || 0) * Number(line.forex || 1);
-    const adjusted = base * (1 + Number(line.contingencyPct || 0) / 100) * (1 - Number(line.discountPct || 0) / 100);
-    return sum + adjusted * (1 + Number(q.productMarkupPct || 0) / 100) * Number(line.qty || 0);
-  }, 0);
-  const manpowerCost = (q.manpower || []).reduce((sum, row) => {
-    return sum + Number(row.headcount || 0) * Number(row.mandays || 0) * (Number(row.dailyRate || 0) + Number(row.allowance || 0));
-  }, 0);
-  const servicesSubtotal = q.servicesFromManpower !== false
-    ? manpowerCost * engineeringServicesQty
-    : (q.services || []).reduce((sum, line) => sum + Number(line.amount || 0), 0);
-  const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSubtotal;
-  const afterDiscount = subtotal * (1 - Number(q.discountPct || 0) / 100);
-  return afterDiscount * (1 + Number(q.vatPct || 0) / 100);
+  let servicesSub;
+  if (q.servicesFromManpower) {
+    if (q.servicesPerLinePricing) {
+      servicesSub = servicesLineSum();
+    } else {
+      const engineeringServicesQty = Math.max(1, num(q.engineeringServicesQty) || 1);
+      const manpowerCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0);
+      servicesSub = manpowerCost * engineeringServicesQty * (1 + num(q.laborMarkupPct) / 100);
+    }
+  } else {
+    servicesSub = servicesLineSum();
+  }
+  return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
 }
 
 function clientApproverFromClient(client) {
@@ -3172,7 +3224,7 @@ function clientApproverFromClient(client) {
   return primary ? [primary.name, primary.position].filter(Boolean).join(' – ') : '';
 }
 
-function mapCalcsheetToMainProject(project, client, quotation, now, projectNo) {
+function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
   const amount = quotationGrandTotal(quotation);
   const year = Number.isFinite(new Date(project.date || now).getFullYear())
@@ -3242,6 +3294,9 @@ function mapCalcsheetToMainProject(project, client, quotation, now, projectNo) {
     source_module: 'calcsheet',
     executionFolderId: project.executionFolderId || '',
     executionFolderUrl: project.executionFolderUrl || '',
+    with_acti: !!withActi,
+    partner_id: (partner && partner.id) || project.partnerId || null,
+    partner_name: (partner && partner.name) || '',
   };
 }
 
@@ -3275,11 +3330,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     throw err;
   }
   const project = { id: projectDoc.id, ...projectDoc.data() };
-  const [clientDoc, qSnap] = await Promise.all([
+  const [clientDoc, partnerDoc, qSnap] = await Promise.all([
     project.customerId ? db.collection('clients').doc(String(project.customerId)).get() : Promise.resolve(null),
+    project.partnerId ? db.collection('clients').doc(String(project.partnerId)).get() : Promise.resolve(null),
     db.collection('calcsheet_quotations').where('projectId', '==', projectId).get(),
   ]);
   const client = clientDoc && clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
+  const partner = partnerDoc && partnerDoc.exists ? { id: partnerDoc.id, ...partnerDoc.data() } : null;
   const quotations = qSnap.docs.map((d) => {
     const { id: _stored, ...data } = d.data();
     return { ...data, id: d.id };
@@ -3287,6 +3344,8 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
   const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
   const selectedQuotation = ioct || acti;
+  // Joint-with-ACTI: the project carries a partner link, or an ACTI-kind quotation exists.
+  const withActi = !!project.partnerId || quotations.some((q) => q.kind === 'ACTI');
   if (!selectedQuotation) {
     const err = new Error('No IOCT or ACTI quotation found to seed contract amount');
     err.status = 400;
@@ -3323,13 +3382,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   if (linkedDoc && options.force) {
     const linkedData = linkedDoc.data() || {};
     const projectNo = linkedData.project_no || await nextIoctProjectNo(now);
-    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi);
     mainProjectId = linkedDoc.id;
     action = 'updated';
     await linkedDoc.ref.update({ ...mapped, updated_at: now });
   } else {
     const projectNo = await nextIoctProjectNo(now);
-    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi);
     action = project.mainProjectId ? 'recreated' : 'created';
     const ref = await db.collection('projects').add({ ...mapped, created_at: now, updated_at: now });
     mainProjectId = ref.id;
@@ -3388,8 +3447,16 @@ app.post('/api/calcsheet/projects', async (req, res) => {
     // below would overwrite ref.id with the client's nanoid in the response,
     // leaving the client with an ID that doesn't address the stored document
     // (subsequent PUTs would 500 with "Failed to update project").
-    const { id: _ignored, ...body } = req.body || {};
-    const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const { id: _ignored, createdBy: _cb, createdByName: _cbn, ...body } = req.body || {};
+    const data = {
+      ...body,
+      // Who created the opportunity — factual audit fields, always stamped from the
+      // authenticated user (client-supplied values are stripped above).
+      createdBy: user.id,
+      createdByName: user.full_name || user.username || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
     const ref = await db.collection('calcsheet_projects').add(data);
     res.json({ success: true, project: { ...data, id: ref.id } });
   } catch (err) {
@@ -3404,8 +3471,9 @@ app.put('/api/calcsheet/projects/:id', async (req, res) => {
     if (!user) return;
     // Defensively drop `id` from the update body — it's the doc identifier (from
     // the URL param) and storing it inside the document is just dead data that
-    // can mask the real ID during debugging.
-    const { id: _ignored, ...body } = req.body || {};
+    // can mask the real ID during debugging. `createdBy`/`createdByName` are
+    // stamped at creation and stay factual — never updatable.
+    const { id: _ignored, createdBy: _cb, createdByName: _cbn, ...body } = req.body || {};
     const update = { ...body, updatedAt: new Date().toISOString() };
     await db.collection('calcsheet_projects').doc(req.params.id).update(update);
     res.json({ success: true });
@@ -4522,6 +4590,170 @@ app.delete('/api/work-sites/:id', async (req, res) => {
   } catch (e) {
     console.error('DELETE /api/work-sites/:id error:', e);
     res.status(500).json({ error: 'Failed to delete work site' });
+  }
+});
+
+// ─── Pricelists ───────────────────────────────────────────────────────────────
+// Read-only catalog for the Sales pricelist browser (seeded by import scripts).
+// Filters applied in memory (collection is small, equality/range only).
+app.get('/api/pricelists', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('pricelist_items').get();
+    let items = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+
+    const { search, poles, minPrice, maxPrice } = req.query;
+    const categories = [].concat(req.query.category || []).filter(Boolean);
+    const brands = [].concat(req.query.brand || []).filter(Boolean);
+    if (categories.length) items = items.filter((i) => categories.includes(i.category));
+    if (brands.length) items = items.filter((i) => brands.includes(i.brand));
+    if (poles != null && poles !== '') items = items.filter((i) => Number(i.poles) === Number(poles));
+    if (minPrice != null && minPrice !== '') items = items.filter((i) => Number(i.sellingPrice) >= Number(minPrice));
+    if (maxPrice != null && maxPrice !== '') items = items.filter((i) => Number(i.sellingPrice) <= Number(maxPrice));
+    if (search) {
+      const t = String(search).toLowerCase();
+      items = items.filter((i) =>
+        [i.catalogNo, i.description, i.brand, i.category, i.abbRefNo, i.sepEquivalent]
+          .filter(Boolean).some((v) => String(v).toLowerCase().includes(t)));
+    }
+    res.json({ success: true, items });
+  } catch (e) {
+    console.error('GET /api/pricelists error:', e);
+    res.status(500).json({ error: 'Failed to fetch pricelist' });
+  }
+});
+
+app.get('/api/pricelists/filters', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('pricelist_items').get();
+    const suppliers = new Set(), brands = new Set(), categories = new Set(), poles = new Set();
+    snap.docs.forEach((d) => {
+      const i = d.data();
+      if (i.supplier) suppliers.add(i.supplier);
+      if (i.brand) brands.add(i.brand);
+      if (i.category) categories.add(i.category);
+      if (Number.isFinite(Number(i.poles)) && i.poles) poles.add(Number(i.poles));
+    });
+    res.json({
+      suppliers: Array.from(suppliers).sort(),
+      brands: Array.from(brands).sort(),
+      categories: Array.from(categories).sort(),
+      poles: Array.from(poles).sort((a, b) => a - b),
+    });
+  } catch (e) {
+    console.error('GET /api/pricelists/filters error:', e);
+    res.status(500).json({ error: 'Failed to fetch pricelist filters' });
+  }
+});
+
+// Normalize a pricelist item payload from the manual add/edit form.
+function pricelistItemFromBody(b) {
+  const numOrNull = (v) => (v !== '' && v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  return {
+    supplier: String(b.supplier || 'IOCT').trim(),
+    brand: String(b.brand || '').trim(),
+    pricelistName: String(b.pricelistName || 'Manual entries').trim(),
+    pricelistDate: String(b.pricelistDate || new Date().toISOString().slice(0, 7)),
+    category: String(b.category || 'Uncategorized').trim(),
+    categoryLabel: String(b.categoryLabel || b.category || 'Uncategorized').trim(),
+    catalogNo: String(b.catalogNo || '').trim(),
+    abbRefNo: String(b.abbRefNo || '').trim(),
+    description: String(b.description || '').trim(),
+    uom: String(b.uom || 'pc').trim(),
+    poles: numOrNull(b.poles),
+    ampRating: numOrNull(b.ampRating),
+    sellingPrice: Number(b.sellingPrice) || 0,
+    sepEquivalent: String(b.sepEquivalent || '').trim() || null,
+  };
+}
+
+const PRICELIST_AUDIT_FIELDS = ['description', 'sellingPrice', 'uom', 'category', 'brand', 'supplier', 'catalogNo', 'poles', 'ampRating', 'sepEquivalent'];
+async function logPricelistAudit(entry) {
+  try { await db.collection('pricelist_audit').add(entry); }
+  catch (e) { console.warn('[pricelist] audit write failed (non-blocking):', e && e.message); }
+}
+
+app.post('/api/pricelists', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  const b = req.body || {};
+  if (!b.description || !(Number(b.sellingPrice) >= 0)) {
+    return res.status(400).json({ error: 'description and a numeric sellingPrice are required' });
+  }
+  try {
+    const now = new Date().toISOString();
+    const who = user.full_name || user.username || String(user.id);
+    const item = pricelistItemFromBody(b);
+    if (!item.catalogNo) item.catalogNo = `MAN-${Date.now().toString(36).toUpperCase()}`;
+    item.createdAt = now; item.updatedAt = now;
+    item.createdBy = who; item.updatedBy = who;
+    const ref = await db.collection('pricelist_items').add(item);
+    await logPricelistAudit({ itemId: ref.id, catalogNo: item.catalogNo, action: 'create', snapshot: { description: item.description, sellingPrice: item.sellingPrice }, byId: String(user.id), byName: who, at: now });
+    res.status(201).json({ ...item, id: ref.id });
+  } catch (e) {
+    console.error('POST /api/pricelists error:', e);
+    res.status(500).json({ error: 'Failed to create pricelist item' });
+  }
+});
+
+app.put('/api/pricelists/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  const b = req.body || {};
+  if (!b.description || !(Number(b.sellingPrice) >= 0)) {
+    return res.status(400).json({ error: 'description and a numeric sellingPrice are required' });
+  }
+  try {
+    const now = new Date().toISOString();
+    const who = user.full_name || user.username || String(user.id);
+    const ref = db.collection('pricelist_items').doc(req.params.id);
+    const prevSnap = await ref.get();
+    const prev = prevSnap.exists ? prevSnap.data() : {};
+    const updates = pricelistItemFromBody(b);
+    updates.updatedAt = now; updates.updatedBy = who;
+    await ref.update(updates);
+    const changes = {};
+    for (const f of PRICELIST_AUDIT_FIELDS) {
+      const from = prev[f] ?? null, to = updates[f] ?? null;
+      if (String(from) !== String(to)) changes[f] = { from, to };
+    }
+    if (Object.keys(changes).length) {
+      await logPricelistAudit({ itemId: req.params.id, catalogNo: updates.catalogNo, action: 'update', changes, byId: String(user.id), byName: who, at: now });
+    }
+    res.json({ success: true, ...updates, id: req.params.id });
+  } catch (e) {
+    console.error('PUT /api/pricelists/:id error:', e);
+    res.status(500).json({ error: 'Failed to update pricelist item' });
+  }
+});
+
+app.delete('/api/pricelists/:id', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const now = new Date().toISOString();
+    const who = user.full_name || user.username || String(user.id);
+    const ref = db.collection('pricelist_items').doc(req.params.id);
+    const prevSnap = await ref.get();
+    const prev = prevSnap.exists ? prevSnap.data() : {};
+    await ref.delete();
+    await logPricelistAudit({ itemId: req.params.id, catalogNo: prev.catalogNo || null, action: 'delete', snapshot: { description: prev.description, sellingPrice: prev.sellingPrice }, byId: String(user.id), byName: who, at: now });
+    res.json({ success: true });
+  } catch (e) {
+    console.error('DELETE /api/pricelists/:id error:', e);
+    res.status(500).json({ error: 'Failed to delete pricelist item' });
+  }
+});
+
+app.get('/api/pricelists/:id/audit', async (req, res) => {
+  const user = await requireActiveUser(req, res); if (!user) return;
+  try {
+    const snap = await db.collection('pricelist_audit').where('itemId', '==', req.params.id).get();
+    const entries = snap.docs
+      .map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; })
+      .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    res.json({ success: true, entries });
+  } catch (e) {
+    console.error('GET /api/pricelists/:id/audit error:', e);
+    res.status(500).json({ error: 'Failed to fetch audit trail' });
   }
 });
 

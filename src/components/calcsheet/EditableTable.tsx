@@ -24,6 +24,11 @@ export interface Column<T> {
   min?: number;
   mono?: boolean;
   multiline?: boolean;
+  // Number columns only: unset (null/undefined) is a meaningful state distinct
+  // from 0 — the cell shows `placeholder` greyed out, and clearing the field
+  // stores undefined instead of 0 (e.g. per-line markup inheriting the global).
+  nullable?: boolean;
+  placeholder?: string;
 }
 
 interface Props<T extends { id: string }> {
@@ -39,17 +44,24 @@ interface Props<T extends { id: string }> {
 }
 
 function NumberCell({
-  value, step, min, align, mono, onChange, readOnly,
-}: { value: number; step?: number; min?: number; align?: 'left' | 'right' | 'center'; mono?: boolean; onChange: (v: number) => void; readOnly?: boolean }) {
-  const display = value === 0 ? '' : String(value);
+  value, step, min, align, mono, onChange, readOnly, nullable, placeholder,
+}: { value: number | null | undefined; step?: number; min?: number; align?: 'left' | 'right' | 'center'; mono?: boolean; onChange: (v: number | undefined) => void; readOnly?: boolean; nullable?: boolean; placeholder?: string }) {
+  // Nullable cells distinguish "unset" (empty, placeholder shows the inherited
+  // value) from an explicit 0; plain cells keep treating 0 as empty.
+  const display = nullable
+    ? (value == null ? '' : String(value))
+    : (value == null || value === 0 ? '' : String(value));
   return (
     <TextField
       value={display}
-      onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+      onChange={(e) => {
+        if (nullable && e.target.value === '') return onChange(undefined);
+        onChange(parseFloat(e.target.value) || 0);
+      }}
       onFocus={(e) => e.target.select()}
       type="number"
       variant="standard"
-      placeholder="0"
+      placeholder={placeholder ?? '0'}
       disabled={readOnly}
       InputProps={{ disableUnderline: true, readOnly, sx: { fontSize: '0.8125rem', fontFamily: mono ? 'monospace' : undefined } }}
       inputProps={{
@@ -136,12 +148,14 @@ function SortableRow<T extends { id: string }>({
           <TableCell key={String(c.key)} align={c.align ?? 'left'} sx={{ p: '4px 8px', ...cellWidth }}>
             {c.type === 'number' ? (
               <NumberCell
-                value={value ?? 0}
+                value={value}
                 step={c.step}
                 min={c.min}
                 align={c.align}
                 mono={c.mono}
                 readOnly={readOnly}
+                nullable={c.nullable}
+                placeholder={c.placeholder}
                 onChange={(v) => onChange(idx, c.key as keyof T, v)}
               />
             ) : (

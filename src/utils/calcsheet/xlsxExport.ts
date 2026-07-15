@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { format } from 'date-fns';
 import type { Client, Project, Quotation } from '../../types/Quotation';
+import { PROJECT_STATUSES } from '../../types/Quotation';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, manpowerCost,
 } from './calc';
@@ -264,4 +265,63 @@ export async function exportQuotationXlsx(
   const buf = await wb.xlsx.writeBuffer();
   const filename = `${refNo}.xlsx`;
   saveAs(new Blob([buf]), filename);
+}
+
+// ── Project list export (status-review checklist) ──────────────────────────
+
+export interface ProjectListExportRow {
+  code: string;
+  name: string;
+  customer: string;
+  partner: string;
+  date: string;      // 'dd MMM yyyy' or ''
+  status: string;
+  ongoing: string;   // 'Yes' | '—'
+  notes: string;
+  createdBy: string; // creator display name or ''
+}
+
+// Derived from the shared status list so the Excel dropdown can never drift
+// from the app's ProjectStatus set.
+const PROJECT_STATUS_DROPDOWN = `"${PROJECT_STATUSES.join(',')}"`;
+
+export function buildProjectListWorkbook(rows: ProjectListExportRow[]): ExcelJS.Workbook {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'IOCT Calcsheet';
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet('Projects', { views: [{ state: 'frozen', ySplit: 1 }] });
+  ws.columns = [
+    { header: 'Code', width: 20 },
+    { header: 'Project Name', width: 45 },
+    { header: 'Customer', width: 28 },
+    { header: 'Partner', width: 28 },
+    { header: 'Date', width: 14 },
+    { header: 'Current Status', width: 14 },
+    { header: 'Ongoing', width: 9 },
+    { header: 'Updated Status', width: 15 },
+    { header: 'Remarks', width: 30 },
+    { header: 'Notes', width: 40 },
+    { header: 'Created By', width: 20 },
+  ];
+  ws.getRow(1).font = { bold: true };
+  ws.autoFilter = 'A1:K1';
+
+  rows.forEach((r, i) => {
+    ws.addRow([r.code, r.name, r.customer, r.partner, r.date, r.status, r.ongoing, null, null, r.notes, r.createdBy]);
+    // Excel dropdown on the blank Updated Status cell — the whole point of the export.
+    ws.getCell(i + 2, 8).dataValidation = {
+      type: 'list',
+      allowBlank: true,
+      formulae: [PROJECT_STATUS_DROPDOWN],
+    };
+  });
+
+  return wb;
+}
+
+export async function exportProjectListXlsx(rows: ProjectListExportRow[]): Promise<void> {
+  const wb = buildProjectListWorkbook(rows);
+  const buf = await wb.xlsx.writeBuffer();
+  saveAs(new Blob([buf]), `calcsheet-projects-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
 }

@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react';
 import {
   Box, TextField, InputAdornment, FormControl, InputLabel, Select, MenuItem,
   Chip, Stack, Button, OutlinedInput, SelectChangeEvent,
@@ -12,27 +11,10 @@ export default function PricelistFilters() {
   const filterOptions = usePricelistStore((s) => s.filterOptions);
   const setFilters = usePricelistStore((s) => s.setFilters);
   const resetFilters = usePricelistStore((s) => s.resetFilters);
-  const fetchItems = usePricelistStore((s) => s.fetchItems);
 
-  // Debounced search
-  const [searchLocal, setSearchLocal] = useState(filters.search);
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if (searchLocal !== filters.search) {
-        setFilters({ search: searchLocal });
-      }
-    }, 300);
-    return () => clearTimeout(t);
-  }, [searchLocal, filters.search, setFilters]);
-
-  // Re-fetch when filters change (except search, which debounces above)
-  useEffect(() => {
-    fetchItems();
-  }, [filters, fetchItems]);
-
-  const handleCategoryChange = (e: SelectChangeEvent<string[]>) => {
+  const handleMultiChange = (key: 'suppliers' | 'categories' | 'brands') => (e: SelectChangeEvent<string[]>) => {
     const val = e.target.value;
-    setFilters({ categories: typeof val === 'string' ? val.split(',') : val });
+    setFilters({ [key]: typeof val === 'string' ? val.split(',') : val });
   };
 
   const handlePolesChange = (e: SelectChangeEvent<string>) => {
@@ -40,23 +22,44 @@ export default function PricelistFilters() {
     setFilters({ poles: val ? Number(val) : null });
   };
 
-  const hasFilters = filters.search || filters.categories.length || filters.poles != null ||
-    filters.minPrice != null || filters.maxPrice != null;
+  const hasFilters = filters.search || filters.suppliers.length || filters.categories.length ||
+    filters.brands.length || filters.poles != null || filters.minPrice != null || filters.maxPrice != null;
+
+  const multiSelect = (key: 'suppliers' | 'categories' | 'brands', label: string, options: string[], minWidth: number) => (
+    <FormControl size="small" sx={{ minWidth }}>
+      <InputLabel>{label}</InputLabel>
+      <Select
+        multiple
+        value={filters[key]}
+        onChange={handleMultiChange(key)}
+        input={<OutlinedInput label={label} />}
+        renderValue={(selected) => (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+            {selected.map((v) => <Chip key={v} label={v} size="small" />)}
+          </Box>
+        )}
+      >
+        {options.map((o) => (
+          <MenuItem key={o} value={o}>{o}</MenuItem>
+        ))}
+      </Select>
+    </FormControl>
+  );
 
   return (
     <Box sx={{ mb: 2 }}>
       <TextField
         fullWidth
         size="small"
-        placeholder="Search by catalog no., description, ABB ref, SEP equivalent..."
-        value={searchLocal}
-        onChange={(e) => setSearchLocal(e.target.value)}
+        placeholder="Search catalog no., description, brand, supplier…"
+        value={filters.search}
+        onChange={(e) => setFilters({ search: e.target.value })}
         slotProps={{
           input: {
             startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>,
-            endAdornment: searchLocal ? (
+            endAdornment: filters.search ? (
               <InputAdornment position="end">
-                <ClearIcon fontSize="small" sx={{ cursor: 'pointer' }} onClick={() => { setSearchLocal(''); setFilters({ search: '' }); }} />
+                <ClearIcon fontSize="small" sx={{ cursor: 'pointer' }} onClick={() => setFilters({ search: '' })} />
               </InputAdornment>
             ) : null,
           },
@@ -64,24 +67,9 @@ export default function PricelistFilters() {
         sx={{ mb: 1.5 }}
       />
       <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
-        <FormControl size="small" sx={{ minWidth: 200 }}>
-          <InputLabel>Category</InputLabel>
-          <Select
-            multiple
-            value={filters.categories}
-            onChange={handleCategoryChange}
-            input={<OutlinedInput label="Category" />}
-            renderValue={(selected) => (
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                {selected.map((v) => <Chip key={v} label={v} size="small" />)}
-              </Box>
-            )}
-          >
-            {filterOptions.categories.map((c) => (
-              <MenuItem key={c} value={c}>{c}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        {filterOptions.suppliers.length > 1 && multiSelect('suppliers', 'Supplier', filterOptions.suppliers, 160)}
+        {multiSelect('categories', 'Category', filterOptions.categories, 200)}
+        {multiSelect('brands', 'Brand', filterOptions.brands, 180)}
 
         <FormControl size="small" sx={{ minWidth: 100 }}>
           <InputLabel>Poles</InputLabel>
@@ -97,21 +85,23 @@ export default function PricelistFilters() {
           size="small"
           label="Min Price"
           type="number"
-          sx={{ width: 120 }}
+          sx={{ width: 130 }}
           value={filters.minPrice ?? ''}
           onChange={(e) => setFilters({ minPrice: e.target.value ? Number(e.target.value) : null })}
+          slotProps={{ input: { startAdornment: <InputAdornment position="start">₱</InputAdornment> } }}
         />
         <TextField
           size="small"
           label="Max Price"
           type="number"
-          sx={{ width: 120 }}
+          sx={{ width: 130 }}
           value={filters.maxPrice ?? ''}
           onChange={(e) => setFilters({ maxPrice: e.target.value ? Number(e.target.value) : null })}
+          slotProps={{ input: { startAdornment: <InputAdornment position="start">₱</InputAdornment> } }}
         />
 
         {hasFilters && (
-          <Button size="small" onClick={() => { resetFilters(); setSearchLocal(''); }}>
+          <Button size="small" onClick={resetFilters}>
             Clear all
           </Button>
         )}

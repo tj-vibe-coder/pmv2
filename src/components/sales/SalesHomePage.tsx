@@ -31,6 +31,7 @@ import {
 } from 'recharts';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { Project, ProjectStatus, Quotation } from '../../types/Quotation';
+import { projectStatusLabel } from '../../types/Quotation';
 import { computeTotals, ioctMargin } from '../../utils/calcsheet/calc';
 
 const NET_PACIFIC_COLORS = {
@@ -44,8 +45,8 @@ const NET_PACIFIC_COLORS = {
   info:      '#74b9ff',
 };
 
-const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error' | 'warning'> = {
-  draft: 'default', sent: 'primary', won: 'success', lost: 'error', inactive: 'warning',
+const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error' | 'warning' | 'info'> = {
+  draft: 'default', for_review: 'info', sent: 'primary', won: 'success', lost: 'error', inactive: 'warning',
 };
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -133,7 +134,7 @@ const SalesHomePage: React.FC = () => {
   }, [projects, quotations, clients]);
 
   const kpis = useMemo(() => {
-    const open = enriched.filter((e) => e.p.status === 'draft' || e.p.status === 'sent');
+    const open = enriched.filter((e) => e.p.status === 'draft' || e.p.status === 'for_review' || e.p.status === 'sent');
     const pipelineValue = open.reduce((s, e) => s + e.value, 0);
     const wonYtd = enriched.filter((e) => e.p.status === 'won' && e.year === currentYear);
     const wonYtdValue = wonYtd.reduce((s, e) => s + e.value, 0);
@@ -164,12 +165,12 @@ const SalesHomePage: React.FC = () => {
   );
 
   const monthlyTrend = useMemo(() => {
-    const rows = new Map<string, { draft: number; sent: number; won: number; lost: number }>();
+    const rows = new Map<string, { draft: number; for_review: number; sent: number; won: number; lost: number }>();
     enriched
       .filter((e) => e.p.status !== 'inactive' && e.month && (trendYear === 'all' || e.year === trendYear))
       .forEach((e) => {
-        const row = rows.get(e.month) ?? { draft: 0, sent: 0, won: 0, lost: 0 };
-        row[e.p.status as 'draft' | 'sent' | 'won' | 'lost'] += e.value;
+        const row = rows.get(e.month) ?? { draft: 0, for_review: 0, sent: 0, won: 0, lost: 0 };
+        row[e.p.status as 'draft' | 'for_review' | 'sent' | 'won' | 'lost'] += e.value;
         rows.set(e.month, row);
       });
     const keys = trendYear === 'all'
@@ -178,7 +179,7 @@ const SalesHomePage: React.FC = () => {
     return keys.map((k) => {
       const [y, m] = k.split('-');
       const label = trendYear === 'all' ? `${MONTHS[Number(m) - 1]} ’${y.slice(2)}` : MONTHS[Number(m) - 1];
-      return { month: label, ...(rows.get(k) ?? { draft: 0, sent: 0, won: 0, lost: 0 }) };
+      return { month: label, ...(rows.get(k) ?? { draft: 0, for_review: 0, sent: 0, won: 0, lost: 0 }) };
     });
   }, [enriched, trendYear]);
 
@@ -203,6 +204,7 @@ const SalesHomePage: React.FC = () => {
     };
     return [
       { stage: 'Draft', ...stage('draft'), fill: '#90a4ae' },
+      { stage: 'For review', ...stage('for_review'), fill: NET_PACIFIC_COLORS.info },
       { stage: 'Sent', ...stage('sent'), fill: NET_PACIFIC_COLORS.primary },
       { stage: 'Won', ...stage('won'), fill: NET_PACIFIC_COLORS.success },
     ];
@@ -351,6 +353,7 @@ const SalesHomePage: React.FC = () => {
                   <RechartsTooltip formatter={(value) => formatPHP(Number(value))} />
                   <Legend />
                   <Bar dataKey="draft" stackId="s" fill="#90a4ae" name="Draft" />
+                  <Bar dataKey="for_review" stackId="s" fill={NET_PACIFIC_COLORS.info} name="For review" />
                   <Bar dataKey="sent" stackId="s" fill={NET_PACIFIC_COLORS.primary} name="Sent" />
                   <Bar dataKey="won" stackId="s" fill={NET_PACIFIC_COLORS.success} name="Won" />
                   <Bar dataKey="lost" stackId="s" fill={NET_PACIFIC_COLORS.error} name="Lost" />
@@ -501,7 +504,7 @@ const SalesHomePage: React.FC = () => {
                       </TableCell>
                       <TableCell sx={bodyCellSx}>{e.customerName}</TableCell>
                       <TableCell sx={bodyCellSx}>
-                        <Chip size="small" label={e.p.status} color={statusColors[e.p.status]} />
+                        <Chip size="small" label={projectStatusLabel(e.p.status)} color={statusColors[e.p.status]} />
                       </TableCell>
                       <TableCell sx={bodyCellSx} align="right">{formatPHP(e.value)}</TableCell>
                       <TableCell sx={bodyCellSx} align="right">{e.p.date || '—'}</TableCell>

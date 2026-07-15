@@ -13,7 +13,9 @@ import {
   Divider,
   Alert,
   CircularProgress,
-  Paper
+  Paper,
+  FormControlLabel,
+  Switch
 } from '@mui/material';
 import { Add as AddIcon, Save as SaveIcon } from '@mui/icons-material';
 import dataService from '../services/dataService';
@@ -93,10 +95,26 @@ const AddProjectDialog: React.FC<AddProjectDialogProps> = ({ open, onClose, onPr
     payment_terms: '30',
     bonds_requirement: 'NO',
     client_approver: '',
-    progress_billing_schedule: 'Monthly'
+    progress_billing_schedule: 'Monthly',
+    with_acti: false,
+    partner_id: null as string | null,
+    partner_name: ''
   });
 
   const categoryOptions = ['Services', 'Electrical', 'PLC/SCADA', 'BMS'];
+
+  const findActiClient = (): Client | null =>
+    clients.find((c) => (c.code || '').toUpperCase() === 'ACT' || /advance controle/i.test(c.name || '')) || null;
+
+  const handleActiToggle = (checked: boolean) => {
+    setFormData((prev) => {
+      if (!checked) return { ...prev, with_acti: false, partner_id: null, partner_name: '' };
+      if (prev.partner_id || prev.partner_name) return { ...prev, with_acti: true };
+      const acti = findActiClient();
+      return { ...prev, with_acti: true, partner_id: acti?.id ?? null, partner_name: acti?.name || 'Advance Controle Technologie Inc' };
+    });
+    setError(null);
+  };
 
   const statusPercentToProjectStatus = (p: number): string => {
     if (p <= 0) return 'Not Started';
@@ -213,7 +231,10 @@ const AddProjectDialog: React.FC<AddProjectDialogProps> = ({ open, onClose, onPr
         payment_terms: '30',
         bonds_requirement: 'NO',
         client_approver: '',
-        progress_billing_schedule: 'Monthly'
+        progress_billing_schedule: 'Monthly',
+        with_acti: false,
+        partner_id: null,
+        partner_name: ''
       });
       setError(null);
       setSuccess(false);
@@ -360,6 +381,31 @@ const AddProjectDialog: React.FC<AddProjectDialogProps> = ({ open, onClose, onPr
                 inputProps={{ min: 2000, max: 2030 }}
               />
             </Grid>
+          </Grid>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* Partner (ACTI) */}
+          <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600, color: '#1a202c' }}>
+            Partner (ACTI)
+          </Typography>
+          <Grid container spacing={2} sx={{ mb: 3 }} alignItems="center">
+            <Grid size={{ xs: 12, md: 6 }}>
+              <FormControlLabel
+                control={<Switch checked={formData.with_acti} onChange={(e) => handleActiToggle(e.target.checked)} />}
+                label="Joint project with ACTI"
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: -0.5 }}>
+                Flags this as done together with the ACTI partner (used in the With-ACTI filter).
+              </Typography>
+            </Grid>
+            {formData.with_acti && (
+              <Grid size={{ xs: 12, md: 6 }}>
+                <Typography variant="body2" color="text.secondary">
+                  Partner: <strong>{formData.partner_name || 'Advance Controle Technologie Inc'}</strong>
+                </Typography>
+              </Grid>
+            )}
           </Grid>
 
           <Divider sx={{ my: 2 }} />

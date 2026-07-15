@@ -13,12 +13,13 @@ import PaymentIcon from '@mui/icons-material/Payment';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
-import type { ProjectInvoice, InvoiceStatus, BillingMilestone } from '../types/Invoice';
+import type { ProjectInvoice, InvoiceStatus, BillingMilestone, BillToKind } from '../types/Invoice';
 import {
   getInvoiceStatus,
   computeDueDate,
   formatPaymentTerms,
   PAYMENT_TERMS_OPTIONS,
+  BILL_TO_OPTIONS,
 } from '../types/Invoice';
 import type { Project } from '../types/Project';
 import { API_BASE } from '../config/api';
@@ -28,6 +29,7 @@ import { onedriveConfig } from '../config/onedriveConfig';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 
 const API = `${API_BASE}/api`;
+const ACTI_NAME = 'Advance Controle Technologie Inc';
 
 const NET_PACIFIC_COLORS = {
   primary: '#2c5aa0',
@@ -72,6 +74,7 @@ interface InvoiceForm {
   due_date: string;
   notes: string;
   pb_number: string;
+  bill_to: BillToKind;
 }
 
 const blankForm = (): InvoiceForm => ({
@@ -85,6 +88,7 @@ const blankForm = (): InvoiceForm => ({
   due_date: computeDueDate(TODAY(), 30),
   notes: '',
   pb_number: '',
+  bill_to: 'customer',
 });
 
 interface CollectForm {
@@ -105,6 +109,7 @@ export default function CollectionsDashboard() {
   // filters
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<InvoiceStatus | ''>('');
+  const [filterActi, setFilterActi] = useState(false);
 
   // add/edit dialog
   const [invoiceDialog, setInvoiceDialog] = useState<'add' | 'edit' | null>(null);
@@ -157,6 +162,16 @@ export default function CollectionsDashboard() {
   }, [preselectedProjectId]);
 
   // ─── derived data ────────────────────────────────────────────────────────
+  const projectsById = useMemo(() => {
+    const m: Record<string, Project> = {};
+    projects.forEach(p => { m[String(p.id)] = p; });
+    return m;
+  }, [projects]);
+
+  // An invoice counts as "with ACTI" when its project is ACTI-joint or it's billed to ACTI.
+  const isActiInvoice = (inv: ProjectInvoice) =>
+    inv.bill_to === 'acti' || !!projectsById[String(inv.project_id)]?.with_acti;
+
   const enriched = useMemo(() => invoices.map(inv => ({
     ...inv,
     _status: getInvoiceStatus(inv),
@@ -167,6 +182,7 @@ export default function CollectionsDashboard() {
     const q = search.toLowerCase();
     return enriched.filter(inv => {
       if (filterStatus && inv._status !== filterStatus) return false;
+      if (filterActi && !isActiInvoice(inv)) return false;
       if (q && !(
         (inv.invoice_no || '').toLowerCase().includes(q) ||
         (inv.project_name || '').toLowerCase().includes(q) ||
@@ -174,7 +190,8 @@ export default function CollectionsDashboard() {
       )) return false;
       return true;
     });
-  }, [enriched, search, filterStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enriched, search, filterStatus, filterActi, projectsById]);
 
   const summary = useMemo(() => {
     const totalInvoiced = enriched.reduce((s, i) => s + i.amount, 0);
@@ -243,6 +260,7 @@ export default function CollectionsDashboard() {
       due_date: inv.due_date,
       notes: inv.notes || '',
       pb_number: inv.pb_number || '',
+      bill_to: inv.bill_to || 'customer',
     });
     setFormErr('');
     setEditTarget(inv);
@@ -267,6 +285,7 @@ export default function CollectionsDashboard() {
       due_date: computeDueDate(today, terms),
       notes: [m.label, m.pb_number].filter(Boolean).join(' — '),
       pb_number: m.pb_number,
+      bill_to: project.with_acti ? 'acti' : 'customer',
     });
     setFormErr('');
     setEditTarget(null);
@@ -302,6 +321,8 @@ export default function CollectionsDashboard() {
         due_date: form.due_date,
         notes: form.notes.trim() || undefined,
         pb_number: form.pb_number || undefined,
+        bill_to: form.bill_to,
+        bill_to_name: form.bill_to === 'acti' ? ACTI_NAME : (selectedProject?.account_name || form.project_name || ''),
         ...(invoiceDialog === 'add' ? { amount_collected: 0 } : {}),
       };
       const url = invoiceDialog === 'edit' && editTarget
@@ -610,6 +631,15 @@ export default function CollectionsDashboard() {
               </Select>
             </FormControl>
           </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <Chip
+              label="With ACTI"
+              color={filterActi ? 'primary' : 'default'}
+              variant={filterActi ? 'filled' : 'outlined'}
+              onClick={() => setFilterActi(v => !v)}
+              clickable
+            />
+          </Grid>
         </Grid>
       </Paper>
 
@@ -637,6 +667,7 @@ export default function CollectionsDashboard() {
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Invoice No.</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>PB #</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Bill To</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Date Issued</TableCell>
                 <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Amount</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Terms</TableCell>
@@ -650,7 +681,7 @@ export default function CollectionsDashboard() {
             <TableBody>
               {filtered.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={11} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: '0.875rem' }}>
+                  <TableCell colSpan={12} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: '0.875rem' }}>
                     {enriched.length === 0
                       ? 'No invoices yet. Click "Add Invoice" to get started.'
                       : 'No invoices match the current filters.'}
@@ -699,6 +730,11 @@ export default function CollectionsDashboard() {
                       {inv.pb_number
                         ? <Chip label={inv.pb_number} size="small" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
                         : <Typography variant="caption" color="text.disabled">—</Typography>}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                      {inv.bill_to === 'acti'
+                        ? <Chip label="ACTI" size="small" color="primary" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
+                        : <Typography variant="caption" color="text.secondary">Customer</Typography>}
                     </TableCell>
                     <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{inv.invoice_date}</TableCell>
                     <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
@@ -790,6 +826,7 @@ export default function CollectionsDashboard() {
                     project_id: String(p.id),
                     project_name: p.project_name || '',
                     project_no: p.project_no || '',
+                    bill_to: p.with_acti ? 'acti' : 'customer',
                   }));
                 } else {
                   setForm(prev => ({ ...prev, project_id: '', project_name: '', project_no: '' }));
@@ -864,6 +901,19 @@ export default function CollectionsDashboard() {
                 />
               </Grid>
             </Grid>
+
+            <FormControl size="small" fullWidth>
+              <InputLabel>Bill To</InputLabel>
+              <Select
+                label="Bill To"
+                value={form.bill_to}
+                onChange={e => setForm(prev => ({ ...prev, bill_to: e.target.value as BillToKind }))}
+              >
+                {BILL_TO_OPTIONS.map(opt => (
+                  <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
 
             <TextField
               label="Notes (optional)"

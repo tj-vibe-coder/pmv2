@@ -30,6 +30,9 @@ import {
   Snackbar,
   Tooltip,
   Divider,
+  Card,
+  CardContent,
+  Grid,
 } from '@mui/material';
 import { Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, PhotoCamera as PhotoCameraIcon, AccountBalanceWallet as WalletIcon } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -46,6 +49,17 @@ import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { resolveCorporateDriveId, ensureFolder, uploadFileToFolderById, sanitizeForOneDrive } from '../services/onedriveFolderService';
 
 const CA_CATEGORIES = ['Materials', 'Accommodation', 'Allowance', 'Transportation', 'Entertainment'] as const;
+
+const NET_PACIFIC_COLORS = {
+  primary:   '#2c5aa0',
+  secondary: '#1e4a72',
+  accent1:   '#4f7bc8',
+  accent2:   '#3c6ba5',
+  success:   '#00b894',
+  warning:   '#fdcb6e',
+  error:     '#e84393',
+  info:      '#74b9ff',
+};
 
 interface BreakdownItem {
   _uid: string;
@@ -815,13 +829,13 @@ export default function CAFormPage() {
     }
   };
 
-  const theme = { primary: '#2c5aa0', secondary: '#1e4a72' };
-
   return (
-    <Box sx={{ p: 3, width: '100%' }}>
-      <Typography variant="h5" sx={{ fontWeight: 600, color: theme.primary, mb: 2 }}>
-        Cash Advance (CA) Form
-      </Typography>
+    <Box sx={{ height: '100%', overflow: 'auto', p: 3 }}>
+      <Box sx={{ mb: 1.5 }}>
+        <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
+          Cash Advance (CA) Form
+        </Typography>
+      </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Request a cash advance. Once approved, you can use it when submitting a liquidation; the liquidation amount will reduce your CA balance.
       </Typography>
@@ -832,10 +846,13 @@ export default function CAFormPage() {
         </Alert>
       )}
 
-      <Paper sx={{ p: 3, mb: 3, border: '1px solid #e0e0e0', borderRadius: 2 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2, color: theme.primary }}>
-          Request Cash Advance
-        </Typography>
+      <Paper sx={{ mb: 3, borderRadius: 2, overflow: 'hidden', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0' }}>
+        <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0' }}>
+          <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+            Request Cash Advance
+          </Typography>
+        </Box>
+        <Box sx={{ p: 2 }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'flex-start', mb: 2 }}>
           <Autocomplete
             size="small"
@@ -872,7 +889,7 @@ export default function CAFormPage() {
         {isAdmin && (
           <>
             <Divider sx={{ my: 2 }} />
-            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5, color: theme.primary }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5, color: NET_PACIFIC_COLORS.primary }}>
               Funded By
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
@@ -928,16 +945,16 @@ export default function CAFormPage() {
           </>
         )}
 
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: theme.primary }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: NET_PACIFIC_COLORS.primary }}>
           Breakdown by category (add child lines under Materials for item breakdown; amount is auto-computed)
         </Typography>
         <TableContainer component={Box} sx={{ border: '1px solid #e0e0e0', borderRadius: 1, mb: 2, maxWidth: 640 }}>
           <Table size="small">
             <TableHead>
-              <TableRow sx={{ bgcolor: theme.primary + '08' }}>
-                <TableCell sx={{ fontWeight: 600, width: 160 }}>Category</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Details</TableCell>
-                <TableCell sx={{ fontWeight: 600, width: 120 }} align="right">Amount</TableCell>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', width: 160 }}>Category</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Details</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', width: 120 }} align="right">Amount</TableCell>
                 <TableCell sx={{ width: 96 }} />
               </TableRow>
             </TableHead>
@@ -998,7 +1015,7 @@ export default function CAFormPage() {
           </Table>
         </TableContainer>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-          <Button size="small" startIcon={<AddIcon />} onClick={addBreakdownRow} sx={{ color: theme.primary }}>
+          <Button size="small" startIcon={<AddIcon />} onClick={addBreakdownRow} sx={{ color: NET_PACIFIC_COLORS.primary }}>
             Add line
           </Button>
           <Typography variant="body2" color="text.secondary">
@@ -1010,7 +1027,7 @@ export default function CAFormPage() {
             startIcon={<VisibilityIcon />}
             onClick={handlePreviewCurrentForm}
             disabled={!canSubmit}
-            sx={{ borderColor: theme.primary, color: theme.primary }}
+            sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
           >
             Preview PDF
           </Button>
@@ -1020,7 +1037,7 @@ export default function CAFormPage() {
             startIcon={<PictureAsPdfIcon />}
             onClick={exportCurrentFormToPDF}
             disabled={!canSubmit}
-            sx={{ borderColor: theme.primary, color: theme.primary }}
+            sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
           >
             Export to PDF (for signing)
           </Button>
@@ -1029,95 +1046,150 @@ export default function CAFormPage() {
             startIcon={<AddIcon />}
             onClick={handleRequest}
             disabled={submitting || !canSubmit || scanningRowId !== null}
-            sx={{ bgcolor: theme.primary, '&:hover': { bgcolor: theme.secondary } }}
+            sx={{ bgcolor: NET_PACIFIC_COLORS.primary, '&:hover': { bgcolor: NET_PACIFIC_COLORS.secondary } }}
           >
             Request CA
           </Button>
         </Box>
+        </Box>
       </Paper>
 
       {!loading && visibleEmployeeBalances.length > 0 && (
-        <Paper sx={{ p: 2, mb: 3, border: '1px solid #e0e0e0', borderRadius: 2 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: theme.primary }}>
-            {isAdmin ? 'Cash Advance Balances by Employee' : 'Your Cash Advance Balance'}
-          </Typography>
-          {isAdmin && (
-            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 1.5 }}>
-              <Typography variant="body2">
-                Held by employees (still to liquidate):{' '}
-                <strong>{totalOutstandingHeld.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong>
+        isAdmin ? (
+          <Paper sx={{ mb: 3, borderRadius: 2, overflow: 'hidden', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0' }}>
+            <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0' }}>
+              <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+                Cash Advance Balances by Employee
               </Typography>
-              {totalCompanyOwes > 0 && (
-                <Typography variant="body2" sx={{ color: 'error.main' }}>
-                  Company owes employees (over-liquidated):{' '}
-                  <strong>{totalCompanyOwes.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong>
-                </Typography>
-              )}
             </Box>
-          )}
-          <TableContainer sx={{ border: '1px solid #e0e0e0', borderRadius: 1 }}>
-            <Table size="small">
-              <TableHead>
-                <TableRow sx={{ bgcolor: theme.primary + '08' }}>
-                  {isAdmin && <TableCell sx={{ fontWeight: 600 }}>Employee</TableCell>}
-                  <TableCell sx={{ fontWeight: 600 }} align="right">Approved CAs</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }} align="right">Total Approved</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }} align="right">Holds Unliquidated</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }} align="right">Company Owes</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {visibleEmployeeBalances.map((b) => (
-                  <TableRow key={b.userId} hover>
-                    {isAdmin && <TableCell>{b.name}</TableCell>}
-                    <TableCell align="right">{b.approvedCount}</TableCell>
-                    <TableCell align="right">{b.totalApproved.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: b.heldPositive > 0 ? 600 : undefined, color: b.heldPositive > 0 ? 'warning.main' : 'text.disabled' }}>
-                      {b.heldPositive > 0 ? b.heldPositive.toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '—'}
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontWeight: b.owedNegative > 0 ? 600 : undefined, color: b.owedNegative > 0 ? 'error.main' : 'text.disabled' }}>
-                      {b.owedNegative > 0 ? b.owedNegative.toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '—'}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Paper>
+            <Box sx={{ p: 1.5 }}>
+              <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 1.5 }}>
+                <Typography variant="body2">
+                  Held by employees (still to liquidate):{' '}
+                  <strong>{totalOutstandingHeld.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong>
+                </Typography>
+                {totalCompanyOwes > 0 && (
+                  <Typography variant="body2" sx={{ color: 'error.main' }}>
+                    Company owes employees (over-liquidated):{' '}
+                    <strong>{totalCompanyOwes.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong>
+                  </Typography>
+                )}
+              </Box>
+              <TableContainer>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Employee</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }} align="right">Approved CAs</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }} align="right">Total Approved</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }} align="right">Holds Unliquidated</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }} align="right">Company Owes</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {visibleEmployeeBalances.map((b) => (
+                      <TableRow key={b.userId} hover sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
+                        <TableCell sx={{ fontSize: '0.8rem' }}>{b.name}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }} align="right">{b.approvedCount}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }} align="right">{b.totalApproved.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', fontWeight: b.heldPositive > 0 ? 600 : undefined, color: b.heldPositive > 0 ? 'warning.main' : 'text.disabled' }}>
+                          {b.heldPositive > 0 ? b.heldPositive.toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '—'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', fontWeight: b.owedNegative > 0 ? 600 : undefined, color: b.owedNegative > 0 ? 'error.main' : 'text.disabled' }}>
+                          {b.owedNegative > 0 ? b.owedNegative.toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '—'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Box>
+          </Paper>
+        ) : (
+          <Grid container spacing={1.5} sx={{ mb: 2 }}>
+            {(() => {
+              const b = visibleEmployeeBalances[0];
+              const fmt = (n: number) => n.toLocaleString('en-PH', { minimumFractionDigits: 2 });
+              return (
+                <>
+                  <Grid size={{ xs: 6, sm: 3 }}>
+                    <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Approved CAs</Typography>
+                        <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{b.approvedCount}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.8 }}>with open balance</Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 3 }}>
+                    <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Approved</Typography>
+                        <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{fmt(b.totalApproved)}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.8 }}>sum of approved CAs</Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 3 }}>
+                    <Card sx={{ height: '100%', background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`, color: '#2d3436' }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Holds Unliquidated</Typography>
+                        <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{b.heldPositive > 0 ? fmt(b.heldPositive) : '—'}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.8 }}>still to liquidate</Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 3 }}>
+                    <Card sx={{ height: '100%', background: b.owedNegative > 0 ? 'linear-gradient(135deg, #e53935 0%, #ef9a9a 100%)' : `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, color: 'white' }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Company Owes</Typography>
+                        <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{b.owedNegative > 0 ? fmt(b.owedNegative) : '—'}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.8 }}>over-liquidated</Typography>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                </>
+              );
+            })()}
+          </Grid>
+        )
       )}
 
-      <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: theme.primary }}>
-        {isAdmin ? 'All CA requests (monitor and approve)' : 'My CA requests'}
-      </Typography>
+      <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2, background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0' }}>
+        <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0' }}>
+          <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+            {isAdmin ? `All CA requests${loading ? '' : ` (${list.length})`}` : `My CA requests${loading ? '' : ` (${list.length})`}`}
+          </Typography>
+        </Box>
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
           <CircularProgress />
         </Box>
       ) : (
-        <TableContainer component={Paper} sx={{ border: '1px solid #e0e0e0', borderRadius: 1 }}>
+        <TableContainer sx={{ maxHeight: 'calc(100vh - 480px)', minHeight: 300 }}>
           <Table size="small" stickyHeader>
             <TableHead>
-              <TableRow sx={{ bgcolor: theme.primary + '12' }}>
+              <TableRow>
                 <TableCell sx={{ width: 36 }} />
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>CA No.</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', whiteSpace: 'nowrap' }}>CA No.</TableCell>
                 {isAdmin && (
                   <>
-                    <TableCell sx={{ fontWeight: 600, color: theme.primary }}>User</TableCell>
-                    <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Full name</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>User</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Full name</TableCell>
                   </>
                 )}
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Amount</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Balance</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Project</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Breakdown</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Status</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Requested</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary }} align="right">
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Amount</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Balance</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Breakdown</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Requested</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }} align="right">
                   Actions
                 </TableCell>
               </TableRow>
             </TableHead>
-            <TableBody>
+            <TableBody sx={list.length === 0 ? undefined : { '& > tr:nth-of-type(4n+1)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
               {list.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={isAdmin ? 11 : 9} align="center" sx={{ py: 3, color: 'text.secondary' }}>
@@ -1126,15 +1198,15 @@ export default function CAFormPage() {
                 </TableRow>
               ) : (
                 list.map((ca) => {
-                  const linkedLiqs = liquidations.filter((l) => l.ca_id === ca.id);
-                  const liquidatedTotal = linkedLiqs
-                    .filter((l) => l.status === 'submitted')
-                    .reduce((s, l) => s + (Number(l.total_amount) || 0), 0);
+                  // Drafts aren't finalized yet (still editable/discardable by the owner), so
+                  // only submitted (pending-review) liquidations count as "linked" to a CA.
+                  const linkedLiqs = liquidations.filter((l) => l.ca_id === ca.id && l.status === 'submitted');
+                  const liquidatedTotal = linkedLiqs.reduce((s, l) => s + (Number(l.total_amount) || 0), 0);
                   const expanded = expandedId === ca.id;
                   return (
                   <React.Fragment key={ca.id}>
                   <TableRow hover>
-                    <TableCell sx={{ py: 0, whiteSpace: 'nowrap' }}>
+                    <TableCell sx={{ py: 0, whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
                       <IconButton
                         size="small"
                         onClick={() => setExpandedId(expanded ? null : ca.id)}
@@ -1151,7 +1223,7 @@ export default function CAFormPage() {
                         />
                       )}
                     </TableCell>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                    <TableCell sx={{ whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
                       {ca.ca_no || (
                         <Tooltip title={`Internal ID: ${ca.id}`}>
                           <span style={{ color: '#888' }}>{ca.id.slice(0, 8)}…</span>
@@ -1160,12 +1232,12 @@ export default function CAFormPage() {
                     </TableCell>
                     {isAdmin && (
                       <>
-                        <TableCell>{ca.username || '—'}</TableCell>
-                        <TableCell>{ca.full_name || '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }}>{ca.username || '—'}</TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem' }}>{ca.full_name || '—'}</TableCell>
                       </>
                     )}
-                    <TableCell>{Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
-                    <TableCell sx={Number(ca.balance_remaining) < 0 ? { color: 'error.main', fontWeight: 600 } : undefined}>
+                    <TableCell sx={{ fontSize: '0.8rem' }}>{Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem', ...(Number(ca.balance_remaining) < 0 ? { color: 'error.main', fontWeight: 600 } : {}) }}>
                       {Number(ca.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
                       {Number(ca.amount) > 0 && (
                         <Tooltip title={`${Math.round(Math.min(100, Math.max(0, ((Number(ca.amount) - Number(ca.balance_remaining)) / Number(ca.amount)) * 100)))}% consumed`}>
@@ -1177,7 +1249,7 @@ export default function CAFormPage() {
                         </Tooltip>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem' }}>
                       {ca.project_name
                         || (ca.purpose ? (
                           <Tooltip title="No project yet — prospect / out-of-project CA">
@@ -1185,7 +1257,7 @@ export default function CAFormPage() {
                           </Tooltip>
                         ) : ca.project_id ? `#${ca.project_id}` : '—')}
                     </TableCell>
-                    <TableCell sx={{ maxWidth: 220, whiteSpace: 'pre-wrap' }}>
+                    <TableCell sx={{ maxWidth: 220, whiteSpace: 'pre-wrap', fontSize: '0.8rem' }}>
                       {(() => {
                         const b = parseBreakdown(ca.breakdown);
                         if (b.length === 0) return '—';
@@ -1197,7 +1269,7 @@ export default function CAFormPage() {
                         }).join('\n');
                       })()}
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem' }}>
                       <Chip
                         size="small"
                         label={ca.status}
@@ -1205,7 +1277,7 @@ export default function CAFormPage() {
                         sx={{ textTransform: 'capitalize' }}
                       />
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem' }}>
                       {ca.requested_at
                         ? new Date(ca.requested_at * 1000).toLocaleDateString()
                         : ca.created_at
@@ -1242,7 +1314,7 @@ export default function CAFormPage() {
                           size="small"
                           startIcon={<ReceiptLongIcon />}
                           onClick={() => navigate(`${location.pathname.replace(/\/ca-form\/?$/, '/liquidation-form')}?ca_id=${ca.id}`)}
-                          sx={{ color: theme.primary, mr: 0.5 }}
+                          sx={{ color: NET_PACIFIC_COLORS.primary, mr: 0.5 }}
                           title="Submit a liquidation against this CA"
                         >
                           Liquidate
@@ -1253,7 +1325,7 @@ export default function CAFormPage() {
                           size="small"
                           startIcon={<WalletIcon />}
                           onClick={() => setCloseTarget(ca)}
-                          sx={{ color: theme.primary, mr: 0.5 }}
+                          sx={{ color: NET_PACIFIC_COLORS.primary, mr: 0.5 }}
                           title="Close out this CA's remaining unused balance"
                         >
                           Close &amp; Settle
@@ -1263,7 +1335,7 @@ export default function CAFormPage() {
                         size="small"
                         onClick={() => exportCARowToPDF(ca)}
                         title="Export to PDF (for signing)"
-                        sx={{ color: theme.primary, ml: 0.5 }}
+                        sx={{ color: NET_PACIFIC_COLORS.primary, ml: 0.5 }}
                       >
                         <PictureAsPdfIcon fontSize="small" />
                       </IconButton>
@@ -1272,7 +1344,7 @@ export default function CAFormPage() {
                           size="small"
                           onClick={() => openFundingEdit(ca)}
                           title={ca.fundingSource?.type === 'investor_outofpocket' ? `Funded by ${ca.fundingSource.investor} (out-of-pocket) — edit` : 'Edit funding source / link to Investment Tracker'}
-                          sx={{ color: ca.fundingSource?.type === 'investor_outofpocket' ? 'info.main' : theme.primary, ml: 0.5 }}
+                          sx={{ color: ca.fundingSource?.type === 'investor_outofpocket' ? 'info.main' : NET_PACIFIC_COLORS.primary, ml: 0.5 }}
                         >
                           <WalletIcon fontSize="small" />
                         </IconButton>
@@ -1301,7 +1373,7 @@ export default function CAFormPage() {
                             </Typography>
                           ) : (
                             <>
-                              <Typography variant="caption" sx={{ fontWeight: 600, color: theme.primary, display: 'block', mb: 0.5 }}>
+                              <Typography variant="caption" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, display: 'block', mb: 0.5 }}>
                                 Liquidated {liquidatedTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })} of {Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
                               </Typography>
                               {linkedLiqs.map((l) => (
@@ -1323,6 +1395,7 @@ export default function CAFormPage() {
           </Table>
         </TableContainer>
       )}
+      </Paper>
       <PdfPreviewDialog
         open={pdfPreviewOpen}
         onClose={() => { setPdfPreviewOpen(false); setPdfPreviewBlob(null); setPdfPreviewTitle(''); }}
@@ -1330,7 +1403,7 @@ export default function CAFormPage() {
         title={pdfPreviewTitle}
       />
       <Dialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)}>
-        <DialogTitle>Delete {confirmDelete?.ca_no || 'cash advance'}?</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 600 }}>Delete {confirmDelete?.ca_no || 'cash advance'}?</DialogTitle>
         <DialogContent>
           <DialogContentText>
             {confirmDelete?.status === 'approved' || confirmDelete?.status === 'rejected'
@@ -1338,7 +1411,7 @@ export default function CAFormPage() {
               : 'Delete this cash advance request? This cannot be undone.'}
           </DialogContentText>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
           <Button
             color="error"
@@ -1351,7 +1424,7 @@ export default function CAFormPage() {
         </DialogActions>
       </Dialog>
       <Dialog open={!!closeTarget} onClose={() => setCloseTarget(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Close &amp; Settle — {closeTarget?.ca_no || closeTarget?.id}</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 600 }}>Close &amp; Settle — {closeTarget?.ca_no || closeTarget?.id}</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>
             {closeTarget?.full_name || closeTarget?.username || 'This employee'} still holds an unused balance of{' '}
@@ -1390,7 +1463,7 @@ export default function CAFormPage() {
         </DialogActions>
       </Dialog>
       <Dialog open={!!fundingEditTarget} onClose={closeFundingEdit} maxWidth="sm" fullWidth>
-        <DialogTitle>
+        <DialogTitle sx={{ fontWeight: 600 }}>
           Funding Source — {fundingEditTarget?.ca_no || fundingEditTarget?.id}
         </DialogTitle>
         <DialogContent>
@@ -1458,13 +1531,13 @@ export default function CAFormPage() {
             )}
           </Box>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={closeFundingEdit} disabled={savingFunding}>Cancel</Button>
           <Button
             variant="contained"
             onClick={handleSaveFunding}
             disabled={savingFunding || fundingEditLoadingInvestments || (fundingEditType === 'investor_outofpocket' && !fundingEditInvestor)}
-            sx={{ bgcolor: theme.primary, '&:hover': { bgcolor: theme.secondary } }}
+            sx={{ bgcolor: NET_PACIFIC_COLORS.primary, '&:hover': { bgcolor: NET_PACIFIC_COLORS.secondary } }}
           >
             {savingFunding ? <CircularProgress size={20} /> : 'Save'}
           </Button>
