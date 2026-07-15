@@ -14,6 +14,14 @@ import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveC
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { compressForUpload, blobToBase64 } from '../utils/receipts/imageCompress';
 import { parseReceipt } from '../services/receiptParseService';
+import {
+  checkDuplicates,
+  computeImageHash,
+  describeMatch,
+  findLocalDuplicates,
+  type DuplicateCheckCandidate,
+  type DuplicateMatch,
+} from '../services/receiptDuplicateService';
 import ReceiptCropper from './ReceiptCropper';
 import LiveCameraCapture from './LiveCameraCapture';
 import { EXPENSE_CATEGORIES } from '../data/financeCategories';
@@ -84,6 +92,10 @@ interface BatchItem {
   parseError?: string;
   saveError?: string;
   isSaved: boolean;
+  imageHash?: string;
+  // Duplicate-detection results, computed once after the whole batch parses.
+  duplicateMatches?: DuplicateMatch[];
+  localDuplicateOfIndex?: number;
 }
 
 export interface ScanProject {
@@ -100,6 +112,7 @@ export interface LiquidationScanItem {
   rawFile: File;
   croppedBlob?: Blob;
   fields: BatchItemFields;
+  imageHash?: string;
 }
 
 interface ScanBatchProps {
@@ -237,6 +250,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
         const blob = item.croppedBlob ?? item.rawFile;
         const b64 = await blobToBase64(blob);
         const pr = await parseReceipt(b64, 'image/jpeg');
+        const imageHash = await computeImageHash(b64);
         const amt = pr.total ?? pr.subtotal;
         const sugCat = pr.suggestedCategory ?? '';
         const fields: BatchItemFields = {
@@ -255,13 +269,43 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
           projectId: item.fields.projectId,
         };
         setParsedCount((c) => c + 1);
-        return { ...item, fields };
+        return { ...item, fields, imageHash };
       } catch (err) {
         setParsedCount((c) => c + 1);
         return { ...item, parseError: err instanceof Error ? err.message : 'Parse failed' };
       }
     });
-    setItems(parsed);
+
+    // Duplicate detection runs once for the whole batch (one server round-trip,
+    // capped at 25 candidates by the service) plus an intra-batch comparison of
+    // each item against earlier items. Best-effort — never blocks the review step.
+    let withDuplicates = parsed;
+    try {
+      const candidates: DuplicateCheckCandidate[] = parsed.map((it) => ({
+        key: it.id,
+        supplier: it.fields.supplier || undefined,
+        invoiceNo: it.fields.invoiceNumber || undefined,
+        amount: Number(it.fields.amount) || undefined,
+        date: it.fields.date || undefined,
+        imageHash: it.imageHash || undefined,
+      }));
+      const serverMatches = await checkDuplicates(candidates);
+      withDuplicates = parsed.map((it, i) => {
+        const localMatches = findLocalDuplicates(candidates[i], candidates.slice(0, i));
+        const localIdx = localMatches.length
+          ? parsed.findIndex((p) => p.id === localMatches[0].key)
+          : -1;
+        return {
+          ...it,
+          duplicateMatches: serverMatches.get(it.id) || [],
+          localDuplicateOfIndex: localIdx >= 0 ? localIdx : undefined,
+        };
+      });
+    } catch (err) {
+      console.warn('[ScanBatch] duplicate check failed:', err);
+    }
+
+    setItems(withDuplicates);
     setStage(BatchStage.review);
   };
 
@@ -328,7 +372,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
     if (mode === 'liquidation') {
       if (!onLiquidationItem) return { ...item, saveError: 'Liquidation handler not configured.' };
       try {
-        const ok = await onLiquidationItem({ rawFile: item.rawFile, croppedBlob: item.croppedBlob, fields: item.fields });
+        const ok = await onLiquidationItem({ rawFile: item.rawFile, croppedBlob: item.croppedBlob, fields: item.fields, imageHash: item.imageHash });
         return ok ? { ...item, isSaved: true, saveError: undefined } : { ...item, saveError: 'Could not add to liquidation.' };
       } catch (err) {
         return { ...item, saveError: err instanceof Error ? err.message : 'Save failed' };
@@ -410,6 +454,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
       if (f.vat.trim() && Number.isFinite(vatNum) && vatNum > 0) meta.vat = vatNum;
       if (typeof f.deductible === 'boolean') meta.deductible = f.deductible;
       if (f.deductibleReason?.trim()) meta.deductibleReason = f.deductibleReason.trim();
+      if (item.imageHash) meta.imageHash = item.imageHash;
 
       // A per-item batch with no project assigned on this receipt falls back to
       // overhead — same endpoint/shape as mode === 'overhead' uses.
@@ -588,6 +633,17 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
                   <MenuItem value="">— No project (Overhead) —</MenuItem>
                   {(projects || []).map((p) => <MenuItem key={p.id} value={p.id}>{p.project_no} — {p.project_name}</MenuItem>)}
                 </TextField>
+              )}
+              {(!!item.duplicateMatches?.length || item.localDuplicateOfIndex !== undefined) && (
+                <Alert severity="warning" variant="outlined" sx={{ mb: 1.5 }}>
+                  Possible duplicate
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                    {item.localDuplicateOfIndex !== undefined && (
+                      <li>Looks like the same receipt as item #{item.localDuplicateOfIndex + 1} in this batch.</li>
+                    )}
+                    {(item.duplicateMatches || []).map((m, i) => <li key={i}>{describeMatch(m)}</li>)}
+                  </ul>
+                </Alert>
               )}
               {item.fields.customerIssues.length > 0 && (
                 <Alert severity="warning" sx={{ mb: 1.5 }}>
