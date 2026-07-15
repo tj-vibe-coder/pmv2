@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, Grid, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, MenuItem, Alert, Chip, CircularProgress,
-  Card, CardContent, Tooltip, Link,
+  Card, CardContent, Tooltip, Link, List, ListItemButton, ListItemText,
+  Checkbox, FormControlLabel, InputAdornment,
 } from '@mui/material';
-import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, ReceiptLong as ReceiptLongIcon, PostAdd as PostAddIcon } from '@mui/icons-material';
+import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, ReceiptLong as ReceiptLongIcon, PostAdd as PostAddIcon, Link as LinkIcon, Search as SearchIcon } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { INVESTORS, PROJECT_EXPENSE_CATEGORIES, OVERHEAD_CATEGORIES } from '../data/financeCategories';
 import { Project } from '../types/Project';
@@ -66,6 +67,19 @@ interface Investment {
   linkedExpenseId?: string;
   linkedExpenseCollection?: 'project_expenses' | 'overhead_expenses' | 'cash_advances';
   linkedExpenseProjectId?: string | null;
+}
+
+// A candidate expense row to link an investor's out-of-pocket ledger entry back to —
+// pulled from project_expenses/overhead_expenses, not yet marked investor_outofpocket.
+interface LinkCandidate {
+  id: string;
+  scope: 'project' | 'overhead';
+  date: string;
+  description: string;
+  amount: number;
+  projectName?: string;
+  category?: string;
+  sourceType?: string;
 }
 
 interface FormData {
@@ -138,6 +152,23 @@ const InvestmentTrackerPage: React.FC = () => {
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [registerSaving, setRegisterSaving] = useState(false);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
+
+  // Link to Existing: match a manually-booked investment row (e.g. a "Liquidation" pencil
+  // entry) to an expense record that already exists — for cases where the actual receipt
+  // was logged separately in Expense Monitoring and the two amounts differ by a few pesos
+  // or centavos (rounding), so an exact-amount auto-match never happens.
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkSource, setLinkSource] = useState<Investment | null>(null);
+  const [linkCandidates, setLinkCandidates] = useState<LinkCandidate[]>([]);
+  const [linkLoading, setLinkLoading] = useState(false);
+  const [linkSearch, setLinkSearch] = useState('');
+  const [linkSelected, setLinkSelected] = useState<LinkCandidate | null>(null);
+  const [linkSyncAmount, setLinkSyncAmount] = useState(true);
+  const [linkSaving, setLinkSaving] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  // Guards against a slower openLink(A) response repopulating candidates after openLink(B)
+  // (or dialog close) has already superseded it.
+  const linkGenRef = useRef(0);
 
   const authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
 
@@ -287,6 +318,115 @@ const InvestmentTrackerPage: React.FC = () => {
       await load();
     } catch { setRegisterError('Failed to create expense'); }
     finally { setRegisterSaving(false); }
+  };
+
+  // ── Link to Existing: find & attach an already-logged expense to a manual ledger row ──
+  const openLink = async (inv: Investment) => {
+    linkGenRef.current += 1;
+    const gen = linkGenRef.current;
+    setLinkSource(inv);
+    setLinkOpen(true);
+    setLinkSelected(null);
+    setLinkSyncAmount(true);
+    setLinkSearch('');
+    setLinkError(null);
+    setLinkCandidates([]);
+    setLinkLoading(true);
+    try {
+      const [projRes, overheadRes] = await Promise.all([
+        fetch(`${API_BASE}/project-expenses`, { headers: authHeaders }),
+        fetch(`${API_BASE}/overhead-expenses`, { headers: authHeaders }),
+      ]);
+      if (gen !== linkGenRef.current) return;
+      if (!projRes.ok || !overheadRes.ok) {
+        setLinkError('Failed to load expense records (server error). Try again.');
+        return;
+      }
+      const projData = await projRes.json().catch(() => ({ success: false, expenses: [] }));
+      const overheadData = await overheadRes.json().catch(() => ({ success: false, expenses: [] }));
+      if (gen !== linkGenRef.current) return;
+      if (!projData.success || !overheadData.success) {
+        setLinkError('Failed to load some expense records — results may be incomplete.');
+      }
+      const isValidCandidate = (e: any) =>
+        typeof e.id === 'string' && e.id &&
+        !(e.fundingSource && e.fundingSource.type === 'investor_outofpocket') &&
+        Number.isFinite(Number(e.amount)) &&
+        typeof e.date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(e.date);
+      const projCandidates: LinkCandidate[] = (projData.expenses || [])
+        .filter(isValidCandidate)
+        .map((e: any) => ({ id: e.id, scope: 'project' as const, date: e.date, description: e.description || '', amount: Number(e.amount), projectName: e.projectName, category: e.category, sourceType: e.sourceType }));
+      const overheadCandidates: LinkCandidate[] = (overheadData.expenses || [])
+        .filter(isValidCandidate)
+        .map((e: any) => ({ id: e.id, scope: 'overhead' as const, date: e.date, description: e.description || '', amount: Number(e.amount), category: e.category, sourceType: e.sourceType }));
+      // Closest amount/date matches to the investment entry first — the disparity this
+      // feature exists to resolve is usually a few pesos or centavos of rounding.
+      const target = inv.amount;
+      const targetDate = new Date(inv.date).getTime();
+      const scored = [...projCandidates, ...overheadCandidates].sort((a, b) => {
+        const scoreA = Math.abs(a.amount - target) + Math.abs(new Date(a.date).getTime() - targetDate) / 86400000;
+        const scoreB = Math.abs(b.amount - target) + Math.abs(new Date(b.date).getTime() - targetDate) / 86400000;
+        return scoreA - scoreB;
+      });
+      setLinkCandidates(scored);
+    } catch {
+      if (gen === linkGenRef.current) setLinkError('Failed to load expense records to match against.');
+    } finally {
+      if (gen === linkGenRef.current) setLinkLoading(false);
+    }
+  };
+  const closeLink = () => { linkGenRef.current += 1; setLinkOpen(false); setLinkSource(null); setLinkCandidates([]); };
+
+  const filteredLinkCandidates = linkCandidates.filter((c) => {
+    if (!linkSearch.trim()) return true;
+    const q = linkSearch.trim().toLowerCase();
+    return c.description?.toLowerCase().includes(q) || c.projectName?.toLowerCase().includes(q) || c.category?.toLowerCase().includes(q);
+  });
+
+  const submitLink = async () => {
+    if (!linkSource || !linkSelected) return;
+    setLinkSaving(true);
+    setLinkError(null);
+    try {
+      const endpoint = linkSelected.scope === 'overhead' ? 'overhead-expenses' : 'project-expenses';
+      const res = await fetch(`${API_BASE}/${endpoint}/${linkSelected.id}`, {
+        method: 'PATCH',
+        headers: authHeaders,
+        body: JSON.stringify({
+          fundingSource: { type: 'investor_outofpocket', investor: linkSource.investor, linkedInvestmentId: linkSource.id },
+        }),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (!res.ok || !data.success) { setLinkError(data.error || 'Failed to link expense'); return; }
+      // Resolve the pesos/centavos disparity by adopting the linked record's amount as the
+      // ledger's authoritative figure, once the two rows are confirmed to be the same spend.
+      // The expense is already linked at this point — a failure here only leaves the ledger
+      // amount stale, so it's reported (not silently swallowed) but doesn't block closing.
+      let amountSyncFailed = false;
+      if (linkSyncAmount && linkSelected.amount !== linkSource.amount) {
+        try {
+          const putRes = await fetch(`${API_BASE}/investments/${linkSource.id}`, {
+            method: 'PUT',
+            headers: authHeaders,
+            body: JSON.stringify({ date: linkSource.date, investor: linkSource.investor, amount: linkSelected.amount, category: linkSource.category, description: linkSource.description }),
+          });
+          const putData = await putRes.json().catch(() => ({ success: false }));
+          amountSyncFailed = !putRes.ok || !putData.success;
+        } catch {
+          amountSyncFailed = true;
+        }
+      }
+      closeLink();
+      await load();
+      // Set after load() (which clears `error` on every call) so the warning survives the refresh.
+      if (amountSyncFailed) {
+        setError('Expense linked, but the ledger amount could not be updated — edit the row manually.');
+      }
+    } catch {
+      setLinkError('Failed to link expense. Check your connection.');
+    } finally {
+      setLinkSaving(false);
+    }
   };
 
   if (loading) return (
@@ -459,6 +599,13 @@ const InvestmentTrackerPage: React.FC = () => {
                       <Tooltip title="Register as Expense">
                         <IconButton size="small" color="primary" onClick={() => openRegister(row)} sx={{ mr: 0.5 }}>
                           <PostAddIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    {!expenseLinkTarget(row) && (
+                      <Tooltip title="Link to Existing Expense">
+                        <IconButton size="small" color="primary" onClick={() => openLink(row)} sx={{ mr: 0.5 }}>
+                          <LinkIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
                     )}
@@ -649,6 +796,71 @@ const InvestmentTrackerPage: React.FC = () => {
             sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
           >
             {registerSaving ? 'Saving…' : 'Create Expense'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Link to Existing Expense Dialog */}
+      <Dialog open={linkOpen} onClose={closeLink} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 600 }}>Link to Existing Expense</DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          {linkError && <Alert severity="error" sx={{ mb: 2 }}>{linkError}</Alert>}
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Matches for <strong>{linkSource?.investor}</strong> — {linkSource?.description || linkSource?.category}
+            {' '}({linkSource ? formatPHP(linkSource.amount) : ''}) on {linkSource?.date}.
+            Pick the expense record that's actually the same spend, even if the amount is off by a few pesos or centavos.
+          </Alert>
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="Filter by description, project, or category"
+            value={linkSearch}
+            onChange={(e) => setLinkSearch(e.target.value)}
+            sx={{ mb: 1.5 }}
+            InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+          />
+          {linkLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}><CircularProgress size={24} /></Box>
+          ) : filteredLinkCandidates.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
+              No unlinked expense records found.
+            </Typography>
+          ) : (
+            <List dense sx={{ maxHeight: 320, overflow: 'auto', border: '1px solid #e0e0e0', borderRadius: 1 }}>
+              {filteredLinkCandidates.slice(0, 100).map((c) => {
+                const diff = linkSource ? c.amount - linkSource.amount : 0;
+                return (
+                  <ListItemButton
+                    key={`${c.scope}-${c.id}`}
+                    selected={linkSelected?.id === c.id && linkSelected?.scope === c.scope}
+                    onClick={() => setLinkSelected(c)}
+                  >
+                    <ListItemText
+                      primary={`${c.description || '—'} · ${formatPHP(c.amount)}`}
+                      secondary={`${c.date} · ${c.scope === 'overhead' ? 'Overhead' : (c.projectName || 'Project')} · ${c.category || ''}${diff !== 0 ? ` · Δ ${diff > 0 ? '+' : ''}${diff.toLocaleString()}` : ''}`}
+                    />
+                  </ListItemButton>
+                );
+              })}
+            </List>
+          )}
+          {linkSelected && linkSource && linkSelected.amount !== linkSource.amount && (
+            <FormControlLabel
+              sx={{ mt: 1 }}
+              control={<Checkbox checked={linkSyncAmount} onChange={(e) => setLinkSyncAmount(e.target.checked)} />}
+              label={`Update ledger amount to ${formatPHP(linkSelected.amount)} to match the linked record`}
+            />
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={closeLink}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={submitLink}
+            disabled={linkSaving || !linkSelected}
+            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+          >
+            {linkSaving ? 'Linking…' : 'Link Expense'}
           </Button>
         </DialogActions>
       </Dialog>
