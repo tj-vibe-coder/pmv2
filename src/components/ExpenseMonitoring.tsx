@@ -36,6 +36,7 @@ import {
   ToggleButtonGroup,
   ToggleButton,
   Link,
+  Tooltip as MuiTooltip,
 } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import {
@@ -53,7 +54,7 @@ import {
   Area,
   AreaChart
 } from 'recharts';
-import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, ExpandMore as ExpandMoreIcon, SwapHoriz as PromoteIcon, AddAPhoto as AddAPhotoIcon, OpenInNew as OpenInNewIcon, Edit as EditIcon, DriveFileMove as MoveIcon, Close as CloseIcon, DragIndicator as DragIndicatorIcon } from '@mui/icons-material';
+import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, ExpandMore as ExpandMoreIcon, SwapHoriz as PromoteIcon, AddAPhoto as AddAPhotoIcon, OpenInNew as OpenInNewIcon, Edit as EditIcon, DriveFileMove as MoveIcon, Close as CloseIcon, DragIndicator as DragIndicatorIcon, AccountBalanceWallet as InvestorLinkIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import { getBudgets } from '../utils/projectBudgetStorage';
@@ -1724,19 +1725,34 @@ const ExpenseMonitoring: React.FC = () => {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Chip
-                          size="small"
-                          label={
-                            expense.sourceType === 'po_sync' ? 'PO' :
-                            expense.sourceType === 'liquidation_sync' ? 'Liquidation' :
-                            expense.sourceType === 'migrated' ? 'Migrated' :
-                            expense.sourceType === 'receipt_scan' ? 'Scan' : 'Manual'
-                          }
-                          color={
-                            expense.sourceType === 'po_sync' ? 'primary' :
-                            expense.sourceType === 'liquidation_sync' ? 'warning' : 'default'
-                          }
-                        />
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                          <Chip
+                            size="small"
+                            label={
+                              expense.sourceType === 'po_sync' ? 'PO' :
+                              expense.sourceType === 'liquidation_sync' ? 'Liquidation' :
+                              expense.sourceType === 'migrated' ? 'Migrated' :
+                              expense.sourceType === 'receipt_scan' ? 'Scan' : 'Manual'
+                            }
+                            color={
+                              expense.sourceType === 'po_sync' ? 'primary' :
+                              expense.sourceType === 'liquidation_sync' ? 'warning' : 'default'
+                            }
+                          />
+                          {expense.fundingSource?.type === 'investor_outofpocket' && expense.fundingSource.investor?.trim() && (
+                            <MuiTooltip title={`Funded out-of-pocket by ${expense.fundingSource.investor} — linked in Investment Tracker`}>
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                color="info"
+                                icon={<InvestorLinkIcon fontSize="small" />}
+                                label={expense.fundingSource.investor}
+                                onClick={() => navigate('/finance/investment-tracker')}
+                                sx={{ cursor: 'pointer' }}
+                              />
+                            </MuiTooltip>
+                          )}
+                        </Box>
                       </TableCell>
                       <TableCell padding="none" align="center" sx={{ whiteSpace: 'nowrap' }}>
                         {/* Fixed-width slot per action (rendered empty when not applicable to this row)
