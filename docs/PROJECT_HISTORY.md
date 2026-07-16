@@ -384,3 +384,107 @@ picks) while grabbing the entire filtered result, not the page.
   pre-fix. Full jest suite + `tsc --noEmit` + `node --check server.js` green.
 - **Follow-up**: already-synced projects keep the wrong amount until re-synced — after deploy,
   use the force/update sync on the project detail page to rewrite `contract_amount`.
+
+
+### Receipt linking, PDF attachments, expense pagination, rotatable/persistent receipt viewer (2026-07-16, on `rj/dev`, commit `209d94d`)
+
+RJ reported three problems while reviewing Expense Monitoring: (1) liquidation rows that had
+a scanned receipt attached showed "came from liquidation" but no way to see the actual scan,
+(2) receipt attachments only accepted photos, not PDFs (he has PDF receipts for
+electronic items/services), (3) the "Recent Expenses" table only ever showed the most recent
+~50 rows even with all Year/Month/Quarter filters cleared.
+
+**Issue 1 — receipt linking.** `receiptRef` (`{oneDriveId, webUrl, filename}`) was already a
+first-class field on `project_expenses`/`overhead_expenses` docs (used by the receipt-scan
+flow), but none of the three liquidation→`project_expenses` sync paths ever populated it, even
+though the liquidation's own `receipts_json` had the scan:
+- `server.js` bulk-insert path (`POST /api/project-expenses` with `expenses: [...]`, used by
+  both the on-submit sync in `LiquidationFormPage.tsx` and the "Sync from Liquidation" button
+  in `ExpenseMonitoring.tsx`) silently dropped `exp.receiptRef` when building the Firestore doc
+  — fixed to pass it through, mirroring the single-insert path which already did.
+- `applyLiquidationRevision` (server-side, fires when a superadmin approves a proposed edit to
+  a submitted liquidation) now also carries `receiptRef` onto both the updated and newly-created
+  `project_expenses` rows, sourced from `revision.receipts_json` (falling back to the
+  liquidation's current `receipts_json` if the revision didn't touch receipts) — matched by
+  `rowId`, only entries with a completed upload (`oneDriveId` + `webUrl` present) count.
+- **Backfill for already-synced rows**: new `POST /api/project-expenses/backfill-liquidation-receipts`
+  (any authenticated user) scans `project_expenses` where `sourceType === 'liquidation_sync'` and
+  `receiptRef` is missing, looks up the matching liquidation's `receipts_json` by
+  `sourceLiquidationId` + `sourceLiquidationRowId`, and batch-patches in the match. Idempotent,
+  safe to re-run. The "Sync from Liquidation" button in Expense Monitoring now calls this
+  automatically after its normal sync and reports both counts ("Synced N…; linked M scanned
+  receipt(s) to existing entries"). **RJ needs to click that button once against production** —
+  this was implemented and verified against real data, but the backfill itself hadn't been
+  triggered as of this write-up, so older liquidation-sourced expenses may still show no receipt
+  link until he does.
+- Verified in-browser against prod: opened a real synced liquidation expense (LQ-0027) in the
+  Expense Monitoring receipt viewer and confirmed the actual scanned image loads.
+
+**Issue 2 — PDF/HEIC attachments.** Scoped narrowly on purpose: the camera/OCR "Scan" flow
+(crop-then-parse-with-Gemini) stays image-only everywhere (`ExpenseMonitoring.tsx`,
+`ScanBatch.tsx`, `ScanPage.tsx`, `CAFormPage.tsx`) because the crop tool fundamentally can't
+operate on a PDF — the server's `/api/receipts/parse` endpoint already accepts
+`application/pdf` and forwards it to Gemini, but every client caller hardcodes
+`mimeType: 'image/jpeg'`, so that path was left alone. What changed: the "attach receipt to an
+existing expense" input in `ExpenseMonitoring.tsx` (`attachReceiptInputRef`, the small camera
+icon in the Actions column, separate from the Scan/Add-Expense flow) now accepts
+`image/*,.pdf,.heic,.heif` (matches what `LiquidationFormPage.tsx`'s receipt-row attach already
+allowed) and no longer forces a fake `.jpg` extension onto the uploaded filename — it now
+preserves the real extension (`.pdf`, `.png`, etc.) so a downloaded/opened file isn't
+mislabeled. Adding a *brand-new* expense with a PDF receipt still means "add manually, then
+attach" — the Scan button itself stays photo-only.
+
+**Issue 3 — pagination.** `ExpenseMonitoring.tsx`'s "Recent Expenses" table had a hardcoded
+`tableRows.slice(0, 50)` regardless of filter state. Replaced with MUI `TablePagination`
+(25/50/100/250 rows/page); `page` resets to 0 whenever the year/month/quarter/project filter or
+sort column/direction changes, so the user can't land on an out-of-range empty page.
+
+**Follow-up ask: rotate + auto-resize the receipt viewer, and persist it.** RJ pointed out many
+scanned receipts (phone photos) are stored sideways and asked for a rotate control, for the
+popup to auto-fit the image instead of a fixed box, and — after confirming the CSS-only rotate
+didn't survive reopening — asked whether the *actual file* could be rotated so a plain download
+comes out upright too.
+
+- Extracted a shared `src/components/ReceiptViewer.tsx` (draggable floating pane) instead of
+  building this three times — `ExpenseMonitoring.tsx` and `finance/TaxFilerLedgerPage.tsx` each
+  had their own near-identical copy-pasted viewer (the Tax Ledger one was literally commented
+  "ported from Expense Monitoring"); both were gutted down to call the shared component.
+  `LiquidationFormPage.tsx` had **no** in-app viewer at all before this — clicking a receipt
+  thumbnail just did `window.open(webUrl)` straight to OneDrive in a new tab; it now gets the
+  same in-app viewer.
+- **Auto-resize**: the pane measures the loaded image's natural width/height (`<img onLoad>`),
+  swaps effective width/height at 90°/270°, and sizes the content box (and thus the whole pane)
+  to fit — replaces the old fixed `width: 380` box that left a rotated portrait photo scrolling
+  inside too-narrow a frame.
+- **Rotate**: CSS `transform: rotate()` on click, instant, always available as a live preview.
+- **Persist ("Save rotation")**: a save icon appears next to the rotate buttons whenever
+  rotation ≠ 0. Clicking it draws the currently-rotated `<img>` onto a `<canvas>` (bakes the
+  rotation into real pixels), uploads the resulting JPEG via new
+  `PUT /api/onedrive/item/:id/content` (new client helper
+  `replaceDriveItemContent` in `onedriveFolderService.ts`) which does a Graph
+  `PUT /drives/{driveId}/items/{itemId}/content` — **overwrites the same item's bytes in
+  place, id and webUrl unchanged**. Because nothing about the stored reference changes, no
+  Firestore write is needed at all for `project_expenses`/`overhead_expenses` (the `receiptRef`
+  object is untouched), and — the key design point — this **also works on a submitted/locked
+  liquidation** without going through the propose-edit → superadmin-approve workflow, since it
+  never touches `rows_json`/`receipts_json`/totals in Firestore, only bytes in OneDrive. (An
+  advisor review during design flagged that a naive "persist rotation as metadata" approach
+  would have meant either writing to a locked liquidation record outside the approval flow, or
+  a second `rotation` field drifting between `receipts_json` and the synced `project_expenses`
+  copy — the bake-into-the-file approach sidesteps both problems entirely.)
+- `LiquidationFormPage.tsx`'s local receipt thumbnail (`thumbnailDataUrl`, part of the
+  persisted `receipts_json` shape) is also regenerated client-side from the baked blob after a
+  successful save, for this session — it isn't force-written to Firestore for a submitted
+  liquidation (would reintroduce the lock-bypass problem for the *Firestore* write, even though
+  the OneDrive write itself is fine); it naturally persists next time the liquidation is
+  legitimately saved as a draft or through a revision.
+- Required restarting the local dev server mid-session (`node server.js` doesn't hot-reload;
+  `concurrently -k` means killing just the server child takes the client down too — killed the
+  top-level `npm start` process group and restarted via `npm start &` instead).
+- **Verified end-to-end in-browser against real production data**: rotated a real sideways
+  receipt (LQ-0027, Shakey's Pizza) in Expense Monitoring, clicked Save, closed and reopened the
+  viewer — receipt loaded upright on a fresh fetch with no rotate/save affordance needed (proves
+  the actual OneDrive file was overwritten, not just a display flag); confirmed rotate also works
+  in the Liquidation form viewer and that Tax Filer Ledger's viewer still opens correctly after
+  the shared-component refactor. `npx tsc --noEmit` and `CI=true npm run build` clean throughout.
+- Committed as `209d94d` on `rj/dev`. **Not pushed to `main`** — no PR opened yet.

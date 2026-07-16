@@ -35,6 +35,7 @@ import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import {
   ensureFolder,
   fetchDriveItemBlob,
+  replaceDriveItemContent,
   resolveCorporateDriveId,
   sanitizeForOneDrive,
   uploadFileToFolderById,
@@ -48,6 +49,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
 import ScanToPhoneDialog, { type DeliveredReceipt } from './ScanToPhoneDialog';
 import ScanBatch, { type LiquidationScanItem } from './ScanBatch';
+import ReceiptViewer from './ReceiptViewer';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 import { LIQUIDATION_CATEGORIES } from '../data/financeCategories';
 import { blobToBase64 } from '../utils/receipts/imageCompress';
@@ -217,7 +219,8 @@ async function addLiquidationRowsToProjectExpenses(
   rows: LiquidationRow[],
   liquidationId?: string,
   formNo?: string,
-  sourceCaId?: string
+  sourceCaId?: string,
+  receipts?: ReceiptAttachment[]
 ): Promise<void> {
   try {
     const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
@@ -227,6 +230,12 @@ async function addLiquidationRowsToProjectExpenses(
       return pid !== '' && pid !== null && pid !== undefined && amt > 0;
     });
     if (toAdd.length === 0) return;
+    // First successfully-uploaded receipt per row (a row can have several; the
+    // expense's receiptRef is singular so this is the best-effort pick).
+    const receiptByRowId = new Map<string, ReceiptAttachment>();
+    (receipts || []).forEach((rec) => {
+      if (rec.oneDriveId && rec.webUrl && !receiptByRowId.has(rec.rowId)) receiptByRowId.set(rec.rowId, rec);
+    });
     const expenses = toAdd.map((r) => {
       const expense: Record<string, unknown> = {
         projectId: r.projectId,
@@ -242,6 +251,10 @@ async function addLiquidationRowsToProjectExpenses(
         sourceLiquidationRowId: r.id,
       };
       if (sourceCaId) expense.sourceCaId = sourceCaId;
+      const receipt = receiptByRowId.get(r.id);
+      if (receipt) {
+        expense.receiptRef = { oneDriveId: receipt.oneDriveId, webUrl: receipt.webUrl, filename: receipt.filename };
+      }
       // Carry BIR substantiation captured on the row into the tax ledger.
       if ((r.supplier || '').trim()) expense.supplier = (r.supplier || '').trim();
       if ((r.invoiceNo || '').trim()) expense.invoiceNo = (r.invoiceNo || '').trim();
@@ -288,6 +301,7 @@ export default function LiquidationFormPage() {
   const [loadedReimb, setLoadedReimb] = useState<{ id: string; status: string | null; at: number | null; caId: string | null } | null>(null);
   // Receipt scans/photos attached per expense row.
   const [receipts, setReceipts] = useState<ReceiptAttachment[]>([]);
+  const [receiptViewer, setReceiptViewer] = useState<{ receipt: ReceiptAttachment; url: string | null } | null>(null);
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const receiptRowIdRef = useRef<string | null>(null);
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
@@ -540,6 +554,39 @@ export default function LiquidationFormPage() {
   };
 
   const removeReceipt = (id: string) => setReceipts((prev) => prev.filter((r) => r.id !== id));
+
+  // In-app viewer (with rotate) instead of always jumping out to OneDrive.
+  // Prefers the in-memory File (this session's own upload, no network round-trip)
+  // and falls back to fetching the OneDrive copy for receipts loaded from a saved liquidation.
+  const openReceiptViewer = async (receipt: ReceiptAttachment) => {
+    setReceiptViewer({ receipt, url: receipt.file ? URL.createObjectURL(receipt.file) : null });
+    if (receipt.file || !receipt.oneDriveId) return;
+    try {
+      const blob = await fetchDriveItemBlob('server', 'server', receipt.oneDriveId);
+      setReceiptViewer((prev) => (prev && prev.receipt.id === receipt.id ? { ...prev, url: URL.createObjectURL(blob) } : prev));
+    } catch {
+      setScanSnackbar({ open: true, severity: 'error', message: 'Could not load the receipt image. Use "Open in OneDrive" instead.' });
+    }
+  };
+  useEffect(() => () => { if (receiptViewer?.url) URL.revokeObjectURL(receiptViewer.url); }, [receiptViewer]);
+
+  // Bakes the viewer's current rotation into the file and overwrites the same
+  // OneDrive item in place (id/webUrl unchanged) — this works even on a
+  // submitted (locked) liquidation, since it never touches receipts_json/rows,
+  // only the file's bytes in OneDrive. Also refreshes the row's small local
+  // thumbnail for this session; that thumbnail persists to Firestore the next
+  // time this liquidation is normally saved (draft) or edited (revision).
+  const saveReceiptRotation = async (receipt: ReceiptAttachment, rotatedBlob: Blob) => {
+    if (!receipt.oneDriveId) throw new Error('This receipt has not finished uploading yet.');
+    await replaceDriveItemContent(receipt.oneDriveId, rotatedBlob);
+    try {
+      const newThumb = await generateThumbnail(rotatedBlob);
+      if (newThumb) setReceipts((prev) => prev.map((r) => (r.id === receipt.id ? { ...r, thumbnailDataUrl: newThumb } : r)));
+    } catch {
+      // best-effort — the row list thumbnail just stays as-is until next re-attach
+    }
+    setScanSnackbar({ open: true, severity: 'success', message: 'Receipt rotated and saved.' });
+  };
 
   const scanYear = String(new Date().getFullYear());
   const scanFolderPath = `Liquidation Receipts/${scanYear}/${sanitizeForOneDrive((formNo || 'draft').trim() || 'draft')}`;
@@ -1090,7 +1137,7 @@ export default function LiquidationFormPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
-        addLiquidationRowsToProjectExpenses(rows, data.id ?? draftId ?? undefined, finalFormNo, caId || undefined).catch(() => {});
+        addLiquidationRowsToProjectExpenses(rows, data.id ?? draftId ?? undefined, finalFormNo, caId || undefined, receipts).catch(() => {});
         setDraftId(null);
         setLoadedOptionValue('');
         setIsViewingSubmitted(false);
@@ -2222,9 +2269,17 @@ export default function LiquidationFormPage() {
                   >
                     {r.thumbnailDataUrl ? (
                       // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                      <img src={r.thumbnailDataUrl} alt={r.filename} style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 4 }} />
+                      <img
+                        src={r.thumbnailDataUrl}
+                        alt={r.filename}
+                        onClick={() => openReceiptViewer(r)}
+                        style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 4, cursor: 'pointer' }}
+                      />
                     ) : (
-                      <AttachFileIcon sx={{ fontSize: 32, color: 'text.secondary' }} />
+                      <AttachFileIcon
+                        onClick={() => openReceiptViewer(r)}
+                        sx={{ fontSize: 32, color: 'text.secondary', cursor: (r.file || r.oneDriveId) ? 'pointer' : 'default' }}
+                      />
                     )}
                     <Box sx={{ minWidth: 0 }}>
                       <Typography variant="caption" sx={{ display: 'block', fontWeight: 600 }}>
@@ -2348,6 +2403,17 @@ export default function LiquidationFormPage() {
           {scanSnackbar.message}
         </Alert>
       </Snackbar>
+      {receiptViewer && (
+        <ReceiptViewer
+          title={receiptViewer.receipt.filename}
+          url={receiptViewer.url}
+          webUrl={receiptViewer.receipt.webUrl}
+          isPdf={/\.pdf$/i.test(receiptViewer.receipt.filename || '')}
+          onClose={() => setReceiptViewer(null)}
+          headerColor={theme.primary}
+          onSaveRotation={(blob) => saveReceiptRotation(receiptViewer.receipt, blob)}
+        />
+      )}
     </Box>
   );
 }

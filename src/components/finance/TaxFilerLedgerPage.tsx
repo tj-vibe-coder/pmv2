@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -26,15 +26,12 @@ import {
   LinearProgress,
   Alert,
   Snackbar,
-  IconButton,
   CircularProgress,
 } from '@mui/material';
 import {
   FileDownload as FileDownloadIcon,
   ReceiptLong as ReceiptLongIcon,
   OpenInNew as OpenInNewIcon,
-  Close as CloseIcon,
-  DragIndicator as DragIndicatorIcon,
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
 } from '@mui/icons-material';
@@ -44,7 +41,8 @@ import { fetchOverheadExpenses, OverheadExpense } from '../../services/overheadE
 import { getOfficePayrollBreakdown } from '../../utils/firebasePayroll';
 import { Payslip } from '../../types/Payroll';
 import { useAuth } from '../../contexts/AuthContext';
-import { fetchDriveItemBlob } from '../../services/onedriveFolderService';
+import { fetchDriveItemBlob, replaceDriveItemContent } from '../../services/onedriveFolderService';
+import ReceiptViewer from '../ReceiptViewer';
 
 const NET_PACIFIC_COLORS = {
   primary:   '#2c5aa0',
@@ -265,16 +263,13 @@ const TaxFilerLedgerPage: React.FC = () => {
     }
   };
 
-  // Floating draggable receipt viewer pane (ported from Expense Monitoring).
+  // Floating draggable receipt viewer pane, shared with Expense Monitoring/Liquidation.
   const [viewer, setViewer] = useState<{ row: LedgerRow; url: string | null } | null>(null);
-  const [viewerPos, setViewerPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const viewerDragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
 
   useEffect(() => () => { if (viewer?.url) URL.revokeObjectURL(viewer.url); }, [viewer]);
 
   const openReceiptViewer = async (row: LedgerRow) => {
     if (!row.receiptRef?.oneDriveId) return;
-    setViewerPos({ x: 0, y: 0 });
     setViewer({ row, url: null });
     try {
       const blob = await fetchDriveItemBlob('server', 'server', row.receiptRef.oneDriveId);
@@ -282,22 +277,6 @@ const TaxFilerLedgerPage: React.FC = () => {
     } catch {
       setToast({ msg: 'Could not load the receipt image. Use "Open in OneDrive" instead.', sev: 'error' });
     }
-  };
-
-  const onViewerDragStart = (e: React.PointerEvent) => {
-    viewerDragRef.current = { startX: e.clientX, startY: e.clientY, baseX: viewerPos.x, baseY: viewerPos.y };
-    const onMove = (ev: PointerEvent) => {
-      const d = viewerDragRef.current;
-      if (!d) return;
-      setViewerPos({ x: d.baseX + ev.clientX - d.startX, y: d.baseY + ev.clientY - d.startY });
-    };
-    const onUp = () => {
-      viewerDragRef.current = null;
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
   };
 
   useEffect(() => {
@@ -764,53 +743,22 @@ const TaxFilerLedgerPage: React.FC = () => {
           </Typography>
         </>
       )}
-      {/* Floating draggable receipt viewer pane (ported from Expense Monitoring) */}
+      {/* Floating draggable receipt viewer pane, shared with Expense Monitoring/Liquidation */}
       {viewer && (
-        <Paper
-          elevation={8}
-          sx={{
-            position: 'fixed',
-            top: `calc(15% + ${viewerPos.y}px)`,
-            left: `calc(50% + ${viewerPos.x}px)`,
-            transform: 'translateX(-50%)',
-            zIndex: (theme) => theme.zIndex.modal + 1,
-            width: 380,
-            maxWidth: '92vw',
-            borderRadius: 2,
-            overflow: 'hidden',
-          }}
-        >
-          <Box
-            onPointerDown={onViewerDragStart}
-            sx={{
-              display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
-              bgcolor: NET_PACIFIC_COLORS.primary, color: 'white',
-              cursor: 'move', userSelect: 'none', touchAction: 'none',
-            }}
-          >
-            <DragIndicatorIcon fontSize="small" sx={{ opacity: 0.7 }} />
-            <Typography variant="subtitle2" sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {viewer.row.description || viewer.row.category} — {formatPHP(viewer.row.amount)}
-            </Typography>
-            <IconButton size="small" onClick={() => setViewer(null)} sx={{ color: 'white' }} title="Close">
-              <CloseIcon fontSize="small" />
-            </IconButton>
-          </Box>
-          <Box sx={{ p: 1.5, maxHeight: '60vh', overflow: 'auto', textAlign: 'center', bgcolor: '#f8fafc' }}>
-            {viewer.url ? (
-              <Box component="img" src={viewer.url} alt="receipt" sx={{ maxWidth: '100%', borderRadius: 1 }} />
-            ) : (
-              <Box sx={{ py: 6 }}><CircularProgress size={28} /></Box>
-            )}
-          </Box>
-          {viewer.row.receiptRef?.webUrl && (
-            <Box sx={{ px: 1.5, py: 1, borderTop: '1px solid #e2e8f0', textAlign: 'right' }}>
-              <Link href={viewer.row.receiptRef.webUrl} target="_blank" rel="noopener" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-                <OpenInNewIcon fontSize="inherit" /> Open in OneDrive
-              </Link>
-            </Box>
-          )}
-        </Paper>
+        <ReceiptViewer
+          title={`${viewer.row.description || viewer.row.category} — ${formatPHP(viewer.row.amount)}`}
+          url={viewer.url}
+          webUrl={viewer.row.receiptRef?.webUrl}
+          isPdf={/\.pdf$/i.test(viewer.row.receiptRef?.filename || '')}
+          onClose={() => setViewer(null)}
+          headerColor={NET_PACIFIC_COLORS.primary}
+          onSaveRotation={viewer.row.receiptRef?.oneDriveId
+            ? async (blob) => {
+                await replaceDriveItemContent(viewer.row.receiptRef!.oneDriveId as string, blob);
+                setToast({ msg: 'Receipt rotated and saved.', sev: 'success' });
+              }
+            : undefined}
+        />
       )}
       <Snackbar
         open={!!toast}
