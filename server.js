@@ -1209,6 +1209,7 @@ app.post('/api/project-expenses', async (req, res) => {
           if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
           if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
           if (exp.remarks) doc.remarks = String(exp.remarks);
+          if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
           // BIR substantiation passthrough — mirrors the single-insert path so
           // liquidation/PO-synced rows carry supplier/invoice detail into the tax ledger.
           if (exp.supplier) doc.supplier = String(exp.supplier);
@@ -1339,6 +1340,48 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
     res.json({ success: true, expense: { id: updated.id, ...updated.data() } });
   } catch (err) {
     console.error('Error updating project_expense:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Backfill receiptRef onto pre-existing liquidation_sync project_expenses that
+// were synced before receipt links were carried over (older filings created
+// prior to this passthrough). Idempotent — safe to call repeatedly; only
+// touches docs currently missing a receiptRef. Matches by sourceLiquidationId
+// + sourceLiquidationRowId against the liquidation's persisted receipts_json.
+app.post('/api/project-expenses/backfill-liquidation-receipts', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  try {
+    const expSnap = await db.collection('project_expenses')
+      .where('sourceType', '==', 'liquidation_sync')
+      .get();
+    const candidates = expSnap.docs.filter(d => !d.data().receiptRef && d.data().sourceLiquidationId && d.data().sourceLiquidationRowId);
+    if (candidates.length === 0) return res.json({ success: true, count: 0 });
+    const liqIds = [...new Set(candidates.map(d => String(d.data().sourceLiquidationId)))];
+    const liqDocs = await Promise.all(liqIds.map(id => db.collection('liquidations').doc(id).get()));
+    const receiptsByLiqId = new Map();
+    liqDocs.forEach(snap => {
+      if (!snap.exists) return;
+      const receipts = parseLiqRows(snap.data().receipts_json);
+      const byRow = new Map();
+      receipts.forEach(r => { if (r && r.rowId && r.oneDriveId && r.webUrl && !byRow.has(r.rowId)) byRow.set(r.rowId, { oneDriveId: r.oneDriveId, webUrl: r.webUrl, filename: r.filename || 'receipt' }); });
+      receiptsByLiqId.set(snap.id, byRow);
+    });
+    let count = 0;
+    const batch = db.batch();
+    for (const d of candidates) {
+      const data = d.data();
+      const byRow = receiptsByLiqId.get(String(data.sourceLiquidationId));
+      const receiptRef = byRow?.get(data.sourceLiquidationRowId);
+      if (!receiptRef) continue;
+      batch.update(d.ref, { receiptRef });
+      count += 1;
+    }
+    if (count > 0) await batch.commit();
+    res.json({ success: true, count });
+  } catch (err) {
+    console.error('Error backfilling liquidation receipts:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
@@ -2159,10 +2202,17 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
   expSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) expByRowId.set(rid, d); });
   const oldRowIds = new Set(oldRows.map(r => r.id));
   const newById = new Map(newRows.map(r => [r.id, r]));
+  // Receipt links keyed by rowId, from the revision's receipts (falling back to
+  // the liquidation's current receipts if the revision didn't touch them) — only
+  // entries that actually finished uploading (oneDriveId/webUrl present) count.
+  const newReceiptsList = parseLiqRows(revision.receipts_json != null ? revision.receipts_json : liq.receipts_json);
+  const receiptByRowId = new Map();
+  newReceiptsList.forEach(r => { if (r && r.rowId && r.oneDriveId && r.webUrl && !receiptByRowId.has(r.rowId)) receiptByRowId.set(r.rowId, { oneDriveId: r.oneDriveId, webUrl: r.webUrl, filename: r.filename || 'receipt' }); });
   const batch = db.batch();
   for (const [rowId, expDoc] of expByRowId) {
     const row = newById.get(rowId);
     if (!row || !row.projectId || !(Number(row.amount) > 0)) { batch.delete(expDoc.ref); continue; }
+    const receiptRef = receiptByRowId.get(rowId);
     batch.update(expDoc.ref, {
       projectId: String(row.projectId),
       projectName: (row.projectName || '').trim() || '—',
@@ -2170,6 +2220,7 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
       amount: Number(row.amount) || 0,
       date: row.date || expDoc.data().date || null,
       category: (row.category || '').trim() || 'Others',
+      receiptRef: receiptRef || FieldValue.delete(),
     });
   }
   for (const row of newRows) {
@@ -2192,6 +2243,8 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
     if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
     if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
     if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+    const receiptRef = receiptByRowId.get(row.id);
+    if (receiptRef) doc.receiptRef = receiptRef;
     batch.set(db.collection('project_expenses').doc(), doc);
   }
   await batch.commit();
@@ -4900,6 +4953,34 @@ app.get('/api/onedrive/item/:id/content', async (req, res) => {
     const ab = await r.arrayBuffer();
     res.set('Content-Type', r.headers.get('content-type') || 'application/octet-stream');
     res.send(Buffer.from(ab));
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 4b. Overwrite an existing item's bytes in place — id and webUrl stay the same,
+// so no Firestore/receipts_json reference ever needs to change. Used to bake a
+// client-side receipt rotation into the stored file so a plain download (or
+// OneDrive itself) shows it upright, not just this app's in-viewer CSS rotate.
+app.put('/api/onedrive/item/:id/content', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { contentBase64 } = req.body || {};
+  if (!contentBase64) return res.status(400).json({ error: 'contentBase64 is required' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const buf = Buffer.from(contentBase64, 'base64');
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/content`,
+      { method: 'PUT', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'image/jpeg' }, body: buf }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Replace content failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
   } catch (err) {
     res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
   }

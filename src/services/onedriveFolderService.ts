@@ -287,6 +287,26 @@ export async function fetchDriveItemBlob(
 }
 
 /**
+ * Overwrite an existing drive item's bytes in place — id and webUrl are
+ * unchanged, so no stored reference (project_expenses.receiptRef,
+ * liquidation receipts_json, etc.) ever needs to change. Used to bake a
+ * client-side receipt rotation into the actual file so a plain download (or
+ * OneDrive itself) shows it upright, not just this app's in-viewer CSS rotate.
+ */
+export async function replaceDriveItemContent(itemId: string, blob: Blob): Promise<void> {
+  const contentBase64 = await blobToBase64(blob);
+  const res = await fetch(`${API_BASE}/api/onedrive/item/${encodeURIComponent(itemId)}/content`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ contentBase64 }),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Replace content failed (${res.status}): ${errText.slice(0, 300)}`);
+  }
+}
+
+/**
  * Delete a drive item by id. Best-effort; resolves true on any 2xx (the proxy
  * treats already-gone as success too), false on other errors. Used to clean up an
  * orphaned receipt file when its expense record is deleted — a failure here must

@@ -16,6 +16,7 @@ import {
   TableHead,
   TableRow,
   TableSortLabel,
+  TablePagination,
   Paper,
   LinearProgress,
   Button,
@@ -54,7 +55,7 @@ import {
   Area,
   AreaChart
 } from 'recharts';
-import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, ExpandMore as ExpandMoreIcon, SwapHoriz as PromoteIcon, AddAPhoto as AddAPhotoIcon, OpenInNew as OpenInNewIcon, Edit as EditIcon, DriveFileMove as MoveIcon, Close as CloseIcon, DragIndicator as DragIndicatorIcon, AccountBalanceWallet as InvestorLinkIcon } from '@mui/icons-material';
+import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, ExpandMore as ExpandMoreIcon, SwapHoriz as PromoteIcon, AddAPhoto as AddAPhotoIcon, OpenInNew as OpenInNewIcon, Edit as EditIcon, DriveFileMove as MoveIcon, AccountBalanceWallet as InvestorLinkIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
 import { getBudgets } from '../utils/projectBudgetStorage';
@@ -72,10 +73,11 @@ import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import ReceiptCropper from './ReceiptCropper';
+import ReceiptViewer from './ReceiptViewer';
 import ScanBatch from './ScanBatch';
 import ScanWithPhoneButton from './ScanWithPhoneButton';
 import { useAuth } from '../contexts/AuthContext';
-import { getDriveItemThumbnailUrl, fetchDriveItemBlob, deleteDriveItem } from '../services/onedriveFolderService';
+import { getDriveItemThumbnailUrl, fetchDriveItemBlob, deleteDriveItem, replaceDriveItemContent } from '../services/onedriveFolderService';
 
 const EXPENSES_KEY = 'projectExpenses';
 
@@ -206,6 +208,8 @@ const ExpenseMonitoring: React.FC = () => {
   const [selectedProjectId, setSelectedProjectId] = useState<string | ''>('');
   const [sortKey, setSortKey] = useState<'date' | 'project' | 'category' | 'description' | 'amount'>('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(50);
   const [loading, setLoading] = useState(true);
   const [addExpenseOpen, setAddExpenseOpen] = useState(false);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
@@ -264,8 +268,6 @@ const ExpenseMonitoring: React.FC = () => {
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   // Floating receipt viewer pane: full image fetched through the OneDrive proxy.
   const [viewer, setViewer] = useState<{ expense: ProjectExpense; url: string | null } | null>(null);
-  const [viewerPos, setViewerPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const viewerDragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
   // Edit an existing row (scope-aware PATCH).
   const [editExpense, setEditExpense] = useState<ProjectExpense | null>(null);
   const [editFields, setEditFields] = useState({ description: '', remarks: '', amount: '', date: '', category: '', supplier: '', invoiceNo: '', invoiceType: '', vat: '', tin: '' });
@@ -463,6 +465,12 @@ const ExpenseMonitoring: React.FC = () => {
     });
   }, [expensesInYear, selectedProjectId, sortKey, sortDir]);
 
+  // Reset to the first page whenever the filtered/sorted row set changes shape,
+  // so the user never lands on an out-of-range empty page after changing filters.
+  useEffect(() => {
+    setPage(0);
+  }, [selectedYear, selectedMonth, selectedQuarter, selectedProjectId, sortKey, sortDir]);
+
   const handleSort = (key: typeof sortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(key); setSortDir(key === 'amount' || key === 'date' ? 'desc' : 'asc'); }
@@ -600,6 +608,14 @@ const ExpenseMonitoring: React.FC = () => {
       for (const liq of submitted) {
         let rows: any[] = [];
         try { rows = JSON.parse(liq.rows_json || '[]'); } catch (_) { continue; }
+        let receipts: any[] = [];
+        try { receipts = JSON.parse(liq.receipts_json || '[]'); } catch (_) { receipts = []; }
+        const receiptByRowId = new Map<string, { oneDriveId: string; webUrl: string; filename: string }>();
+        receipts.forEach((r) => {
+          if (r?.rowId && r?.oneDriveId && r?.webUrl && !receiptByRowId.has(r.rowId)) {
+            receiptByRowId.set(r.rowId, { oneDriveId: r.oneDriveId, webUrl: r.webUrl, filename: r.filename || 'receipt' });
+          }
+        });
 
         for (const row of rows) {
           const pid = row.projectId != null && row.projectId !== '' ? String(row.projectId) : '';
@@ -624,13 +640,14 @@ const ExpenseMonitoring: React.FC = () => {
             sourceLiquidationId: liq.id,
             sourceLiquidationRowId: row.id,
             sourceType: 'liquidation_sync',
+            ...(receiptByRowId.get(row.id) ? { receiptRef: receiptByRowId.get(row.id) } : {}),
           });
         }
       }
 
-      if (newExpenses.length === 0) {
-        setSyncMessage({ type: 'info', text: 'No new liquidation expenses to sync. All submitted liquidations are already logged.' });
-      } else {
+      let syncedCount = 0;
+      let syncFailed = false;
+      if (newExpenses.length > 0) {
         const syncRes = await fetch(`${API_BASE}/api/project-expenses`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -638,17 +655,37 @@ const ExpenseMonitoring: React.FC = () => {
         });
         const syncData = await syncRes.json().catch(() => ({ success: false }));
         if (syncData.success) {
-          const count = syncData.count ?? newExpenses.length;
-          if (count === 0) {
-            setSyncMessage({ type: 'info', text: 'No new liquidation expenses to sync. All submitted liquidations are already logged.' });
-          } else {
-            setSyncMessage({ type: 'success', text: `Synced ${count} liquidation expense(s).` });
-          }
-          await fetchExpenses();
+          syncedCount = syncData.count ?? newExpenses.length;
         } else {
-          setSyncMessage({ type: 'error', text: 'Failed to save liquidation expenses.' });
+          syncFailed = true;
         }
       }
+
+      // Also backfill receiptRef onto already-synced liquidation expenses that
+      // predate this passthrough (older filings whose scan was never linked).
+      let backfilledCount = 0;
+      try {
+        const backfillRes = await fetch(`${API_BASE}/api/project-expenses/backfill-liquidation-receipts`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const backfillData = await backfillRes.json().catch(() => ({ success: false }));
+        if (backfillData.success) backfilledCount = backfillData.count ?? 0;
+      } catch {
+        // best-effort — sync itself already succeeded/failed independently
+      }
+
+      if (syncFailed) {
+        setSyncMessage({ type: 'error', text: 'Failed to save liquidation expenses.' });
+      } else if (syncedCount === 0 && backfilledCount === 0) {
+        setSyncMessage({ type: 'info', text: 'No new liquidation expenses to sync. All submitted liquidations are already logged.' });
+      } else {
+        const parts = [];
+        if (syncedCount > 0) parts.push(`Synced ${syncedCount} liquidation expense(s)`);
+        if (backfilledCount > 0) parts.push(`linked ${backfilledCount} scanned receipt(s) to existing entries`);
+        setSyncMessage({ type: 'success', text: `${parts.join('; ')}.` });
+      }
+      if (syncedCount > 0 || backfilledCount > 0) await fetchExpenses();
     } catch (err) {
       setSyncMessage({ type: 'error', text: 'Error syncing liquidations.' });
     }
@@ -839,7 +876,11 @@ const ExpenseMonitoring: React.FC = () => {
       const compressed = await compressForUpload(safeFile);
       const contentBase64 = await blobToBase64(compressed);
       const year = String((target.date || '').slice(0, 4) || new Date().getFullYear());
-      const filename = `SCAN-${Date.now()}.jpg`;
+      // Preserve the real extension (jpg after HEIC conversion, pdf/png/etc. as-is)
+      // instead of forcing .jpg — a PDF saved with a fake .jpg name won't open.
+      const extMatch = safeFile.name.match(/\.[a-z0-9]+$/i);
+      const ext = extMatch ? extMatch[0] : (safeFile.type === 'application/pdf' ? '.pdf' : '.jpg');
+      const filename = `SCAN-${Date.now()}${ext}`;
       const project = target.scope === 'project' ? allProjects.find((p) => String(p.id) === String(target.projectId)) : undefined;
       const folderPath = target.scope === 'project'
         ? `Project Receipts/${project?.project_no || target.projectId}/${year}`
@@ -986,7 +1027,6 @@ const ExpenseMonitoring: React.FC = () => {
 
   const openReceiptViewer = async (expense: ProjectExpense) => {
     if (!expense.receiptRef?.oneDriveId) return;
-    setViewerPos({ x: 0, y: 0 });
     setViewer({ expense, url: null });
     try {
       const blob = await fetchDriveItemBlob('server', 'server', expense.receiptRef.oneDriveId);
@@ -997,20 +1037,18 @@ const ExpenseMonitoring: React.FC = () => {
     }
   };
 
-  const onViewerDragStart = (e: React.PointerEvent) => {
-    viewerDragRef.current = { startX: e.clientX, startY: e.clientY, baseX: viewerPos.x, baseY: viewerPos.y };
-    const onMove = (ev: PointerEvent) => {
-      const d = viewerDragRef.current;
-      if (!d) return;
-      setViewerPos({ x: d.baseX + ev.clientX - d.startX, y: d.baseY + ev.clientY - d.startY });
-    };
-    const onUp = () => {
-      viewerDragRef.current = null;
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+  // Bakes the viewer's current rotation into the file and overwrites the same
+  // OneDrive item, so it stays upright on a plain download too. id/webUrl are
+  // unchanged, so nothing in Firestore needs to be touched.
+  const saveReceiptRotation = async (oneDriveId: string, rotatedBlob: Blob) => {
+    await replaceDriveItemContent(oneDriveId, rotatedBlob);
+    // The cached thumbnail is now stale — refetch it in place.
+    try {
+      const url = await getDriveItemThumbnailUrl('server', 'server', oneDriveId);
+      if (url) setThumbs((prev) => ({ ...prev, [oneDriveId]: url }));
+    } catch {
+      // best-effort — the full viewer already shows the corrected image
+    }
   };
 
   // Phase 1: pick a photo, auto-detect its corners, and open the crop dialog.
@@ -1687,7 +1725,7 @@ const ExpenseMonitoring: React.FC = () => {
                   </TableRow>
                 ) : (
                   tableRows
-                    .slice(0, 50)
+                    .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
                     .map((expense) => {
                       const project = expense.scope === 'project' ? allProjects.find((p) => String(p.id) === String(expense.projectId)) : undefined;
                       const projectNo = project?.project_no || String(project?.item_no ?? project?.id ?? '');
@@ -1797,6 +1835,15 @@ const ExpenseMonitoring: React.FC = () => {
               </TableBody>
             </Table>
           </TableContainer>
+          <TablePagination
+            component="div"
+            count={tableRows.length}
+            page={page}
+            onPageChange={(_e, newPage) => setPage(newPage)}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+            rowsPerPageOptions={[25, 50, 100, 250]}
+          />
         </CardContent>
       </Card>
 
@@ -2336,58 +2383,24 @@ const ExpenseMonitoring: React.FC = () => {
 
       {/* Floating draggable receipt viewer pane */}
       {viewer && (
-        <Paper
-          elevation={8}
-          sx={{
-            position: 'fixed',
-            top: `calc(15% + ${viewerPos.y}px)`,
-            left: `calc(50% + ${viewerPos.x}px)`,
-            transform: 'translateX(-50%)',
-            zIndex: (theme) => theme.zIndex.modal + 1,
-            width: 380,
-            maxWidth: '92vw',
-            borderRadius: 2,
-            overflow: 'hidden',
-          }}
-        >
-          <Box
-            onPointerDown={onViewerDragStart}
-            sx={{
-              display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75,
-              bgcolor: NET_PACIFIC_COLORS.primary, color: 'white',
-              cursor: 'move', userSelect: 'none', touchAction: 'none',
-            }}
-          >
-            <DragIndicatorIcon fontSize="small" sx={{ opacity: 0.7 }} />
-            <Typography variant="subtitle2" sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {viewer.expense.description || viewer.expense.category} — {formatCurrency(viewer.expense.amount)}
-            </Typography>
-            <IconButton size="small" onClick={() => setViewer(null)} sx={{ color: 'white' }} title="Close">
-              <CloseIcon fontSize="small" />
-            </IconButton>
-          </Box>
-          <Box sx={{ p: 1.5, maxHeight: '60vh', overflow: 'auto', textAlign: 'center', bgcolor: '#f8fafc' }}>
-            {viewer.url ? (
-              <Box component="img" src={viewer.url} alt="receipt" sx={{ maxWidth: '100%', borderRadius: 1 }} />
-            ) : (
-              <Box sx={{ py: 6 }}><CircularProgress size={28} /></Box>
-            )}
-          </Box>
-          {viewer.expense.receiptRef?.webUrl && (
-            <Box sx={{ px: 1.5, py: 1, borderTop: '1px solid #e2e8f0', textAlign: 'right' }}>
-              <Link href={viewer.expense.receiptRef.webUrl} target="_blank" rel="noopener" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-                <OpenInNewIcon fontSize="inherit" /> Open in OneDrive
-              </Link>
-            </Box>
-          )}
-        </Paper>
+        <ReceiptViewer
+          title={`${viewer.expense.description || viewer.expense.category} — ${formatCurrency(viewer.expense.amount)}`}
+          url={viewer.url}
+          webUrl={viewer.expense.receiptRef?.webUrl}
+          isPdf={/\.pdf$/i.test(viewer.expense.receiptRef?.filename || '')}
+          onClose={() => setViewer(null)}
+          headerColor={NET_PACIFIC_COLORS.primary}
+          onSaveRotation={viewer.expense.receiptRef?.oneDriveId
+            ? (blob) => saveReceiptRotation(viewer.expense.receiptRef!.oneDriveId, blob)
+            : undefined}
+        />
       )}
 
       {/* Hidden picker for attach-receipt-later on existing table rows */}
       <input
         type="file"
         ref={attachReceiptInputRef}
-        accept="image/*"
+        accept="image/*,.pdf,.heic,.heif"
         style={{ display: 'none' }}
         onChange={handleAttachReceiptInputChange}
       />
