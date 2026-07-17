@@ -125,6 +125,11 @@ export interface ProjectExpense {
   /** When synced from Liquidation, avoid duplicate sync */
   sourceLiquidationId?: string;
   sourceLiquidationRowId?: string;
+  /** Denormalized from the liquidation at sync time — GET /api/liquidations is
+   *  scoped to the requesting user's own filings for non-admins, so a client-side
+   *  join wouldn't resolve for other employees' liquidation-sourced rows. */
+  liquidationFiledBy?: string;
+  liquidationFiledAt?: string;
   sourceType?: 'manual' | 'receipt_scan' | 'po_sync' | 'liquidation_sync' | 'migrated';
   sourceCaId?: string;
   supplier?: string;
@@ -640,6 +645,8 @@ const ExpenseMonitoring: React.FC = () => {
             sourceLiquidationId: liq.id,
             sourceLiquidationRowId: row.id,
             sourceType: 'liquidation_sync',
+            ...(liq.employee_name ? { liquidationFiledBy: liq.employee_name } : {}),
+            ...(liq.date_of_submission ? { liquidationFiledAt: liq.date_of_submission } : {}),
             ...(receiptByRowId.get(row.id) ? { receiptRef: receiptByRowId.get(row.id) } : {}),
           });
         }
@@ -1741,7 +1748,14 @@ const ExpenseMonitoring: React.FC = () => {
                       <TableCell>{expense.scope === 'overhead' ? '—' : (projectNo || '—')}</TableCell>
                       <TableCell>{expense.scope === 'overhead' ? '—' : poNumber}</TableCell>
                       <TableCell>{expense.category}</TableCell>
-                      <TableCell>{expense.description}</TableCell>
+                      <TableCell>
+                        {expense.description}
+                        {expense.sourceType === 'liquidation_sync' && (expense.liquidationFiledBy || expense.liquidationFiledAt) && (
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            Filed by {expense.liquidationFiledBy || 'unknown'}{expense.liquidationFiledAt ? ` on ${expense.liquidationFiledAt}` : ''}
+                          </Typography>
+                        )}
+                      </TableCell>
                       <TableCell>{expense.remarks || '—'}</TableCell>
                       <TableCell align="right">{formatCurrency(expense.amount)}</TableCell>
                       <TableCell>
