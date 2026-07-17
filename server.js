@@ -1207,6 +1207,8 @@ app.post('/api/project-expenses', async (req, res) => {
           if (exp.sourcePoItemId) doc.sourcePoItemId = exp.sourcePoItemId;
           if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
           if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
+          if (exp.liquidationFiledBy) doc.liquidationFiledBy = String(exp.liquidationFiledBy);
+          if (exp.liquidationFiledAt) doc.liquidationFiledAt = String(exp.liquidationFiledAt);
           if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
           if (exp.remarks) doc.remarks = String(exp.remarks);
           if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
@@ -1237,7 +1239,7 @@ app.post('/api/project-expenses', async (req, res) => {
     }
     // Single insert
     const { projectId, projectName, description, remarks, amount, date, category, sourceType,
-            sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, sourceCaId, receiptRef,
+            sourcePoId, sourcePoItemId, sourceLiquidationId, sourceLiquidationRowId, liquidationFiledBy, liquidationFiledAt, sourceCaId, receiptRef,
             supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = body;
     if (!projectId || !amount) {
       return res.status(400).json({ success: false, error: 'projectId and amount are required' });
@@ -1257,6 +1259,8 @@ app.post('/api/project-expenses', async (req, res) => {
     if (sourcePoItemId) doc.sourcePoItemId = sourcePoItemId;
     if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
     if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
+    if (liquidationFiledBy) doc.liquidationFiledBy = String(liquidationFiledBy);
+    if (liquidationFiledAt) doc.liquidationFiledAt = String(liquidationFiledAt);
     if (sourceCaId) doc.sourceCaId = sourceCaId;
     if (remarks) doc.remarks = String(remarks);
     if (receiptRef) doc.receiptRef = receiptRef;
@@ -1344,11 +1348,12 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
   }
 });
 
-// Backfill receiptRef onto pre-existing liquidation_sync project_expenses that
-// were synced before receipt links were carried over (older filings created
-// prior to this passthrough). Idempotent — safe to call repeatedly; only
-// touches docs currently missing a receiptRef. Matches by sourceLiquidationId
-// + sourceLiquidationRowId against the liquidation's persisted receipts_json.
+// Backfill receiptRef / liquidationFiledBy / liquidationFiledAt onto pre-existing
+// liquidation_sync project_expenses that were synced before these fields were
+// carried over (older filings created prior to those passthroughs). Idempotent —
+// safe to call repeatedly; only touches docs currently missing one of the fields.
+// Matches by sourceLiquidationId (+ sourceLiquidationRowId for the receipt)
+// against the liquidation's persisted employee_name / date_of_submission / receipts_json.
 app.post('/api/project-expenses/backfill-liquidation-receipts', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -1356,26 +1361,41 @@ app.post('/api/project-expenses/backfill-liquidation-receipts', async (req, res)
     const expSnap = await db.collection('project_expenses')
       .where('sourceType', '==', 'liquidation_sync')
       .get();
-    const candidates = expSnap.docs.filter(d => !d.data().receiptRef && d.data().sourceLiquidationId && d.data().sourceLiquidationRowId);
+    const candidates = expSnap.docs.filter(d => {
+      const data = d.data();
+      if (!data.sourceLiquidationId) return false;
+      return !data.receiptRef || !data.liquidationFiledBy || !data.liquidationFiledAt;
+    });
     if (candidates.length === 0) return res.json({ success: true, count: 0 });
     const liqIds = [...new Set(candidates.map(d => String(d.data().sourceLiquidationId)))];
     const liqDocs = await Promise.all(liqIds.map(id => db.collection('liquidations').doc(id).get()));
     const receiptsByLiqId = new Map();
+    const liqInfoById = new Map();
     liqDocs.forEach(snap => {
       if (!snap.exists) return;
-      const receipts = parseLiqRows(snap.data().receipts_json);
+      const data = snap.data();
+      const receipts = parseLiqRows(data.receipts_json);
       const byRow = new Map();
       receipts.forEach(r => { if (r && r.rowId && r.oneDriveId && r.webUrl && !byRow.has(r.rowId)) byRow.set(r.rowId, { oneDriveId: r.oneDriveId, webUrl: r.webUrl, filename: r.filename || 'receipt' }); });
       receiptsByLiqId.set(snap.id, byRow);
+      liqInfoById.set(snap.id, { employee_name: data.employee_name || null, date_of_submission: data.date_of_submission || null });
     });
     let count = 0;
     const batch = db.batch();
     for (const d of candidates) {
       const data = d.data();
-      const byRow = receiptsByLiqId.get(String(data.sourceLiquidationId));
-      const receiptRef = byRow?.get(data.sourceLiquidationRowId);
-      if (!receiptRef) continue;
-      batch.update(d.ref, { receiptRef });
+      const liqId = String(data.sourceLiquidationId);
+      const update = {};
+      if (!data.receiptRef && data.sourceLiquidationRowId) {
+        const byRow = receiptsByLiqId.get(liqId);
+        const receiptRef = byRow?.get(data.sourceLiquidationRowId);
+        if (receiptRef) update.receiptRef = receiptRef;
+      }
+      const info = liqInfoById.get(liqId);
+      if (!data.liquidationFiledBy && info?.employee_name) update.liquidationFiledBy = info.employee_name;
+      if (!data.liquidationFiledAt && info?.date_of_submission) update.liquidationFiledAt = info.date_of_submission;
+      if (Object.keys(update).length === 0) continue;
+      batch.update(d.ref, update);
       count += 1;
     }
     if (count > 0) await batch.commit();
@@ -2202,6 +2222,8 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
   expSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) expByRowId.set(rid, d); });
   const oldRowIds = new Set(oldRows.map(r => r.id));
   const newById = new Map(newRows.map(r => [r.id, r]));
+  const revisedFiledBy = (revision.employee_name ?? liq.employee_name) || null;
+  const revisedFiledAt = (revision.date_of_submission ?? liq.date_of_submission) || null;
   // Receipt links keyed by rowId, from the revision's receipts (falling back to
   // the liquidation's current receipts if the revision didn't touch them) — only
   // entries that actually finished uploading (oneDriveId/webUrl present) count.
@@ -2221,6 +2243,8 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
       date: row.date || expDoc.data().date || null,
       category: (row.category || '').trim() || 'Others',
       receiptRef: receiptRef || FieldValue.delete(),
+      liquidationFiledBy: revisedFiledBy || FieldValue.delete(),
+      liquidationFiledAt: revisedFiledAt || FieldValue.delete(),
     });
   }
   for (const row of newRows) {
@@ -2239,6 +2263,8 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
       sourceLiquidationId: liqId,
       sourceLiquidationRowId: row.id,
     };
+    if (revisedFiledBy) doc.liquidationFiledBy = revisedFiledBy;
+    if (revisedFiledAt) doc.liquidationFiledAt = revisedFiledAt;
     if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
     if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
     if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
