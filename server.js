@@ -2353,14 +2353,13 @@ app.post('/api/liquidations/:id/propose-edit', async (req, res) => {
     const rows = parseLiqRows(rows_json);
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
     const total = parseFloat(total_amount) || 0;
-    // Early CA check for fast feedback; approval re-validates against the live balance.
-    if (liq.ca_id) {
-      const caDoc = await db.collection('cash_advances').doc(String(liq.ca_id)).get();
-      if (caDoc.exists) {
-        const available = (parseFloat(caDoc.data().balance_remaining) || 0) + (parseFloat(liq.total_amount) || 0);
-        if (total > available) return res.status(400).json({ success: false, error: `Revised total (₱${total.toFixed(2)}) exceeds the CA's available balance (₱${available.toFixed(2)})` });
-      }
-    }
+    // No CA-overspend guard here, matching POST /api/liquidations and
+    // applyLiquidationRevision: overspend against a CA is never blocked, the
+    // excess just becomes a tracked reimbursement. A prior version of this
+    // endpoint rejected any edit — even a date-only fix — on a liquidation that
+    // was already legitimately over its CA, since "available" only reconstructs
+    // the CA's balance before this liquidation, not what a fresh submission
+    // would actually allow.
     const now = Math.floor(Date.now() / 1000);
     const revision = {
       rows_json: JSON.stringify(rows),
