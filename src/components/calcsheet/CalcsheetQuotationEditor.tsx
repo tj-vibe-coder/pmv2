@@ -616,6 +616,12 @@ export default function QuotationEditor() {
     { key: 'role', label: 'Role', width: 240,
       render: (r, idx) => {
         const isCustom = !r.presetId;
+        // A saved presetId may not resolve to a currently-loaded preset (preset
+        // reseeded with new ids, or presets not loaded). Without a matching
+        // MenuItem the Select renders blank AND the custom-name fallback is
+        // hidden, so the stored role would vanish — render a fallback option
+        // that shows r.role so it's always visible.
+        const presetResolves = !r.presetId || presets.some((p) => p.id === r.presetId);
         return (
           <Stack direction="column" spacing={0.5} sx={{ py: 0.5 }}>
             <TextField
@@ -626,6 +632,9 @@ export default function QuotationEditor() {
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem', fontWeight: 500 } }}
               fullWidth
             >
+              {!presetResolves && (
+                <MenuItem value={r.presetId as string}>{r.role || '(unknown role)'}</MenuItem>
+              )}
               <ListSubheader>Engineering / Automation</ListSubheader>
               {engineeringPresets.map((p) => (
                 <MenuItem key={p.id} value={p.id}>{p.role}</MenuItem>
