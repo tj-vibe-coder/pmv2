@@ -549,6 +549,34 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     const reportNo = (serviceReportNo || '').trim() || `${pdfProjectNo} - SR${serviceReports.length + 1}`;
     const reportDateStr = serviceReportDate ? new Date(serviceReportDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
+    // ── Professional-layout palette + helpers ─────────────────────────────
+    const BLUE = DR_HEADER_BLUE;
+    const BLUE_DARK: [number, number, number] = [30, 74, 114];
+    const PANEL_FILL: [number, number, number] = [244, 247, 251];
+    const BORDER: [number, number, number] = [208, 215, 224];
+    const MUTED: [number, number, number] = [96, 106, 122];
+    const pageWidth = 210;
+    // Truncate a string with an ellipsis to fit maxW at the current font/size.
+    const fit = (s: string, maxW: number): string => {
+      if (!s) return '';
+      if (doc.getTextWidth(s) <= maxW) return s;
+      let t = s;
+      while (t.length > 1 && doc.getTextWidth(`${t}…`) > maxW) t = t.slice(0, -1);
+      return `${t}…`;
+    };
+    // Section heading: short brand accent bar + uppercase label. Advances y.
+    const sectionHeading = (label: string) => {
+      doc.setFillColor(...BLUE);
+      doc.rect(margin, y - 3.4, 1.5, 4.4, 'F');
+      fontTitle();
+      doc.setFontSize(10.5);
+      doc.setTextColor(...BLUE_DARK);
+      doc.text(label.toUpperCase(), margin + 4.5, y);
+      doc.setTextColor(0, 0, 0);
+      fontBody();
+      y += lineHeight + 1;
+    };
+
     // ------------------------------------------------------------------
     // Pre-fetch photo data URLs. A photo is embeddable when its original
     // file is still in memory (even if the OneDrive upload failed) or when
@@ -664,46 +692,69 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       return gY;
     };
 
+    // ── Header band: logo (left) + title block (right) + brand rule ───────
+    const headerTop = y;
+    let logoBottom = headerTop;
     if (reportCompany === 'ACT') {
       try {
         const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
         const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
         const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-        doc.addImage(logoDataUrl, 'PNG', margin, y, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT);
-        y += ACT_LOGO_PDF_HEIGHT + 4;
+        doc.addImage(logoDataUrl, 'PNG', margin, headerTop, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT);
+        logoBottom = headerTop + ACT_LOGO_PDF_HEIGHT;
       } catch (_) {}
     } else if (reportCompany === 'IOCT') {
       try {
         const { loadImageDataUrl, IOCT_ICON_LOGO_PDF_SIZE } = await import('../../utils/logoUtils');
         const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
         const logoDataUrl = await loadImageDataUrl(logoUrl);
-        doc.addImage(logoDataUrl, 'PNG', margin, y, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
-        y += IOCT_ICON_LOGO_PDF_SIZE + 4;
+        doc.addImage(logoDataUrl, 'PNG', margin, headerTop, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
+        logoBottom = headerTop + IOCT_ICON_LOGO_PDF_SIZE;
       } catch (_) {}
     }
-
     fontTitle();
-    doc.setFontSize(11);
-    doc.text(companyNameUpper, margin, y);
-    fontTitle();
-    doc.setFontSize(14);
-    const pageWidth = 210;
-    doc.text('Daily Service Report', pageWidth - margin, y, { align: 'right' });
-    y += lineHeight + sectionGap;
+    doc.setFontSize(17);
+    doc.setTextColor(...BLUE);
+    doc.text('DAILY SERVICE REPORT', pageWidth - margin, headerTop + 6, { align: 'right' });
     fontBody();
     doc.setFontSize(9);
-    doc.text(`Project Name: ${projectName || '—'}`, margin, y);
-    doc.text(`Report No.: ${reportNo}`, pageWidth - margin, y, { align: 'right' });
-    y += lineHeight;
-    doc.text(`Project No.: ${pdfProjectNo}`, margin, y);
-    doc.text(`Date: ${reportDateStr}`, pageWidth - margin, y, { align: 'right' });
-    y += lineHeight;
-    doc.text(`PO No.: ${projectPo || '—'}`, margin, y);
-    doc.text(`Start Time: ${serviceReportStartTime || '—'}`, pageWidth - margin, y, { align: 'right' });
-    y += lineHeight;
-    doc.text(`Client: ${projectClient || '—'}`, margin, y);
-    doc.text(`End Time: ${serviceReportEndTime || '—'}`, pageWidth - margin, y, { align: 'right' });
-    y += lineHeight + sectionGap;
+    doc.setTextColor(...MUTED);
+    doc.text(companyNameUpper, pageWidth - margin, headerTop + 11.5, { align: 'right' });
+    doc.setTextColor(0, 0, 0);
+    const headerBottom = Math.max(logoBottom, headerTop + 13) + 3;
+    doc.setDrawColor(...BLUE);
+    doc.setLineWidth(0.8);
+    doc.line(margin, headerBottom, pageWidth - margin, headerBottom);
+    doc.setLineWidth(0.2);
+    y = headerBottom + 6;
+
+    // ── Info panel: framed light box, two-column labeled grid ─────────────
+    const infoRowH = 6.4;
+    const infoPanelH = 4 * infoRowH + 4;
+    doc.setFillColor(...PANEL_FILL);
+    doc.setDrawColor(...BORDER);
+    doc.roundedRect(margin, y, contentWidth, infoPanelH, 1.6, 1.6, 'FD');
+    const colLX = margin + 5;
+    const colRX = margin + contentWidth / 2 + 3;
+    const labelW = 24;
+    const cellValW = contentWidth / 2 - labelW - 9;
+    const infoField = (x: number, label: string, value: string, rowY: number) => {
+      fontTitle();
+      doc.setFontSize(7.2);
+      doc.setTextColor(...MUTED);
+      doc.text(label.toUpperCase(), x, rowY);
+      fontBody();
+      doc.setFontSize(9);
+      doc.setTextColor(33, 37, 43);
+      doc.text(fit(value || '—', cellValW), x + labelW, rowY);
+    };
+    let iy = y + 5.6;
+    infoField(colLX, 'Project Name', projectName || '—', iy); infoField(colRX, 'Report No.', reportNo, iy); iy += infoRowH;
+    infoField(colLX, 'Project No.', pdfProjectNo, iy);        infoField(colRX, 'Date', reportDateStr, iy); iy += infoRowH;
+    infoField(colLX, 'Client', projectClient || '—', iy);    infoField(colRX, 'Start Time', serviceReportStartTime || '—', iy); iy += infoRowH;
+    infoField(colLX, 'PO No.', projectPo || '—', iy);        infoField(colRX, 'End Time', serviceReportEndTime || '—', iy);
+    doc.setTextColor(0, 0, 0);
+    y = y + infoPanelH + sectionGap;
 
     const signatureSpace = 2 * lineHeight;
     const signatureBlockHeight = 42 + signatureSpace;
@@ -718,12 +769,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       (r.findingOutcome || '').trim() || '—',
     ]);
     if (y > signatureY - 80) { doc.addPage(); y = 20; }
-    fontTitle();
-    doc.setFontSize(11);
-    doc.text('Activities', margin, y);
-    fontBody();
-    y += lineHeight;
-    doc.setFontSize(9);
+    sectionHeading('Activities');
     autoTable(doc, {
       head: [headers],
       body,
@@ -731,9 +777,14 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       margin: { left: margin, right: margin },
       tableWidth: contentWidth,
       theme: 'grid',
-      columnStyles: { 0: { cellWidth: 10 }, 1: { cellWidth: contentWidth * 0.5 - 5 }, 2: { cellWidth: contentWidth * 0.5 - 5 } },
-      styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', overflow: 'linebreak', cellPadding: 2 },
-      headStyles: { fillColor: DR_HEADER_BLUE, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', fontSize: 8 },
+      columnStyles: {
+        0: { cellWidth: 11, halign: 'center' },
+        1: { cellWidth: contentWidth * 0.5 - 5.5 },
+        2: { cellWidth: contentWidth * 0.5 - 5.5 },
+      },
+      styles: { fontSize: 8.5, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', overflow: 'linebreak', cellPadding: 2.4, textColor: [40, 44, 52], lineColor: BORDER, lineWidth: 0.1, valign: 'top' },
+      headStyles: { fillColor: DR_HEADER_BLUE, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', fontSize: 8.5, halign: 'left', cellPadding: { top: 2.6, bottom: 2.6, left: 2.4, right: 2.4 } },
+      alternateRowStyles: { fillColor: [246, 249, 252] },
     });
     const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
     y = (docWithTable.lastAutoTable?.finalY ?? y) + sectionGap;
@@ -786,17 +837,17 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     // Recommendations and Remarks
     const boxHeight = 4 * lineHeight;
     if (y + boxHeight + sectionGap > signatureY - 5) { doc.addPage(); y = 20; }
-    fontTitle();
-    doc.setFontSize(11);
-    doc.text('Recommendations and Remarks', margin, y);
-    y += lineHeight + 2;
-    doc.setDrawColor(180, 180, 180);
-    doc.rect(margin, y, contentWidth, boxHeight);
+    sectionHeading('Recommendations and Remarks');
+    doc.setFillColor(250, 251, 253);
+    doc.setDrawColor(...BORDER);
+    doc.roundedRect(margin, y, contentWidth, boxHeight, 1.4, 1.4, 'FD');
     const commentsText = (serviceReportCustomerComments || '').trim();
     if (commentsText) {
       fontBody();
       doc.setFontSize(9);
-      doc.text(doc.splitTextToSize(commentsText, contentWidth - 4), margin + 2, y + 3);
+      doc.setTextColor(40, 44, 52);
+      doc.text(doc.splitTextToSize(commentsText, contentWidth - 6), margin + 3, y + 5);
+      doc.setTextColor(0, 0, 0);
     }
     y += boxHeight + sectionGap;
 
@@ -832,22 +883,36 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     const leftColX = margin;
     const rightColX = margin + 95;
     const lineWidth = 52;
-    const sigLineHeight = 5;
+    const sigLineHeight = 5.4;
     const drawSignatureLine = (colX: number, label: string, rowY: number, value?: string) => {
       fontBody();
-      doc.setFontSize(9);
-      doc.text(label, colX, rowY);
-      if (value) doc.text(value, colX + 28, rowY);
-      doc.setDrawColor(180, 180, 180);
-      doc.line(colX + 26, rowY + 2, colX + 26 + lineWidth, rowY + 2);
+      doc.setFontSize(7.4);
+      doc.setTextColor(...MUTED);
+      doc.text(label.toUpperCase(), colX, rowY);
+      if (value) {
+        doc.setFontSize(9);
+        doc.setTextColor(33, 37, 43);
+        doc.text(fit(value, lineWidth - 1), colX + 26, rowY - 0.2);
+      }
+      doc.setDrawColor(...BORDER);
+      doc.setLineWidth(0.2);
+      doc.line(colX + 25, rowY + 1.6, colX + 25 + lineWidth, rowY + 1.6);
+      doc.setTextColor(0, 0, 0);
     };
     const totalPages = doc.getNumberOfPages();
     const lastPageSignatureY = pageHeight - signatureBlockHeight - 10;
     doc.setPage(totalPages);
+    // Divider above the signature block
+    doc.setDrawColor(...BORDER);
+    doc.setLineWidth(0.3);
+    doc.line(margin, lastPageSignatureY - 5, pageWidth - margin, lastPageSignatureY - 5);
+    doc.setLineWidth(0.2);
     fontTitle();
-    doc.setFontSize(10);
-    doc.text('Prepared by:', leftColX, lastPageSignatureY);
-    doc.text('Approved by:', rightColX, lastPageSignatureY);
+    doc.setFontSize(9.5);
+    doc.setTextColor(...BLUE_DARK);
+    doc.text('PREPARED BY', leftColX, lastPageSignatureY);
+    doc.text('APPROVED BY', rightColX, lastPageSignatureY);
+    doc.setTextColor(0, 0, 0);
     let rowY = lastPageSignatureY + signatureSpace;
     const preparedByNamePdf = (preparedByName.trim() || preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
     drawSignatureLine(leftColX, 'Name', rowY, preparedByNamePdf);
@@ -864,12 +929,17 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
 
     const docNumber = `Doc. No.: ${reportNo}`;
     const footerY = pageHeight - 10;
-    fontBody();
-    doc.setFontSize(8);
     for (let p = 1; p <= totalPages; p++) {
       doc.setPage(p);
+      doc.setDrawColor(...BORDER);
+      doc.setLineWidth(0.2);
+      doc.line(margin, footerY - 3.6, pageWidth - margin, footerY - 3.6);
+      fontBody();
+      doc.setFontSize(8);
+      doc.setTextColor(...MUTED);
       doc.text(docNumber, margin, footerY);
-      doc.text(`Page ${p} of ${totalPages}`, 210 - margin, footerY, { align: 'right' });
+      doc.text(`Page ${p} of ${totalPages}`, pageWidth - margin, footerY, { align: 'right' });
+      doc.setTextColor(0, 0, 0);
     }
 
     // Format: IOCT2606001-SR1.pdf (collapse "IOCT2606001 - SR1" → "IOCT2606001-SR1")
