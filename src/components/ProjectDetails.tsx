@@ -203,6 +203,11 @@ export interface ServiceReport {
   title: string;
   startTime?: string;
   endTime?: string;
+  /** Site-work date range this report covers — may span multiple days and
+   * differ from `date` (the report's own authored date). Falls back to
+   * `date` when absent (legacy reports / single-day reports). */
+  dateCoveredStart?: string;
+  dateCoveredEnd?: string;
   /** New format: table rows. Legacy reports may have activities/findings instead. */
   activitiesTable?: ServiceReportActivityRow[];
   activities?: string;
