@@ -172,6 +172,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   clientApprover,
 }) => {
   const [serviceReportDate, setServiceReportDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Site-work date range (may span multiple days) — separate from serviceReportDate,
+  // which is when the report itself was authored. Defaults to today for both ends.
+  const [serviceReportDateCoveredStart, setServiceReportDateCoveredStart] = useState(() => new Date().toISOString().slice(0, 10));
+  const [serviceReportDateCoveredEnd, setServiceReportDateCoveredEnd] = useState(() => new Date().toISOString().slice(0, 10));
   const [serviceReportStartTime, setServiceReportStartTime] = useState('');
   const [serviceReportEndTime, setServiceReportEndTime] = useState('');
   const [serviceReportNo, setServiceReportNo] = useState('');
@@ -265,6 +269,8 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
 
   const resetServiceReportForm = useCallback(() => {
     setServiceReportDate(new Date().toISOString().slice(0, 10));
+    setServiceReportDateCoveredStart(new Date().toISOString().slice(0, 10));
+    setServiceReportDateCoveredEnd(new Date().toISOString().slice(0, 10));
     setServiceReportStartTime('');
     setServiceReportEndTime('');
     setServiceReportNo('');
@@ -442,6 +448,8 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       }));
     const report = {
       date: serviceReportDate,
+      dateCoveredStart: serviceReportDateCoveredStart || serviceReportDate,
+      dateCoveredEnd: serviceReportDateCoveredEnd || serviceReportDate,
       reportNo,
       title: serviceReportTitle.trim() || 'Service Report',
       startTime: serviceReportStartTime.trim() || undefined,
@@ -473,6 +481,9 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
 
   const handleLoadServiceReport = (report: ServiceReport) => {
     setServiceReportDate(report.date);
+    // Legacy reports have no coverage range saved — fall back to the report's own date.
+    setServiceReportDateCoveredStart(report.dateCoveredStart || report.date);
+    setServiceReportDateCoveredEnd(report.dateCoveredEnd || report.date);
     setServiceReportStartTime(report.startTime || '');
     setServiceReportEndTime(report.endTime || '');
     setServiceReportNo(report.reportNo);
@@ -548,6 +559,13 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     const pdfProjectNo = projectNo || '—';
     const reportNo = (serviceReportNo || '').trim() || `${pdfProjectNo} - SR${serviceReports.length + 1}`;
     const reportDateStr = serviceReportDate ? new Date(serviceReportDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const fmtLongDate = (iso: string) => new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const dateCoveredStr = serviceReportDateCoveredStart && serviceReportDateCoveredEnd
+      ? (serviceReportDateCoveredStart === serviceReportDateCoveredEnd
+          ? fmtLongDate(serviceReportDateCoveredStart)
+          : `${fmtLongDate(serviceReportDateCoveredStart)} – ${fmtLongDate(serviceReportDateCoveredEnd)}`)
+      : reportDateStr;
+    const preparedByNamePdf = (preparedByName.trim() || preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
 
     // ── Professional-layout palette + helpers ─────────────────────────────
     const BLUE = DR_HEADER_BLUE;
@@ -556,6 +574,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     const BORDER: [number, number, number] = [208, 215, 224];
     const MUTED: [number, number, number] = [96, 106, 122];
     const pageWidth = 210;
+    const REPORT_COMPANY_TAGLINE: Record<ReportCompanyKey, string> = {
+      IOCT: 'INDUSTRIAL AUTOMATION & DIGITAL SOLUTIONS',
+      ACT: '',
+    };
     // Truncate a string with an ellipsis to fit maxW at the current font/size.
     const fit = (s: string, maxW: number): string => {
       if (!s) return '';
@@ -692,9 +714,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
       return gY;
     };
 
-    // ── Header band: logo (left) + title block (right) + brand rule ───────
+    // ── Header band: logo + company name/tagline (left), title (right) ────
     const headerTop = y;
     let logoBottom = headerTop;
+    let logoW = 0;
     if (reportCompany === 'ACT') {
       try {
         const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
@@ -702,6 +725,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
         doc.addImage(logoDataUrl, 'PNG', margin, headerTop, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT);
         logoBottom = headerTop + ACT_LOGO_PDF_HEIGHT;
+        logoW = ACT_LOGO_PDF_WIDTH;
       } catch (_) {}
     } else if (reportCompany === 'IOCT') {
       try {
@@ -710,20 +734,41 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         const logoDataUrl = await loadImageDataUrl(logoUrl);
         doc.addImage(logoDataUrl, 'PNG', margin, headerTop, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
         logoBottom = headerTop + IOCT_ICON_LOGO_PDF_SIZE;
+        logoW = IOCT_ICON_LOGO_PDF_SIZE;
       } catch (_) {}
     }
+    // Company name + tagline sit beside the logo, vertically centered on it.
+    const textX = margin + logoW + (logoW > 0 ? 4 : 0);
+    const logoMidY = (headerTop + logoBottom) / 2;
+    const tagline = REPORT_COMPANY_TAGLINE[reportCompany];
     fontTitle();
-    doc.setFontSize(17);
-    doc.setTextColor(...BLUE);
-    doc.text('DAILY SERVICE REPORT', pageWidth - margin, headerTop + 6, { align: 'right' });
-    fontBody();
-    doc.setFontSize(9);
-    doc.setTextColor(...MUTED);
-    doc.text(companyNameUpper, pageWidth - margin, headerTop + 11.5, { align: 'right' });
+    doc.setFontSize(11);
+    doc.setTextColor(33, 37, 43);
+    doc.text(companyNameUpper, textX, tagline ? logoMidY - 0.5 : logoMidY + 1.5);
+    if (tagline) {
+      fontBody();
+      doc.setFontSize(6.6);
+      doc.setTextColor(...MUTED);
+      doc.text(tagline, textX, logoMidY + 4);
+    }
     doc.setTextColor(0, 0, 0);
-    const headerBottom = Math.max(logoBottom, headerTop + 13) + 3;
+    // Title, right-aligned, with a short brand underline matching its width.
+    const titleText = 'SERVICE REPORT';
+    fontTitle();
+    doc.setFontSize(19);
+    doc.setTextColor(...BLUE);
+    const titleY = headerTop + 7;
+    doc.text(titleText, pageWidth - margin, titleY, { align: 'right' });
+    const titleW = doc.getTextWidth(titleText);
     doc.setDrawColor(...BLUE);
-    doc.setLineWidth(0.8);
+    doc.setLineWidth(0.7);
+    doc.line(pageWidth - margin - titleW, titleY + 1.8, pageWidth - margin, titleY + 1.8);
+    doc.setTextColor(0, 0, 0);
+    doc.setLineWidth(0.2);
+    // Full-width light rule separates the header band from the info panel.
+    const headerBottom = Math.max(logoBottom, titleY + 1.8) + 3;
+    doc.setDrawColor(...BORDER);
+    doc.setLineWidth(0.3);
     doc.line(margin, headerBottom, pageWidth - margin, headerBottom);
     doc.setLineWidth(0.2);
     y = headerBottom + 6;
@@ -736,7 +781,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     doc.roundedRect(margin, y, contentWidth, infoPanelH, 1.6, 1.6, 'FD');
     const colLX = margin + 5;
     const colRX = margin + contentWidth / 2 + 3;
-    const labelW = 24;
+    const labelW = 30;
     const cellValW = contentWidth / 2 - labelW - 9;
     const infoField = (x: number, label: string, value: string, rowY: number) => {
       fontTitle();
@@ -750,26 +795,27 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     };
     let iy = y + 5.6;
     infoField(colLX, 'Project Name', projectName || '—', iy); infoField(colRX, 'Report No.', reportNo, iy); iy += infoRowH;
-    infoField(colLX, 'Project No.', pdfProjectNo, iy);        infoField(colRX, 'Date', reportDateStr, iy); iy += infoRowH;
-    infoField(colLX, 'Client', projectClient || '—', iy);    infoField(colRX, 'Start Time', serviceReportStartTime || '—', iy); iy += infoRowH;
-    infoField(colLX, 'PO No.', projectPo || '—', iy);        infoField(colRX, 'End Time', serviceReportEndTime || '—', iy);
+    infoField(colLX, 'Project No.', pdfProjectNo, iy);        infoField(colRX, 'Report Date', reportDateStr, iy); iy += infoRowH;
+    infoField(colLX, 'Client', projectClient || '—', iy);     infoField(colRX, 'Date(s) Covered', dateCoveredStr, iy); iy += infoRowH;
+    infoField(colLX, 'PO No.', projectPo || '—', iy);         infoField(colRX, 'Prepared By', preparedByNamePdf, iy);
     doc.setTextColor(0, 0, 0);
     y = y + infoPanelH + sectionGap;
 
     const signatureSpace = 2 * lineHeight;
-    const signatureBlockHeight = 42 + signatureSpace;
+    // 5 rows now (Name/Designation/Company/Date/Signature) — was 4.
+    const signatureBlockHeight = 48 + signatureSpace;
     const signatureY = pageHeight - signatureBlockHeight - 10;
 
     // Activities table
     const tableRows = serviceReportActivitiesTable.filter((r) => (r.activity || '').trim() || (r.findingOutcome || '').trim());
-    const headers = ['No.', 'Activity', 'Finding / Outcome'];
+    const headers = ['No.', 'Activity / Description', 'Finding / Outcome'];
     const body: string[][] = tableRows.map((r, i) => [
       String(i + 1),
       (r.activity || '').trim() || '—',
       (r.findingOutcome || '').trim() || '—',
     ]);
     if (y > signatureY - 80) { doc.addPage(); y = 20; }
-    sectionHeading('Activities');
+    sectionHeading('Activities Performed');
     autoTable(doc, {
       head: [headers],
       body,
@@ -782,9 +828,8 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
         1: { cellWidth: contentWidth * 0.5 - 5.5 },
         2: { cellWidth: contentWidth * 0.5 - 5.5 },
       },
-      styles: { fontSize: 8.5, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', overflow: 'linebreak', cellPadding: 2.4, textColor: [40, 44, 52], lineColor: BORDER, lineWidth: 0.1, valign: 'top' },
-      headStyles: { fillColor: DR_HEADER_BLUE, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', fontSize: 8.5, halign: 'left', cellPadding: { top: 2.6, bottom: 2.6, left: 2.4, right: 2.4 } },
-      alternateRowStyles: { fillColor: [246, 249, 252] },
+      styles: { fontSize: 8.5, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', overflow: 'linebreak', cellPadding: 3, textColor: [40, 44, 52], lineColor: BORDER, lineWidth: 0.1, valign: 'top' },
+      headStyles: { fillColor: BLUE_DARK, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', fontSize: 8.5, halign: 'left', cellPadding: { top: 3, bottom: 3, left: 2.4, right: 2.4 } },
     });
     const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
     y = (docWithTable.lastAutoTable?.finalY ?? y) + sectionGap;
@@ -914,7 +959,6 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     doc.text('APPROVED BY', rightColX, lastPageSignatureY);
     doc.setTextColor(0, 0, 0);
     let rowY = lastPageSignatureY + signatureSpace;
-    const preparedByNamePdf = (preparedByName.trim() || preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
     drawSignatureLine(leftColX, 'Name', rowY, preparedByNamePdf);
     drawSignatureLine(rightColX, 'Name', rowY, approverName.trim() || undefined);
     rowY += sigLineHeight;
@@ -926,6 +970,16 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     rowY += sigLineHeight;
     drawSignatureLine(leftColX, 'Date', rowY, reportDateStr);
     drawSignatureLine(rightColX, 'Date', rowY, reportDateStr);
+    rowY += sigLineHeight;
+    // Blank signature line — wet-signed by hand on the printed/exported copy.
+    drawSignatureLine(leftColX, 'Signature', rowY);
+    drawSignatureLine(rightColX, 'Signature', rowY);
+
+    // Vertical divider between the two signatory columns.
+    const dividerX = (leftColX + 77 + rightColX) / 2;
+    doc.setDrawColor(...BORDER);
+    doc.setLineWidth(0.2);
+    doc.line(dividerX, lastPageSignatureY - 5, dividerX, rowY + 2);
 
     const docNumber = `Doc. No.: ${reportNo}`;
     const footerY = pageHeight - 10;
@@ -1152,6 +1206,17 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
                 <Typography variant="body1" sx={{ fontWeight: 500 }}>
                   {serviceReportNo || (projectNo ? `${projectNo} - SR${serviceReports.length + 1}` : `SR${serviceReports.length + 1}`)}
                 </Typography>
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField size="small" fullWidth label="Date Covered (From)" type="date" value={serviceReportDateCoveredStart} onChange={(e) => {
+                  const v = e.target.value;
+                  setServiceReportDateCoveredStart(v);
+                  // Keep the range sane if "From" is pushed past the current "To".
+                  if (serviceReportDateCoveredEnd && v > serviceReportDateCoveredEnd) setServiceReportDateCoveredEnd(v);
+                }} InputLabelProps={{ shrink: true }} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField size="small" fullWidth label="Date Covered (To)" type="date" value={serviceReportDateCoveredEnd} onChange={(e) => setServiceReportDateCoveredEnd(e.target.value)} InputLabelProps={{ shrink: true }} inputProps={{ min: serviceReportDateCoveredStart }} />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
                 <TextField size="small" fullWidth label="Start Time" type="time" value={serviceReportStartTime} onChange={(e) => setServiceReportStartTime(e.target.value)} InputLabelProps={{ shrink: true }} />
