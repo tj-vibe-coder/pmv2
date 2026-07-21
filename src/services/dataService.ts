@@ -295,9 +295,12 @@ class DataService {
     }
   }
 
-  async deleteProjects(projectIds: number[]): Promise<{success: boolean; errors: string[]}> {
+  async deleteProjects(projectIds: string[]): Promise<{success: boolean; errors: string[]}> {
     try {
-      // server expects DELETE /api/projects with body: { ids: number[] }
+      // Firestore doc ids are opaque strings (e.g. "V1StGXR8_Z5jdHi6B"), not
+      // numbers — server expects DELETE /api/projects with body: { ids: string[] }.
+      // A caller that runs these through Number() would silently turn every id
+      // into NaN (serialized as null), which no-ops the delete without erroring.
       const response = await fetch(`${API_BASE_URL}/projects`, {
         method: 'DELETE',
         headers: {

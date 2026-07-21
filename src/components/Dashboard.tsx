@@ -449,8 +449,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       // Simulate brief loading for better UX
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      // Actually delete the projects from the data service
-      const deleteResult = await dataService.deleteProjects(selectedProjectIds.map(id => Number(id)));
+      // Actually delete the projects from the data service.
+      // Project ids are Firestore doc ids (opaque strings) — do NOT convert to
+      // Number(): that produced NaN for every real id, which serialized to null
+      // and made the server delete a non-existent "null" doc. Selection appeared
+      // to succeed (no error thrown) but the project was never actually removed.
+      const deleteResult = await dataService.deleteProjects(selectedProjectIds);
       
       if (deleteResult.success) {
         // Clear selection and close dialog
