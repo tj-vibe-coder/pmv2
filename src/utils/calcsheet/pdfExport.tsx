@@ -2,7 +2,7 @@ import { Document, Page, Text, View, Image, StyleSheet, pdf } from '@react-pdf/r
 import { saveAs } from 'file-saver';
 import { format } from 'date-fns';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import type { Client, Project, Quotation, SalesContact } from '../../types/Quotation';
+import type { Client, ComponentLine, Project, Quotation, SalesContact } from '../../types/Quotation';
 import { resolveContact } from '../../types/Client';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP, NUM,
@@ -124,6 +124,12 @@ const styles = StyleSheet.create({
     backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
     fontSize: 9, padding: '2 8', marginTop: 8,
   },
+  // Dark-gray variant used for the "Optional Items" header, to visually set it
+  // apart from the contract (navy) sections.
+  sectionBarGray: {
+    backgroundColor: '#4a4f57', color: 'white', fontWeight: 700,
+    fontSize: 9, padding: '2 8', marginTop: 8,
+  },
   // Summary label — same solid PRIMARY treatment
   summaryBar: {
     backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
@@ -141,15 +147,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     fontSize: 8.5,
   },
+  // Sub-total band — tinted like the table header so the money row stands
+  // out from plain item rows without competing with the navy section bars.
   trSub: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    padding: '3 0', fontSize: 8.5,
+    padding: '3 6', fontSize: 8.5,
+    backgroundColor: SECTION_BG,
     borderTop: `0.5px solid ${BORDER}`,
   },
 
   cItem: { width: '10%', paddingLeft: 4, paddingVertical: 2 },
   cDesc: { width: '48%', paddingLeft: 8, paddingRight: 2, paddingVertical: 2 },
+  // Muted brand/part-number sub-line under the item name.
+  cDescSub: { fontSize: 7.5, color: TEXT_LIGHT, marginTop: 1 },
   cQty: { width: '8%', paddingVertical: 2, textAlign: 'center' },
   cUom: { width: '8%', paddingVertical: 2, textAlign: 'center' },
   cUnit: { width: '13%', paddingRight: 4, paddingVertical: 2, textAlign: 'right' },
@@ -211,6 +222,19 @@ const styles = StyleSheet.create({
     fontSize: 8.5, color: TEXT, textAlign: 'center',
   },
 });
+
+// Component description cell: item name as the main line, brand + part number
+// as a muted sub-line underneath (reads like a hand-written spec sheet, not a
+// dash-joined string).
+function ComponentDesc({ l }: { l: ComponentLine }) {
+  const sub = [l.brand, l.partNo].filter(Boolean).join(', ');
+  return (
+    <View style={styles.cDesc}>
+      <Text>{l.description || ''}</Text>
+      {sub ? <Text style={styles.cDescSub}>{sub}</Text> : null}
+    </View>
+  );
+}
 
 interface Props {
   quotation: Quotation;
@@ -386,7 +410,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             </View>
             <View style={styles.trSub}>
               <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
-              <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.generalReqtsSubtotal)}</Text>
+              <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.generalReqtsSubtotal)}</Text>
             </View>
           </>
         )}
@@ -426,7 +450,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     return (
                       <View style={styles.tr} key={l.id}>
                         <Text style={styles.cItem}>{isFirst ? codesB.get(l.id) : ''}</Text>
-                        <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
+                        <ComponentDesc l={l} />
                         <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
                         <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
                         <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
@@ -437,7 +461,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   return (
                     <View style={styles.tr} key={l.id}>
                       <Text style={styles.cItem}>{codesB.get(l.id)}</Text>
-                      <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
+                      <ComponentDesc l={l} />
                       <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
                       <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                       <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
@@ -448,7 +472,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 </View>
                 <View style={styles.trSub}>
                   <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
-                  <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.componentsSubtotal)}</Text>
+                  <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.componentsSubtotal)}</Text>
                 </View>
               </>
             );
@@ -564,7 +588,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             </View>
             <View style={styles.trSub}>
               <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
-              <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.servicesSubtotal)}</Text>
+              <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.servicesSubtotal)}</Text>
             </View>
           </>
         )}
@@ -637,7 +661,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
         {/* ─── OPTIONAL ITEMS (priced for reference, not in contract total) ─── */}
         {hasOptional && (
           <View style={styles.tableWrap} wrap={false}>
-            <Text style={styles.sectionBar}>Optional Items</Text>
+            <Text style={styles.sectionBarGray}>Optional Items</Text>
             <Text style={[styles.termText, { marginBottom: 4, fontStyle: 'italic' }]}>
               The items below are optional and are NOT included in the total contract price above. They may be availed separately at the prices indicated.
             </Text>
@@ -652,7 +676,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             {optionalComponents.map((l) => (
               <View style={styles.tr} key={l.id}>
                 <Text style={styles.cItem}>{codesOpt.get(l.id)}</Text>
-                <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
+                <ComponentDesc l={l} />
                 <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
                 <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                 <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
@@ -661,7 +685,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             ))}
             <View style={styles.trSub}>
               <Text style={{ fontWeight: 500 }}>optional total (vat-ex)</Text>
-              <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.componentsOptionalSubtotal ?? 0)}</Text>
+              <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.componentsOptionalSubtotal ?? 0)}</Text>
             </View>
           </View>
         )}
