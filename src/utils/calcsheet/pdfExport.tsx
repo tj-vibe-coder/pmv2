@@ -147,10 +147,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     fontSize: 8.5,
   },
+  // Sub-total band — tinted like the table header so the money row stands
+  // out from plain item rows without competing with the navy section bars.
   trSub: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    padding: '3 0', fontSize: 8.5,
+    padding: '3 6', fontSize: 8.5,
+    backgroundColor: SECTION_BG,
     borderTop: `0.5px solid ${BORDER}`,
   },
 
@@ -392,7 +395,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             </View>
             <View style={styles.trSub}>
               <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
-              <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.generalReqtsSubtotal)}</Text>
+              <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.generalReqtsSubtotal)}</Text>
             </View>
           </>
         )}
@@ -454,7 +457,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 </View>
                 <View style={styles.trSub}>
                   <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
-                  <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.componentsSubtotal)}</Text>
+                  <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.componentsSubtotal)}</Text>
                 </View>
               </>
             );
@@ -570,7 +573,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             </View>
             <View style={styles.trSub}>
               <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
-              <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.servicesSubtotal)}</Text>
+              <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.servicesSubtotal)}</Text>
             </View>
           </>
         )}
@@ -667,7 +670,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             ))}
             <View style={styles.trSub}>
               <Text style={{ fontWeight: 500 }}>optional total (vat-ex)</Text>
-              <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.componentsOptionalSubtotal ?? 0)}</Text>
+              <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.componentsOptionalSubtotal ?? 0)}</Text>
             </View>
           </View>
         )}
