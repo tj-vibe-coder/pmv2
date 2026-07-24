@@ -9,6 +9,7 @@ import {
 import { quotationRefNo } from './codes';
 
 const PHP_FMT = '"₱" #,##0.00;[Red]"₱" -#,##0.00';
+const QTY_FMT = '#,##0.00';
 
 function quotationDate(value: string | undefined): Date {
   const dateOnly = (value || format(new Date(), 'yyyy-MM-dd')).slice(0, 10);
@@ -38,6 +39,9 @@ export async function exportQuotationXlsx(
   ws.columns = [
     { width: 14 }, { width: 50 }, { width: 10 }, { width: 8 }, { width: 18 }, { width: 18 },
   ];
+  // Column C only ever holds quantities — always show 2 decimals (1 -> 1.00),
+  // matching the PDF. Text headers in this column are unaffected by numFmt.
+  ws.getColumn(3).numFmt = QTY_FMT;
 
   const navy = 'FF0F2A44';
   const grayBg = 'FFF2F4F7';
