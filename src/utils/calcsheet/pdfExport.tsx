@@ -124,6 +124,12 @@ const styles = StyleSheet.create({
     backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
     fontSize: 9, padding: '2 8', marginTop: 8,
   },
+  // Dark-gray variant used for the "Optional Items" header, to visually set it
+  // apart from the contract (navy) sections.
+  sectionBarGray: {
+    backgroundColor: '#4a4f57', color: 'white', fontWeight: 700,
+    fontSize: 9, padding: '2 8', marginTop: 8,
+  },
   // Summary label — same solid PRIMARY treatment
   summaryBar: {
     backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
@@ -637,7 +643,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
         {/* ─── OPTIONAL ITEMS (priced for reference, not in contract total) ─── */}
         {hasOptional && (
           <View style={styles.tableWrap} wrap={false}>
-            <Text style={styles.sectionBar}>Optional Items</Text>
+            <Text style={styles.sectionBarGray}>Optional Items</Text>
             <Text style={[styles.termText, { marginBottom: 4, fontStyle: 'italic' }]}>
               The items below are optional and are NOT included in the total contract price above. They may be availed separately at the prices indicated.
             </Text>
