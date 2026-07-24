@@ -165,8 +165,13 @@ export async function exportQuotationXlsx(
           ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
           : 0;
         if (itemized) {
-          ws.getRow(r).values = [l.code, desc, l.qty, l.uom, '', isMid ? groupTotal : ''];
-          if (isMid) ws.getCell(r, 6).numFmt = PHP_FMT;
+          // Group price shows in both Unit Price and Total on the middle row,
+          // same as the LOT presentation — it's one combined lot amount.
+          ws.getRow(r).values = [l.code, desc, l.qty, l.uom, isMid ? groupTotal : '', isMid ? groupTotal : ''];
+          if (isMid) {
+            ws.getCell(r, 5).numFmt = PHP_FMT;
+            ws.getCell(r, 6).numFmt = PHP_FMT;
+          }
         } else if (isMid) {
           ws.getRow(r).values = [l.code, desc, 1, 'lot', groupTotal, groupTotal];
           ws.getCell(r, 5).numFmt = PHP_FMT;
