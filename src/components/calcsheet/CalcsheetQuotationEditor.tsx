@@ -464,7 +464,22 @@ export default function QuotationEditor() {
           variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
           InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
           inputProps={{ style: { padding: '6px 4px' } }} />
-        {r.group && <Chip label={r.group} size="small" color="warning" variant="outlined" onDelete={() => ungroupComp(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
+        {r.group && (
+          <Tooltip title={groupDisplayMode(r.group) === 'lot'
+            ? `"${r.group}" prints as one 1.00 LOT line — click to show each item's qty instead`
+            : `"${r.group}" prints each item's qty (one combined price) — click to collapse to 1.00 LOT`}>
+            <Chip
+              label={`${r.group} · ${groupDisplayMode(r.group) === 'lot' ? 'LOT' : 'itemized'}`}
+              size="small"
+              color="warning"
+              variant={groupDisplayMode(r.group) === 'lot' ? 'outlined' : 'filled'}
+              onClick={() => toggleGroupDisplay(r.group!)}
+              onDelete={() => ungroupComp(r.id)}
+              disabled={isLegacy}
+              sx={{ height: 20, cursor: 'pointer', '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }}
+            />
+          </Tooltip>
+        )}
       </Stack>
     ) },
     { key: 'brand', label: 'Brand', width: 90 },
@@ -539,6 +554,15 @@ export default function QuotationEditor() {
   };
   const ungroupComp = (compId: string) => {
     setField('components', quotation.components.map((c) => c.id === compId ? { ...c, group: undefined } : c));
+  };
+  // Per-group export style. Absent = 'lot' (collapse to a single "1.00 LOT"
+  // line priced at the group total); 'itemized' shows each member's own qty
+  // and UOM while the group keeps one combined price.
+  const groupDisplayMode = (group: string): 'lot' | 'itemized' =>
+    quotation.componentGroupDisplay?.[group] === 'itemized' ? 'itemized' : 'lot';
+  const toggleGroupDisplay = (group: string) => {
+    const next = groupDisplayMode(group) === 'lot' ? 'itemized' : 'lot';
+    setField('componentGroupDisplay', { ...(quotation.componentGroupDisplay || {}), [group]: next });
   };
 
   const svcCols: Column<ServiceLine>[] = perLinePricing

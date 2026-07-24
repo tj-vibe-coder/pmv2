@@ -447,13 +447,17 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     const groupTotal = isMid
                       ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
                       : 0;
+                    // 'itemized' shows each member's own qty + UOM; the group is
+                    // still priced as one combined amount on the middle row, so
+                    // no per-unit price is disclosed for the members.
+                    const itemized = quotation.componentGroupDisplay?.[l.group] === 'itemized';
                     return (
                       <View style={styles.tr} key={l.id}>
                         <Text style={styles.cItem}>{isFirst ? codesB.get(l.id) : ''}</Text>
                         <ComponentDesc l={l} />
-                        <Text style={styles.cQty}>{isMid ? NUM(1) : ''}</Text>
-                        <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
-                        <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
+                        <Text style={styles.cQty}>{itemized ? NUM(l.qty) : (isMid ? NUM(1) : '')}</Text>
+                        <Text style={styles.cUom}>{itemized ? (l.uom ?? '').toUpperCase() : (isMid ? 'LOT' : '')}</Text>
+                        <Text style={styles.cUnit}>{!itemized && isMid ? NUM(groupTotal) : ''}</Text>
                         <Text style={styles.cTotal}>{isMid ? NUM(groupTotal) : ''}</Text>
                       </View>
                     );

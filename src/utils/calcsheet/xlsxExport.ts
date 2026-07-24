@@ -158,8 +158,16 @@ export async function exportQuotationXlsx(
         const members = compGroups.get(l.group)!;
         const midIdx = Math.max(0, Math.floor((members.length - 1) / 2));
         const isMid = members[midIdx].id === l.id;
-        if (isMid) {
-          const groupTotal = members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0);
+        // 'itemized' shows each member's own qty + UOM; the group stays priced
+        // as one combined amount on the middle row (no per-unit price shown).
+        const itemized = quotation.componentGroupDisplay?.[l.group] === 'itemized';
+        const groupTotal = isMid
+          ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
+          : 0;
+        if (itemized) {
+          ws.getRow(r).values = [l.code, desc, l.qty, l.uom, '', isMid ? groupTotal : ''];
+          if (isMid) ws.getCell(r, 6).numFmt = PHP_FMT;
+        } else if (isMid) {
           ws.getRow(r).values = [l.code, desc, 1, 'lot', groupTotal, groupTotal];
           ws.getCell(r, 5).numFmt = PHP_FMT;
           ws.getCell(r, 6).numFmt = PHP_FMT;
