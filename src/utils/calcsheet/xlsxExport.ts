@@ -9,6 +9,7 @@ import {
 import { quotationRefNo } from './codes';
 
 const PHP_FMT = '"₱" #,##0.00;[Red]"₱" -#,##0.00';
+const QTY_FMT = '#,##0.00';
 
 function quotationDate(value: string | undefined): Date {
   const dateOnly = (value || format(new Date(), 'yyyy-MM-dd')).slice(0, 10);
@@ -38,6 +39,9 @@ export async function exportQuotationXlsx(
   ws.columns = [
     { width: 14 }, { width: 50 }, { width: 10 }, { width: 8 }, { width: 18 }, { width: 18 },
   ];
+  // Column C only ever holds quantities — always show 2 decimals (1 -> 1.00),
+  // matching the PDF. Text headers in this column are unaffected by numFmt.
+  ws.getColumn(3).numFmt = QTY_FMT;
 
   const navy = 'FF0F2A44';
   const grayBg = 'FFF2F4F7';
@@ -154,8 +158,16 @@ export async function exportQuotationXlsx(
         const members = compGroups.get(l.group)!;
         const midIdx = Math.max(0, Math.floor((members.length - 1) / 2));
         const isMid = members[midIdx].id === l.id;
-        if (isMid) {
-          const groupTotal = members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0);
+        // 'itemized' shows each member's own qty + UOM; the group stays priced
+        // as one combined amount on the middle row (no per-unit price shown).
+        const itemized = quotation.componentGroupDisplay?.[l.group] === 'itemized';
+        const groupTotal = isMid
+          ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
+          : 0;
+        if (itemized) {
+          ws.getRow(r).values = [l.code, desc, l.qty, l.uom, '', isMid ? groupTotal : ''];
+          if (isMid) ws.getCell(r, 6).numFmt = PHP_FMT;
+        } else if (isMid) {
           ws.getRow(r).values = [l.code, desc, 1, 'lot', groupTotal, groupTotal];
           ws.getCell(r, 5).numFmt = PHP_FMT;
           ws.getCell(r, 6).numFmt = PHP_FMT;

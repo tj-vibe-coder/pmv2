@@ -388,7 +388,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   <View style={styles.tr} key={l.id}>
                     <Text style={styles.cItem}>{codesA.get(l.id)}</Text>
                     <Text style={styles.cDesc}>{l.description}</Text>
-                    <Text style={styles.cQty}>{showLotTotal ? String(generalReqtsExportQty) : ''}</Text>
+                    <Text style={styles.cQty}>{showLotTotal ? NUM(generalReqtsExportQty) : ''}</Text>
                     <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
                     <Text style={styles.cUnit}>{showLotTotal ? NUM(generalReqtsExportUnitPrice) : ''}</Text>
                     <Text style={styles.cTotal}>{showLotTotal ? NUM(totals.generalReqtsSubtotal) : ''}</Text>
@@ -400,7 +400,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 <View style={styles.tr} key={l.id}>
                   <Text style={styles.cItem}>{codesA.get(l.id)}</Text>
                   <Text style={styles.cDesc}>{l.description}</Text>
-                  <Text style={styles.cQty}>{l.qty}</Text>
+                  <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                   <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                   <Text style={styles.cUnit}>{NUM(l.unitPrice)}</Text>
                   <Text style={styles.cTotal}>{NUM(lineGeneralTotal(l))}</Text>
@@ -447,13 +447,17 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     const groupTotal = isMid
                       ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
                       : 0;
+                    // 'itemized' shows each member's own qty + UOM; the group is
+                    // still priced as one combined amount on the middle row, so
+                    // no per-unit price is disclosed for the members.
+                    const itemized = quotation.componentGroupDisplay?.[l.group] === 'itemized';
                     return (
                       <View style={styles.tr} key={l.id}>
                         <Text style={styles.cItem}>{isFirst ? codesB.get(l.id) : ''}</Text>
                         <ComponentDesc l={l} />
-                        <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
-                        <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
-                        <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
+                        <Text style={styles.cQty}>{itemized ? NUM(l.qty) : (isMid ? NUM(1) : '')}</Text>
+                        <Text style={styles.cUom}>{itemized ? (l.uom ?? '').toUpperCase() : (isMid ? 'LOT' : '')}</Text>
+                        <Text style={styles.cUnit}>{!itemized && isMid ? NUM(groupTotal) : ''}</Text>
                         <Text style={styles.cTotal}>{isMid ? NUM(groupTotal) : ''}</Text>
                       </View>
                     );
@@ -462,7 +466,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     <View style={styles.tr} key={l.id}>
                       <Text style={styles.cItem}>{codesB.get(l.id)}</Text>
                       <ComponentDesc l={l} />
-                      <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
+                      <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                       <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                       <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
                       <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct))}</Text>
@@ -522,7 +526,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                             <View style={styles.tr} key={l.id}>
                               <Text style={styles.cItem}>{isFirst ? codesC.get(l.id) : ''}</Text>
                               <Text style={styles.cDesc}>{l.description}</Text>
-                              <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
+                              <Text style={styles.cQty}>{isMid ? NUM(1) : ''}</Text>
                               <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
                               <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
                               <Text style={styles.cTotal}>{isMid ? NUM(groupTotal) : ''}</Text>
@@ -534,7 +538,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                             <View style={styles.tr} key={l.id}>
                               <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
                               <Text style={styles.cDesc}>{l.description}</Text>
-                              <Text style={styles.cQty}>1</Text>
+                              <Text style={styles.cQty}>{NUM(1)}</Text>
                               <Text style={styles.cUom}>LOT</Text>
                               <Text style={styles.cUnit}>{NUM(l.amount)}</Text>
                               <Text style={styles.cTotal}>{NUM(l.amount)}</Text>
@@ -564,7 +568,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                       <View style={styles.tr} key={l.id}>
                         <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
                         <Text style={styles.cDesc}>{l.description}</Text>
-                        <Text style={styles.cQty}>{showLotTotal ? String(engineeringServicesQty) : ''}</Text>
+                        <Text style={styles.cQty}>{showLotTotal ? NUM(engineeringServicesQty) : ''}</Text>
                         <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
                         <Text style={styles.cUnit}>{showLotTotal ? NUM(engineeringServicesUnitPrice) : ''}</Text>
                         <Text style={styles.cTotal}>{showLotTotal ? NUM(totals.servicesSubtotal) : ''}</Text>
@@ -576,7 +580,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     <View style={styles.tr} key={l.id}>
                       <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
                       <Text style={styles.cDesc}>{l.description}</Text>
-                      <Text style={styles.cQty}>1</Text>
+                      <Text style={styles.cQty}>{NUM(1)}</Text>
                       <Text style={styles.cUom}>LOT</Text>
                       <Text style={styles.cUnit}>{NUM(l.amount)}</Text>
                       <Text style={styles.cTotal}>{NUM(l.amount)}</Text>
@@ -606,7 +610,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
           {hasA && (
             <View style={styles.sumRow}>
               <Text style={styles.sumItem}>General Requirements</Text>
-              <Text style={styles.sumQty}>1</Text>
+              <Text style={styles.sumQty}>{NUM(1)}</Text>
               <Text style={styles.sumUom}>LOT</Text>
               <Text style={styles.sumPrice}>{PHP(totals.generalReqtsSubtotal)}</Text>
             </View>
@@ -614,7 +618,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
           {hasB && (
             <View style={styles.sumRow}>
               <Text style={styles.sumItem}>Supply of Components</Text>
-              <Text style={styles.sumQty}>1</Text>
+              <Text style={styles.sumQty}>{NUM(1)}</Text>
               <Text style={styles.sumUom}>LOT</Text>
               <Text style={styles.sumPrice}>{PHP(totals.componentsSubtotal)}</Text>
             </View>
@@ -622,7 +626,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
           {hasC && (
             <View style={styles.sumRow}>
               <Text style={styles.sumItem}>Engineering Services</Text>
-              <Text style={styles.sumQty}>1</Text>
+              <Text style={styles.sumQty}>{NUM(1)}</Text>
               <Text style={styles.sumUom}>LOT</Text>
               <Text style={styles.sumPrice}>{PHP(totals.servicesSubtotal)}</Text>
             </View>
@@ -677,7 +681,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               <View style={styles.tr} key={l.id}>
                 <Text style={styles.cItem}>{codesOpt.get(l.id)}</Text>
                 <ComponentDesc l={l} />
-                <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
+                <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                 <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                 <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
                 <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct))}</Text>

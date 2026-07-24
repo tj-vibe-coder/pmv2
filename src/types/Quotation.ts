@@ -183,6 +183,12 @@ export interface Quotation {
   notes?: string;
   exportGeneralReqtsAsLot?: boolean;
   generalReqtsExportQty?: number;
+  /** How each component group renders on the PDF/Excel, keyed by group name.
+   * 'lot' (the default when a group is absent here) collapses the group to a
+   * single "1.00 LOT" line priced at the group total. 'itemized' shows each
+   * member's own qty + UOM while still pricing the group as one combined
+   * amount. */
+  componentGroupDisplay?: Record<string, 'lot' | 'itemized'>;
   pageBreakBeforeTerms?: boolean;
   formulaVersion?: FormulaVersion;
   generalReqContingencyMode?: 'standard' | 'baked';
