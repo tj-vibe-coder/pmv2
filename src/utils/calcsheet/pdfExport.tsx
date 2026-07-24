@@ -457,7 +457,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                         <ComponentDesc l={l} />
                         <Text style={styles.cQty}>{itemized ? NUM(l.qty) : (isMid ? NUM(1) : '')}</Text>
                         <Text style={styles.cUom}>{itemized ? (l.uom ?? '').toUpperCase() : (isMid ? 'LOT' : '')}</Text>
-                        <Text style={styles.cUnit}>{!itemized && isMid ? NUM(groupTotal) : ''}</Text>
+                        <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
                         <Text style={styles.cTotal}>{isMid ? NUM(groupTotal) : ''}</Text>
                       </View>
                     );
