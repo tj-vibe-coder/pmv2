@@ -146,7 +146,10 @@ export async function exportQuotationXlsx(
       }
     });
     contractComponents.forEach((l) => {
-      const desc = [l.brand, l.description, l.partNo].filter(Boolean).join(' — ');
+      // Item name on the first line; brand + part number on a wrapped
+      // second line (mirrors the PDF's two-line description cell).
+      const compSub = [l.brand, l.partNo].filter(Boolean).join(', ');
+      const desc = compSub ? `${l.description}\n${compSub}` : l.description;
       if (l.group) {
         const members = compGroups.get(l.group)!;
         const midIdx = Math.max(0, Math.floor((members.length - 1) / 2));
@@ -164,6 +167,7 @@ export async function exportQuotationXlsx(
         ws.getCell(r, 5).numFmt = PHP_FMT;
         ws.getCell(r, 6).numFmt = PHP_FMT;
       }
+      if (compSub) ws.getCell(r, 2).alignment = { wrapText: true, vertical: 'top' };
       r++;
     });
     ws.getRow(r).values = ['', '', '', '', 'Subtotal', totals.componentsSubtotal];
@@ -252,8 +256,10 @@ export async function exportQuotationXlsx(
     sectionHeader('OPTIONAL ITEMS (NOT INCLUDED IN CONTRACT PRICE)');
     tableHeader(['Code', 'Description', 'Qty', 'UOM', 'Unit Price', 'Total']);
     optionalComponents.forEach((l) => {
-      const desc = [l.brand, l.description, l.partNo].filter(Boolean).join(' — ');
+      const compSub = [l.brand, l.partNo].filter(Boolean).join(', ');
+      const desc = compSub ? `${l.description}\n${compSub}` : l.description;
       ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct), componentLineTotal(l, quotation.productMarkupPct)];
+      if (compSub) ws.getCell(r, 2).alignment = { wrapText: true, vertical: 'top' };
       ws.getCell(r, 5).numFmt = PHP_FMT;
       ws.getCell(r, 6).numFmt = PHP_FMT;
       r++;

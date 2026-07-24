@@ -2,7 +2,7 @@ import { Document, Page, Text, View, Image, StyleSheet, pdf } from '@react-pdf/r
 import { saveAs } from 'file-saver';
 import { format } from 'date-fns';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import type { Client, Project, Quotation, SalesContact } from '../../types/Quotation';
+import type { Client, ComponentLine, Project, Quotation, SalesContact } from '../../types/Quotation';
 import { resolveContact } from '../../types/Client';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP, NUM,
@@ -159,6 +159,8 @@ const styles = StyleSheet.create({
 
   cItem: { width: '10%', paddingLeft: 4, paddingVertical: 2 },
   cDesc: { width: '48%', paddingLeft: 8, paddingRight: 2, paddingVertical: 2 },
+  // Muted brand/part-number sub-line under the item name.
+  cDescSub: { fontSize: 7.5, color: TEXT_LIGHT, marginTop: 1 },
   cQty: { width: '8%', paddingVertical: 2, textAlign: 'center' },
   cUom: { width: '8%', paddingVertical: 2, textAlign: 'center' },
   cUnit: { width: '13%', paddingRight: 4, paddingVertical: 2, textAlign: 'right' },
@@ -220,6 +222,19 @@ const styles = StyleSheet.create({
     fontSize: 8.5, color: TEXT, textAlign: 'center',
   },
 });
+
+// Component description cell: item name as the main line, brand + part number
+// as a muted sub-line underneath (reads like a hand-written spec sheet, not a
+// dash-joined string).
+function ComponentDesc({ l }: { l: ComponentLine }) {
+  const sub = [l.brand, l.partNo].filter(Boolean).join(', ');
+  return (
+    <View style={styles.cDesc}>
+      <Text>{l.description || ''}</Text>
+      {sub ? <Text style={styles.cDescSub}>{sub}</Text> : null}
+    </View>
+  );
+}
 
 interface Props {
   quotation: Quotation;
@@ -435,7 +450,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     return (
                       <View style={styles.tr} key={l.id}>
                         <Text style={styles.cItem}>{isFirst ? codesB.get(l.id) : ''}</Text>
-                        <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
+                        <ComponentDesc l={l} />
                         <Text style={styles.cQty}>{isMid ? '1' : ''}</Text>
                         <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
                         <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
@@ -446,7 +461,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   return (
                     <View style={styles.tr} key={l.id}>
                       <Text style={styles.cItem}>{codesB.get(l.id)}</Text>
-                      <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
+                      <ComponentDesc l={l} />
                       <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
                       <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                       <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
@@ -661,7 +676,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             {optionalComponents.map((l) => (
               <View style={styles.tr} key={l.id}>
                 <Text style={styles.cItem}>{codesOpt.get(l.id)}</Text>
-                <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
+                <ComponentDesc l={l} />
                 <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
                 <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                 <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
