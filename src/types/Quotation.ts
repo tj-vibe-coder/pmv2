@@ -109,6 +109,10 @@ export interface ComponentLine {
   leadTimeDays?: number;
   group?: string;
   markupPct?: number;
+  /** Optional item: priced for reference but NOT included in the contract
+   * cost/subtotal/grand total. Listed in a separate "Optional Items" section
+   * on exports so the client can add it if they avail. */
+  optional?: boolean;
 }
 
 export interface ServiceLine {
@@ -207,6 +211,9 @@ export interface QuotationTotals {
   componentsCost: number;
   componentsWithContingency?: number;
   componentsSubtotal: number;
+  /** Sum of optional-component selling prices — informational only, NOT part
+   * of `subtotal`/`grandTotal`. Absent/0 when there are no optional items. */
+  componentsOptionalSubtotal?: number;
 
   laborCost: number;
   laborWithContingency: number;

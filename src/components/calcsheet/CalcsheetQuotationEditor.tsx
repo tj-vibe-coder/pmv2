@@ -500,10 +500,22 @@ export default function QuotationEditor() {
     // typed; clearing the cell falls back to the global again.
     { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.productMarkupPct || 0) },
     { key: 'leadTimeDays', label: 'Lead Time', width: 90, type: 'number', align: 'right', min: 0 },
+    { key: 'optional', label: 'Optional', width: 70, align: 'center', render: (r, idx) => (
+      <Checkbox size="small" sx={{ p: 0 }}
+        checked={!!r.optional}
+        disabled={isLegacy}
+        onChange={(e) => updateRow('components', idx, 'optional', e.target.checked)}
+        title="Optional item — priced for reference, not included in the contract total"
+      />
+    ) },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
-      render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
+      render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: r.optional ? 'text.disabled' : undefined }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
     { key: 'total', label: 'Total', width: 130, align: 'right',
-      render: (r) => <Box sx={{ fontFamily: 'monospace', fontWeight: 500 }}>{PHP(componentLineTotal(r, quotation.productMarkupPct))}</Box> },
+      render: (r) => (
+        <Box sx={{ fontFamily: 'monospace', fontWeight: 500, color: r.optional ? 'text.disabled' : undefined, fontStyle: r.optional ? 'italic' : undefined }}>
+          {PHP(componentLineTotal(r, quotation.productMarkupPct))}{r.optional ? ' *' : ''}
+        </Box>
+      ) },
   ];
 
   // Section C — Services
@@ -1335,15 +1347,22 @@ export default function QuotationEditor() {
           footer={
             <>
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={10} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no contingency/markup)</TableCell>
+                <TableCell colSpan={11} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no contingency/markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(totals.componentsCost)}</TableCell>
                 <TableCell />
               </TableRow>
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={10} align="right" sx={{ fontWeight: 600 }}>Subtotal (with contingency + markup)</TableCell>
+                <TableCell colSpan={11} align="right" sx={{ fontWeight: 600 }}>Subtotal (with contingency + markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.componentsSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
+              {(totals.componentsOptionalSubtotal ?? 0) > 0 && (
+                <TableRow sx={{ bgcolor: 'grey.50' }}>
+                  <TableCell colSpan={11} align="right" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>Optional items (* not in contract total)</TableCell>
+                  <TableCell align="right" sx={{ fontFamily: 'monospace', fontStyle: 'italic', color: 'text.secondary' }}>{PHP(totals.componentsOptionalSubtotal ?? 0)}</TableCell>
+                  <TableCell />
+                </TableRow>
+              )}
             </>
           }
         />

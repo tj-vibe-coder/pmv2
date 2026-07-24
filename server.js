@@ -503,7 +503,11 @@ app.use('/api/users', usersRouter);
 // ========== PROJECTS ROUTES ==========
 
 function formatProject(doc) {
-  return { id: doc.id, ...doc.data() };
+  // Spread data first so a stray stored `id` field can't clobber the real
+  // Firestore doc id — see the calcsheet projects/presets POST fix for the
+  // same pattern (CLAUDE.md follow-up #8).
+  const { id: _staleId, ...data } = doc.data();
+  return { ...data, id: doc.id };
 }
 
 app.get('/api/projects', async (req, res) => {

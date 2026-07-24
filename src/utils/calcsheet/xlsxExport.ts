@@ -130,20 +130,22 @@ export async function exportQuotationXlsx(
     r += 2;
   }
 
-  // B. Components
-  if (quotation.components.length) {
+  // B. Components (optional items are pulled out into their own section below).
+  const contractComponents = quotation.components.filter((l) => !l.optional);
+  const optionalComponents = quotation.components.filter((l) => l.optional);
+  if (contractComponents.length) {
     sectionHeader('B. SUPPLY OF COMPONENTS');
     tableHeader(['Code', 'Description', 'Qty', 'UOM', 'Unit Price', 'Total']);
     // Group-aware rendering — pricing on middle row of each group
     const compGroups = new Map<string, typeof quotation.components>();
-    quotation.components.forEach((l) => {
+    contractComponents.forEach((l) => {
       if (l.group) {
         const arr = compGroups.get(l.group) || [];
         arr.push(l);
         compGroups.set(l.group, arr);
       }
     });
-    quotation.components.forEach((l) => {
+    contractComponents.forEach((l) => {
       const desc = [l.brand, l.description, l.partNo].filter(Boolean).join(' — ');
       if (l.group) {
         const members = compGroups.get(l.group)!;
@@ -243,6 +245,25 @@ export async function exportQuotationXlsx(
     }
     r++;
   });
+
+  // Optional items — priced for reference, NOT in the grand total above.
+  if (optionalComponents.length) {
+    r += 1;
+    sectionHeader('OPTIONAL ITEMS (NOT INCLUDED IN CONTRACT PRICE)');
+    tableHeader(['Code', 'Description', 'Qty', 'UOM', 'Unit Price', 'Total']);
+    optionalComponents.forEach((l) => {
+      const desc = [l.brand, l.description, l.partNo].filter(Boolean).join(' — ');
+      ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct), componentLineTotal(l, quotation.productMarkupPct)];
+      ws.getCell(r, 5).numFmt = PHP_FMT;
+      ws.getCell(r, 6).numFmt = PHP_FMT;
+      r++;
+    });
+    ws.getRow(r).values = ['', '', '', '', 'Optional Total', totals.componentsOptionalSubtotal ?? 0];
+    ws.getCell(r, 5).font = { bold: true };
+    ws.getCell(r, 6).font = { bold: true };
+    ws.getCell(r, 6).numFmt = PHP_FMT;
+    r += 2;
+  }
 
   // Manpower sheet (working data)
   if (quotation.manpower.length) {

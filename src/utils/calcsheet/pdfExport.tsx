@@ -249,12 +249,19 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
   }
 
   const codesA = autoNumber('A', quotation.generalReqts);
-  const codesB = autoNumber('B', quotation.components);
   const codesC = autoNumber('C', quotation.services);
+
+  // Optional components are priced for reference only — pulled out of Section B
+  // and listed in their own "Optional Items" section (not in the contract total).
+  const contractComponents = quotation.components.filter((l) => !l.optional);
+  const optionalComponents = quotation.components.filter((l) => l.optional);
+  const codesB = autoNumber('B', contractComponents);
+  const codesOpt = autoNumber('OP', optionalComponents);
 
   // Section presence
   const hasA = quotation.generalReqts.length > 0;
-  const hasB = quotation.components.length > 0;
+  const hasB = contractComponents.length > 0;
+  const hasOptional = optionalComponents.length > 0;
   const hasC = quotation.services.length > 0 || totals.servicesSubtotal > 0;
   const exportGeneralReqtsAsLot = !!quotation.exportGeneralReqtsAsLot;
   const generalReqtsExportQty = Math.max(1, quotation.generalReqtsExportQty || 1);
@@ -388,7 +395,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
         {hasB && (
           (() => {
             const compGroups = new Map<string, typeof quotation.components>();
-            quotation.components.forEach((l) => {
+            contractComponents.forEach((l) => {
               if (l.group) {
                 const arr = compGroups.get(l.group) || [];
                 arr.push(l);
@@ -407,7 +414,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   <Text style={styles.cUnit}>Unit Price</Text>
                   <Text style={styles.cTotal}>Total , PhP</Text>
                 </View>
-                {quotation.components.map((l) => {
+                {contractComponents.map((l) => {
                   if (l.group) {
                     const members = compGroups.get(l.group)!;
                     const midIdx = groupedLotDisplayIndex(members.length);
@@ -626,6 +633,38 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
             </>
           )}
         </View>
+
+        {/* ─── OPTIONAL ITEMS (priced for reference, not in contract total) ─── */}
+        {hasOptional && (
+          <View style={styles.tableWrap} wrap={false}>
+            <Text style={styles.sectionBar}>Optional Items</Text>
+            <Text style={[styles.termText, { marginBottom: 4, fontStyle: 'italic' }]}>
+              The items below are optional and are NOT included in the total contract price above. They may be availed separately at the prices indicated.
+            </Text>
+            <View style={styles.th}>
+              <Text style={styles.cItem}>Item No.</Text>
+              <Text style={styles.cDesc}>Description</Text>
+              <Text style={styles.cQty}>QTY</Text>
+              <Text style={styles.cUom}>UOM</Text>
+              <Text style={styles.cUnit}>Unit Price</Text>
+              <Text style={styles.cTotal}>Total , PhP</Text>
+            </View>
+            {optionalComponents.map((l) => (
+              <View style={styles.tr} key={l.id}>
+                <Text style={styles.cItem}>{codesOpt.get(l.id)}</Text>
+                <Text style={styles.cDesc}>{[l.brand, l.description, l.partNo].filter(Boolean).join(' — ')}</Text>
+                <Text style={styles.cQty}>{l.qty.toFixed(2)}</Text>
+                <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
+                <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
+                <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct))}</Text>
+              </View>
+            ))}
+            <View style={styles.trSub}>
+              <Text style={{ fontWeight: 500 }}>optional total (vat-ex)</Text>
+              <Text style={{ fontWeight: 700, marginLeft: 12 }}>{PHP(totals.componentsOptionalSubtotal ?? 0)}</Text>
+            </View>
+          </View>
+        )}
 
         {/* ─── TERMS AND CONDITIONS ─── */}
         <View style={styles.terms} break={!!quotation.pageBreakBeforeTerms}>
