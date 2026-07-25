@@ -5,7 +5,7 @@ function clean(value) {
 }
 
 function normalizedPart(value) {
-  return clean(value).toLowerCase().replace(/\s+/g, '');
+  return clean(value).toLowerCase();
 }
 
 function productKeyOf(line) {
@@ -15,6 +15,18 @@ function productKeyOf(line) {
 
 function validDateOnly(value) {
   if (!value) return null;
+  const calendarDate = String(value).match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/);
+  if (calendarDate) {
+    const [, year, month, day] = calendarDate;
+    const check = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+    if (
+      check.getUTCFullYear() !== Number(year)
+      || check.getUTCMonth() + 1 !== Number(month)
+      || check.getUTCDate() !== Number(day)
+    ) {
+      return null;
+    }
+  }
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null;
 }
@@ -53,7 +65,23 @@ function flattenProductHistory({ projects, quotations, clients }) {
     components.forEach((line, index) => {
       const normalizedUnitCost = normalizedCostOf(line);
       const contingencyPct = Number(line.contingencyPct || 0);
-      const markupPct = Number(line.markupPct ?? quotation.productMarkupPct ?? 0);
+      const legacyFormula = quotation.formulaVersion === 'legacy';
+      const markupPct = Number(
+        legacyFormula
+          ? quotation.productMarkupPct ?? 0
+          : line.markupPct ?? quotation.productMarkupPct ?? 0,
+      );
+      const legacySellingUnit = Number(line.unitCost)
+        * (line.forex == null ? 1 : Number(line.forex))
+        * (1 + contingencyPct / 100 - Number(line.discountPct || 0) / 100)
+        * (1 + markupPct / 100);
+      const quotedSellingUnit = legacyFormula
+        ? Number.isFinite(legacySellingUnit) && legacySellingUnit > 0
+          ? legacySellingUnit
+          : null
+        : normalizedUnitCost == null
+          ? null
+          : normalizedUnitCost * (1 + contingencyPct / 100) * (1 + markupPct / 100);
       rows.push({
         observationId: `${quotation.id}:${line.id || index}`,
         productKey: productKeyOf(line),
@@ -76,9 +104,7 @@ function flattenProductHistory({ projects, quotations, clients }) {
         sourceForex: line.forex == null ? 1 : Number(line.forex),
         sourceDiscountPct: Number(line.discountPct || 0),
         normalizedUnitCost,
-        quotedSellingUnit: normalizedUnitCost == null
-          ? null
-          : normalizedUnitCost * (1 + contingencyPct / 100) * (1 + markupPct / 100),
+        quotedSellingUnit,
         sourceContingencyPct: contingencyPct,
         sourceMarkupPct: markupPct,
       });
@@ -90,7 +116,10 @@ function flattenProductHistory({ projects, quotations, clients }) {
 function searchProductHistory(rows, options = {}) {
   const search = clean(options.search).toLowerCase();
   const status = clean(options.status);
-  const limit = Math.min(100, Math.max(1, Number(options.limit) || 50));
+  const requestedLimit = Number(options.limit);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit !== 0
+    ? Math.min(100, Math.max(1, Math.trunc(requestedLimit)))
+    : 50;
   let items = rows.filter((row) => {
     if (status && row.projectStatus !== status) return false;
     if (!search) return true;
