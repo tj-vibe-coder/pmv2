@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const crypto = require('crypto');
+const { createProductHistoryRouter } = require('./server/calcsheetProductHistoryRouter');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -3656,6 +3657,11 @@ app.delete('/api/calcsheet/projects/:id', async (req, res) => {
 });
 
 // ── Quotations ────────────────────────────────────────────────────────────────
+
+app.use(
+  '/api/calcsheet/product-history',
+  createProductHistoryRouter({ db, requireActiveUser }),
+);
 
 app.get('/api/calcsheet/quotations', async (req, res) => {
   try {
