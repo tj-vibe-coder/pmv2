@@ -190,6 +190,7 @@ export default function ProductHistoryTab({
     if (!selected || selected.productKey) return [];
     const selectedBrand = normalized(selected.brand);
     const selectedDescription = normalized(selected.description);
+    if (!selectedDescription) return [];
     return rows.filter((candidate) => (
       candidate.observationId !== selected.observationId
       && !candidate.productKey

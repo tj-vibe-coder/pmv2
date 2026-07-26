@@ -237,6 +237,35 @@ it('sends only explicitly confirmed description-match candidates', async () => {
   ));
 });
 
+it('does not expose blank-identity rows as confirmable candidates', async () => {
+  const blankSelected = {
+    ...row,
+    observationId: 'q1:no-part',
+    productKey: null,
+    partNo: '',
+    brand: '',
+    description: '',
+  };
+  const blankCandidate = {
+    ...blankSelected,
+    observationId: 'q2:no-part',
+    quotationReference: 'PCS2',
+    projectName: 'Blank candidate project',
+  };
+  mocked.fetchProductHistory.mockResolvedValue({
+    success: true,
+    items: [blankSelected, blankCandidate],
+    total: 2,
+    limit: 50,
+  });
+  render(<ProductHistoryTab {...defaultProps} />);
+
+  fireEvent.click((await screen.findAllByRole('button', { name: 'Select' }))[0]);
+
+  expect(await screen.findByText('No visible candidate matches.')).toBeInTheDocument();
+  expect(screen.queryByRole('checkbox', { name: /PCS2/ })).not.toBeInTheDocument();
+});
+
 it('clears an applied suggestion before a replacement candidate suggestion resolves', async () => {
   const unmatched = {
     ...row,

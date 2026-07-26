@@ -31,10 +31,12 @@ const normalizedCandidateText = (value) => String(value ?? '')
   .replace(/\s+/g, ' ');
 
 function isGenuineCandidateMatch(selected, candidate) {
+  const selectedDescription = normalizedCandidateText(selected.description);
   return !selected.productKey
     && !candidate.productKey
+    && selectedDescription.length > 0
     && normalizedCandidateText(candidate.brand) === normalizedCandidateText(selected.brand)
-    && normalizedCandidateText(candidate.description) === normalizedCandidateText(selected.description);
+    && normalizedCandidateText(candidate.description) === selectedDescription;
 }
 
 function quarterlyRate(observations, analysisMs) {

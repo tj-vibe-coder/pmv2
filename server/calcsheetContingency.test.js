@@ -84,9 +84,10 @@ test('rounds a positive forecast upward to the next half percent', () => {
 });
 
 test('uses only explicitly confirmed candidates when the selected row has no part number', () => {
-  const selected = observation('selected', '2024-01-01', 10000, { productKey: null });
-  const confirmed = observation('confirmed', '2025-01-01', 11000, { productKey: null });
-  const unconfirmed = observation('unconfirmed', '2025-01-01', 15000, { productKey: null });
+  const candidateIdentity = { productKey: null, brand: 'ABB', description: 'S203 breaker' };
+  const selected = observation('selected', '2024-01-01', 10000, candidateIdentity);
+  const confirmed = observation('confirmed', '2025-01-01', 11000, candidateIdentity);
+  const unconfirmed = observation('unconfirmed', '2025-01-01', 15000, candidateIdentity);
   const result = calculateSuggestion({
     observations: [selected, confirmed, unconfirmed],
     selectedObservationId: 'selected',
@@ -126,6 +127,31 @@ test('uses only genuine normalized candidate matches from confirmed IDs', () => 
   assert.deepEqual(result.included.map((row) => row.observationId), ['selected', 'genuine']);
   assert.ok(result.excluded.some((entry) =>
     entry.observationId === 'unrelated' && entry.reason === 'invalid_confirmed_candidate'));
+});
+
+test('rejects confirmed candidates when the shared identity is blank', () => {
+  const selected = observation('selected', '2024-01-01', 10000, {
+    productKey: null,
+    brand: '',
+    description: '',
+  });
+  const blankCandidate = observation('blank-candidate', '2025-01-01', 11000, {
+    productKey: null,
+    brand: '',
+    description: '',
+  });
+
+  const result = calculateSuggestion({
+    observations: [selected, blankCandidate],
+    selectedObservationId: 'selected',
+    confirmedCandidateObservationIds: ['blank-candidate'],
+    analysisDate: '2025-02-01',
+    expectedPurchaseDate: '2026-01-01',
+  });
+
+  assert.deepEqual(result.included.map((row) => row.observationId), ['selected']);
+  assert.ok(result.excluded.some((entry) =>
+    entry.observationId === 'blank-candidate' && entry.reason === 'invalid_confirmed_candidate'));
 });
 
 test('does not use confirmed candidates when the selected row has an exact product key', () => {
