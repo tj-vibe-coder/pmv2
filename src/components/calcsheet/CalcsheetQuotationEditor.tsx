@@ -13,6 +13,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import GridOnIcon from '@mui/icons-material/GridOn';
+import EventIcon from '@mui/icons-material/Event';
 import { useNavigate } from 'react-router-dom';
 import { nanoid } from 'nanoid';
 import { format } from 'date-fns';
@@ -43,6 +44,7 @@ import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
 import PricelistPickerDialog from '../pricelists/PricelistPickerDialog';
 import type { PricelistItem } from '../../types/Pricelist';
+import ComponentTimingDialog from './ComponentTimingDialog';
 
 const id = () => nanoid(6);
 
@@ -239,6 +241,7 @@ export default function QuotationEditor() {
 
   const [saving, setSaving] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [timingComponentId, setTimingComponentId] = useState<string | null>(null);
 
   // Saved-version history (snapshots captured server-side on every save).
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -301,6 +304,11 @@ export default function QuotationEditor() {
   const customer = clients.find((c) => c.id === project.customerId);
   const issuer = quotation.kind;
   const isLegacy = quotation.formulaVersion === 'legacy';
+  const quotationDate =
+    quotation.dateSent
+    || quotation.createdAt?.slice(0, 10)
+    || todayDateOnly();
+  const timingComponent = quotation.components.find((line) => line.id === timingComponentId);
 
   const setField = <K extends keyof Quotation>(k: K, v: any) => {
     if (isLegacy) return;
@@ -500,6 +508,29 @@ export default function QuotationEditor() {
     // typed; clearing the cell falls back to the global again.
     { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.productMarkupPct || 0) },
     { key: 'leadTimeDays', label: 'Lead Time', width: 90, type: 'number', align: 'right', min: 0 },
+    {
+      key: '_timing',
+      label: '',
+      width: 42,
+      render: (row) => (
+        <Tooltip title={row.expectedPurchaseDate
+          ? `Expected purchase: ${row.expectedPurchaseDate}`
+          : 'Set product expected purchase date'}>
+          <span>
+            <IconButton
+              size="small"
+              disabled={isLegacy}
+              onClick={() => setTimingComponentId(row.id)}
+            >
+              <EventIcon
+                fontSize="small"
+                color={row.expectedPurchaseDate ? 'primary' : 'inherit'}
+              />
+            </IconButton>
+          </span>
+        </Tooltip>
+      ),
+    },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
       render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
     { key: 'total', label: 'Total', width: 130, align: 'right',
@@ -1211,6 +1242,19 @@ export default function QuotationEditor() {
             <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = 1 + (((s.markupPct ?? v) || 0) / 100); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
+            <TextField
+              label="Expected purchase date"
+              type="date"
+              size="small"
+              value={quotation.expectedPurchaseDate ?? ''}
+              onChange={(event) => setField('expectedPurchaseDate', event.target.value || undefined)}
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ min: quotationDate }}
+              helperText={quotation.expectedPurchaseDate
+                ? 'Used for product price-contingency forecasts'
+                : 'Blank assumes 3 months after the quotation date'}
+              disabled={isLegacy}
+            />
             <NumField
               label="Discount (₱)"
               value={totals ? Math.round(totals.discount * 100) / 100 : 0}
@@ -1686,6 +1730,23 @@ export default function QuotationEditor() {
       </Dialog>
 
       <PricelistPickerDialog open={catalogOpen} onClose={() => setCatalogOpen(false)} onAdd={addFromCatalog} />
+
+      <ComponentTimingDialog
+        open={Boolean(timingComponent)}
+        value={timingComponent?.expectedPurchaseDate}
+        quotationExpectedPurchaseDate={quotation.expectedPurchaseDate}
+        minimumDate={quotationDate}
+        onClose={() => setTimingComponentId(null)}
+        onSave={(value) => {
+          if (!timingComponent) return;
+          setField('components', quotation.components.map((line) => (
+            line.id === timingComponent.id
+              ? { ...line, expectedPurchaseDate: value || undefined }
+              : line
+          )));
+          setTimingComponentId(null);
+        }}
+      />
 
       <Snackbar
         open={!!toast}
