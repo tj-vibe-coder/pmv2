@@ -152,6 +152,19 @@ it('recalculates when the product purchase date changes', async () => {
   ));
 });
 
+it('does not add a product with an expected purchase date before the quotation date', async () => {
+  render(<ProductHistoryTab {...defaultProps} />);
+  fireEvent.click(await screen.findByRole('button', { name: /select s203-c20 breaker/i }));
+
+  fireEvent.change(screen.getByLabelText('This product expected purchase date'), {
+    target: { value: '2025-12-31' },
+  });
+
+  expect(await screen.findByText('Expected purchase date cannot be before the quotation date'))
+    .toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Add product to quotation' })).toBeDisabled();
+});
+
 it('sends only explicitly confirmed description-match candidates', async () => {
   const unmatched = {
     ...row,
@@ -270,6 +283,26 @@ it('shows fallback-date and high-risk evidence before application', async () => 
   expect(await screen.findByText('Fallback date')).toBeInTheDocument();
   expect(await screen.findByText(/high-risk suggestion/i)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Apply 55% suggestion' })).toBeInTheDocument();
+});
+
+it('does not allow adding an observation without a usable date and normalized cost', async () => {
+  mocked.fetchProductHistory.mockResolvedValue({
+    success: true,
+    items: [{
+      ...row,
+      quotationDate: null,
+      quotationDateSource: 'missing',
+      normalizedUnitCost: null,
+    }],
+    total: 1,
+    limit: 50,
+  });
+  render(<ProductHistoryTab {...defaultProps} />);
+
+  fireEvent.click(await screen.findByRole('button', { name: /select s203-c20 breaker/i }));
+
+  expect(await screen.findByText('Quarterly')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Add product to quotation' })).toBeDisabled();
 });
 
 it('ignores an older suggestion response after another product is selected', async () => {

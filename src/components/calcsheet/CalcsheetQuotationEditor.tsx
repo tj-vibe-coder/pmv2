@@ -15,7 +15,7 @@ import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import { useNavigate } from 'react-router-dom';
 import { nanoid } from 'nanoid';
-import { format } from 'date-fns';
+import { addMonths, format } from 'date-fns';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
@@ -30,7 +30,7 @@ import { ISSUER_NAMES, DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDel
 import { quotationRefNo } from '../../utils/calcsheet/codes';
 import { FloatingTotalsWidget } from './FloatingTotalsWidget';
 import type {
-  ComponentLine, GeneralReqLine, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
+  ComponentLine, GeneralReqLine, HistoricalPriceSource, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
 } from '../../types/Quotation';
 import { EditableTable } from './EditableTable';
 import type { Column } from './EditableTable';
@@ -41,8 +41,9 @@ import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
-import PricelistPickerDialog from '../pricelists/PricelistPickerDialog';
+import ProductPickerDialog from '../pricelists/ProductPickerDialog';
 import type { PricelistItem } from '../../types/Pricelist';
+import type { ProductHistoryAddSelection } from '../../types/ProductHistory';
 import ComponentTimingDialog, {
   ComponentTimingAction,
 } from './ComponentTimingDialog';
@@ -65,6 +66,92 @@ const PAYMENT_TERM_OPTIONS = [
 ];
 const CUSTOM_PAYMENT = '__custom__';
 const todayDateOnly = () => format(new Date(), 'yyyy-MM-dd');
+
+export const resolveExpectedPurchaseDate = (
+  quotationDate: string,
+  quotationExpectedPurchaseDate?: string,
+) => quotationExpectedPurchaseDate
+  || format(addMonths(new Date(`${quotationDate}T00:00:00`), 3), 'yyyy-MM-dd');
+
+export const createHistoricalComponentLine = (
+  selection: ProductHistoryAddSelection,
+  defaultContingencyPct: number,
+  code: string,
+  lineId: string,
+  selectedAt = new Date().toISOString(),
+): ComponentLine => {
+  const item = selection.observation;
+  if (
+    !item.quotationDate
+    || item.normalizedUnitCost == null
+    || !Number.isFinite(item.normalizedUnitCost)
+    || item.normalizedUnitCost <= 0
+  ) {
+    throw new Error('Historical product requires a usable quotation date and normalized cost');
+  }
+  const suggested = selection.applySuggestion
+    && selection.suggestion?.status === 'ready'
+    ? selection.suggestion.suggestedContingencyPct
+    : null;
+  return {
+    id: lineId,
+    code,
+    description: item.description,
+    brand: item.brand || '',
+    partNo: item.partNo || '',
+    qty: 1,
+    uom: item.uom || 'pc',
+    unitCost: item.sourceUnitCost,
+    forex: item.sourceForex || 1,
+    discountPct: item.sourceDiscountPct || 0,
+    ...(selection.expectedPurchaseDateOverride
+      ? { expectedPurchaseDate: selection.expectedPurchaseDateOverride }
+      : {}),
+    contingencyPct: suggested ?? defaultContingencyPct,
+    contingencyPctOverridden: suggested != null,
+    historicalPriceSource: {
+      observationId: item.observationId,
+      quotationId: item.quotationId,
+      projectId: item.projectId,
+      quotationReference: item.quotationReference,
+      quotationDate: item.quotationDate,
+      normalizedUnitCost: item.normalizedUnitCost,
+      ...(item.quotedSellingUnit != null
+        ? { quotedSellingUnit: item.quotedSellingUnit }
+        : {}),
+      selectedAt,
+      ...(suggested != null ? {
+        suggestedContingencyPct: suggested,
+        ...(selection.suggestion?.method
+          ? { suggestionMethod: selection.suggestion.method }
+          : {}),
+        ...(selection.suggestion?.confidence
+          ? { suggestionConfidence: selection.suggestion.confidence }
+          : {}),
+      } : {}),
+    },
+  };
+};
+
+export function HistoricalSourceChip({ source }: { source: HistoricalPriceSource }) {
+  return (
+    <Tooltip
+      title={[
+        source.quotationReference,
+        source.quotationDate,
+        `Base cost ${PHP(source.normalizedUnitCost)}`,
+      ].join(' · ')}
+    >
+      <Chip
+        label="Quote history"
+        size="small"
+        variant="outlined"
+        color="info"
+        sx={{ flexShrink: 0 }}
+      />
+    </Tooltip>
+  );
+}
 
 const normalizeName = (value: string | undefined | null) => (value || '').trim().toLowerCase();
 const firstLastKey = (value: string | undefined | null) => {
@@ -310,6 +397,10 @@ export default function QuotationEditor() {
     quotation.dateSent
     || quotation.createdAt?.slice(0, 10)
     || todayDateOnly();
+  const effectiveExpectedPurchaseDate = resolveExpectedPurchaseDate(
+    quotationDate,
+    quotation.expectedPurchaseDate,
+  );
   const timingComponent = quotation.components.find((line) => line.id === timingComponentId);
   const invalidPurchaseTiming = hasInvalidPurchaseTiming(
     quotationDate,
@@ -495,6 +586,16 @@ export default function QuotationEditor() {
     commit('components', [...quotation.components, ...newLines] as ComponentLine[]);
   };
 
+  const addFromHistory = (selection: ProductHistoryAddSelection) => {
+    const line = createHistoricalComponentLine(
+      selection,
+      quotation.productContingencyPct ?? 0,
+      nextCode('B', quotation.components),
+      id(),
+    );
+    commit('components', [...quotation.components, line] as ComponentLine[]);
+  };
+
   const compCols: Column<ComponentLine>[] = [
     { key: '_select', label: '', width: 36, render: (r) => (
       <Checkbox size="small" sx={{ p: 0 }}
@@ -509,6 +610,9 @@ export default function QuotationEditor() {
           variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
           InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
           inputProps={{ style: { padding: '6px 4px' } }} />
+        {r.historicalPriceSource && (
+          <HistoricalSourceChip source={r.historicalPriceSource} />
+        )}
         {r.group && <Chip label={r.group} size="small" color="warning" variant="outlined" onDelete={() => ungroupComp(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
       </Stack>
     ) },
@@ -1745,7 +1849,15 @@ export default function QuotationEditor() {
         </DialogActions>
       </Dialog>
 
-      <PricelistPickerDialog open={catalogOpen} onClose={() => setCatalogOpen(false)} onAdd={addFromCatalog} />
+      <ProductPickerDialog
+        open={catalogOpen}
+        onClose={() => setCatalogOpen(false)}
+        onAddPricelist={addFromCatalog}
+        onAddHistory={addFromHistory}
+        analysisDate={quotationDate}
+        expectedPurchaseDate={effectiveExpectedPurchaseDate}
+        defaultContingencyPct={quotation.productContingencyPct ?? 0}
+      />
 
       <ComponentTimingDialog
         open={Boolean(timingComponent)}

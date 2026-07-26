@@ -215,8 +215,17 @@ export default function ProductHistoryTab({
       : current.filter((id) => id !== observationId));
   };
 
+  const invalidTargetDate = !targetDate || targetDate < analysisDate;
+  const canAddSelected = Boolean(
+    selected?.quotationDate
+    && selected.normalizedUnitCost != null
+    && Number.isFinite(selected.normalizedUnitCost)
+    && selected.normalizedUnitCost > 0
+    && !invalidTargetDate
+  );
+
   const handleAdd = () => {
-    if (!selected) return;
+    if (!selected || !canAddSelected) return;
     onAdd({
       observation: selected,
       suggestion,
@@ -449,9 +458,14 @@ export default function ProductHistoryTab({
                 }}
                 InputLabelProps={{ shrink: true }}
                 inputProps={{ min: analysisDate }}
-                helperText={targetDate === expectedPurchaseDate
-                  ? 'Using quotation-level or assumed purchase date'
-                  : 'Product-level override'}
+                error={invalidTargetDate}
+                helperText={invalidTargetDate
+                  ? targetDate
+                    ? 'Expected purchase date cannot be before the quotation date'
+                    : 'Expected purchase date is required'
+                  : targetDate === expectedPurchaseDate
+                    ? 'Using quotation-level or assumed purchase date'
+                    : 'Product-level override'}
               />
 
               {!selected.productKey && (
@@ -624,7 +638,7 @@ export default function ProductHistoryTab({
                 </Stack>
               )}
 
-              <Button variant="contained" onClick={handleAdd}>
+              <Button variant="contained" onClick={handleAdd} disabled={!canAddSelected}>
                 Add product to quotation
               </Button>
             </Stack>
