@@ -6,9 +6,56 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
   Stack,
   TextField,
+  Tooltip,
 } from '@mui/material';
+import EventIcon from '@mui/icons-material/Event';
+
+interface ComponentTimingActionProps {
+  componentDescription: string;
+  expectedPurchaseDate?: string;
+  invalid?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}
+
+export function ComponentTimingAction({
+  componentDescription,
+  expectedPurchaseDate,
+  invalid = false,
+  disabled = false,
+  onClick,
+}: ComponentTimingActionProps) {
+  const componentLabel = componentDescription.trim() || 'component';
+  const actionLabel = expectedPurchaseDate
+    ? `Edit expected purchase date for ${componentLabel}`
+    : `Set expected purchase date for ${componentLabel}`;
+  const tooltip = invalid
+    ? 'Expected purchase date cannot be before the quotation date'
+    : expectedPurchaseDate
+      ? `Expected purchase: ${expectedPurchaseDate}`
+      : 'Set product expected purchase date';
+
+  return (
+    <Tooltip title={tooltip}>
+      <span>
+        <IconButton
+          size="small"
+          aria-label={actionLabel}
+          disabled={disabled}
+          onClick={onClick}
+        >
+          <EventIcon
+            fontSize="small"
+            color={invalid ? 'error' : expectedPurchaseDate ? 'primary' : 'inherit'}
+          />
+        </IconButton>
+      </span>
+    </Tooltip>
+  );
+}
 
 interface Props {
   open: boolean;

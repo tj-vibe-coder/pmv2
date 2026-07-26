@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import ComponentTimingDialog from './ComponentTimingDialog';
+import ComponentTimingDialog, { ComponentTimingAction } from './ComponentTimingDialog';
 
 it('shows the quotation date fallback and saves an override', () => {
   const onSave = jest.fn();
@@ -41,4 +41,21 @@ it('rejects a date before the quotation date', () => {
 
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   expect(screen.getByText(/cannot be before/i)).toBeInTheDocument();
+});
+
+it('gives the component timing action an accessible name', () => {
+  const onClick = jest.fn();
+  render(
+    <ComponentTimingAction
+      componentDescription="Main circuit breaker"
+      expectedPurchaseDate=""
+      onClick={onClick}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole('button', {
+    name: 'Set expected purchase date for Main circuit breaker',
+  }));
+
+  expect(onClick).toHaveBeenCalledTimes(1);
 });

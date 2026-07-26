@@ -13,7 +13,6 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import GridOnIcon from '@mui/icons-material/GridOn';
-import EventIcon from '@mui/icons-material/Event';
 import { useNavigate } from 'react-router-dom';
 import { nanoid } from 'nanoid';
 import { format } from 'date-fns';
@@ -44,7 +43,10 @@ import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
 import PricelistPickerDialog from '../pricelists/PricelistPickerDialog';
 import type { PricelistItem } from '../../types/Pricelist';
-import ComponentTimingDialog from './ComponentTimingDialog';
+import ComponentTimingDialog, {
+  ComponentTimingAction,
+} from './ComponentTimingDialog';
+import { hasInvalidPurchaseTiming } from './purchaseTiming';
 
 const id = () => nanoid(6);
 
@@ -309,6 +311,11 @@ export default function QuotationEditor() {
     || quotation.createdAt?.slice(0, 10)
     || todayDateOnly();
   const timingComponent = quotation.components.find((line) => line.id === timingComponentId);
+  const invalidPurchaseTiming = hasInvalidPurchaseTiming(
+    quotationDate,
+    quotation.expectedPurchaseDate,
+    quotation.components,
+  );
 
   const setField = <K extends keyof Quotation>(k: K, v: any) => {
     if (isLegacy) return;
@@ -341,7 +348,15 @@ export default function QuotationEditor() {
   };
 
   const handleSave = async () => {
-    if (!isDirty || saving) return;
+    if (!isDirty || saving || invalidPurchaseTiming) {
+      if (invalidPurchaseTiming) {
+        setToast({
+          msg: 'Expected purchase dates cannot be before the quotation date',
+          sev: 'warning',
+        });
+      }
+      return;
+    }
     setSaving(true);
     try {
       // Send the full draft as the patch — the store's updateQuotation handles
@@ -513,22 +528,15 @@ export default function QuotationEditor() {
       label: '',
       width: 42,
       render: (row) => (
-        <Tooltip title={row.expectedPurchaseDate
-          ? `Expected purchase: ${row.expectedPurchaseDate}`
-          : 'Set product expected purchase date'}>
-          <span>
-            <IconButton
-              size="small"
-              disabled={isLegacy}
-              onClick={() => setTimingComponentId(row.id)}
-            >
-              <EventIcon
-                fontSize="small"
-                color={row.expectedPurchaseDate ? 'primary' : 'inherit'}
-              />
-            </IconButton>
-          </span>
-        </Tooltip>
+        <ComponentTimingAction
+          componentDescription={row.description || row.code}
+          expectedPurchaseDate={row.expectedPurchaseDate}
+          invalid={Boolean(
+            row.expectedPurchaseDate && row.expectedPurchaseDate < quotationDate
+          )}
+          disabled={isLegacy}
+          onClick={() => setTimingComponentId(row.id)}
+        />
       ),
     },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
@@ -863,7 +871,7 @@ export default function QuotationEditor() {
                 variant="contained"
                 color="primary"
                 onClick={handleSave}
-                disabled={!isDirty || saving}
+                disabled={!isDirty || saving || invalidPurchaseTiming}
               >
                 {saving ? 'Saving…' : 'Save'}
               </Button>
@@ -1250,9 +1258,17 @@ export default function QuotationEditor() {
               onChange={(event) => setField('expectedPurchaseDate', event.target.value || undefined)}
               InputLabelProps={{ shrink: true }}
               inputProps={{ min: quotationDate }}
-              helperText={quotation.expectedPurchaseDate
-                ? 'Used for product price-contingency forecasts'
-                : 'Blank assumes 3 months after the quotation date'}
+              error={Boolean(
+                quotation.expectedPurchaseDate
+                && quotation.expectedPurchaseDate < quotationDate
+              )}
+              helperText={
+                quotation.expectedPurchaseDate && quotation.expectedPurchaseDate < quotationDate
+                  ? 'Expected purchase date cannot be before the quotation date'
+                  : quotation.expectedPurchaseDate
+                    ? 'Used for product price-contingency forecasts'
+                    : 'Blank assumes 3 months after the quotation date'
+              }
               disabled={isLegacy}
             />
             <NumField
