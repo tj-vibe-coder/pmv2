@@ -25,6 +25,18 @@ const quarterIndex = (dateOnly) => {
   return date.getUTCFullYear() * 4 + Math.floor(date.getUTCMonth() / 3);
 };
 
+const normalizedCandidateText = (value) => String(value ?? '')
+  .trim()
+  .toLowerCase()
+  .replace(/\s+/g, ' ');
+
+function isGenuineCandidateMatch(selected, candidate) {
+  return !selected.productKey
+    && !candidate.productKey
+    && normalizedCandidateText(candidate.brand) === normalizedCandidateText(selected.brand)
+    && normalizedCandidateText(candidate.description) === normalizedCandidateText(selected.description);
+}
+
 function quarterlyRate(observations, analysisMs) {
   const analysisDate = new Date(analysisMs);
   const cutoff = Date.UTC(
@@ -140,12 +152,21 @@ function calculateSuggestion({
     throw new Error('Expected purchase date cannot be before the quotation date');
   }
 
-  const confirmed = new Set(confirmedCandidateObservationIds);
   const excluded = [];
+  const requestedConfirmed = new Set(confirmedCandidateObservationIds);
+  const validConfirmed = new Set();
+  observations.forEach((row) => {
+    if (!requestedConfirmed.has(row.observationId)) return;
+    if (isGenuineCandidateMatch(selected, row)) {
+      validConfirmed.add(row.observationId);
+    } else {
+      excluded.push({ observationId: row.observationId, reason: 'invalid_confirmed_candidate' });
+    }
+  });
   let usable = observations.filter((row) => {
     const isSelected = row.observationId === selectedObservationId;
     const sameExactProduct = selected.productKey && row.productKey === selected.productKey;
-    const userConfirmed = confirmed.has(row.observationId);
+    const userConfirmed = validConfirmed.has(row.observationId);
     if (!isSelected && !sameExactProduct && !userConfirmed) return false;
     const rowMs = parseDay(row.quotationDate);
     if (rowMs == null) {
@@ -203,7 +224,7 @@ function calculateSuggestion({
   const unitDays = method === 'quarterly' ? QUARTER_DAYS : 365;
   const forecastDays = (targetMs - selectedMs) / DAY_MS;
   const projectedIncreasePct = ((1 + rate) ** (forecastDays / unitDays) - 1) * 100;
-  const candidateUsed = usable.some((row) => confirmed.has(row.observationId));
+  const candidateUsed = usable.some((row) => validConfirmed.has(row.observationId));
   const latestMs = Math.max(...usable.map((row) => parseDay(row.quotationDate)));
   const staleDays = (analysisMs - latestMs) / DAY_MS;
   const confidence = confidenceOf({

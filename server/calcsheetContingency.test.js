@@ -98,6 +98,64 @@ test('uses only explicitly confirmed candidates when the selected row has no par
   assert.equal(result.confidence, 'low');
 });
 
+test('uses only genuine normalized candidate matches from confirmed IDs', () => {
+  const selected = observation('selected', '2024-01-01', 10000, {
+    productKey: null,
+    brand: 'ABB',
+    description: '  S203   breaker ',
+  });
+  const genuineCandidate = observation('genuine', '2025-01-01', 11000, {
+    productKey: null,
+    brand: 'abb',
+    description: 's203 breaker',
+  });
+  const unrelated = observation('unrelated', '2025-01-01', 50000, {
+    productKey: null,
+    brand: 'Different',
+    description: 'Unrelated product',
+  });
+
+  const result = calculateSuggestion({
+    observations: [selected, genuineCandidate, unrelated],
+    selectedObservationId: 'selected',
+    confirmedCandidateObservationIds: ['genuine', 'unrelated'],
+    analysisDate: '2025-02-01',
+    expectedPurchaseDate: '2026-01-01',
+  });
+
+  assert.deepEqual(result.included.map((row) => row.observationId), ['selected', 'genuine']);
+  assert.ok(result.excluded.some((entry) =>
+    entry.observationId === 'unrelated' && entry.reason === 'invalid_confirmed_candidate'));
+});
+
+test('does not use confirmed candidates when the selected row has an exact product key', () => {
+  const exactSelected = observation('selected', '2024-01-01', 10000, {
+    brand: 'ABB',
+    description: 'S203 breaker',
+  });
+  const exactMatch = observation('exact-match', '2025-01-01', 11000, {
+    brand: 'ABB',
+    description: 'S203 breaker',
+  });
+  const injectedCandidate = observation('injected', '2025-01-01', 50000, {
+    productKey: null,
+    brand: 'Different',
+    description: 'Unrelated product',
+  });
+
+  const result = calculateSuggestion({
+    observations: [exactSelected, exactMatch, injectedCandidate],
+    selectedObservationId: 'selected',
+    confirmedCandidateObservationIds: ['injected'],
+    analysisDate: '2025-02-01',
+    expectedPurchaseDate: '2026-01-01',
+  });
+
+  assert.deepEqual(result.included.map((row) => row.observationId), ['selected', 'exact-match']);
+  assert.ok(result.excluded.some((entry) =>
+    entry.observationId === 'injected' && entry.reason === 'invalid_confirmed_candidate'));
+});
+
 test('flags a robust log-trend outlier and excludes it visibly', () => {
   const result = calculateSuggestion({
     observations: [

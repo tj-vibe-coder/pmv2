@@ -152,6 +152,46 @@ it('recalculates when the product purchase date changes', async () => {
   ));
 });
 
+it('clears an applied suggestion before the replacement date suggestion resolves', async () => {
+  const onAdd = jest.fn();
+  let resolveReplacement!: (value: ProductHistorySuggestion) => void;
+  mocked.fetchProductHistorySuggestion
+    .mockResolvedValueOnce({
+      success: true,
+      status: 'ready',
+      method: 'quarterly',
+      confidence: 'medium',
+      suggestedContingencyPct: 13,
+      included: [row],
+      excluded: [],
+    })
+    .mockImplementationOnce(() => new Promise((resolve) => { resolveReplacement = resolve; }));
+  render(<ProductHistoryTab {...defaultProps} onAdd={onAdd} />);
+
+  fireEvent.click(await screen.findByRole('button', { name: /select s203-c20 breaker/i }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Apply 13% suggestion' }));
+  fireEvent.change(screen.getByLabelText('This product expected purchase date'), {
+    target: { value: '2026-07-01' },
+  });
+
+  expect(screen.queryByRole('button', { name: /use default contingency/i })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Add product to quotation' }));
+  expect(onAdd).toHaveBeenLastCalledWith(expect.objectContaining({
+    suggestion: null,
+    applySuggestion: false,
+  }));
+
+  await act(async () => resolveReplacement({
+    success: true,
+    status: 'ready',
+    method: 'quarterly',
+    confidence: 'medium',
+    suggestedContingencyPct: 15,
+    included: [row],
+    excluded: [],
+  }));
+});
+
 it('does not add a product with an expected purchase date before the quotation date', async () => {
   render(<ProductHistoryTab {...defaultProps} />);
   fireEvent.click(await screen.findByRole('button', { name: /select s203-c20 breaker/i }));
@@ -190,11 +230,70 @@ it('sends only explicitly confirmed description-match candidates', async () => {
     'button',
     { name: /select s203-c20 breaker/i },
   ))[0]);
-  fireEvent.click(await screen.findByLabelText(/PCS2/));
+  fireEvent.click(await screen.findByRole('checkbox', { name: /PCS2/ }));
 
   await waitFor(() => expect(mocked.fetchProductHistorySuggestion).toHaveBeenLastCalledWith(
     expect.objectContaining({ confirmedCandidateObservationIds: ['q2:no-part'] }),
   ));
+});
+
+it('clears an applied suggestion before a replacement candidate suggestion resolves', async () => {
+  const unmatched = {
+    ...row,
+    observationId: 'q1:no-part',
+    productKey: null,
+    partNo: '',
+  };
+  const candidate = {
+    ...unmatched,
+    observationId: 'q2:no-part',
+    quotationReference: 'PCS2',
+    projectName: 'Candidate Panel',
+  };
+  const onAdd = jest.fn();
+  let resolveReplacement!: (value: ProductHistorySuggestion) => void;
+  mocked.fetchProductHistory.mockResolvedValue({
+    success: true,
+    items: [unmatched, candidate],
+    total: 2,
+    limit: 50,
+  });
+  mocked.fetchProductHistorySuggestion
+    .mockResolvedValueOnce({
+      success: true,
+      status: 'ready',
+      method: 'quarterly',
+      confidence: 'medium',
+      suggestedContingencyPct: 13,
+      included: [unmatched],
+      excluded: [],
+    })
+    .mockImplementationOnce(() => new Promise((resolve) => { resolveReplacement = resolve; }));
+  render(<ProductHistoryTab {...defaultProps} onAdd={onAdd} />);
+
+  fireEvent.click((await screen.findAllByRole(
+    'button',
+    { name: /select s203-c20 breaker/i },
+  ))[0]);
+  fireEvent.click(await screen.findByRole('button', { name: 'Apply 13% suggestion' }));
+  fireEvent.click(await screen.findByRole('checkbox', { name: /PCS2/ }));
+
+  expect(screen.queryByRole('button', { name: /use default contingency/i })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Add product to quotation' }));
+  expect(onAdd).toHaveBeenLastCalledWith(expect.objectContaining({
+    suggestion: null,
+    applySuggestion: false,
+  }));
+
+  await act(async () => resolveReplacement({
+    success: true,
+    status: 'ready',
+    method: 'quarterly',
+    confidence: 'medium',
+    suggestedContingencyPct: 15,
+    included: [unmatched, candidate],
+    excluded: [],
+  }));
 });
 
 it('debounces search and sends status and sort filters', async () => {

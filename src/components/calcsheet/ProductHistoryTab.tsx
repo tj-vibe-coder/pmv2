@@ -97,10 +97,18 @@ export default function ProductHistoryTab({
   const [suggestionRetryCount, setSuggestionRetryCount] = useState(0);
   const suggestionRequestId = useRef(0);
 
-  useEffect(() => {
+  const clearSuggestionState = useCallback(() => {
     suggestionRequestId.current += 1;
+    setSuggestion(null);
+    setSuggestionError(null);
+    setSuggestionLoading(false);
+    setApplySuggestion(false);
+  }, []);
+
+  useEffect(() => {
+    clearSuggestionState();
     setTargetDate(expectedPurchaseDate);
-  }, [expectedPurchaseDate]);
+  }, [clearSuggestionState, expectedPurchaseDate]);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -164,17 +172,14 @@ export default function ProductHistoryTab({
 
   useEffect(() => {
     if (!active) {
-      suggestionRequestId.current += 1;
-      setSuggestion(null);
-      setSuggestionError(null);
-      setSuggestionLoading(false);
-      setApplySuggestion(false);
+      clearSuggestionState();
       return;
     }
     if (!selected) return;
     void requestSuggestion(selected, confirmedCandidateIds);
   }, [
     active,
+    clearSuggestionState,
     confirmedCandidateIds,
     requestSuggestion,
     selected,
@@ -199,17 +204,14 @@ export default function ProductHistoryTab({
   ), [suggestion]);
 
   const selectObservation = (observation: ProductHistoryObservation) => {
-    suggestionRequestId.current += 1;
+    clearSuggestionState();
     setSelected(observation);
     setConfirmedCandidateIds([]);
     setTargetDate(expectedPurchaseDate);
-    setSuggestion(null);
-    setSuggestionError(null);
-    setApplySuggestion(false);
   };
 
   const updateCandidate = (observationId: string, checked: boolean) => {
-    suggestionRequestId.current += 1;
+    clearSuggestionState();
     setConfirmedCandidateIds((current) => checked
       ? [...current, observationId]
       : current.filter((id) => id !== observationId));
@@ -453,7 +455,7 @@ export default function ProductHistoryTab({
                 size="small"
                 value={targetDate}
                 onChange={(event) => {
-                  suggestionRequestId.current += 1;
+                  clearSuggestionState();
                   setTargetDate(event.target.value);
                 }}
                 InputLabelProps={{ shrink: true }}

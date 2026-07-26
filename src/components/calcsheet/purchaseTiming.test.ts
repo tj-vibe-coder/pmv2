@@ -18,4 +18,11 @@ describe('hasInvalidPurchaseTiming', () => {
       { expectedPurchaseDate: '2026-03-01' },
     ])).toBe(false);
   });
+
+  it('blocks impossible calendar dates instead of comparing date strings', () => {
+    expect(hasInvalidPurchaseTiming('2026-01-01', '2026-02-30', [])).toBe(true);
+    expect(hasInvalidPurchaseTiming('2026-01-01', undefined, [
+      { expectedPurchaseDate: '2026-04-31' },
+    ])).toBe(true);
+  });
 });
