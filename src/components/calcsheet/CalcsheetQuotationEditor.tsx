@@ -1435,14 +1435,15 @@ export default function QuotationEditor() {
           readOnly={isLegacy}
           footer={
             <>
+              {/* colSpan = columns.length: drag handle + all data cols except Total (amount sits under Total; trailing empty is delete) */}
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={5} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no markup)</TableCell>
+                <TableCell colSpan={generalCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(totals.generalReqtsCost)}</TableCell>
                 <TableCell />
               </TableRow>
               {!!quotation.exportGeneralReqtsAsLot && (
                 <TableRow sx={{ bgcolor: 'grey.50' }}>
-                  <TableCell colSpan={5} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                  <TableCell colSpan={generalCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
                     Unit Price / LOT
                   </TableCell>
                   <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(generalReqtsExportUnitPrice)}</TableCell>
@@ -1450,7 +1451,7 @@ export default function QuotationEditor() {
                 </TableRow>
               )}
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={5} align="right" sx={{ fontWeight: 600 }}>Subtotal (with markup)</TableCell>
+                <TableCell colSpan={generalCols.length} align="right" sx={{ fontWeight: 600 }}>Subtotal (with markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.generalReqtsSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
@@ -1489,13 +1490,14 @@ export default function QuotationEditor() {
           readOnly={isLegacy}
           footer={
             <>
+              {/* colSpan = columns.length so amount lands under Total (drag + data cols except Total) */}
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={10} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no contingency/markup)</TableCell>
+                <TableCell colSpan={compCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no contingency/markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(totals.componentsCost)}</TableCell>
                 <TableCell />
               </TableRow>
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={10} align="right" sx={{ fontWeight: 600 }}>Subtotal (with contingency + markup)</TableCell>
+                <TableCell colSpan={compCols.length} align="right" sx={{ fontWeight: 600 }}>Subtotal (with contingency + markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.componentsSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
@@ -1568,7 +1570,7 @@ export default function QuotationEditor() {
           footer={
             (!quotation.servicesFromManpower || quotation.servicesPerLinePricing) ? (
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={perLinePricing ? 4 : 2} align="right" sx={{ fontWeight: 600 }}>Services Subtotal</TableCell>
+                <TableCell colSpan={svcCols.length} align="right" sx={{ fontWeight: 600 }}>Services Subtotal</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.servicesSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
@@ -1601,12 +1603,12 @@ export default function QuotationEditor() {
                 quotation.servicesPerLinePricing ? (
                   <>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Team Daily Rate</TableCell>
+                    <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Team Daily Rate</TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(teamDailyRate)}</TableCell>
                     <TableCell />
                   </TableRow>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 600 }}>Total Manpower Cost</TableCell>
+                    <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 600 }}>Total Manpower Cost</TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.laborCost)}</TableCell>
                     <TableCell />
                   </TableRow>
@@ -1614,7 +1616,7 @@ export default function QuotationEditor() {
                 ) : (
                 <>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                    <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
                       {engineeringServicesQty > 1 ? 'Manpower Cost / LOT' : 'Manpower Cost'}
                     </TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
@@ -1624,7 +1626,7 @@ export default function QuotationEditor() {
                   </TableRow>
                   {engineeringServicesQty > 1 && (
                     <TableRow sx={{ bgcolor: 'grey.50' }}>
-                      <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                      <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
                         Total Manpower Cost ({engineeringServicesQty} LOT)
                       </TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(totals.laborCost)}</TableCell>
@@ -1632,14 +1634,14 @@ export default function QuotationEditor() {
                     </TableRow>
                   )}
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                    <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
                       Unit Price / LOT
                     </TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(engineeringServicesUnitPrice)}</TableCell>
                     <TableCell />
                   </TableRow>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 600 }}>Services Subtotal (lump sum)</TableCell>
+                    <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 600 }}>Services Subtotal (lump sum)</TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.servicesSubtotal)}</TableCell>
                     <TableCell />
                   </TableRow>
