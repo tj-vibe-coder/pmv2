@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const crypto = require('crypto');
+const { createProductHistoryRouter } = require('./server/calcsheetProductHistoryRouter');
+const { validateQuotationPurchaseTiming } = require('./server/calcsheetPurchaseTiming');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -3661,6 +3663,11 @@ app.delete('/api/calcsheet/projects/:id', async (req, res) => {
 
 // ── Quotations ────────────────────────────────────────────────────────────────
 
+app.use(
+  '/api/calcsheet/product-history',
+  createProductHistoryRouter({ db, requireActiveUser }),
+);
+
 app.get('/api/calcsheet/quotations', async (req, res) => {
   try {
     const { projectId } = req.query;
@@ -3686,6 +3693,11 @@ app.post('/api/calcsheet/quotations', async (req, res) => {
     if (!user) return;
     const { id: _ignored, ...body } = req.body || {};
     const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const timingError = validateQuotationPurchaseTiming(data);
+    if (timingError) {
+      res.status(400).json({ error: timingError });
+      return;
+    }
     const ref = await db.collection('calcsheet_quotations').add(data);
     res.json({ success: true, quotation: { ...data, id: ref.id } });
   } catch (err) {
@@ -3704,10 +3716,23 @@ app.put('/api/calcsheet/quotations/:id', async (req, res) => {
     // Snapshot the pre-save state into calcsheet_quotation_versions so edits
     // can be looked back at later. Best-effort — a failed snapshot must never
     // block the save itself.
+    let prevData = null;
     try {
       const prev = await ref.get();
       if (prev.exists) {
-        const { id: _stored, ...prevData } = prev.data();
+        const { id: _stored, ...storedData } = prev.data();
+        prevData = storedData;
+      }
+    } catch (verErr) {
+      console.warn('[calcsheet] version snapshot failed (non-blocking):', verErr && verErr.message);
+    }
+    const timingError = validateQuotationPurchaseTiming({ ...prevData, ...body });
+    if (timingError) {
+      res.status(400).json({ error: timingError });
+      return;
+    }
+    if (prevData) {
+      try {
         await db.collection('calcsheet_quotation_versions').add({
           quotationId: req.params.id,
           projectId: prevData.projectId || null,
@@ -3715,9 +3740,9 @@ app.put('/api/calcsheet/quotations/:id', async (req, res) => {
           savedBy: user.full_name || user.username || null,
           data: prevData,
         });
+      } catch (verErr) {
+        console.warn('[calcsheet] version snapshot failed (non-blocking):', verErr && verErr.message);
       }
-    } catch (verErr) {
-      console.warn('[calcsheet] version snapshot failed (non-blocking):', verErr && verErr.message);
     }
     await ref.update(update);
     res.json({ success: true });

@@ -15,7 +15,7 @@ import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import { useNavigate } from 'react-router-dom';
 import { nanoid } from 'nanoid';
-import { format } from 'date-fns';
+import { addMonths, format } from 'date-fns';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
@@ -30,7 +30,7 @@ import { ISSUER_NAMES, DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDel
 import { quotationRefNo } from '../../utils/calcsheet/codes';
 import { FloatingTotalsWidget } from './FloatingTotalsWidget';
 import type {
-  ComponentLine, GeneralReqLine, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
+  ComponentLine, GeneralReqLine, HistoricalPriceSource, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
 } from '../../types/Quotation';
 import { EditableTable } from './EditableTable';
 import type { Column } from './EditableTable';
@@ -41,8 +41,13 @@ import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
-import PricelistPickerDialog from '../pricelists/PricelistPickerDialog';
+import ProductPickerDialog from '../pricelists/ProductPickerDialog';
 import type { PricelistItem } from '../../types/Pricelist';
+import type { ProductHistoryAddSelection } from '../../types/ProductHistory';
+import ComponentTimingDialog, {
+  ComponentTimingAction,
+} from './ComponentTimingDialog';
+import { hasInvalidPurchaseTiming } from './purchaseTiming';
 
 const id = () => nanoid(6);
 
@@ -61,6 +66,92 @@ const PAYMENT_TERM_OPTIONS = [
 ];
 const CUSTOM_PAYMENT = '__custom__';
 const todayDateOnly = () => format(new Date(), 'yyyy-MM-dd');
+
+export const resolveExpectedPurchaseDate = (
+  quotationDate: string,
+  quotationExpectedPurchaseDate?: string,
+) => quotationExpectedPurchaseDate
+  || format(addMonths(new Date(`${quotationDate}T00:00:00`), 3), 'yyyy-MM-dd');
+
+export const createHistoricalComponentLine = (
+  selection: ProductHistoryAddSelection,
+  defaultContingencyPct: number,
+  code: string,
+  lineId: string,
+  selectedAt = new Date().toISOString(),
+): ComponentLine => {
+  const item = selection.observation;
+  if (
+    !item.quotationDate
+    || item.normalizedUnitCost == null
+    || !Number.isFinite(item.normalizedUnitCost)
+    || item.normalizedUnitCost <= 0
+  ) {
+    throw new Error('Historical product requires a usable quotation date and normalized cost');
+  }
+  const suggested = selection.applySuggestion
+    && selection.suggestion?.status === 'ready'
+    ? selection.suggestion.suggestedContingencyPct
+    : null;
+  return {
+    id: lineId,
+    code,
+    description: item.description,
+    brand: item.brand || '',
+    partNo: item.partNo || '',
+    qty: 1,
+    uom: item.uom || 'pc',
+    unitCost: item.sourceUnitCost,
+    forex: item.sourceForex || 1,
+    discountPct: item.sourceDiscountPct || 0,
+    ...(selection.expectedPurchaseDateOverride
+      ? { expectedPurchaseDate: selection.expectedPurchaseDateOverride }
+      : {}),
+    contingencyPct: suggested ?? defaultContingencyPct,
+    contingencyPctOverridden: suggested != null,
+    historicalPriceSource: {
+      observationId: item.observationId,
+      quotationId: item.quotationId,
+      projectId: item.projectId,
+      quotationReference: item.quotationReference,
+      quotationDate: item.quotationDate,
+      normalizedUnitCost: item.normalizedUnitCost,
+      ...(item.quotedSellingUnit != null
+        ? { quotedSellingUnit: item.quotedSellingUnit }
+        : {}),
+      selectedAt,
+      ...(suggested != null ? {
+        suggestedContingencyPct: suggested,
+        ...(selection.suggestion?.method
+          ? { suggestionMethod: selection.suggestion.method }
+          : {}),
+        ...(selection.suggestion?.confidence
+          ? { suggestionConfidence: selection.suggestion.confidence }
+          : {}),
+      } : {}),
+    },
+  };
+};
+
+export function HistoricalSourceChip({ source }: { source: HistoricalPriceSource }) {
+  return (
+    <Tooltip
+      title={[
+        source.quotationReference,
+        source.quotationDate,
+        `Base cost ${PHP(source.normalizedUnitCost)}`,
+      ].join(' · ')}
+    >
+      <Chip
+        label="Quote history"
+        size="small"
+        variant="outlined"
+        color="info"
+        sx={{ flexShrink: 0 }}
+      />
+    </Tooltip>
+  );
+}
 
 const normalizeName = (value: string | undefined | null) => (value || '').trim().toLowerCase();
 const firstLastKey = (value: string | undefined | null) => {
@@ -239,6 +330,7 @@ export default function QuotationEditor() {
 
   const [saving, setSaving] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [timingComponentId, setTimingComponentId] = useState<string | null>(null);
 
   // Saved-version history (snapshots captured server-side on every save).
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -301,6 +393,20 @@ export default function QuotationEditor() {
   const customer = clients.find((c) => c.id === project.customerId);
   const issuer = quotation.kind;
   const isLegacy = quotation.formulaVersion === 'legacy';
+  const quotationDate =
+    quotation.dateSent
+    || quotation.createdAt?.slice(0, 10)
+    || todayDateOnly();
+  const effectiveExpectedPurchaseDate = resolveExpectedPurchaseDate(
+    quotationDate,
+    quotation.expectedPurchaseDate,
+  );
+  const timingComponent = quotation.components.find((line) => line.id === timingComponentId);
+  const invalidPurchaseTiming = hasInvalidPurchaseTiming(
+    quotationDate,
+    quotation.expectedPurchaseDate,
+    quotation.components,
+  );
 
   const setField = <K extends keyof Quotation>(k: K, v: any) => {
     if (isLegacy) return;
@@ -333,7 +439,15 @@ export default function QuotationEditor() {
   };
 
   const handleSave = async () => {
-    if (!isDirty || saving) return;
+    if (!isDirty || saving || invalidPurchaseTiming) {
+      if (invalidPurchaseTiming) {
+        setToast({
+          msg: 'Expected purchase dates cannot be before the quotation date',
+          sev: 'warning',
+        });
+      }
+      return;
+    }
     setSaving(true);
     try {
       // Send the full draft as the patch — the store's updateQuotation handles
@@ -472,6 +586,16 @@ export default function QuotationEditor() {
     commit('components', [...quotation.components, ...newLines] as ComponentLine[]);
   };
 
+  const addFromHistory = (selection: ProductHistoryAddSelection) => {
+    const line = createHistoricalComponentLine(
+      selection,
+      quotation.productContingencyPct ?? 0,
+      nextCode('B', quotation.components),
+      id(),
+    );
+    commit('components', [...quotation.components, line] as ComponentLine[]);
+  };
+
   const compCols: Column<ComponentLine>[] = [
     { key: '_select', label: '', width: 36, render: (r) => (
       <Checkbox size="small" sx={{ p: 0 }}
@@ -486,6 +610,9 @@ export default function QuotationEditor() {
           variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
           InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
           inputProps={{ style: { padding: '6px 4px' } }} />
+        {r.historicalPriceSource && (
+          <HistoricalSourceChip source={r.historicalPriceSource} />
+        )}
         {r.group && (
           <Tooltip title={groupDisplayMode(r.group) === 'lot'
             ? `"${r.group}" prints as one 1.00 LOT line — click to show each item's qty instead`
@@ -515,6 +642,22 @@ export default function QuotationEditor() {
     // typed; clearing the cell falls back to the global again.
     { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.productMarkupPct || 0) },
     { key: 'leadTimeDays', label: 'Lead Time', width: 90, type: 'number', align: 'right', min: 0 },
+    {
+      key: '_timing',
+      label: '',
+      width: 42,
+      render: (row) => (
+        <ComponentTimingAction
+          componentDescription={row.description || row.code}
+          expectedPurchaseDate={row.expectedPurchaseDate}
+          invalid={Boolean(
+            row.expectedPurchaseDate && row.expectedPurchaseDate < quotationDate
+          )}
+          disabled={isLegacy}
+          onClick={() => setTimingComponentId(row.id)}
+        />
+      ),
+    },
     { key: 'optional', label: 'Optional', width: 70, align: 'center', render: (r, idx) => (
       <Checkbox size="small" sx={{ p: 0 }}
         checked={!!r.optional}
@@ -877,7 +1020,7 @@ export default function QuotationEditor() {
                 variant="contained"
                 color="primary"
                 onClick={handleSave}
-                disabled={!isDirty || saving}
+                disabled={!isDirty || saving || invalidPurchaseTiming}
               >
                 {saving ? 'Saving…' : 'Save'}
               </Button>
@@ -1256,6 +1399,27 @@ export default function QuotationEditor() {
             <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = 1 + (((s.markupPct ?? v) || 0) / 100); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
+            <TextField
+              label="Expected purchase date"
+              type="date"
+              size="small"
+              value={quotation.expectedPurchaseDate ?? ''}
+              onChange={(event) => setField('expectedPurchaseDate', event.target.value || undefined)}
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ min: quotationDate }}
+              error={Boolean(
+                quotation.expectedPurchaseDate
+                && quotation.expectedPurchaseDate < quotationDate
+              )}
+              helperText={
+                quotation.expectedPurchaseDate && quotation.expectedPurchaseDate < quotationDate
+                  ? 'Expected purchase date cannot be before the quotation date'
+                  : quotation.expectedPurchaseDate
+                    ? 'Used for product price-contingency forecasts'
+                    : 'Blank assumes 3 months after the quotation date'
+              }
+              disabled={isLegacy}
+            />
             <NumField
               label="Discount (₱)"
               value={totals ? Math.round(totals.discount * 100) / 100 : 0}
@@ -1316,14 +1480,15 @@ export default function QuotationEditor() {
           readOnly={isLegacy}
           footer={
             <>
+              {/* colSpan = columns.length: drag handle + all data cols except Total (amount sits under Total; trailing empty is delete) */}
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={5} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no markup)</TableCell>
+                <TableCell colSpan={generalCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(totals.generalReqtsCost)}</TableCell>
                 <TableCell />
               </TableRow>
               {!!quotation.exportGeneralReqtsAsLot && (
                 <TableRow sx={{ bgcolor: 'grey.50' }}>
-                  <TableCell colSpan={5} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                  <TableCell colSpan={generalCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
                     Unit Price / LOT
                   </TableCell>
                   <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(generalReqtsExportUnitPrice)}</TableCell>
@@ -1331,7 +1496,7 @@ export default function QuotationEditor() {
                 </TableRow>
               )}
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={5} align="right" sx={{ fontWeight: 600 }}>Subtotal (with markup)</TableCell>
+                <TableCell colSpan={generalCols.length} align="right" sx={{ fontWeight: 600 }}>Subtotal (with markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.generalReqtsSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
@@ -1370,19 +1535,20 @@ export default function QuotationEditor() {
           readOnly={isLegacy}
           footer={
             <>
+              {/* colSpan = columns.length so amount lands under Total (drag + data cols except Total) */}
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={11} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no contingency/markup)</TableCell>
+                <TableCell colSpan={compCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Cost (no contingency/markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(totals.componentsCost)}</TableCell>
                 <TableCell />
               </TableRow>
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={11} align="right" sx={{ fontWeight: 600 }}>Subtotal (with contingency + markup)</TableCell>
+                <TableCell colSpan={compCols.length} align="right" sx={{ fontWeight: 600 }}>Subtotal (with contingency + markup)</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.componentsSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
               {(totals.componentsOptionalSubtotal ?? 0) > 0 && (
                 <TableRow sx={{ bgcolor: 'grey.50' }}>
-                  <TableCell colSpan={11} align="right" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>Optional items (* not in contract total)</TableCell>
+                  <TableCell colSpan={compCols.length} align="right" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>Optional items (* not in contract total)</TableCell>
                   <TableCell align="right" sx={{ fontFamily: 'monospace', fontStyle: 'italic', color: 'text.secondary' }}>{PHP(totals.componentsOptionalSubtotal ?? 0)}</TableCell>
                   <TableCell />
                 </TableRow>
@@ -1456,7 +1622,7 @@ export default function QuotationEditor() {
           footer={
             (!quotation.servicesFromManpower || quotation.servicesPerLinePricing) ? (
               <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={perLinePricing ? 4 : 2} align="right" sx={{ fontWeight: 600 }}>Services Subtotal</TableCell>
+                <TableCell colSpan={svcCols.length} align="right" sx={{ fontWeight: 600 }}>Services Subtotal</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.servicesSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
@@ -1489,12 +1655,12 @@ export default function QuotationEditor() {
                 quotation.servicesPerLinePricing ? (
                   <>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Team Daily Rate</TableCell>
+                    <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>Team Daily Rate</TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(teamDailyRate)}</TableCell>
                     <TableCell />
                   </TableRow>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 600 }}>Total Manpower Cost</TableCell>
+                    <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 600 }}>Total Manpower Cost</TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.laborCost)}</TableCell>
                     <TableCell />
                   </TableRow>
@@ -1502,7 +1668,7 @@ export default function QuotationEditor() {
                 ) : (
                 <>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                    <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
                       {engineeringServicesQty > 1 ? 'Manpower Cost / LOT' : 'Manpower Cost'}
                     </TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
@@ -1512,7 +1678,7 @@ export default function QuotationEditor() {
                   </TableRow>
                   {engineeringServicesQty > 1 && (
                     <TableRow sx={{ bgcolor: 'grey.50' }}>
-                      <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                      <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
                         Total Manpower Cost ({engineeringServicesQty} LOT)
                       </TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(totals.laborCost)}</TableCell>
@@ -1520,14 +1686,14 @@ export default function QuotationEditor() {
                     </TableRow>
                   )}
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
+                    <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 500, color: 'text.secondary' }}>
                       Unit Price / LOT
                     </TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{PHP(engineeringServicesUnitPrice)}</TableCell>
                     <TableCell />
                   </TableRow>
                   <TableRow sx={{ bgcolor: 'grey.50' }}>
-                    <TableCell colSpan={6} align="right" sx={{ fontWeight: 600 }}>Services Subtotal (lump sum)</TableCell>
+                    <TableCell colSpan={mpCols.length} align="right" sx={{ fontWeight: 600 }}>Services Subtotal (lump sum)</TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.servicesSubtotal)}</TableCell>
                     <TableCell />
                   </TableRow>
@@ -1737,7 +1903,32 @@ export default function QuotationEditor() {
         </DialogActions>
       </Dialog>
 
-      <PricelistPickerDialog open={catalogOpen} onClose={() => setCatalogOpen(false)} onAdd={addFromCatalog} />
+      <ProductPickerDialog
+        open={catalogOpen}
+        onClose={() => setCatalogOpen(false)}
+        onAddPricelist={addFromCatalog}
+        onAddHistory={addFromHistory}
+        analysisDate={quotationDate}
+        expectedPurchaseDate={effectiveExpectedPurchaseDate}
+        defaultContingencyPct={quotation.productContingencyPct ?? 0}
+      />
+
+      <ComponentTimingDialog
+        open={Boolean(timingComponent)}
+        value={timingComponent?.expectedPurchaseDate}
+        quotationExpectedPurchaseDate={quotation.expectedPurchaseDate}
+        minimumDate={quotationDate}
+        onClose={() => setTimingComponentId(null)}
+        onSave={(value) => {
+          if (!timingComponent) return;
+          setField('components', quotation.components.map((line) => (
+            line.id === timingComponent.id
+              ? { ...line, expectedPurchaseDate: value || undefined }
+              : line
+          )));
+          setTimingComponentId(null);
+        }}
+      />
 
       <Snackbar
         open={!!toast}

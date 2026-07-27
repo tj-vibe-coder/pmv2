@@ -70,6 +70,7 @@
     "deploy:all": "npm run build && firebase deploy",
     "functions:install": "npm install --prefix functions",
     "test": "react-scripts test",
+    "test:product-history": "node --test server/calcsheetProductHistory.test.js server/calcsheetContingency.test.js server/calcsheetProductHistoryRouter.test.js server/calcsheetPurchaseTiming.test.js",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

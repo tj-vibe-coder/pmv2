@@ -15,6 +15,7 @@ pmv2 is a web-based operations platform for IOCT (IO Control Technologie OPC), a
 ## Main Use Cases
 
 - Monitor project financial health (contract value, billing, backlogs) from a single dashboard
+- Build sales quotations in Calcsheet using managed pricelists and prior quotation pricing evidence
 - Track cash advances and liquidations with balance management
 - Manage the procurement pipeline (material requests → purchase orders → delivery receipts)
 - Generate and print project reports (progress, service, completion certificates)
@@ -98,6 +99,23 @@ Acceptance Criteria:
 - Superadmins can update username, email, name, company position, access role, approval status, and password
 - Password reset leaves the existing password unchanged when the field is blank
 - The app protects against removing access from the last superadmin
+
+### Feature 7: Sales Calcsheet & Historical Product Pricing
+
+Description: Sales users create IOCT/ACTI quotations, price component lines, and reuse product information from either the managed Pricelists catalog or a separate read-only Quotation History catalog built from current quotation records.
+
+Acceptance Criteria:
+
+- Add Product presents separate **Pricelists** and **Quotation History** tabs; historical quotation rows are never merged into the managed catalog
+- Quotation History is searchable and filterable and identifies the source project, quotation reference, project status, quotation date, normalized cost, and quoted selling price
+- Historical observations come from current `calcsheet_quotations` only; version snapshots are excluded
+- Selecting a historical product preserves an immutable source snapshot on the new component line
+- Quotation-level and component-level expected purchase dates are valid calendar dates on or after Date Sent
+- The system suggests contingency from validated comparable price history, preferring quarterly evidence and using annualized growth only when quarterly evidence is insufficient
+- Unrelated, blank-identity, invalid-date, future-date, non-positive-price, incompatible-UOM, and robust outlier observations do not influence the suggestion
+- A user must explicitly apply a ready suggestion; insufficient history is reported honestly and does not invent a percentage
+- Changing the target purchase date or confirmed candidate evidence immediately invalidates any previous suggestion
+- Historical source snapshots remain internal Calcsheet evidence and are not serialized into customer PDF/XLSX exports
 
 ## User Roles
 

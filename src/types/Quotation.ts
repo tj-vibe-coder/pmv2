@@ -93,6 +93,20 @@ export interface GeneralReqLine {
   markupPct?: number;
 }
 
+export interface HistoricalPriceSource {
+  observationId: string;
+  quotationId: ID;
+  projectId: ID;
+  quotationReference: string;
+  quotationDate: string;
+  normalizedUnitCost: number;
+  quotedSellingUnit?: number;
+  selectedAt: string;
+  suggestedContingencyPct?: number;
+  suggestionMethod?: 'quarterly' | 'annualized';
+  suggestionConfidence?: 'high' | 'medium' | 'low';
+}
+
 export interface ComponentLine {
   id: ID;
   code: string;
@@ -109,6 +123,8 @@ export interface ComponentLine {
   leadTimeDays?: number;
   group?: string;
   markupPct?: number;
+  expectedPurchaseDate?: string;
+  historicalPriceSource?: HistoricalPriceSource;
   /** Optional item: priced for reference but NOT included in the contract
    * cost/subtotal/grand total. Listed in a separate "Optional Items" section
    * on exports so the client can add it if they avail. */
@@ -152,6 +168,7 @@ export interface Quotation {
   recipientId: ID | null;
   contactId?: ID;            // Which contact at the recipient client this quotation addresses
   dateSent?: string;          // YYYY-MM-DD. If blank, exports use the generation date.
+  expectedPurchaseDate?: string;
   validityDays: number;
   paymentTerms: string;
   deliveryTerms: string;

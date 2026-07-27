@@ -488,3 +488,17 @@ comes out upright too.
   in the Liquidation form viewer and that Tax Filer Ledger's viewer still opens correctly after
   the shared-component refactor. `npx tsc --noEmit` and `CI=true npm run build` clean throughout.
 - Committed as `209d94d` on `rj/dev`. **Not pushed to `main`** — no PR opened yet.
+
+### Calcsheet quotation-history pricing (2026-07-27, committed)
+
+Calcsheet Add Product now has two deliberately separate sources: **Pricelists** remains the managed catalog, while **Quotation History** is a read-only view derived from component rows in current quotations.
+
+- Backend helpers flatten `calcsheet_quotations` into product observations with source project, quotation reference/revision, project status, quotation date, normalized cost, and quoted selling unit. Quotation version snapshots are never queried.
+- Authenticated search and suggestion endpoints live under `/api/calcsheet/product-history`. Suggestions prefer a robust median quarterly trend, fall back to annualized growth when appropriate, compound through the expected purchase date, and report insufficient history rather than inventing a rate.
+- Evidence filters exclude invalid/future dates, non-positive prices, incompatible UOMs, robust outliers, unrelated confirmed candidates, and candidates with blank identities.
+- Quotations and component lines support expected purchase dates. Strict client and server validation rejects impossible calendar dates and dates before Date Sent.
+- The picker requires an explicit Apply action before a ready suggestion changes contingency. Changing the purchase date or confirmed candidates immediately clears stale suggestion state.
+- Added component rows retain an immutable `historicalPriceSource` snapshot for internal evidence. Customer PDF/XLSX exporters do not serialize it.
+- Main implementation commits: `91dcea6` through `3344577`, including final integrity hardening in `d501e28` and `3344577`.
+- Verification: 36/36 server product-history tests, 73/73 frontend tests, TypeScript, production build, live emulator API smoke, and independent review all passed.
+- Local smoke used the flat backup `backups/2026-07-15T05-32-40` because the newer recursive backup is not compatible with `scripts/sandbox-seed.js`.
