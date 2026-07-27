@@ -3710,7 +3710,10 @@ app.put('/api/calcsheet/quotations/:id', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    const { id: _ignored, ...body } = req.body || {};
+    // `remarks` is a changelog note for this save, not a quotation field —
+    // strip it here so it never lands in calcsheet_quotations; it's attached
+    // to the version snapshot below instead.
+    const { id: _ignored, remarks, ...body } = req.body || {};
     const update = { ...body, updatedAt: new Date().toISOString() };
     const ref = db.collection('calcsheet_quotations').doc(req.params.id);
     // Snapshot the pre-save state into calcsheet_quotation_versions so edits
@@ -3738,6 +3741,7 @@ app.put('/api/calcsheet/quotations/:id', async (req, res) => {
           projectId: prevData.projectId || null,
           savedAt: new Date().toISOString(),
           savedBy: user.full_name || user.username || null,
+          remarks: (typeof remarks === 'string' && remarks.trim()) ? remarks.trim() : null,
           data: prevData,
         });
       } catch (verErr) {

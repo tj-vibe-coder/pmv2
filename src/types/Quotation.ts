@@ -223,6 +223,10 @@ export interface QuotationVersion {
   projectId?: ID | null;
   savedAt: string;          // when this state was replaced by a newer save
   savedBy?: string | null;  // who performed the save that replaced this state
+  /** Free-text note describing what changed in the save that replaced this
+   * state — typed by the user in the "What did you change?" prompt on Save.
+   * Optional; absent on saves where the prompt was left blank. */
+  remarks?: string | null;
   data: Quotation;
 }
 
