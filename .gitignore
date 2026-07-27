@@ -83,6 +83,9 @@ uncommitted.diff
 # Browser-tool (cui) local state
 /.cui/
 
-# Agent memory system (local-only tooling, not app code)
-/docs/agent/
+# Agent memory tooling
+# The source-of-truth status/log/issue files under docs/agent are tracked.
+# CUI's user-approved memory inbox remains local.
+/docs/agent/MEMORY.md
+/docs/agent/memory/
 /scripts/atomize-memory.mjs

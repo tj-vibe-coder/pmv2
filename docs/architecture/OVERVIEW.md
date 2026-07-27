@@ -19,6 +19,7 @@ pmv2 is a **monolithic web application** — a React 19 + TypeScript frontend se
 | **Auth** | Custom login, registration, role-based access | `contexts/AuthContext.tsx`, `components/LoginPage.tsx`, `server.js` (auth routes) |
 | **Project Monitoring** | Dashboard, KPI charts, project CRUD, import/export | `components/Dashboard.tsx`, `components/ProjectDetails.tsx`, `services/dataService.ts` |
 | **Project List** | Detailed projects view for the main operations module | `components/ProjectMonitoringApp.tsx` |
+| **Sales / Calcsheet** | Proposal projects, IOCT/ACTI quotations, managed pricelists, and historical product-pricing evidence | `components/calcsheet/*`, `components/pricelists/*`, `server/calcsheetProductHistory*.js`, `server/calcsheetContingency.js` |
 | **Expense Management** | Cash advances, liquidations, direct labor | `components/CAFormPage.tsx`, `components/LiquidationFormPage.tsx`, `components/ExpenseMonitoring.tsx` |
 | **Procurement** | Material requests, delivery receipts, suppliers, purchase orders, estimates | `components/MaterialRequestFormPage.tsx`, `components/PurchaseOrderPage.tsx`, `components/SuppliersPage.tsx` |
 | **Reports** | Progress reports, service reports, completion certificates, saved-report snapshots, OneDrive attachments | `components/ReportsPage.tsx`, `components/reports/*` |
@@ -71,6 +72,16 @@ User profile fields (`full_name`, `designation`) feed report prepared-by signatu
 - `users`, `projects` (60+ fields), `clients`, `cash_advances`, `liquidations`
 - `suppliers`, `supplier_products`, `project_attachments`
 - `employees`, `payrollRuns` (with subcollections `dtrEntries`, `payslips`), `phHolidays`
+- Sales/Calcsheet: `calcsheet_projects`, `calcsheet_quotations`, `calcsheet_quotation_versions`, `pricelist_items`
+
+### Calcsheet historical product pricing
+
+- `GET /api/calcsheet/product-history` derives searchable product observations at request time from current `calcsheet_quotations` joined to `calcsheet_projects` and `clients`. It deliberately never reads `calcsheet_quotation_versions`, preventing superseded drafts from being double-counted.
+- `POST /api/calcsheet/product-history/suggest` is a read-only calculation endpoint. It validates the selected observation and any explicitly confirmed candidates, rejects unrelated or blank identities, filters invalid evidence, then computes a quarterly trend with an annualized fallback.
+- The Add Product dialog keeps managed **Pricelists** and read-only **Quotation History** as separate tabs. History loads lazily when opened.
+- `Quotation.expectedPurchaseDate` supplies the default horizon; `ComponentLine.expectedPurchaseDate` may override it. The server validates both quotation create and update writes against Date Sent using strict calendar-date checks.
+- A historical selection stores `ComponentLine.historicalPriceSource` as internal provenance. Customer PDF/XLSX exporters use explicit public fields and do not serialize this snapshot.
+- Suggestion application is explicit. Date or candidate changes synchronously clear the prior suggestion so stale percentages cannot be added.
 
 **SQLite (legacy)** — `database/projects.db`, used for historical data migration. Not used at runtime.
 

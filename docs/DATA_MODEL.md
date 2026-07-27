@@ -382,6 +382,47 @@ Top-level collection for the Collections & AR dashboard. Each document represent
 - `overdue` → `due_date < today && amount_collected < amount`
 - `unpaid` → all other cases
 
+### 2.15 Calcsheet pricing collections
+
+Historical pricing is derived from existing records rather than copied into a separate catalog collection.
+
+| Collection | Role |
+|---|---|
+| `calcsheet_projects` | Proposal/project metadata, including code, name, date, customer, and sales status |
+| `calcsheet_quotations` | Current quotation documents and component rows; the only source queried for Quotation History |
+| `calcsheet_quotation_versions` | Pre-save snapshots for restore/history; explicitly excluded from product-price observations |
+| `pricelist_items` | Managed Pricelists catalog maintained separately from quotation history |
+
+Relevant optional quotation/component fields:
+
+```typescript
+interface HistoricalPriceSource {
+  observationId: string;
+  quotationId: string;
+  projectId: string;
+  quotationReference: string;
+  quotationDate: string;
+  normalizedUnitCost: number;
+  quotedSellingUnit?: number;
+  selectedAt: string;
+  suggestedContingencyPct?: number;
+  suggestionMethod?: 'quarterly' | 'annualized';
+  suggestionConfidence?: 'high' | 'medium' | 'low';
+}
+
+interface Quotation {
+  dateSent?: string;                 // YYYY-MM-DD
+  expectedPurchaseDate?: string;     // YYYY-MM-DD, must be >= dateSent
+}
+
+interface ComponentLine {
+  expectedPurchaseDate?: string;     // Optional per-line override
+  historicalPriceSource?: HistoricalPriceSource;
+}
+```
+
+`historicalPriceSource` is internal provenance stored with the component line. It is not included in quotation PDF/XLSX exports.
+
 ---
 
 ## 3. TypeScript Interfaces
