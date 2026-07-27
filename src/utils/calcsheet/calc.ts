@@ -87,13 +87,21 @@ export function computeTotals(q: Quotation): QuotationTotals {
     : generalReqtsWithContingency * (1 + (q.generalReqMarkupPct || 0) / 100);
 
   // Components: raw cost → per-line contingency → markup.
-  const componentsSubtotal = q.components.reduce(
+  // Optional items are excluded from every contract figure (cost/subtotal/
+  // grand total) and reported separately via componentsOptionalSubtotal.
+  const contractComponents = q.components.filter((l) => !l.optional);
+  const optionalComponents = q.components.filter((l) => l.optional);
+  const componentsSubtotal = contractComponents.reduce(
     (s, l) => s + componentLineTotal(l, q.productMarkupPct),
     0,
   );
-  const componentsCost = q.components.reduce((s, l) => s + componentLineCost(l), 0);
-  const componentsWithContingency = q.components.reduce(
+  const componentsCost = contractComponents.reduce((s, l) => s + componentLineCost(l), 0);
+  const componentsWithContingency = contractComponents.reduce(
     (s, l) => s + componentLineWithContingency(l),
+    0,
+  );
+  const componentsOptionalSubtotal = optionalComponents.reduce(
+    (s, l) => s + componentLineTotal(l, q.productMarkupPct),
     0,
   );
 
@@ -136,6 +144,7 @@ export function computeTotals(q: Quotation): QuotationTotals {
     componentsCost,
     componentsWithContingency,
     componentsSubtotal,
+    componentsOptionalSubtotal,
     laborCost,
     laborWithContingency,
     servicesSubtotal: servicesSub,

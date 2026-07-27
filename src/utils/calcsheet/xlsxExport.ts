@@ -9,6 +9,7 @@ import {
 import { quotationRefNo } from './codes';
 
 const PHP_FMT = '"₱" #,##0.00;[Red]"₱" -#,##0.00';
+const QTY_FMT = '#,##0.00';
 
 function quotationDate(value: string | undefined): Date {
   const dateOnly = (value || format(new Date(), 'yyyy-MM-dd')).slice(0, 10);
@@ -38,6 +39,9 @@ export async function exportQuotationXlsx(
   ws.columns = [
     { width: 14 }, { width: 50 }, { width: 10 }, { width: 8 }, { width: 18 }, { width: 18 },
   ];
+  // Column C only ever holds quantities — always show 2 decimals (1 -> 1.00),
+  // matching the PDF. Text headers in this column are unaffected by numFmt.
+  ws.getColumn(3).numFmt = QTY_FMT;
 
   const navy = 'FF0F2A44';
   const grayBg = 'FFF2F4F7';
@@ -130,27 +134,45 @@ export async function exportQuotationXlsx(
     r += 2;
   }
 
-  // B. Components
-  if (quotation.components.length) {
+  // B. Components (optional items are pulled out into their own section below).
+  const contractComponents = quotation.components.filter((l) => !l.optional);
+  const optionalComponents = quotation.components.filter((l) => l.optional);
+  if (contractComponents.length) {
     sectionHeader('B. SUPPLY OF COMPONENTS');
     tableHeader(['Code', 'Description', 'Qty', 'UOM', 'Unit Price', 'Total']);
     // Group-aware rendering — pricing on middle row of each group
     const compGroups = new Map<string, typeof quotation.components>();
-    quotation.components.forEach((l) => {
+    contractComponents.forEach((l) => {
       if (l.group) {
         const arr = compGroups.get(l.group) || [];
         arr.push(l);
         compGroups.set(l.group, arr);
       }
     });
-    quotation.components.forEach((l) => {
-      const desc = [l.brand, l.description, l.partNo].filter(Boolean).join(' — ');
+    contractComponents.forEach((l) => {
+      // Item name on the first line; brand + part number on a wrapped
+      // second line (mirrors the PDF's two-line description cell).
+      const compSub = [l.brand, l.partNo].filter(Boolean).join(', ');
+      const desc = compSub ? `${l.description}\n${compSub}` : l.description;
       if (l.group) {
         const members = compGroups.get(l.group)!;
         const midIdx = Math.max(0, Math.floor((members.length - 1) / 2));
         const isMid = members[midIdx].id === l.id;
-        if (isMid) {
-          const groupTotal = members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0);
+        // 'itemized' shows each member's own qty + UOM; the group stays priced
+        // as one combined amount on the middle row (no per-unit price shown).
+        const itemized = quotation.componentGroupDisplay?.[l.group] === 'itemized';
+        const groupTotal = isMid
+          ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
+          : 0;
+        if (itemized) {
+          // Group price shows in both Unit Price and Total on the middle row,
+          // same as the LOT presentation — it's one combined lot amount.
+          ws.getRow(r).values = [l.code, desc, l.qty, l.uom, isMid ? groupTotal : '', isMid ? groupTotal : ''];
+          if (isMid) {
+            ws.getCell(r, 5).numFmt = PHP_FMT;
+            ws.getCell(r, 6).numFmt = PHP_FMT;
+          }
+        } else if (isMid) {
           ws.getRow(r).values = [l.code, desc, 1, 'lot', groupTotal, groupTotal];
           ws.getCell(r, 5).numFmt = PHP_FMT;
           ws.getCell(r, 6).numFmt = PHP_FMT;
@@ -162,6 +184,7 @@ export async function exportQuotationXlsx(
         ws.getCell(r, 5).numFmt = PHP_FMT;
         ws.getCell(r, 6).numFmt = PHP_FMT;
       }
+      if (compSub) ws.getCell(r, 2).alignment = { wrapText: true, vertical: 'top' };
       r++;
     });
     ws.getRow(r).values = ['', '', '', '', 'Subtotal', totals.componentsSubtotal];
@@ -243,6 +266,27 @@ export async function exportQuotationXlsx(
     }
     r++;
   });
+
+  // Optional items — priced for reference, NOT in the grand total above.
+  if (optionalComponents.length) {
+    r += 1;
+    sectionHeader('OPTIONAL ITEMS (NOT INCLUDED IN CONTRACT PRICE)');
+    tableHeader(['Code', 'Description', 'Qty', 'UOM', 'Unit Price', 'Total']);
+    optionalComponents.forEach((l) => {
+      const compSub = [l.brand, l.partNo].filter(Boolean).join(', ');
+      const desc = compSub ? `${l.description}\n${compSub}` : l.description;
+      ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct), componentLineTotal(l, quotation.productMarkupPct)];
+      if (compSub) ws.getCell(r, 2).alignment = { wrapText: true, vertical: 'top' };
+      ws.getCell(r, 5).numFmt = PHP_FMT;
+      ws.getCell(r, 6).numFmt = PHP_FMT;
+      r++;
+    });
+    ws.getRow(r).values = ['', '', '', '', 'Optional Total', totals.componentsOptionalSubtotal ?? 0];
+    ws.getCell(r, 5).font = { bold: true };
+    ws.getCell(r, 6).font = { bold: true };
+    ws.getCell(r, 6).numFmt = PHP_FMT;
+    r += 2;
+  }
 
   // Manpower sheet (working data)
   if (quotation.manpower.length) {

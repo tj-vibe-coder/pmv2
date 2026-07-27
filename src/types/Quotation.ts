@@ -125,6 +125,10 @@ export interface ComponentLine {
   markupPct?: number;
   expectedPurchaseDate?: string;
   historicalPriceSource?: HistoricalPriceSource;
+  /** Optional item: priced for reference but NOT included in the contract
+   * cost/subtotal/grand total. Listed in a separate "Optional Items" section
+   * on exports so the client can add it if they avail. */
+  optional?: boolean;
 }
 
 export interface ServiceLine {
@@ -196,6 +200,12 @@ export interface Quotation {
   notes?: string;
   exportGeneralReqtsAsLot?: boolean;
   generalReqtsExportQty?: number;
+  /** How each component group renders on the PDF/Excel, keyed by group name.
+   * 'lot' (the default when a group is absent here) collapses the group to a
+   * single "1.00 LOT" line priced at the group total. 'itemized' shows each
+   * member's own qty + UOM while still pricing the group as one combined
+   * amount. */
+  componentGroupDisplay?: Record<string, 'lot' | 'itemized'>;
   pageBreakBeforeTerms?: boolean;
   formulaVersion?: FormulaVersion;
   generalReqContingencyMode?: 'standard' | 'baked';
@@ -224,6 +234,9 @@ export interface QuotationTotals {
   componentsCost: number;
   componentsWithContingency?: number;
   componentsSubtotal: number;
+  /** Sum of optional-component selling prices — informational only, NOT part
+   * of `subtotal`/`grandTotal`. Absent/0 when there are no optional items. */
+  componentsOptionalSubtotal?: number;
 
   laborCost: number;
   laborWithContingency: number;

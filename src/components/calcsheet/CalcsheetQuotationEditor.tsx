@@ -613,7 +613,22 @@ export default function QuotationEditor() {
         {r.historicalPriceSource && (
           <HistoricalSourceChip source={r.historicalPriceSource} />
         )}
-        {r.group && <Chip label={r.group} size="small" color="warning" variant="outlined" onDelete={() => ungroupComp(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
+        {r.group && (
+          <Tooltip title={groupDisplayMode(r.group) === 'lot'
+            ? `"${r.group}" prints as one 1.00 LOT line — click to show each item's qty instead`
+            : `"${r.group}" prints each item's qty (one combined price) — click to collapse to 1.00 LOT`}>
+            <Chip
+              label={`${r.group} · ${groupDisplayMode(r.group) === 'lot' ? 'LOT' : 'itemized'}`}
+              size="small"
+              color="warning"
+              variant={groupDisplayMode(r.group) === 'lot' ? 'outlined' : 'filled'}
+              onClick={() => toggleGroupDisplay(r.group!)}
+              onDelete={() => ungroupComp(r.id)}
+              disabled={isLegacy}
+              sx={{ height: 20, cursor: 'pointer', '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }}
+            />
+          </Tooltip>
+        )}
       </Stack>
     ) },
     { key: 'brand', label: 'Brand', width: 90 },
@@ -643,10 +658,22 @@ export default function QuotationEditor() {
         />
       ),
     },
+    { key: 'optional', label: 'Optional', width: 70, align: 'center', render: (r, idx) => (
+      <Checkbox size="small" sx={{ p: 0 }}
+        checked={!!r.optional}
+        disabled={isLegacy}
+        onChange={(e) => updateRow('components', idx, 'optional', e.target.checked)}
+        title="Optional item — priced for reference, not included in the contract total"
+      />
+    ) },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
-      render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
+      render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: r.optional ? 'text.disabled' : undefined }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
     { key: 'total', label: 'Total', width: 130, align: 'right',
-      render: (r) => <Box sx={{ fontFamily: 'monospace', fontWeight: 500 }}>{PHP(componentLineTotal(r, quotation.productMarkupPct))}</Box> },
+      render: (r) => (
+        <Box sx={{ fontFamily: 'monospace', fontWeight: 500, color: r.optional ? 'text.disabled' : undefined, fontStyle: r.optional ? 'italic' : undefined }}>
+          {PHP(componentLineTotal(r, quotation.productMarkupPct))}{r.optional ? ' *' : ''}
+        </Box>
+      ) },
   ];
 
   // Section C — Services
@@ -692,6 +719,15 @@ export default function QuotationEditor() {
   };
   const ungroupComp = (compId: string) => {
     setField('components', quotation.components.map((c) => c.id === compId ? { ...c, group: undefined } : c));
+  };
+  // Per-group export style. Absent = 'lot' (collapse to a single "1.00 LOT"
+  // line priced at the group total); 'itemized' shows each member's own qty
+  // and UOM while the group keeps one combined price.
+  const groupDisplayMode = (group: string): 'lot' | 'itemized' =>
+    quotation.componentGroupDisplay?.[group] === 'itemized' ? 'itemized' : 'lot';
+  const toggleGroupDisplay = (group: string) => {
+    const next = groupDisplayMode(group) === 'lot' ? 'itemized' : 'lot';
+    setField('componentGroupDisplay', { ...(quotation.componentGroupDisplay || {}), [group]: next });
   };
 
   const svcCols: Column<ServiceLine>[] = perLinePricing
@@ -759,6 +795,12 @@ export default function QuotationEditor() {
     { key: 'role', label: 'Role', width: 240,
       render: (r, idx) => {
         const isCustom = !r.presetId;
+        // A saved presetId may not resolve to a currently-loaded preset (preset
+        // reseeded with new ids, or presets not loaded). Without a matching
+        // MenuItem the Select renders blank AND the custom-name fallback is
+        // hidden, so the stored role would vanish — render a fallback option
+        // that shows r.role so it's always visible.
+        const presetResolves = !r.presetId || presets.some((p) => p.id === r.presetId);
         return (
           <Stack direction="column" spacing={0.5} sx={{ py: 0.5 }}>
             <TextField
@@ -769,6 +811,9 @@ export default function QuotationEditor() {
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem', fontWeight: 500 } }}
               fullWidth
             >
+              {!presetResolves && (
+                <MenuItem value={r.presetId as string}>{r.role || '(unknown role)'}</MenuItem>
+              )}
               <ListSubheader>Engineering / Automation</ListSubheader>
               {engineeringPresets.map((p) => (
                 <MenuItem key={p.id} value={p.id}>{p.role}</MenuItem>
@@ -1501,6 +1546,13 @@ export default function QuotationEditor() {
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(totals.componentsSubtotal)}</TableCell>
                 <TableCell />
               </TableRow>
+              {(totals.componentsOptionalSubtotal ?? 0) > 0 && (
+                <TableRow sx={{ bgcolor: 'grey.50' }}>
+                  <TableCell colSpan={compCols.length} align="right" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>Optional items (* not in contract total)</TableCell>
+                  <TableCell align="right" sx={{ fontFamily: 'monospace', fontStyle: 'italic', color: 'text.secondary' }}>{PHP(totals.componentsOptionalSubtotal ?? 0)}</TableCell>
+                  <TableCell />
+                </TableRow>
+              )}
             </>
           }
         />
