@@ -35,12 +35,12 @@ const STATUS_OPTIONS: ProjectStatus[] = PROJECT_STATUSES;
 const DEFAULT_HIDDEN_STATUSES: ProjectStatus[] = ['lost', 'inactive'];
 const statusLabel = projectStatusLabel;
 
-type SortKey = 'code' | 'name' | 'customer' | 'date' | 'status' | 'grandTotal' | 'margin';
+type SortKey = 'code' | 'name' | 'customer' | 'date' | 'updatedAt' | 'status' | 'grandTotal' | 'margin';
 type SortDir = 'asc' | 'desc';
 
 // Last-used sort persists per browser so the list reopens the way the user left it
 const SORT_PREF_KEY = 'calcsheet-projects-sort';
-const SORT_KEYS: SortKey[] = ['code', 'name', 'customer', 'date', 'status', 'grandTotal', 'margin'];
+const SORT_KEYS: SortKey[] = ['code', 'name', 'customer', 'date', 'updatedAt', 'status', 'grandTotal', 'margin'];
 
 function loadSortPref(): { key: SortKey; dir: SortDir } {
   try {
@@ -52,7 +52,7 @@ function loadSortPref(): { key: SortKey; dir: SortDir } {
       }
     }
   } catch { /* corrupted pref — fall through to default */ }
-  return { key: 'date', dir: 'desc' }; // newest projects at the top by default
+  return { key: 'updatedAt', dir: 'desc' }; // most recently edited projects at the top by default
 }
 
 function saveSortPref(key: SortKey, dir: SortDir) {
@@ -321,6 +321,7 @@ export default function Projects() {
         case 'name': av = (a.p.name || '').toLowerCase(); bv = (b.p.name || '').toLowerCase(); break;
         case 'customer': av = (a.customer?.name || '').toLowerCase(); bv = (b.customer?.name || '').toLowerCase(); break;
         case 'date': av = a.p.date || ''; bv = b.p.date || ''; break;
+        case 'updatedAt': av = a.p.updatedAt || ''; bv = b.p.updatedAt || ''; break;
         case 'status': av = a.p.status; bv = b.p.status; break;
         case 'grandTotal': av = a.grandTotal; bv = b.grandTotal; break;
         case 'margin':
@@ -339,7 +340,7 @@ export default function Projects() {
   const toggleSort = (key: SortKey) => {
     const nextDir: SortDir = sortKey === key
       ? (sortDir === 'asc' ? 'desc' : 'asc')
-      : (key === 'date' || key === 'grandTotal' ? 'desc' : 'asc');
+      : (key === 'date' || key === 'updatedAt' || key === 'grandTotal' ? 'desc' : 'asc');
     setSortKey(key);
     setSortDir(nextDir);
     saveSortPref(key, nextDir);
@@ -654,6 +655,7 @@ export default function Projects() {
               <TableCell>Partner</TableCell>
               <TableCell>Created by</TableCell>
               <SortHeader k="date" label="Date" />
+              <SortHeader k="updatedAt" label="Last edited" />
               <SortHeader k="status" label="Status" />
               <SortHeader k="grandTotal" label="Quotations" align="right" />
               <SortHeader k="margin" label="IOCT Margin" align="right" />
@@ -704,6 +706,7 @@ export default function Projects() {
                 <TableCell>{partner?.name ?? '—'}</TableCell>
                 <TableCell>{p.createdByName ?? '—'}</TableCell>
                 <TableCell>{p.date ? format(new Date(p.date), 'dd MMM yyyy') : '—'}</TableCell>
+                <TableCell>{p.updatedAt ? format(new Date(p.updatedAt), 'dd MMM yyyy HH:mm') : '—'}</TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={0.5} alignItems="center">
                     <Select
