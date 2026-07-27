@@ -72,6 +72,25 @@ export interface Project {
   mainProjectProgressPercent?: number;
   mainProjectCompletionDate?: number | string | null;
   mainProjectStatusSyncedAt?: string;
+
+  // Customer PO documents attached for easy reference. Populated when the user
+  // attaches a PO — typically prompted right after marking the project 'won',
+  // but also available any time from the project detail page. Files live in
+  // the project's OneDrive execution folder under a "Customer PO" subfolder;
+  // this array only stores pointers + light metadata, never the file bytes.
+  customerPOs?: CustomerPO[];
+}
+
+export interface CustomerPO {
+  id: ID;                 // uuid
+  poNumber?: string;
+  poDate?: string;         // ISO date (yyyy-mm-dd)
+  fileName: string;
+  driveItemId: string;    // OneDrive item id of the uploaded file
+  webUrl?: string;         // OneDrive web link
+  fileSize?: number;       // bytes
+  uploadedBy?: string;     // username of uploader
+  uploadedAt: string;       // ISO datetime
 }
 
 export type FormulaVersion = 'legacy' | 'current';

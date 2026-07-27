@@ -5163,17 +5163,21 @@ app.get('/api/onedrive/by-path', async (req, res) => {
   }
 });
 
-// List children of a folder (by path; empty path = root) with optional name-prefix filter.
+// List children of a folder — by parent item id (preferred when known) or by
+// path (empty path = root) — with optional name-prefix filter.
 app.get('/api/onedrive/children', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    const id = req.query.id ? String(req.query.id) : '';
     const path = req.query.path ? String(req.query.path) : '';
     const prefix = req.query.prefix ? String(req.query.prefix).toLowerCase() : '';
     const enc = path ? path.split('/').map(encodeURIComponent).join('/') : '';
-    const url = path
+    const url = id
+      ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(id)}/children?$top=500&$select=id,webUrl,name,folder`
+      : path
       ? `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${enc}:/children?$top=500&$select=id,webUrl,name,folder`
       : `https://graph.microsoft.com/v1.0/drives/${driveId}/root/children?$top=500&$select=id,webUrl,name,folder`;
     const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });

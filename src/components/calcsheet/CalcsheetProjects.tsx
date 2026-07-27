@@ -726,6 +726,11 @@ export default function Projects() {
                       ))}
                     </Select>
                     {p.ongoing && <Chip size="small" label="active" variant="outlined" sx={{ height: 18 }} />}
+                    {p.status === 'won' && !!p.customerPOs?.length && (
+                      <Tooltip title={`${p.customerPOs.length} customer PO(s) attached`}>
+                        <Chip size="small" label="PO" color="success" variant="outlined" sx={{ height: 18 }} />
+                      </Tooltip>
+                    )}
                   </Stack>
                 </TableCell>
                 <TableCell align="right">
