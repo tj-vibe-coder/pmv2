@@ -19,13 +19,14 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import CloudOffIcon from '@mui/icons-material/CloudOff';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
-import type { ProjectStatus, Quotation, QuotationKind } from '../../types/Quotation';
-import { PROJECT_STATUSES, projectStatusLabel } from '../../types/Quotation';
+import type { ProjectStatus, Quotation, QuotationKind, OpportunityGrade } from '../../types/Quotation';
+import { PROJECT_STATUSES, projectStatusLabel, OPPORTUNITY_GRADES, opportunityGradeLabel } from '../../types/Quotation';
 import { parseLegacyWorkbook } from '../../utils/calcsheet/legacyImport';
 import type { ParsedProject, ParsedQuotation } from '../../utils/calcsheet/legacyImport';
 import { parseLegacyPdf } from '../../utils/calcsheet/legacyPdfImport';
 import type { ParsedLegacyPdf } from '../../utils/calcsheet/legacyPdfImport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import {
   ensureProposalFolder,
@@ -35,13 +36,20 @@ import {
   verifyDriveItem,
   resolveSharingUrl,
   listFoldersWithPrefix,
+  listChildrenById,
+  getOrCreateChildFolderById,
+  uploadFileToFolderById,
+  deleteDriveItem,
   projectCodePrefix,
   type DriveItemRef,
 } from '../../services/onedriveFolderService';
 import { onedriveConfig } from '../../config/onedriveConfig';
 import LinkIcon from '@mui/icons-material/Link';
 import DesktopMacIcon from '@mui/icons-material/DesktopMac';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DescriptionIcon from '@mui/icons-material/Description';
 import DuplicateQuotationDialog from './DuplicateQuotationDialog';
+import type { CustomerPO } from '../../types/Quotation';
 
 export default function ProjectDetail() {
   const { id = '' } = useParams();
@@ -58,8 +66,19 @@ export default function ProjectDetail() {
 
   // OneDrive corporate folder integration
   const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
+  const { user: currentUser } = useAuth();
   const [oneDriveBusy, setOneDriveBusy] = useState<'proposal' | 'execution' | null>(null);
   const [oneDriveErr, setOneDriveErr] = useState<string>('');
+
+  // Customer PO attach dialog
+  const [poDialogOpen, setPoDialogOpen] = useState(false);
+  const [poFile, setPoFile] = useState<File | null>(null);
+  const [poNumber, setPoNumber] = useState('');
+  const [poDate, setPoDate] = useState('');
+  const [poBusy, setPoBusy] = useState(false);
+  const [poErr, setPoErr] = useState('');
+  const [poDeleteTarget, setPoDeleteTarget] = useState<CustomerPO | null>(null);
+  const [poDeleteBusy, setPoDeleteBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Quotation | null>(null);
   const [duplicateTarget, setDuplicateTarget] = useState<Quotation | null>(null);
   // Non-error info message shown next to the OneDrive buttons. Used to tell the
@@ -169,8 +188,98 @@ export default function ProjectDetail() {
         status: 'won',
         ...(result ? { mainProjectId: result.mainProjectId, mainProjectNo: result.projectNo } : {}),
       });
+      openPoDialog();
     } catch (e) {
       setMainSyncErr(e instanceof Error ? e.message : 'Failed to mark project as won');
+    }
+  };
+
+  const openPoDialog = () => {
+    setPoFile(null);
+    setPoNumber('');
+    setPoDate('');
+    setPoErr('');
+    setPoDialogOpen(true);
+  };
+
+  // Collision-safe filename within the "Customer PO" folder: keep the original
+  // name when free, else append " (2)", " (3)", ... before the extension.
+  const dedupeFilename = (desired: string, existing: DriveItemRef[]): string => {
+    const taken = new Set(existing.map((it) => (it.name || '').toLowerCase()));
+    if (!taken.has(desired.toLowerCase())) return desired;
+    const dot = desired.lastIndexOf('.');
+    const base = dot > 0 ? desired.slice(0, dot) : desired;
+    const ext = dot > 0 ? desired.slice(dot) : '';
+    for (let n = 2; n < 1000; n++) {
+      const candidate = `${base} (${n})${ext}`;
+      if (!taken.has(candidate.toLowerCase())) return candidate;
+    }
+    return desired;
+  };
+
+  const attachPo = async () => {
+    if (!project || !poFile) return;
+    setPoBusy(true);
+    setPoErr('');
+    try {
+      const token = await getOneDriveToken();
+      if (!token) throw new Error('Not signed in to OneDrive.');
+      const driveId = await resolveCorporateDriveId(token);
+
+      let executionFolderId = project.executionFolderId;
+      let executionFolderUrl = project.executionFolderUrl;
+      if (!executionFolderId) {
+        const ref = await ensureExecutionFolder(token, project);
+        executionFolderId = ref.id;
+        executionFolderUrl = ref.webUrl;
+        await updateProject(project.id, { executionFolderId, executionFolderUrl });
+      }
+
+      const poFolder = await getOrCreateChildFolderById(token, driveId, executionFolderId, 'Customer PO');
+      const existing = await listChildrenById(token, driveId, poFolder.id);
+      const filename = dedupeFilename(poFile.name, existing);
+      const uploaded = await uploadFileToFolderById(token, driveId, poFolder.id, filename, poFile);
+
+      const entry: CustomerPO = {
+        id: nanoid(),
+        poNumber: poNumber.trim() || undefined,
+        poDate: poDate || undefined,
+        fileName: filename,
+        driveItemId: uploaded.id,
+        webUrl: uploaded.webUrl || undefined,
+        fileSize: poFile.size,
+        uploadedBy: (currentUser?.full_name?.trim() || currentUser?.username || '').trim() || undefined,
+        uploadedAt: new Date().toISOString(),
+      };
+      const customerPOs = [...(project.customerPOs || []), entry];
+      await updateProject(project.id, { customerPOs });
+      setPoDialogOpen(false);
+    } catch (e) {
+      setPoErr(e instanceof Error ? e.message : 'Failed to attach PO');
+    } finally {
+      setPoBusy(false);
+    }
+  };
+
+  const deletePo = async () => {
+    if (!project || !poDeleteTarget) return;
+    setPoDeleteBusy(true);
+    try {
+      const customerPOs = (project.customerPOs || []).filter((p) => p.id !== poDeleteTarget.id);
+      await updateProject(project.id, { customerPOs });
+      try {
+        const token = await getOneDriveToken();
+        if (token) {
+          const driveId = await resolveCorporateDriveId(token);
+          await deleteDriveItem(token, driveId, poDeleteTarget.driveItemId);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[OneDrive] failed to delete PO file, entry removed anyway', err);
+      }
+      setPoDeleteTarget(null);
+    } finally {
+      setPoDeleteBusy(false);
     }
   };
 
@@ -934,6 +1043,25 @@ export default function ProjectDetail() {
               </TextField>
             </Box>
           </Box>
+          <Box>
+            <Typography variant="caption" color="text.secondary">Grade</Typography>
+            <Box>
+              <TextField
+                select
+                size="small"
+                variant="standard"
+                value={project.opportunityGrade ?? ''}
+                onChange={(e) => updateProject(project.id, { opportunityGrade: (e.target.value || undefined) as OpportunityGrade | undefined })}
+                InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
+                sx={{ minWidth: 110 }}
+              >
+                <MenuItem value=""><em>Ungraded</em></MenuItem>
+                {OPPORTUNITY_GRADES.map((g) => (
+                  <MenuItem key={g} value={g}>{opportunityGradeLabel(g)}</MenuItem>
+                ))}
+              </TextField>
+            </Box>
+          </Box>
           {project.mainProjectId && (
             <Box>
               <Typography variant="caption" color="text.secondary">Project List status</Typography>
@@ -1185,6 +1313,64 @@ export default function ProjectDetail() {
             </Typography>
           )}
         </Stack>
+      )}
+
+      {project.status === 'won' && (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Customer PO</Typography>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<UploadFileIcon />}
+              disabled={!isCorporateOneDriveConfigured()}
+              onClick={openPoDialog}
+            >
+              Attach PO
+            </Button>
+          </Stack>
+          {!isCorporateOneDriveConfigured() && (
+            <Typography variant="caption" color="text.secondary">
+              OneDrive is not configured — PO attachments are unavailable.
+            </Typography>
+          )}
+          {isCorporateOneDriveConfigured() && (project.customerPOs || []).length === 0 && (
+            <Typography variant="caption" color="text.secondary">
+              No PO attached yet.
+            </Typography>
+          )}
+          {(project.customerPOs || []).length > 0 && (
+            <Stack spacing={0.5}>
+              {project.customerPOs!.map((po) => (
+                <Stack key={po.id} direction="row" alignItems="center" spacing={1}>
+                  <DescriptionIcon fontSize="small" color="action" />
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography
+                      variant="body2"
+                      component={po.webUrl ? 'a' : 'span'}
+                      href={po.webUrl || undefined}
+                      target={po.webUrl ? '_blank' : undefined}
+                      rel={po.webUrl ? 'noopener' : undefined}
+                      sx={{ fontWeight: 500, textDecoration: po.webUrl ? 'underline' : 'none', color: po.webUrl ? 'primary.main' : 'text.primary' }}
+                    >
+                      {po.fileName}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                      {[
+                        po.poNumber ? `PO ${po.poNumber}` : null,
+                        po.poDate || null,
+                        po.uploadedBy || null,
+                      ].filter(Boolean).join(' · ') || '—'}
+                    </Typography>
+                  </Box>
+                  <IconButton size="small" onClick={() => setPoDeleteTarget(po)}>
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconButton>
+                </Stack>
+              ))}
+            </Stack>
+          )}
+        </Paper>
       )}
 
       <Stack direction="row" alignItems="center" justifyContent="space-between">
@@ -1825,6 +2011,62 @@ export default function ProjectDetail() {
           </Button>
           <Button variant="contained" color="success" onClick={() => { void confirmWon(true); }}>
             Mark Won and Create Project
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={poDialogOpen} onClose={() => { if (!poBusy) setPoDialogOpen(false); }} maxWidth="xs" fullWidth>
+        <DialogTitle>Attach Customer PO</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {poErr && <Alert severity="error">{poErr}</Alert>}
+            <Button variant="outlined" component="label" startIcon={<UploadFileIcon />}>
+              {poFile ? poFile.name : 'Choose file'}
+              <input
+                type="file"
+                hidden
+                onChange={(e) => setPoFile(e.target.files?.[0] ?? null)}
+              />
+            </Button>
+            <TextField
+              label="PO Number"
+              size="small"
+              value={poNumber}
+              onChange={(e) => setPoNumber(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="PO Date"
+              type="date"
+              size="small"
+              value={poDate}
+              onChange={(e) => setPoDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              fullWidth
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPoDialogOpen(false)} disabled={poBusy}>
+            Skip for now
+          </Button>
+          <Button variant="contained" onClick={() => { void attachPo(); }} disabled={poBusy || !poFile}>
+            {poBusy ? 'Attaching…' : 'Attach'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!poDeleteTarget} onClose={() => { if (!poDeleteBusy) setPoDeleteTarget(null); }} maxWidth="xs" fullWidth>
+        <DialogTitle>Remove this PO?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            This removes "{poDeleteTarget?.fileName}" from the project and best-effort deletes the file from OneDrive.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPoDeleteTarget(null)} disabled={poDeleteBusy}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={() => { void deletePo(); }} disabled={poDeleteBusy}>
+            {poDeleteBusy ? 'Removing…' : 'Remove'}
           </Button>
         </DialogActions>
       </Dialog>

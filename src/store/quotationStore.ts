@@ -92,7 +92,10 @@ interface Actions {
 
   // Quotations
   createQuotation: (projectId: ID, kind: QuotationKind, recipientId: ID | null) => Promise<Quotation>;
-  updateQuotation: (id: ID, patch: Partial<Quotation>) => Promise<Quotation>;
+  // `remarks` is an optional changelog note for this save — recorded on the
+  // version snapshot the server takes of the pre-save state, not stored on
+  // the quotation itself.
+  updateQuotation: (id: ID, patch: Partial<Quotation>, remarks?: string) => Promise<Quotation>;
   deleteQuotation: (id: ID) => Promise<void>;
   duplicateQuotation: (id: ID, opts?: { projectId?: ID }) => Promise<Quotation | null>;
   // Import a fully-formed Quotation (e.g. from a legacy Excel parse) under an existing project.
@@ -522,7 +525,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
     set({ quotations: [...get().quotations, saved] });
     return saved;
   },
-  updateQuotation: async (id, patch) => {
+  updateQuotation: async (id, patch, remarks) => {
     // Firestore rejects `undefined` values with a 500. Substitute null (to
     // clear the field) so callers can safely send "I have no value here".
     // Undefined keys are dropped entirely when they would just be left alone.
@@ -530,6 +533,10 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
     for (const [k, v] of Object.entries(patch)) {
       if (v !== undefined) cleaned[k] = v;
     }
+    // `remarks` rides alongside the patch but isn't a Quotation field — the
+    // server strips it before writing the document and attaches it to the
+    // version snapshot instead.
+    if (remarks !== undefined) cleaned.remarks = remarks;
     await api('PUT', `/quotations/${id}`, cleaned);
     const updatedAt = now();
     let saved: Quotation | null = null;

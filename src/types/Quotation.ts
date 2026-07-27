@@ -14,6 +14,22 @@ export function projectStatusLabel(s: ProjectStatus): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// Sales' subjective read on how likely an opportunity is to close, independent
+// of pipeline status (a project can be 'sent' and still graded A or C). Not
+// set on legacy/imported projects — the UI shows "Ungraded" until a grade is
+// explicitly picked.
+export type OpportunityGrade = 'A' | 'B' | 'C';
+
+export const OPPORTUNITY_GRADES: OpportunityGrade[] = ['A', 'B', 'C'];
+
+export function opportunityGradeLabel(g: OpportunityGrade): string {
+  switch (g) {
+    case 'A': return 'A — Sure win';
+    case 'B': return 'B — Has a chance';
+    case 'C': return 'C — No info yet';
+  }
+}
+
 // Re-export the unified Client + ClientContact types so calcsheet code that imports
 // from `types/Quotation` keeps working without a path change.
 export type { Client, ClientContact, Gender } from './Client';
@@ -41,6 +57,10 @@ export interface Project {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+
+  // Sales' subjective win-likelihood grade for this opportunity. See
+  // `OpportunityGrade` for the A/B/C meanings. Undefined = ungraded.
+  opportunityGrade?: OpportunityGrade;
 
   // Who created the opportunity — stamped server-side from the authenticated user
   // on POST and never updatable (PUT strips them). Absent on legacy/imported and
@@ -72,6 +92,25 @@ export interface Project {
   mainProjectProgressPercent?: number;
   mainProjectCompletionDate?: number | string | null;
   mainProjectStatusSyncedAt?: string;
+
+  // Customer PO documents attached for easy reference. Populated when the user
+  // attaches a PO — typically prompted right after marking the project 'won',
+  // but also available any time from the project detail page. Files live in
+  // the project's OneDrive execution folder under a "Customer PO" subfolder;
+  // this array only stores pointers + light metadata, never the file bytes.
+  customerPOs?: CustomerPO[];
+}
+
+export interface CustomerPO {
+  id: ID;                 // uuid
+  poNumber?: string;
+  poDate?: string;         // ISO date (yyyy-mm-dd)
+  fileName: string;
+  driveItemId: string;    // OneDrive item id of the uploaded file
+  webUrl?: string;         // OneDrive web link
+  fileSize?: number;       // bytes
+  uploadedBy?: string;     // username of uploader
+  uploadedAt: string;       // ISO datetime
 }
 
 export type FormulaVersion = 'legacy' | 'current';
@@ -223,6 +262,10 @@ export interface QuotationVersion {
   projectId?: ID | null;
   savedAt: string;          // when this state was replaced by a newer save
   savedBy?: string | null;  // who performed the save that replaced this state
+  /** Free-text note describing what changed in the save that replaced this
+   * state — typed by the user in the "What did you change?" prompt on Save.
+   * Optional; absent on saves where the prompt was left blank. */
+  remarks?: string | null;
   data: Quotation;
 }
 

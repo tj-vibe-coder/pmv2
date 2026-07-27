@@ -118,6 +118,32 @@ export async function listFoldersWithPrefix(
 }
 
 /**
+ * List ALL children (files and folders alike) of a folder identified by its
+ * drive item id. Used for collision-safe filenames when uploading into a
+ * folder whose id is already known (no path resolution needed).
+ */
+export async function listChildrenById(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  token: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  driveId: string,
+  folderId: string,
+): Promise<DriveItemRef[]> {
+  const res = await fetch(
+    `${API_BASE}/api/onedrive/children?id=${encodeURIComponent(folderId)}`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`List children failed (${res.status}) for folder "${folderId}": ${errText.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const items: Array<{ id: string; name?: string; webUrl?: string }> =
+    Array.isArray(data?.items) ? data.items : [];
+  return items.map((it) => ({ id: it.id, webUrl: it.webUrl || '', name: it.name }));
+}
+
+/**
  * Resolve any OneDrive folder URL — long Documents-path URL OR short `:f:/p/...`
  * share link — to a drive item. The proxy handles the Graph `/shares` resolution.
  *

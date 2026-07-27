@@ -332,6 +332,11 @@ export default function QuotationEditor() {
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [timingComponentId, setTimingComponentId] = useState<string | null>(null);
 
+  // "What did you change?" prompt shown on Save — the note is attached to
+  // the version snapshot the server takes of the pre-save state.
+  const [remarkDialogOpen, setRemarkDialogOpen] = useState(false);
+  const [remarkText, setRemarkText] = useState('');
+
   // Saved-version history (snapshots captured server-side on every save).
   const [historyOpen, setHistoryOpen] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
@@ -438,7 +443,10 @@ export default function QuotationEditor() {
     });
   };
 
-  const handleSave = async () => {
+  // Clicking Save opens the "what changed?" prompt rather than saving
+  // immediately — confirmSave (below) does the actual save once the user
+  // submits it (remark is optional; blank is fine for a quick iteration).
+  const openSavePrompt = () => {
     if (!isDirty || saving || invalidPurchaseTiming) {
       if (invalidPurchaseTiming) {
         setToast({
@@ -448,11 +456,18 @@ export default function QuotationEditor() {
       }
       return;
     }
+    setRemarkText('');
+    setRemarkDialogOpen(true);
+  };
+
+  const confirmSave = async (remark: string) => {
+    setRemarkDialogOpen(false);
     setSaving(true);
     try {
       // Send the full draft as the patch — the store's updateQuotation handles
-      // PUT to the server and updates local state on success.
-      const savedQuotation = await update(quotation.id, draft);
+      // PUT to the server and updates local state on success. The remark is
+      // attached server-side to the version snapshot of the pre-save state.
+      const savedQuotation = await update(quotation.id, draft, remark.trim());
       setDraft(savedQuotation);
       setToast({ msg: 'Saved', sev: 'success' });
     } catch (err) {
@@ -1019,7 +1034,7 @@ export default function QuotationEditor() {
                 startIcon={<SaveIcon />}
                 variant="contained"
                 color="primary"
-                onClick={handleSave}
+                onClick={openSavePrompt}
                 disabled={!isDirty || saving || invalidPurchaseTiming}
               >
                 {saving ? 'Saving…' : 'Save'}
@@ -1874,7 +1889,16 @@ export default function QuotationEditor() {
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>
                         {v.savedAt ? format(new Date(v.savedAt), 'yyyy-MM-dd HH:mm') : '—'}
                       </TableCell>
-                      <TableCell>{v.savedBy || '—'}</TableCell>
+                      <TableCell>
+                        <Box>
+                          <Typography variant="body2">{v.savedBy || '—'}</Typography>
+                          {v.remarks && (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontStyle: 'italic' }}>
+                              "{v.remarks}"
+                            </Typography>
+                          )}
+                        </Box>
+                      </TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{total}</TableCell>
                       <TableCell align="right">
                         {!isLegacy && (
@@ -1900,6 +1924,48 @@ export default function QuotationEditor() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setHistoryOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={remarkDialogOpen}
+        onClose={() => setRemarkDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        // Enter submits like a commit-message prompt; Shift+Enter adds a line.
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            void confirmSave(remarkText);
+          }
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 600 }}>What did you change?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Optional — shown in Version history next to this save. Leave blank to save without a note.
+          </Typography>
+          <TextField
+            autoFocus
+            fullWidth
+            multiline
+            minRows={2}
+            maxRows={5}
+            placeholder="e.g. Added optional spare CPU, adjusted Panel Assembly pricing"
+            value={remarkText}
+            onChange={(e) => setRemarkText(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setRemarkDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<SaveIcon />}
+            onClick={() => confirmSave(remarkText)}
+          >
+            Save
+          </Button>
         </DialogActions>
       </Dialog>
 
