@@ -54,7 +54,7 @@
 - **Firebase project**: `pmv2-851ae` (production Firestore — all writes are real)
 - **Service account**: `pmv2-851ae-firebase-adminsdk-fbsvc-c4d13e6cb1.json` in repo root (gitignored)
 - **Hosting rewrite**: `/api/**` → Cloud Function `api`; everything else → `index.html` (SPA)
-- **Predeploy gotcha**: `scripts/prepare-functions.js` copies root `server.js` → `functions/server.js`, **overwriting** any local edits in functions/. Deployed function runs whatever's in root `server.js`. The hardened env-var seed in `functions/server.js` is a no-op once the 4 default users exist in Firestore.
+- **Predeploy gotcha**: `scripts/prepare-functions.js` copies root `server.js` → `functions/server.js` **and** runtime modules from root `server/*.js` (skipping `*.test.js`) → `functions/server/`, **overwriting** any local edits under functions/. Deployed function runs whatever's in root `server.js` + `server/`. The hardened env-var seed in `functions/server.js` is a no-op once the 4 default users exist in Firestore. If you add a new `require('./server/…')` from `server.js`, it must live as a non-test file under root `server/` so prepare-functions packages it — otherwise Cloud Functions deploy fails with `MODULE_NOT_FOUND` (see 2026-07-27 PR #59 deploy).
 
 ### Run locally
 
