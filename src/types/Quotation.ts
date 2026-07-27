@@ -22,12 +22,15 @@ export type OpportunityGrade = 'A' | 'B' | 'C';
 
 export const OPPORTUNITY_GRADES: OpportunityGrade[] = ['A', 'B', 'C'];
 
+// Win-likelihood weight behind each grade, as a whole-number percentage.
+export const OPPORTUNITY_GRADE_WEIGHT: Record<OpportunityGrade, number> = {
+  A: 100,
+  B: 60,
+  C: 30,
+};
+
 export function opportunityGradeLabel(g: OpportunityGrade): string {
-  switch (g) {
-    case 'A': return 'A — Sure win';
-    case 'B': return 'B — Has a chance';
-    case 'C': return 'C — No info yet';
-  }
+  return `${g} — ${OPPORTUNITY_GRADE_WEIGHT[g]}%`;
 }
 
 // Re-export the unified Client + ClientContact types so calcsheet code that imports
