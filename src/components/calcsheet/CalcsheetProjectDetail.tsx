@@ -19,8 +19,8 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import CloudOffIcon from '@mui/icons-material/CloudOff';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
-import type { ProjectStatus, Quotation, QuotationKind } from '../../types/Quotation';
-import { PROJECT_STATUSES, projectStatusLabel } from '../../types/Quotation';
+import type { ProjectStatus, Quotation, QuotationKind, OpportunityGrade } from '../../types/Quotation';
+import { PROJECT_STATUSES, projectStatusLabel, OPPORTUNITY_GRADES, opportunityGradeLabel } from '../../types/Quotation';
 import { parseLegacyWorkbook } from '../../utils/calcsheet/legacyImport';
 import type { ParsedProject, ParsedQuotation } from '../../utils/calcsheet/legacyImport';
 import { parseLegacyPdf } from '../../utils/calcsheet/legacyPdfImport';
@@ -1039,6 +1039,25 @@ export default function ProjectDetail() {
               >
                 {PROJECT_STATUSES.map((s) => (
                   <MenuItem key={s} value={s}>{projectStatusLabel(s)}</MenuItem>
+                ))}
+              </TextField>
+            </Box>
+          </Box>
+          <Box>
+            <Typography variant="caption" color="text.secondary">Grade</Typography>
+            <Box>
+              <TextField
+                select
+                size="small"
+                variant="standard"
+                value={project.opportunityGrade ?? ''}
+                onChange={(e) => updateProject(project.id, { opportunityGrade: (e.target.value || undefined) as OpportunityGrade | undefined })}
+                InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
+                sx={{ minWidth: 110 }}
+              >
+                <MenuItem value=""><em>Ungraded</em></MenuItem>
+                {OPPORTUNITY_GRADES.map((g) => (
+                  <MenuItem key={g} value={g}>{opportunityGradeLabel(g)}</MenuItem>
                 ))}
               </TextField>
             </Box>

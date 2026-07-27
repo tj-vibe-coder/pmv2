@@ -14,6 +14,22 @@ export function projectStatusLabel(s: ProjectStatus): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// Sales' subjective read on how likely an opportunity is to close, independent
+// of pipeline status (a project can be 'sent' and still graded A or C). Not
+// set on legacy/imported projects — the UI shows "Ungraded" until a grade is
+// explicitly picked.
+export type OpportunityGrade = 'A' | 'B' | 'C';
+
+export const OPPORTUNITY_GRADES: OpportunityGrade[] = ['A', 'B', 'C'];
+
+export function opportunityGradeLabel(g: OpportunityGrade): string {
+  switch (g) {
+    case 'A': return 'A — Sure win';
+    case 'B': return 'B — Has a chance';
+    case 'C': return 'C — No info yet';
+  }
+}
+
 // Re-export the unified Client + ClientContact types so calcsheet code that imports
 // from `types/Quotation` keeps working without a path change.
 export type { Client, ClientContact, Gender } from './Client';
@@ -41,6 +57,10 @@ export interface Project {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+
+  // Sales' subjective win-likelihood grade for this opportunity. See
+  // `OpportunityGrade` for the A/B/C meanings. Undefined = ungraded.
+  opportunityGrade?: OpportunityGrade;
 
   // Who created the opportunity — stamped server-side from the authenticated user
   // on POST and never updatable (PUT strips them). Absent on legacy/imported and
