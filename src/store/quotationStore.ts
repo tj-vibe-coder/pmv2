@@ -15,7 +15,7 @@ import { seedLaborPresets, starterGeneralReqts } from '../data/quotationPresets'
 import { quotationCode } from '../utils/calcsheet/codes';
 import { getOneDriveTokenStore } from '../services/onedriveTokenStore';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
-import { ensureProposalFolder, ensureExecutionFolder, moveProposalToExecution } from '../services/onedriveFolderService';
+import { ensureProposalFolder, ensureWonExecutionLayout } from '../services/onedriveFolderService';
 
 // API base — talks to pmv2's Express server
 const API_BASE = process.env.REACT_APP_API_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
@@ -116,12 +116,13 @@ interface Actions {
 
 export interface SyncMainProjectResult {
   success: boolean;
-  action: 'created' | 'recreated' | 'updated' | 'linked-existing';
+  action: 'created' | 'recreated' | 'updated' | 'linked-existing' | 'amount-synced';
   mainProjectId: string;
   projectNo: string;
   quotationId: string;
   quotationKind: QuotationKind;
   amount: number;
+  previousAmount?: number;
 }
 
 const now = () => new Date().toISOString();
@@ -377,14 +378,25 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       ),
     });
 
-    // If status transitioned to 'won' (and wasn't already), promote the project's
-    // OneDrive folder to the execution location. Preferred path: MOVE the existing
-    // proposal folder so all proposal-phase files travel with the project (single
-    // source of truth) and leave a .url shortcut in the original proposal location.
-    // Fallback for legacy projects without a proposal folder: create a fresh
-    // execution folder. Best-effort, fire-and-forget.
-    if (patch.status === 'won' && prev && prev.status !== 'won' && isCorporateOneDriveConfigured()) {
-      const next: Project = { ...prev, ...patch };
+    // OneDrive execution layout (best-effort, fire-and-forget):
+    //  1. status → won: promote/create under 01 Execution with IOCT naming when
+    //     mainProjectNo is known (`IOCT2605001-LBI Project Name`).
+    //  2. mainProjectNo arrives later on an already-won project: rename the
+    //     existing execution folder from PCS… → IOCT… if needed.
+    const next: Project | undefined = prev ? { ...prev, ...patch } : undefined;
+    const becameWon = !!patch.status && patch.status === 'won' && !!prev && prev.status !== 'won';
+    const mainNoArrived =
+      typeof patch.mainProjectNo === 'string' &&
+      !!patch.mainProjectNo &&
+      patch.mainProjectNo !== (prev?.mainProjectNo || '');
+    const isWon = (next?.status === 'won') || becameWon;
+    const shouldEnsureExecution =
+      isCorporateOneDriveConfigured() &&
+      !!next &&
+      isWon &&
+      (becameWon || mainNoArrived || (!!next.mainProjectNo && !next.executionFolderId));
+
+    if (shouldEnsureExecution && next) {
       (async () => {
         try {
           const odStore = getOneDriveTokenStore();
@@ -392,82 +404,42 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
           const token = await odStore.getToken();
           if (!token) return;
 
-          if (next.proposalFolderId) {
-            // Promotion path: create the ops project folder in execution, then move
-            // the PCS proposal folder inside it as a subfolder.
-            const customerCodeMatch = next.code.match(/^PCS\d{7}-([A-Z0-9]+)-/i);
-            const customerSuffix = customerCodeMatch ? `-${customerCodeMatch[1].toUpperCase()}` : '';
-            const executionFolderName = next.mainProjectNo
-              ? `${next.mainProjectNo}${customerSuffix}${next.name ? ` ${next.name}` : ''}`
-              : undefined;
-            const { executionFolder, proposalFolder } = await moveProposalToExecution(token, {
-              code: next.code,
-              name: next.name,
-              proposalFolderId: next.proposalFolderId,
-              executionFolderName,
-            });
-            const patchFields = {
-              // executionFolder is the new ops project folder; proposalFolder is the
-              // PCS subfolder now living inside it.
-              proposalFolderUrl: proposalFolder.webUrl,
-              executionFolderId: executionFolder.id,
-              executionFolderUrl: executionFolder.webUrl,
-            };
-            await api('PUT', `/projects/${id}`, patchFields);
-            // Only update the linked main project's execution folder if it doesn't
-            // already have one — avoids overwriting a manually-configured link on
-            // pre-Calcsheet projects.
-            if (next.mainProjectId) {
-              const mainResp = await fetch(`/api/projects/${next.mainProjectId}`).then((r) => r.json()).catch(() => null);
-              if (mainResp && !mainResp.executionFolderId) {
-                await api('PUT', `/api/projects/${next.mainProjectId}`, {
-                  executionFolderId: executionFolder.id,
-                  executionFolderUrl: executionFolder.webUrl,
-                }).catch(() => {});
-              }
-            }
-            set({
-              projects: get().projects.map((proj) =>
-                proj.id === id ? { ...proj, ...patchFields } : proj,
-              ),
-            });
-            // eslint-disable-next-line no-console
-            console.info('[OneDrive] proposal folder promoted to execution', executionFolder.webUrl);
-          } else {
-            // Fallback: no proposal folder (legacy or manually-linked projects).
-            // Skip if we already have an execution folder linked to this calcsheet project.
-            if (next.executionFolderId) return;
-            const executionProject = next.mainProjectNo
-              ? { code: next.mainProjectNo, name: '' }
-              : next;
-            const ref = await ensureExecutionFolder(token, executionProject);
-            await api('PUT', `/projects/${id}`, {
-              executionFolderId: ref.id,
-              executionFolderUrl: ref.webUrl,
-            });
-            // Same guard: only set on main project if not already configured.
-            if (next.mainProjectId) {
-              const mainResp = await fetch(`/api/projects/${next.mainProjectId}`).then((r) => r.json()).catch(() => null);
-              if (mainResp && !mainResp.executionFolderId) {
-                await api('PUT', `/api/projects/${next.mainProjectId}`, {
-                  executionFolderId: ref.id,
-                  executionFolderUrl: ref.webUrl,
-                }).catch(() => {});
-              }
-            }
-            set({
-              projects: get().projects.map((proj) =>
-                proj.id === id
-                  ? { ...proj, executionFolderId: ref.id, executionFolderUrl: ref.webUrl }
-                  : proj,
-              ),
-            });
-            // eslint-disable-next-line no-console
-            console.info('[OneDrive] execution folder created (no prior proposal)', ref.webUrl);
+          const { executionFolder, proposalFolder } = await ensureWonExecutionLayout(token, next);
+          const patchFields: Partial<Project> = {
+            executionFolderId: executionFolder.id,
+            executionFolderUrl: executionFolder.webUrl,
+            ...(proposalFolder?.webUrl ? { proposalFolderUrl: proposalFolder.webUrl } : {}),
+          };
+          const cur = get().projects.find((p) => p.id === id);
+          if (
+            cur?.executionFolderId === patchFields.executionFolderId &&
+            cur?.executionFolderUrl === patchFields.executionFolderUrl &&
+            (!patchFields.proposalFolderUrl || cur?.proposalFolderUrl === patchFields.proposalFolderUrl)
+          ) {
+            // Nothing to persist (already correct / no URL change after rename).
+            // Still write when rename changes the webUrl.
           }
+          await api('PUT', `/projects/${id}`, patchFields);
+          // Only set on the linked main project if it has no execution folder yet.
+          if (next.mainProjectId) {
+            const mainResp = await fetch(`/api/projects/${next.mainProjectId}`).then((r) => r.json()).catch(() => null);
+            if (mainResp && !mainResp.executionFolderId) {
+              await api('PUT', `/api/projects/${next.mainProjectId}`, {
+                executionFolderId: executionFolder.id,
+                executionFolderUrl: executionFolder.webUrl,
+              }).catch(() => {});
+            }
+          }
+          set({
+            projects: get().projects.map((proj) =>
+              proj.id === id ? { ...proj, ...patchFields } : proj,
+            ),
+          });
+          // eslint-disable-next-line no-console
+          console.info('[OneDrive] execution folder ensured', executionFolder.webUrl || executionFolder.name);
         } catch (err) {
           // eslint-disable-next-line no-console
-          console.warn('[OneDrive] execution promotion failed (non-blocking)', err);
+          console.warn('[OneDrive] execution promotion/rename failed (non-blocking)', err);
         }
       })();
     }
@@ -484,6 +456,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       force: !!opts.force,
     });
     const nowIso = now();
+    const prev = get().projects.find((p) => p.id === id);
     set({
       projects: get().projects.map((p) =>
         p.id === id
@@ -502,6 +475,48 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
           : p,
       ),
     });
+    // If this project is already won, re-run execution layout so a PCS-named
+    // folder gets renamed to `IOCT####-CUST Name` now that we have the number.
+    if (prev?.status === 'won' && res.projectNo && isCorporateOneDriveConfigured()) {
+      // Reuse updateProject's OneDrive side-effect by applying mainProjectNo again.
+      // Avoid a second Firestore write of unrelated fields — only trigger ensure.
+      (async () => {
+        try {
+          const odStore = getOneDriveTokenStore();
+          if (!odStore.isAuthenticated) return;
+          const token = await odStore.getToken();
+          if (!token) return;
+          const cur = get().projects.find((p) => p.id === id);
+          if (!cur) return;
+          const { executionFolder, proposalFolder } = await ensureWonExecutionLayout(token, cur);
+          const patchFields: Partial<Project> = {
+            executionFolderId: executionFolder.id,
+            executionFolderUrl: executionFolder.webUrl,
+            ...(proposalFolder?.webUrl ? { proposalFolderUrl: proposalFolder.webUrl } : {}),
+          };
+          await api('PUT', `/projects/${id}`, patchFields);
+          if (cur.mainProjectId) {
+            const mainResp = await fetch(`/api/projects/${cur.mainProjectId}`).then((r) => r.json()).catch(() => null);
+            if (mainResp && !mainResp.executionFolderId) {
+              await api('PUT', `/api/projects/${cur.mainProjectId}`, {
+                executionFolderId: executionFolder.id,
+                executionFolderUrl: executionFolder.webUrl,
+              }).catch(() => {});
+            }
+          }
+          set({
+            projects: get().projects.map((proj) =>
+              proj.id === id ? { ...proj, ...patchFields } : proj,
+            ),
+          });
+          // eslint-disable-next-line no-console
+          console.info('[OneDrive] execution folder renamed after sync-main', executionFolder.name || executionFolder.webUrl);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[OneDrive] post-sync-main rename failed (non-blocking)', err);
+        }
+      })();
+    }
     return res;
   },
 

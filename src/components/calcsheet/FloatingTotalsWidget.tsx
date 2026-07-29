@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, IconButton, Paper, Stack, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
-import { PHP } from '../../utils/calcsheet/calc';
+import { PHP, formatDiscountPct } from '../../utils/calcsheet/calc';
 import type { Quotation, QuotationTotals } from '../../types/Quotation';
 
 const POSITION_KEY = 'calcsheet:floatingTotalsPos';
@@ -105,7 +105,7 @@ export function FloatingTotalsWidget({
           </Stack>
           {quotation.discountPct > 0 && (
             <Stack direction="row" justifyContent="space-between">
-              <Typography variant="caption" color="text.secondary">Discount ({quotation.discountPct}%)</Typography>
+              <Typography variant="caption" color="text.secondary">Discount ({formatDiscountPct(quotation.discountPct)}%)</Typography>
               <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'error.main' }}>− {PHP(totals.discount)}</Typography>
             </Stack>
           )}

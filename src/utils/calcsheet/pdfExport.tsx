@@ -6,6 +6,7 @@ import type { Client, ComponentLine, Project, Quotation, SalesContact } from '..
 import { resolveContact } from '../../types/Client';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP, NUM,
+  formatDiscountPct,
 } from './calc';
 import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
 import { quotationRefNo } from './codes';
@@ -639,7 +640,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
           {quotation.discountPct > 0 && (
             <>
               <View style={styles.sumFooterRow}>
-                <Text style={styles.sumFooterLabel}>DISCOUNT({quotation.discountPct}%)</Text>
+                {/* Round % for clients — exact discount is the peso amount */}
+                <Text style={styles.sumFooterLabel}>DISCOUNT ({formatDiscountPct(quotation.discountPct)}%)</Text>
                 <Text style={styles.sumFooterValue}>{PHP(totals.discount)}</Text>
               </View>
               <View style={styles.sumFooterRow}>

@@ -23,7 +23,11 @@ import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes'
 import { exportProjectListXlsx } from '../../utils/calcsheet/xlsxExport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
-import { ensureProposalFolder, ensureExecutionFolder, moveProposalToExecution } from '../../services/onedriveFolderService';
+import {
+  ensureProposalFolder,
+  ensureWonExecutionLayout,
+  executionProjectFolderName,
+} from '../../services/onedriveFolderService';
 
 const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error' | 'warning' | 'info'> = {
   draft: 'default', for_review: 'info', sent: 'primary', won: 'success', lost: 'error', inactive: 'warning',
@@ -74,6 +78,7 @@ export default function Projects() {
   const addProject = useQuotationStore((s) => s.addProject);
   const deleteProject = useQuotationStore((s) => s.deleteProject);
   const updateProject = useQuotationStore((s) => s.updateProject);
+  const syncMainProject = useQuotationStore((s) => s.syncMainProject);
 
   // OneDrive bulk auto-link
   const {
@@ -145,31 +150,18 @@ export default function Projects() {
         });
         if (ref.matchedExisting) progress.linked++;
         else progress.created++;
-        // Bonus: if the project is already won, also resolve the execution folder.
-        if (p.status === 'won' && !p.executionFolderId) {
+        // Bonus: if the project is already won, also resolve/rename the execution folder
+        // to the IOCT convention (`IOCT####-CUST Name`) when a project no. is linked.
+        if (p.status === 'won') {
           try {
-              let exId: string;
-            let exUrl: string;
-            let proposalUrl: string | undefined;
-            if (p.mainProjectNo) {
-              const { executionFolder, proposalFolder } = await moveProposalToExecution(token, {
-                code: p.code,
-                name: p.name,
-                proposalFolderId: ref.id,
-                executionFolderName: p.mainProjectNo,
-              });
-              exId = executionFolder.id;
-              exUrl = executionFolder.webUrl;
-              proposalUrl = proposalFolder.webUrl;
-            } else {
-              const exRef = await ensureExecutionFolder(token, p);
-              exId = exRef.id;
-              exUrl = exRef.webUrl;
-            }
+            const { executionFolder, proposalFolder } = await ensureWonExecutionLayout(token, {
+              ...p,
+              proposalFolderId: ref.id,
+            });
             await updateProject(p.id, {
-              executionFolderId: exId,
-              executionFolderUrl: exUrl,
-              ...(proposalUrl ? { proposalFolderUrl: proposalUrl } : {}),
+              executionFolderId: executionFolder.id,
+              executionFolderUrl: executionFolder.webUrl,
+              ...(proposalFolder?.webUrl ? { proposalFolderUrl: proposalFolder.webUrl } : {}),
             });
           } catch (exErr) {
             // Non-fatal — proposal folder still landed.
@@ -718,7 +710,42 @@ export default function Projects() {
                     <Select
                       size="small"
                       value={p.status}
-                      onChange={(e) => updateProject(p.id, { status: e.target.value as ProjectStatus })}
+                      onChange={(e) => {
+                        const nextStatus = e.target.value as ProjectStatus;
+                        void (async () => {
+                          // Marking won from the list must carry a Project List number so
+                          // OneDrive gets `IOCT####-CUST Name` (not a leftover PCS folder).
+                          if (nextStatus === 'won' && p.status !== 'won') {
+                            try {
+                              let mainProjectId = p.mainProjectId;
+                              let mainProjectNo = p.mainProjectNo;
+                              if (!mainProjectNo) {
+                                const result = await syncMainProject(p.id, { force: false });
+                                mainProjectId = result.mainProjectId;
+                                mainProjectNo = result.projectNo;
+                              }
+                              await updateProject(p.id, {
+                                status: 'won',
+                                ...(mainProjectId ? { mainProjectId } : {}),
+                                ...(mainProjectNo ? { mainProjectNo } : {}),
+                              });
+                              setCreateNotice({
+                                severity: 'info',
+                                message: mainProjectNo
+                                  ? `Marked won · Project List ${mainProjectNo}. OneDrive folder: ${executionProjectFolderName({ code: p.code, name: p.name, mainProjectNo })}`
+                                  : 'Marked won. Link a Project List record so the OneDrive folder can use the IOCT project number.',
+                              });
+                            } catch (err) {
+                              setCreateNotice({
+                                severity: 'error',
+                                message: err instanceof Error ? err.message : 'Failed to mark project as won.',
+                              });
+                            }
+                            return;
+                          }
+                          await updateProject(p.id, { status: nextStatus });
+                        })();
+                      }}
                       sx={{
                         minWidth: 96,
                         '& .MuiSelect-select': { py: 0.25, display: 'flex', alignItems: 'center' },
