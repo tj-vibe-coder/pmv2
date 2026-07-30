@@ -168,7 +168,9 @@ const EmployeeList: React.FC<EmployeeListProps> = ({ onViewDTR, onViewDashboard 
                   <TableCell>
                     {resolveRateType(emp) === 'DAILY' ? fmt(emp.dailyRate) + '/day' : fmt(emp.monthlyRate) + '/mo'}
                   </TableCell>
-                  <TableCell>{fmt(emp.mealAllowance)}/day</TableCell>
+                  <TableCell>
+                    {fmt(emp.mealAllowance)}/{(emp.mealAllowanceBasis ?? 'DAILY') === 'MONTHLY' ? 'mo' : 'day'}
+                  </TableCell>
                   <TableCell>{emp.payFrequency.replace('_', '-')}</TableCell>
                   <TableCell>
                     <Chip label={emp.isActive ? 'Active' : 'Inactive'} size="small"

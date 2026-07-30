@@ -5,6 +5,7 @@ import type { Client, Project, Quotation } from '../../types/Quotation';
 import { PROJECT_STATUSES } from '../../types/Quotation';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, manpowerCost,
+  formatDiscountPct,
 } from './calc';
 import { quotationRefNo } from './codes';
 
@@ -246,7 +247,7 @@ export async function exportQuotationXlsx(
   const totalsBlock: [string, number, boolean?][] = [
     ['Subtotal (VAT-EX)', totals.subtotal, true],
   ];
-  if (quotation.discountPct > 0) totalsBlock.push([`Discount (${quotation.discountPct}%)`, -totals.discount]);
+  if (quotation.discountPct > 0) totalsBlock.push([`Discount (${formatDiscountPct(quotation.discountPct)}%)`, -totals.discount]);
   if (quotation.vatPct > 0) totalsBlock.push([`VAT (${quotation.vatPct}%)`, totals.vat]);
   totalsBlock.push(['GRAND TOTAL (PHP)', totals.grandTotal, true]);
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, FormControl,
+  Alert, Box, Button, Checkbox, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControl,
   IconButton, InputAdornment, InputLabel, LinearProgress, ListItemText, MenuItem, OutlinedInput, Paper,
   Select, Snackbar, Stack, Switch, FormControlLabel,
   Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, TextField, Typography, Tooltip,
@@ -23,7 +23,11 @@ import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes'
 import { exportProjectListXlsx } from '../../utils/calcsheet/xlsxExport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
-import { ensureProposalFolder, ensureExecutionFolder, moveProposalToExecution } from '../../services/onedriveFolderService';
+import {
+  ensureProposalFolder,
+  ensureWonExecutionLayout,
+  executionProjectFolderName,
+} from '../../services/onedriveFolderService';
 
 const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error' | 'warning' | 'info'> = {
   draft: 'default', for_review: 'info', sent: 'primary', won: 'success', lost: 'error', inactive: 'warning',
@@ -79,6 +83,7 @@ export default function Projects() {
   const addProject = useQuotationStore((s) => s.addProject);
   const deleteProject = useQuotationStore((s) => s.deleteProject);
   const updateProject = useQuotationStore((s) => s.updateProject);
+  const syncMainProject = useQuotationStore((s) => s.syncMainProject);
 
   // OneDrive bulk auto-link
   const {
@@ -150,31 +155,18 @@ export default function Projects() {
         });
         if (ref.matchedExisting) progress.linked++;
         else progress.created++;
-        // Bonus: if the project is already won, also resolve the execution folder.
-        if (p.status === 'won' && !p.executionFolderId) {
+        // Bonus: if the project is already won, also resolve/rename the execution folder
+        // to the IOCT convention (`IOCT####-CUST Name`) when a project no. is linked.
+        if (p.status === 'won') {
           try {
-              let exId: string;
-            let exUrl: string;
-            let proposalUrl: string | undefined;
-            if (p.mainProjectNo) {
-              const { executionFolder, proposalFolder } = await moveProposalToExecution(token, {
-                code: p.code,
-                name: p.name,
-                proposalFolderId: ref.id,
-                executionFolderName: p.mainProjectNo,
-              });
-              exId = executionFolder.id;
-              exUrl = executionFolder.webUrl;
-              proposalUrl = proposalFolder.webUrl;
-            } else {
-              const exRef = await ensureExecutionFolder(token, p);
-              exId = exRef.id;
-              exUrl = exRef.webUrl;
-            }
+            const { executionFolder, proposalFolder } = await ensureWonExecutionLayout(token, {
+              ...p,
+              proposalFolderId: ref.id,
+            });
             await updateProject(p.id, {
-              executionFolderId: exId,
-              executionFolderUrl: exUrl,
-              ...(proposalUrl ? { proposalFolderUrl: proposalUrl } : {}),
+              executionFolderId: executionFolder.id,
+              executionFolderUrl: executionFolder.webUrl,
+              ...(proposalFolder?.webUrl ? { proposalFolderUrl: proposalFolder.webUrl } : {}),
             });
           } catch (exErr) {
             // Non-fatal — proposal folder still landed.
@@ -200,6 +192,7 @@ export default function Projects() {
   };
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(empty);
+  const [creating, setCreating] = useState(false);
   // tracks whether the location/code fields were auto-filled — so customer
   // changes can replace them, but manual edits lock them in
   const [locationAutoFilled, setLocationAutoFilled] = useState(false);
@@ -237,10 +230,16 @@ export default function Projects() {
     setForm(empty);
     setLocationAutoFilled(false);
     setCodeManuallyEdited(false);
+    setCreating(false);
     setOpen(true);
   };
+  const closeNewDialog = () => {
+    if (creating) return; // don't dismiss mid-create (avoids "did it work?" ambiguity)
+    setOpen(false);
+  };
   const save = async () => {
-    if (!form.name || !form.customerId) return;
+    if (!form.name || !form.customerId || creating) return;
+    setCreating(true);
     try {
       const saved = await addProject({
         name: form.name,
@@ -253,6 +252,7 @@ export default function Projects() {
         code: form.code || undefined,
       });
       setOpen(false);
+      setCreating(false);
       // If OneDrive is configured but the folder couldn't be created (not signed
       // in, or token unavailable), let the user know the project saved fine and
       // the folder can be linked later from the project page.
@@ -265,6 +265,7 @@ export default function Projects() {
         });
       }
     } catch (err) {
+      setCreating(false);
       setCreateNotice({ severity: 'error', message: err instanceof Error ? err.message : 'Failed to create project.' });
     }
   };
@@ -723,7 +724,42 @@ export default function Projects() {
                     <Select
                       size="small"
                       value={p.status}
-                      onChange={(e) => updateProject(p.id, { status: e.target.value as ProjectStatus })}
+                      onChange={(e) => {
+                        const nextStatus = e.target.value as ProjectStatus;
+                        void (async () => {
+                          // Marking won from the list must carry a Project List number so
+                          // OneDrive gets `IOCT####-CUST Name` (not a leftover PCS folder).
+                          if (nextStatus === 'won' && p.status !== 'won') {
+                            try {
+                              let mainProjectId = p.mainProjectId;
+                              let mainProjectNo = p.mainProjectNo;
+                              if (!mainProjectNo) {
+                                const result = await syncMainProject(p.id, { force: false });
+                                mainProjectId = result.mainProjectId;
+                                mainProjectNo = result.projectNo;
+                              }
+                              await updateProject(p.id, {
+                                status: 'won',
+                                ...(mainProjectId ? { mainProjectId } : {}),
+                                ...(mainProjectNo ? { mainProjectNo } : {}),
+                              });
+                              setCreateNotice({
+                                severity: 'info',
+                                message: mainProjectNo
+                                  ? `Marked won · Project List ${mainProjectNo}. OneDrive folder: ${executionProjectFolderName({ code: p.code, name: p.name, mainProjectNo })}`
+                                  : 'Marked won. Link a Project List record so the OneDrive folder can use the IOCT project number.',
+                              });
+                            } catch (err) {
+                              setCreateNotice({
+                                severity: 'error',
+                                message: err instanceof Error ? err.message : 'Failed to mark project as won.',
+                              });
+                            }
+                            return;
+                          }
+                          await updateProject(p.id, { status: nextStatus });
+                        })();
+                      }}
                       sx={{
                         minWidth: 96,
                         '& .MuiSelect-select': { py: 0.25, display: 'flex', alignItems: 'center' },
@@ -852,9 +888,21 @@ export default function Projects() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog
+        open={open}
+        onClose={closeNewDialog}
+        maxWidth="sm"
+        fullWidth
+        disableEscapeKeyDown={creating}
+      >
+        {creating && <LinearProgress />}
         <DialogTitle>New project</DialogTitle>
         <DialogContent>
+          {creating && (
+            <Alert severity="info" sx={{ mb: 1 }}>
+              Creating project… this can take a few seconds (especially when linking OneDrive).
+            </Alert>
+          )}
           {oneDriveRequired && !oneDriveSignedIn && (
             <Alert
               severity="info"
@@ -864,7 +912,7 @@ export default function Projects() {
                   color="inherit"
                   size="small"
                   onClick={() => { void oneDriveLogin(); }}
-                  disabled={oneDriveLoading}
+                  disabled={oneDriveLoading || creating}
                 >
                   Sign in
                 </Button>
@@ -875,12 +923,13 @@ export default function Projects() {
             </Alert>
           )}
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mt: 1 }}>
-            <TextField label="Project name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ gridColumn: 'span 2' }} />
+            <TextField label="Project name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ gridColumn: 'span 2' }} disabled={creating} />
             {/* Customer first so location can auto-fill from it */}
             <TextField
               select
               label="Customer"
               value={form.customerId}
+              disabled={creating}
               onChange={(e) => {
                 const newCustomerId = e.target.value;
                 const selectedClient = clients.find((c) => c.id === newCustomerId);
@@ -896,13 +945,14 @@ export default function Projects() {
             >
               {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
             </TextField>
-            <TextField select label="Partner (optional)" value={form.partnerId} onChange={(e) => setForm({ ...form, partnerId: e.target.value })}>
+            <TextField select label="Partner (optional)" value={form.partnerId} disabled={creating} onChange={(e) => setForm({ ...form, partnerId: e.target.value })}>
               <MenuItem value="">— none —</MenuItem>
               {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
             </TextField>
             <TextField
               label="Location"
               value={form.location}
+              disabled={creating}
               onChange={(e) => { setLocationAutoFilled(false); setForm({ ...form, location: e.target.value }); }}
               sx={{ gridColumn: 'span 2' }}
               helperText={locationAutoFilled ? 'Auto-filled from client — edit freely' : undefined}
@@ -911,6 +961,7 @@ export default function Projects() {
               label="Date"
               type="date"
               value={form.date}
+              disabled={creating}
               onChange={(e) => {
                 const newDate = e.target.value;
                 const newCode = codeManuallyEdited ? form.code : computeCode(form.customerId, newDate);
@@ -918,7 +969,7 @@ export default function Projects() {
               }}
               InputLabelProps={{ shrink: true }}
             />
-            <TextField select label="Status" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}>
+            <TextField select label="Status" value={form.status} disabled={creating} onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}>
               {STATUS_OPTIONS.map((s) => (
                 <MenuItem key={s} value={s}>{statusLabel(s)}</MenuItem>
               ))}
@@ -927,6 +978,7 @@ export default function Projects() {
               select
               label="Sales / account contact"
               value={form.salesContactId}
+              disabled={creating}
               onChange={(e) => setForm({ ...form, salesContactId: e.target.value })}
               sx={{ gridColumn: 'span 2' }}
             >
@@ -940,6 +992,7 @@ export default function Projects() {
             <TextField
               label="Project code (optional)"
               value={form.code}
+              disabled={creating}
               onChange={(e) => { setCodeManuallyEdited(true); setForm({ ...form, code: e.target.value }); }}
               onFocus={() => {
                 // auto-fill on first focus if still empty
@@ -965,8 +1018,15 @@ export default function Projects() {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={save}>Create</Button>
+          <Button onClick={closeNewDialog} disabled={creating}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => { void save(); }}
+            disabled={creating || !form.name || !form.customerId}
+            startIcon={creating ? <CircularProgress size={16} color="inherit" /> : undefined}
+          >
+            {creating ? 'Creating…' : 'Create'}
+          </Button>
         </DialogActions>
       </Dialog>
     </Stack>

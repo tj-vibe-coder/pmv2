@@ -25,6 +25,7 @@ import { useQuotationStore } from '../../store/quotationStore';
 import {
   PHP, computeTotals, componentLineTotal,
   componentSellingUnit, lineGeneralTotal, manpowerCost, manpowerTotalCost, manpowerDailyRate,
+  formatDiscountPct, discountPctFromAmount, discountPctFromTargetNet,
 } from '../../utils/calcsheet/calc';
 import { ISSUER_NAMES, DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from '../../utils/calcsheet/defaultTerms';
 import { quotationRefNo } from '../../utils/calcsheet/codes';
@@ -1413,7 +1414,18 @@ export default function QuotationEditor() {
             <NumField label="General Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = 1 + (((s.markupPct ?? v) || 0) / 100); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={isLegacy} sx={{ width: '100%' }} />
-            <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
+            <NumField
+              label="Discount %"
+              value={quotation.discountPct}
+              onChange={(v) => setField('discountPct', v)}
+              helperText={
+                quotation.discountPct > 0
+                  ? `Client PDF shows ${formatDiscountPct(quotation.discountPct)}% (rounded)`
+                  : 'Or use Discount ₱ / Target net below'
+              }
+              disabled={isLegacy}
+              sx={{ width: '100%' }}
+            />
             <TextField
               label="Expected purchase date"
               type="date"
@@ -1440,10 +1452,28 @@ export default function QuotationEditor() {
               value={totals ? Math.round(totals.discount * 100) / 100 : 0}
               onChange={(v) => {
                 if (!totals || totals.subtotal <= 0) return;
-                const pct = (v / totals.subtotal) * 100;
-                setField('discountPct', Math.min(100, Math.max(0, pct)));
+                setField('discountPct', discountPctFromAmount(totals.subtotal, v));
               }}
-              helperText={totals && totals.subtotal > 0 ? 'Enter an exact peso discount — % above updates to match' : 'Add line items first'}
+              helperText={
+                totals && totals.subtotal > 0
+                  ? 'Exact peso off the subtotal (e.g. negotiated cut)'
+                  : 'Add line items first'
+              }
+              disabled={isLegacy || !totals || totals.subtotal <= 0}
+              sx={{ width: '100%' }}
+            />
+            <NumField
+              label="Target net total (VAT-ex ₱)"
+              value={totals ? Math.round((totals.subtotal - totals.discount) * 100) / 100 : 0}
+              onChange={(v) => {
+                if (!totals || totals.subtotal <= 0) return;
+                setField('discountPct', discountPctFromTargetNet(totals.subtotal, v));
+              }}
+              helperText={
+                totals && totals.subtotal > 0
+                  ? 'Type the figure you want to charge (e.g. 532000 for 14 × 38000)'
+                  : 'Add line items first'
+              }
               disabled={isLegacy || !totals || totals.subtotal <= 0}
               sx={{ width: '100%' }}
             />
@@ -1754,7 +1784,7 @@ export default function QuotationEditor() {
           <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right', fontWeight: 600 }}>{PHP(totals.subtotal)}</Typography>
           <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right', minWidth: 44 }}>100%</Typography>
           {quotation.discountPct > 0 && <>
-            <Typography variant="body2">Discount ({quotation.discountPct}%)</Typography>
+            <Typography variant="body2">Discount ({formatDiscountPct(quotation.discountPct)}%)</Typography>
             <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right', color: 'error.main' }}>− {PHP(totals.discount)}</Typography>
             <Box />
           </>}

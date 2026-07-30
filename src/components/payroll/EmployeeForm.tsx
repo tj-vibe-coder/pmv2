@@ -3,7 +3,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField, MenuItem, Grid, FormControlLabel, Switch, Typography,
 } from '@mui/material';
-import { Employee, EmployeeType, PayFrequency, RateType } from '../../types/Payroll';
+import { Employee, EmployeeType, PayFrequency, RateType, MealAllowanceBasis } from '../../types/Payroll';
 import type { User } from '../../types/User';
 
 const DESIGNATIONS = ['Helper', 'Skilled Worker', 'Foreman', 'Supervisor', 'Engineer', 'Engineering Manager', 'Project Manager', 'Admin', 'Accounting', 'Other'];
@@ -28,6 +28,9 @@ const EMPTY: Omit<Employee, 'id' | 'createdAt'> = {
   dailyRate: 0,
   monthlyRate: 0,
   mealAllowance: 0,
+  // Default DAILY so pro-rated field hires (electricians) get allowance × days.
+  // Switch to MONTHLY for fixed take-home packages (e.g. ₱15k basic + ₱1k meal).
+  mealAllowanceBasis: 'DAILY',
   dateHired: new Date().toISOString().split('T')[0],
   isActive: true,
   applyDeductions: true,
@@ -66,6 +69,7 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEdi
   // Resolved rate basis (falls back to the FIELD→DAILY / OFFICE→MONTHLY default
   // for older records that predate the explicit rateType field).
   const rateType: RateType = form.rateType ?? (form.employeeType === 'FIELD' ? 'DAILY' : 'MONTHLY');
+  const mealBasis: MealAllowanceBasis = form.mealAllowanceBasis ?? 'DAILY';
 
   const handleSave = async () => {
     if (!form.name || !form.employeeNumber || !form.designation) return;
@@ -141,7 +145,26 @@ const EmployeeForm: React.FC<Props> = ({ open, employee, onClose, onSave, canEdi
           )}
           {canEditRate && (
             <Grid size={{ xs: 12, sm: 4 }}>
-              <TextField fullWidth label="Meal Allowance (₱/day)" type="number" value={form.mealAllowance} onChange={set('mealAllowance')} inputProps={{ min: 0 }} />
+              <TextField fullWidth select label="Meal Allowance Basis" value={mealBasis}
+                onChange={(e) => setForm((f) => ({ ...f, mealAllowanceBasis: e.target.value as MealAllowanceBasis }))}
+                helperText={mealBasis === 'DAILY'
+                  ? 'Pro-rated: amount × days worked (use for electricians / field)'
+                  : 'Fixed monthly amount, split by pay frequency (e.g. ₱1,000/mo → ₱500 semi-monthly)'}>
+                <MenuItem value="DAILY">Per day</MenuItem>
+                <MenuItem value="MONTHLY">Per month (fixed)</MenuItem>
+              </TextField>
+            </Grid>
+          )}
+          {canEditRate && (
+            <Grid size={{ xs: 12, sm: 4 }}>
+              <TextField
+                fullWidth
+                label={mealBasis === 'DAILY' ? 'Meal Allowance (₱/day)' : 'Meal Allowance (₱/month)'}
+                type="number"
+                value={form.mealAllowance}
+                onChange={set('mealAllowance')}
+                inputProps={{ min: 0 }}
+              />
             </Grid>
           )}
           <Grid size={{ xs: 12, sm: 4 }}>
