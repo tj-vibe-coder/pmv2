@@ -32,3 +32,20 @@
 - `npm run build` passed.
 - Live sandbox API and browser smoke passed.
 - Independent final code review: READY.
+
+## 2026-07-30 — Payroll meal allowance basis (Kim Solis package)
+
+### Problem
+Meal allowance was always per-day. TJ set Kim to 15k/mo + 1k meal intending 16k take-home with OT on basic only; system multiplied 1k × days worked.
+
+### Done
+- Added `mealAllowanceBasis: 'DAILY' | 'MONTHLY'` (default DAILY).
+- Engine, Employee form, Employee list, PayslipCard, unit tests.
+
+### Kim data (ops, after code live)
+- mealAllowanceBasis=MONTHLY, mealAllowance=1000, monthlyRate=15000, SEMI_MONTHLY → 8k/cutoff.
+- Recompute draft July 15 payroll run if already created.
+
+### Checked
+- `npm test -- --watchAll=false --testPathPattern=payrollEngine.test` — 19/19 pass
+- `npx tsc --noEmit` — clean
