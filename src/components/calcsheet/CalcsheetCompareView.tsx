@@ -151,7 +151,7 @@ export default function CompareView() {
     <Stack spacing={3}>
       <Stack direction="row" alignItems="flex-start" justifyContent="space-between">
         <Stack spacing={0.5}>
-          <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{project.code}</Typography>
+          <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{project.code || 'Draft'}</Typography>
           <Typography variant="h5" sx={{ fontWeight: 600 }}>{project.name} · Comparison</Typography>
         </Stack>
         <Box>

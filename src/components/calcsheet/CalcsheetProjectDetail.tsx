@@ -1002,8 +1002,8 @@ export default function ProjectDetail() {
       <Stack direction="row" alignItems="flex-start" justifyContent="space-between">
         <Stack direction="row" alignItems="flex-start" spacing={1}>
           <Stack spacing={0.5}>
-            <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
-              {project.code}
+            <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary', ...(project.code ? {} : { fontStyle: 'italic' }) }}>
+              {project.code || 'No code yet — assign a client to generate one'}
             </Typography>
             <Typography variant="h5" sx={{ fontWeight: 600 }}>{project.name}</Typography>
             {project.location && <Typography color="text.secondary">{project.location}</Typography>}
@@ -1524,6 +1524,8 @@ export default function ProjectDetail() {
               fullWidth
               size="small"
               inputProps={{ style: { fontFamily: 'monospace' } }}
+              placeholder={editForm.code ? undefined : 'Assigned automatically once a customer is set'}
+              helperText={editForm.code ? undefined : 'No code yet — leave blank and pick a customer below to have one assigned'}
             />
             <TextField
               label="Project name"
@@ -1569,7 +1571,7 @@ export default function ProjectDetail() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setEditOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={saveEdit} disabled={!editForm.name.trim() || !editForm.code.trim()}>Save</Button>
+          <Button variant="contained" onClick={saveEdit} disabled={!editForm.name.trim()}>Save</Button>
         </DialogActions>
       </Dialog>
 
