@@ -240,7 +240,10 @@ export default function Projects() {
     setOpen(true);
   };
   const save = async () => {
-    if (!form.name || !form.customerId) return;
+    // Customer is optional at creation — a bare opportunity can be saved before
+    // the client is known. Its code is assigned automatically once a customer
+    // is set (here or later from the project page).
+    if (!form.name) return;
     try {
       const saved = await addProject({
         name: form.name,
@@ -692,7 +695,9 @@ export default function Projects() {
               >
                 <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
                   <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Link to={`/sales/calcsheet/projects/${p.id}`} style={{ color: 'inherit' }} onClick={onRowClick}>{p.code}</Link>
+                    <Link to={`/sales/calcsheet/projects/${p.id}`} style={{ color: p.code ? 'inherit' : undefined }} onClick={onRowClick}>
+                      {p.code || <Typography component="span" variant="inherit" color="text.secondary" sx={{ fontStyle: 'italic' }}>No code yet</Typography>}
+                    </Link>
                     {hasLegacy && (
                       <Tooltip title="Has legacy quotation(s)">
                         <HistoryIcon fontSize="inherit" color="warning" sx={{ fontSize: '0.85rem' }} />
@@ -879,8 +884,9 @@ export default function Projects() {
             {/* Customer first so location can auto-fill from it */}
             <TextField
               select
-              label="Customer"
+              label="Customer (optional)"
               value={form.customerId}
+              helperText="Leave blank to save a draft — no code is assigned until a client is set"
               onChange={(e) => {
                 const newCustomerId = e.target.value;
                 const selectedClient = clients.find((c) => c.id === newCustomerId);
@@ -890,10 +896,11 @@ export default function Projects() {
                     : form.location;
                 const didAutoFill = !!selectedClient?.address && newLocation === selectedClient?.address;
                 setLocationAutoFilled(didAutoFill);
-                const newCode = codeManuallyEdited ? form.code : computeCode(newCustomerId, form.date);
+                const newCode = codeManuallyEdited ? form.code : (newCustomerId ? computeCode(newCustomerId, form.date) : '');
                 setForm((prev) => ({ ...prev, customerId: newCustomerId, location: newLocation, code: newCode }));
               }}
             >
+              <MenuItem value="">— none yet —</MenuItem>
               {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
             </TextField>
             <TextField select label="Partner (optional)" value={form.partnerId} onChange={(e) => setForm({ ...form, partnerId: e.target.value })}>
@@ -913,7 +920,7 @@ export default function Projects() {
               value={form.date}
               onChange={(e) => {
                 const newDate = e.target.value;
-                const newCode = codeManuallyEdited ? form.code : computeCode(form.customerId, newDate);
+                const newCode = codeManuallyEdited ? form.code : (form.customerId ? computeCode(form.customerId, newDate) : '');
                 setForm({ ...form, date: newDate, code: newCode });
               }}
               InputLabelProps={{ shrink: true }}

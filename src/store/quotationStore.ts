@@ -317,11 +317,25 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
 
   addProject: async (p) => {
     const customer = get().clients.find((c) => c.id === p.customerId);
-    const seq = await api<{ seq: number }>('POST', '/seq/increment').then((r) => r.seq).catch(() => get().seq);
     const { code: codeOverride, ...rest } = p;
+    const explicitCode = (codeOverride || '').trim();
+    // A project can be created before its client is known (a bare opportunity
+    // placeholder). Codes are derived from the client's code, so without a
+    // client — and without an explicit override — skip both code generation
+    // AND the sequence increment (sequences are global/precious; don't burn
+    // one on a draft that has nothing to encode yet). The code is assigned
+    // later, in updateProject, the first time a customer is set.
+    let code = explicitCode;
+    let seq = get().seq;
+    let incrementedSeq = false;
+    if (!code && p.customerId) {
+      seq = await api<{ seq: number }>('POST', '/seq/increment').then((r) => r.seq).catch(() => get().seq);
+      incrementedSeq = true;
+      code = quotationCode(seq, customer?.code ?? 'XXX', '00', new Date(p.date));
+    }
     const project: Project = {
       id: nanoid(8),
-      code: (codeOverride || '').trim() || quotationCode(seq, customer?.code ?? 'XXX', '00', new Date(p.date)),
+      code,
       createdAt: now(),
       updatedAt: now(),
       ...rest,
@@ -336,7 +350,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
     // folder later from the project detail page. Never block project creation on
     // OneDrive — a tokenless-but-cached MSAL session must not strand the user.
     let projectWithFolder = project;
-    if (isCorporateOneDriveConfigured()) {
+    if (code && isCorporateOneDriveConfigured()) {
       try {
         const odStore = getOneDriveTokenStore();
         const token = odStore.isAuthenticated ? await odStore.getToken() : null;
@@ -366,17 +380,30 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
 
     const res = await api<{ project: Project }>('POST', '/projects', projectWithFolder);
     const saved = res.project ?? projectWithFolder;
-    set({ projects: [...get().projects, saved], seq: seq + 1 });
+    set({ projects: [...get().projects, saved], ...(incrementedSeq ? { seq: seq + 1 } : {}) });
     return saved;
   },
   updateProject: async (id, patch) => {
-    const cleaned: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(patch)) if (v !== undefined) cleaned[k] = v;
     const prev = get().projects.find((p) => p.id === id);
+    // A project created without a client (see addProject) has no code yet.
+    // The first time a customer is set on it, assign a code now — unless the
+    // caller is itself explicitly setting a custom code in the same patch.
+    let effectivePatch: Partial<Project> = patch;
+    const callerProvidedCode = typeof patch.code === 'string' && patch.code.trim().length > 0;
+    if (prev && !prev.code && patch.customerId && !callerProvidedCode) {
+      const customer = get().clients.find((c) => c.id === patch.customerId);
+      const seq = await api<{ seq: number }>('POST', '/seq/increment').then((r) => r.seq).catch(() => get().seq);
+      const dateForCode = patch.date ?? prev.date;
+      const code = quotationCode(seq, customer?.code ?? 'XXX', '00', new Date(dateForCode));
+      effectivePatch = { ...patch, code };
+      set({ seq: seq + 1 });
+    }
+    const cleaned: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(effectivePatch)) if (v !== undefined) cleaned[k] = v;
     await api('PUT', `/projects/${id}`, cleaned);
     set({
       projects: get().projects.map((p) =>
-        p.id === id ? { ...p, ...patch, updatedAt: now() } : p,
+        p.id === id ? { ...p, ...effectivePatch, updatedAt: now() } : p,
       ),
     });
 

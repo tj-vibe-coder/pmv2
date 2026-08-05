@@ -446,7 +446,7 @@ const SalesHomePage: React.FC = () => {
                     <TableRow key={e.p.id} hover sx={stripedRowSx}>
                       <TableCell sx={bodyCellSx}>
                         <Link to={`/sales/calcsheet/projects/${e.p.id}`} style={{ color: NET_PACIFIC_COLORS.primary }}>
-                          {e.p.code}
+                          {e.p.code || 'Draft'}
                         </Link>
                         <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', maxWidth: 220 }} noWrap>
                           {e.p.name}
@@ -496,7 +496,7 @@ const SalesHomePage: React.FC = () => {
                     <TableRow key={e.p.id} hover sx={stripedRowSx}>
                       <TableCell sx={bodyCellSx}>
                         <Link to={`/sales/calcsheet/projects/${e.p.id}`} style={{ color: NET_PACIFIC_COLORS.primary }}>
-                          {e.p.code}
+                          {e.p.code || 'Draft'}
                         </Link>
                         <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', maxWidth: 220 }} noWrap>
                           {e.p.name}

@@ -77,7 +77,7 @@ export default function DuplicateQuotationDialog({ open, quotation, onClose, onD
               options={otherProjects}
               value={targetProject}
               onChange={(_e, v) => setTargetProject(v)}
-              getOptionLabel={(p) => `${p.code} — ${p.name}`}
+              getOptionLabel={(p) => `${p.code || 'Draft'} — ${p.name}`}
               isOptionEqualToValue={(a, b) => a.id === b.id}
               renderInput={(params) => <TextField {...params} label="Target project" placeholder="Search by code or name" />}
             />

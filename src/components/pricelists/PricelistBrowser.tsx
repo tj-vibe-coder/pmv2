@@ -255,7 +255,7 @@ export default function PricelistBrowser() {
             options={projects}
             value={selectedProject}
             onChange={(_, p) => { setTargetProjectId(p?.id ?? ''); setTargetQuotationId(''); }}
-            getOptionLabel={(p) => `${p.code} — ${p.name}`}
+            getOptionLabel={(p) => `${p.code || 'Draft'} — ${p.name}`}
             isOptionEqualToValue={(a, b) => a.id === b.id}
             renderInput={(params) => <TextField {...params} label="Project" size="small" />}
             sx={{ mt: 1, mb: 2 }}
