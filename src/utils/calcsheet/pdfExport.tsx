@@ -2,7 +2,7 @@ import { Document, Page, Text, View, Image, StyleSheet, pdf } from '@react-pdf/r
 import { saveAs } from 'file-saver';
 import { format } from 'date-fns';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import type { Client, ComponentLine, Project, Quotation, SalesContact } from '../../types/Quotation';
+import type { Client, ComponentLine, Project, QuotationKind, Quotation, SalesContact } from '../../types/Quotation';
 import { resolveContact } from '../../types/Client';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP, NUM,
@@ -44,18 +44,23 @@ const ISSUER_INFO = {
 // Returns the formal title, phone, and email when the name matches. Custom
 // (free-text) names that aren't in salesContacts return null and the PDF just
 // renders the name on its own.
+// When the quotation is issued under ACTI, prefer each contact's
+// actiPosition/actiEmail (their designation under the ACTI partnership),
+// falling back to the IOCT position/email when no ACTI override is set.
 function lookupStaff(
   name: string | undefined,
   salesContacts: SalesContact[],
+  kind: QuotationKind,
 ): { title: string; phone: string; email: string } | null {
   if (!name) return null;
   const trimmed = name.trim().toLowerCase();
   const match = salesContacts.find((c) => c.name.trim().toLowerCase() === trimmed);
   if (!match) return null;
+  const isActi = kind === 'ACTI';
   return {
-    title: match.position || '',
+    title: (isActi ? match.actiPosition : undefined) || match.position || '',
     phone: match.phone || '',
-    email: match.email || '',
+    email: (isActi ? match.actiEmail : undefined) || match.email || '',
   };
 }
 
@@ -298,7 +303,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
   // (The legacy "Authorized by" slot was repurposed as "Prepared by" — only one
   // signatory is shown on the issuer side.)
   const prepName = quotation.preparedBy || '';
-  const staff = lookupStaff(prepName, salesContacts);
+  const staff = lookupStaff(prepName, salesContacts, quotation.kind);
   // Job title: explicit override wins, then resolved from salesContacts, then nothing.
   const prepTitle = quotation.preparedByTitle?.trim() || staff?.title || '';
   const to = quotation.termsOverrides ?? {};

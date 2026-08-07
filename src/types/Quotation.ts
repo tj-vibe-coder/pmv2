@@ -44,6 +44,11 @@ export interface SalesContact {
   position?: string;
   email?: string;
   phone?: string;
+  // Overrides shown on the PDF signature block when the quotation is issued
+  // under ACTI (quotation.kind === 'ACTI') instead of IOCT — e.g. a different
+  // title/email under the ACTI partnership. Falls back to position/email when unset.
+  actiPosition?: string;
+  actiEmail?: string;
 }
 
 export interface Project {

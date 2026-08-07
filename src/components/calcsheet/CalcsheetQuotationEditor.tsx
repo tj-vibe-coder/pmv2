@@ -1212,9 +1212,15 @@ export default function QuotationEditor() {
             )}
           </Box>
           {(() => {
+            // Under ACTI, prefer each contact's ACTI-side title/email (their
+            // designation under the ACTI partnership) so the editor previews
+            // what pdfExport.tsx will actually render on the signature block.
+            const isActi = quotation.kind === 'ACTI';
+            const positionFor = (c: SalesContact | undefined) => (isActi ? c?.actiPosition : undefined) || c?.position;
+            const emailFor = (c: SalesContact | undefined) => (isActi ? c?.actiEmail : undefined) || c?.email;
             const staffOption = (props: any, option: string) => {
               const c = effectiveSalesContacts.find((x) => x.name === option);
-              const sub = [c?.position, c?.phone, c?.email].filter(Boolean).join(' · ');
+              const sub = [positionFor(c), c?.phone, emailFor(c)].filter(Boolean).join(' · ');
               return (
                 <li {...props} key={option}>
                   <Box>
@@ -1228,7 +1234,7 @@ export default function QuotationEditor() {
             };
             const helperFor = (name: string | undefined) => {
               const c = name ? effectiveSalesContacts.find((x) => x.name === name) : undefined;
-              return c ? [c.position, c.phone, c.email].filter(Boolean).join(' · ') : ' ';
+              return c ? [positionFor(c), c.phone, emailFor(c)].filter(Boolean).join(' · ') : ' ';
             };
             return (
               <>
@@ -1257,7 +1263,7 @@ export default function QuotationEditor() {
                     disabled={isLegacy}
                     value={quotation.preparedByTitle ?? ''}
                     onChange={(e) => setField('preparedByTitle', e.target.value || undefined)}
-                    placeholder={(() => { const c = quotation.preparedBy ? effectiveSalesContacts.find((x) => x.name === quotation.preparedBy) : undefined; return c?.position || 'e.g. Sales Engineer'; })()}
+                    placeholder={(() => { const c = quotation.preparedBy ? effectiveSalesContacts.find((x) => x.name === quotation.preparedBy) : undefined; return positionFor(c) || 'e.g. Sales Engineer'; })()}
                     helperText="Leave blank to auto-resolve from team member record"
                   />
                 </Tooltip>
