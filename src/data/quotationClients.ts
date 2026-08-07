@@ -45,6 +45,8 @@ export const seedSalesContacts = (): SalesContact[] => [
     position: 'General Manager',
     email: '',
     phone: '+63 969 162 2660',
+    actiPosition: 'Technical Manager - Automation',
+    actiEmail: 'tj@advancecontrole.com',
   },
   {
     id: nanoid(8),
@@ -52,6 +54,8 @@ export const seedSalesContacts = (): SalesContact[] => [
     position: 'Solutions Manager',
     email: 'reuel.rivera@iocontroltech.com',
     phone: '+63 919 082 5434',
+    actiPosition: 'Project Manager',
+    actiEmail: 'rj@advancecontrole.com',
   },
   {
     id: nanoid(8),
@@ -59,6 +63,8 @@ export const seedSalesContacts = (): SalesContact[] => [
     position: 'Engineering Supervisor',
     email: 'renzel.punongbayan@iocontroltech.com',
     phone: '+63 999 557 0678',
+    actiPosition: 'Engineering Supervisor',
+    actiEmail: 'renzel@advancecontrole.com',
   },
   {
     id: nanoid(8),
