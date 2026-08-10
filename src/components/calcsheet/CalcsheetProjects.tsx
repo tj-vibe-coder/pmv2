@@ -15,8 +15,8 @@ import CloudSyncIcon from '@mui/icons-material/CloudSync';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { Link } from 'react-router-dom';
 import { useQuotationStore } from '../../store/quotationStore';
-import type { ProjectStatus, Project } from '../../types/Quotation';
-import { PROJECT_STATUSES, projectStatusLabel } from '../../types/Quotation';
+import type { ProjectStatus, Project, OpportunityGrade } from '../../types/Quotation';
+import { PROJECT_STATUSES, projectStatusLabel, OPPORTUNITY_GRADES, opportunityGradeLabel } from '../../types/Quotation';
 import { format } from 'date-fns';
 import { PHP, computeTotals, ioctMargin } from '../../utils/calcsheet/calc';
 import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes';
@@ -39,12 +39,17 @@ const STATUS_OPTIONS: ProjectStatus[] = PROJECT_STATUSES;
 const DEFAULT_HIDDEN_STATUSES: ProjectStatus[] = ['lost', 'inactive'];
 const statusLabel = projectStatusLabel;
 
-type SortKey = 'code' | 'name' | 'customer' | 'date' | 'status' | 'grandTotal' | 'margin';
+const gradeColors: Record<OpportunityGrade, 'success' | 'warning' | 'default'> = {
+  A: 'success', B: 'warning', C: 'default',
+};
+const GRADE_OPTIONS: OpportunityGrade[] = OPPORTUNITY_GRADES;
+
+type SortKey = 'code' | 'name' | 'customer' | 'date' | 'updatedAt' | 'status' | 'grade' | 'grandTotal' | 'margin';
 type SortDir = 'asc' | 'desc';
 
 // Last-used sort persists per browser so the list reopens the way the user left it
 const SORT_PREF_KEY = 'calcsheet-projects-sort';
-const SORT_KEYS: SortKey[] = ['code', 'name', 'customer', 'date', 'status', 'grandTotal', 'margin'];
+const SORT_KEYS: SortKey[] = ['code', 'name', 'customer', 'date', 'updatedAt', 'status', 'grade', 'grandTotal', 'margin'];
 
 function loadSortPref(): { key: SortKey; dir: SortDir } {
   try {
@@ -56,7 +61,7 @@ function loadSortPref(): { key: SortKey; dir: SortDir } {
       }
     }
   } catch { /* corrupted pref — fall through to default */ }
-  return { key: 'date', dir: 'desc' }; // newest projects at the top by default
+  return { key: 'updatedAt', dir: 'desc' }; // most recently edited projects at the top by default
 }
 
 function saveSortPref(key: SortKey, dir: SortDir) {
@@ -233,7 +238,10 @@ export default function Projects() {
     setOpen(false);
   };
   const save = async () => {
-    if (!form.name || !form.customerId || creating) return;
+    // Customer is optional at creation — a bare opportunity can be saved before
+    // the client is known. Its code is assigned automatically once a customer
+    // is set (here or later from the project page).
+    if (!form.name || creating) return;
     setCreating(true);
     try {
       const saved = await addProject({
@@ -322,7 +330,13 @@ export default function Projects() {
         case 'name': av = (a.p.name || '').toLowerCase(); bv = (b.p.name || '').toLowerCase(); break;
         case 'customer': av = (a.customer?.name || '').toLowerCase(); bv = (b.customer?.name || '').toLowerCase(); break;
         case 'date': av = a.p.date || ''; bv = b.p.date || ''; break;
+        case 'updatedAt': av = a.p.updatedAt || ''; bv = b.p.updatedAt || ''; break;
         case 'status': av = a.p.status; bv = b.p.status; break;
+        case 'grade':
+          // A/B/C rank (A best); ungraded sorts to the bottom regardless of direction.
+          av = a.p.opportunityGrade ? GRADE_OPTIONS.indexOf(a.p.opportunityGrade) : Infinity;
+          bv = b.p.opportunityGrade ? GRADE_OPTIONS.indexOf(b.p.opportunityGrade) : Infinity;
+          break;
         case 'grandTotal': av = a.grandTotal; bv = b.grandTotal; break;
         case 'margin':
           // Sort by pct; nulls (no data) go to the bottom regardless of direction
@@ -340,7 +354,7 @@ export default function Projects() {
   const toggleSort = (key: SortKey) => {
     const nextDir: SortDir = sortKey === key
       ? (sortDir === 'asc' ? 'desc' : 'asc')
-      : (key === 'date' || key === 'grandTotal' ? 'desc' : 'asc');
+      : (key === 'date' || key === 'updatedAt' || key === 'grandTotal' ? 'desc' : 'asc');
     setSortKey(key);
     setSortDir(nextDir);
     saveSortPref(key, nextDir);
@@ -655,7 +669,9 @@ export default function Projects() {
               <TableCell>Partner</TableCell>
               <TableCell>Created by</TableCell>
               <SortHeader k="date" label="Date" />
+              <SortHeader k="updatedAt" label="Last edited" />
               <SortHeader k="status" label="Status" />
+              <SortHeader k="grade" label="Grade" />
               <SortHeader k="grandTotal" label="Quotations" align="right" />
               <SortHeader k="margin" label="IOCT Margin" align="right" />
               <TableCell align="right">Actions</TableCell>
@@ -680,7 +696,9 @@ export default function Projects() {
               >
                 <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
                   <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Link to={`/sales/calcsheet/projects/${p.id}`} style={{ color: 'inherit' }} onClick={onRowClick}>{p.code}</Link>
+                    <Link to={`/sales/calcsheet/projects/${p.id}`} style={{ color: p.code ? 'inherit' : undefined }} onClick={onRowClick}>
+                      {p.code || <Typography component="span" variant="inherit" color="text.secondary" sx={{ fontStyle: 'italic' }}>No code yet</Typography>}
+                    </Link>
                     {hasLegacy && (
                       <Tooltip title="Has legacy quotation(s)">
                         <HistoryIcon fontSize="inherit" color="warning" sx={{ fontSize: '0.85rem' }} />
@@ -705,6 +723,7 @@ export default function Projects() {
                 <TableCell>{partner?.name ?? '—'}</TableCell>
                 <TableCell>{p.createdByName ?? '—'}</TableCell>
                 <TableCell>{p.date ? format(new Date(p.date), 'dd MMM yyyy') : '—'}</TableCell>
+                <TableCell>{p.updatedAt ? format(new Date(p.updatedAt), 'dd MMM yyyy HH:mm') : '—'}</TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={0.5} alignItems="center">
                     <Select
@@ -762,7 +781,44 @@ export default function Projects() {
                       ))}
                     </Select>
                     {p.ongoing && <Chip size="small" label="active" variant="outlined" sx={{ height: 18 }} />}
+                    {p.status === 'won' && !!p.customerPOs?.length && (
+                      <Tooltip title={`${p.customerPOs.length} customer PO(s) attached`}>
+                        <Chip size="small" label="PO" color="success" variant="outlined" sx={{ height: 18 }} />
+                      </Tooltip>
+                    )}
                   </Stack>
+                </TableCell>
+                <TableCell>
+                  <Select
+                    size="small"
+                    displayEmpty
+                    value={p.opportunityGrade ?? ''}
+                    onChange={(e) => updateProject(p.id, { opportunityGrade: (e.target.value || undefined) as OpportunityGrade | undefined })}
+                    sx={{
+                      minWidth: 76,
+                      '& .MuiSelect-select': { py: 0.25, display: 'flex', alignItems: 'center' },
+                      '& .MuiOutlinedInput-notchedOutline': { border: 'none' },
+                      '&:hover .MuiOutlinedInput-notchedOutline': { border: '1px solid', borderColor: 'grey.400' },
+                      '&.Mui-focused .MuiOutlinedInput-notchedOutline': { border: '1px solid', borderColor: 'primary.main' },
+                    }}
+                    MenuProps={{ sx: { '& .MuiMenuItem-root': { fontSize: '0.8rem' } } }}
+                    renderValue={(v) => (
+                      v ? <Chip size="small" label={v as string} color={gradeColors[v as OpportunityGrade]} sx={{ minWidth: 32, fontWeight: 700 }} />
+                        : <Chip size="small" label="Ungraded" variant="outlined" sx={{ minWidth: 32 }} />
+                    )}
+                  >
+                    <MenuItem value="" dense>
+                      <em>Ungraded</em>
+                    </MenuItem>
+                    {GRADE_OPTIONS.map((g) => (
+                      <MenuItem key={g} value={g} dense>
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <Chip size="small" label={g} color={gradeColors[g]} sx={{ minWidth: 32, fontWeight: 700 }} />
+                          <Typography variant="caption">{opportunityGradeLabel(g).replace(`${g} — `, '')}</Typography>
+                        </Stack>
+                      </MenuItem>
+                    ))}
+                  </Select>
                 </TableCell>
                 <TableCell align="right">
                   <Stack spacing={0.25}>
@@ -876,9 +932,10 @@ export default function Projects() {
             {/* Customer first so location can auto-fill from it */}
             <TextField
               select
-              label="Customer"
+              label="Customer (optional)"
               value={form.customerId}
               disabled={creating}
+              helperText="Leave blank to save a draft — no code is assigned until a client is set"
               onChange={(e) => {
                 const newCustomerId = e.target.value;
                 const selectedClient = clients.find((c) => c.id === newCustomerId);
@@ -888,10 +945,11 @@ export default function Projects() {
                     : form.location;
                 const didAutoFill = !!selectedClient?.address && newLocation === selectedClient?.address;
                 setLocationAutoFilled(didAutoFill);
-                const newCode = codeManuallyEdited ? form.code : computeCode(newCustomerId, form.date);
+                const newCode = codeManuallyEdited ? form.code : (newCustomerId ? computeCode(newCustomerId, form.date) : '');
                 setForm((prev) => ({ ...prev, customerId: newCustomerId, location: newLocation, code: newCode }));
               }}
             >
+              <MenuItem value="">— none yet —</MenuItem>
               {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
             </TextField>
             <TextField select label="Partner (optional)" value={form.partnerId} disabled={creating} onChange={(e) => setForm({ ...form, partnerId: e.target.value })}>
@@ -913,7 +971,7 @@ export default function Projects() {
               disabled={creating}
               onChange={(e) => {
                 const newDate = e.target.value;
-                const newCode = codeManuallyEdited ? form.code : computeCode(form.customerId, newDate);
+                const newCode = codeManuallyEdited ? form.code : (form.customerId ? computeCode(form.customerId, newDate) : '');
                 setForm({ ...form, date: newDate, code: newCode });
               }}
               InputLabelProps={{ shrink: true }}

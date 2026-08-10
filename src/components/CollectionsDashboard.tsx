@@ -578,7 +578,7 @@ export default function CollectionsDashboard() {
               >
                 <Box sx={{ minWidth: 0 }}>
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    {r.project.project_no || r.project.project_name || `Project ${r.project.id}`}
+                    {[r.project.project_no, r.project.project_name].filter(Boolean).join(' · ') || `Project ${r.project.id}`}
                     {' — '}
                     <Box component="span" sx={{ fontFamily: 'monospace', color: NET_PACIFIC_COLORS.primary }}>{r.milestone.pb_number}</Box>
                     {r.milestone.label ? ` ${r.milestone.label}` : ''}

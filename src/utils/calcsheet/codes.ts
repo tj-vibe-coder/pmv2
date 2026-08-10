@@ -45,6 +45,8 @@ export function assignLegacyCode(yymm: string, seq: number, clientCode: string, 
 // quotation's own revision — otherwise both segments get concatenated and you
 // get a duplicated "-00-00" (or "-00-00-OPT1", etc.).
 export function quotationRefNo(projectCode: string, recipientCode: string | undefined, revision: string): string {
-  const base = projectCode.replace(/-[A-Z]{3}-\d{2}$/, '');
+  // A project can exist without a code yet (client not defined — see addProject);
+  // fall back to a readable placeholder rather than a leading "-XXX-00".
+  const base = (projectCode || 'DRAFT').replace(/-[A-Z]{3}-\d{2}$/, '');
   return `${base}-${(recipientCode ?? 'XXX').slice(0, 3)}-${revision}`;
 }
