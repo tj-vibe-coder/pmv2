@@ -5,6 +5,14 @@ export type EmployeeType = 'FIELD' | 'OFFICE';
 export type PayFrequency = 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY';
 /** How the employee's pay is quoted. Drives basic-pay computation and premium eligibility, independent of FIELD/OFFICE classification. */
 export type RateType = 'DAILY' | 'MONTHLY';
+/**
+ * How meal allowance is applied.
+ * - DAILY (default): mealAllowance × workingDays — for field/pro-rated hires (electricians, etc.)
+ * - MONTHLY: mealAllowance is a monthly amount, split by payFrequency via toPerPeriod
+ *   (e.g. ₱1,000/mo semi-monthly → ₱500/cutoff). Keeps OT/SSS on basic only while still
+ *   paying a fixed non-taxable meal add-on toward take-home.
+ */
+export type MealAllowanceBasis = 'DAILY' | 'MONTHLY';
 
 export interface Employee {
   id: string;
@@ -18,7 +26,10 @@ export interface Employee {
   rateType?: RateType;
   dailyRate?: number;     // used when rateType is DAILY
   monthlyRate?: number;   // used when rateType is MONTHLY
-  mealAllowance?: number; // per day
+  /** Meal allowance amount. Unit depends on mealAllowanceBasis (₱/day or ₱/month). */
+  mealAllowance?: number;
+  /** Absent = DAILY for backward compatibility with existing employees. */
+  mealAllowanceBasis?: MealAllowanceBasis;
   projectId?: string;
   dateHired: string;      // ISO string
   isActive: boolean;

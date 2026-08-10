@@ -141,6 +141,32 @@ async function getCurrentUser(req) {
   }
 }
 
+// Liquidation form numbers append the submitter's initials, e.g. LQ26-022-RJR.
+// Prefer an explicit `initials` field on the user doc (set for accounts whose
+// username isn't already initials-style, e.g. Renzel/Kim/Nylle); fall back to
+// username for accounts where it already is (TJC, RJR, ...).
+function formSubmitterInitials(user) {
+  const raw = (user && (user.initials || user.username)) ? String(user.initials || user.username) : '';
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '') || 'NA';
+}
+
+// LQ<YY>-<###>-<INITIALS>, e.g. LQ26-022-RJR — 22nd liquidation submitted in 2026 by RJR.
+// Sequence resets each calendar year (Philippine business date, same convention as
+// nextCaNo/nextIoctProjectNo); only form numbers already carrying that year's prefix count.
+async function nextLiquidationFormNo(user) {
+  const yy = phYearMonth(new Date()).slice(0, 2);
+  const snap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
+  const re = new RegExp(`^LQ${yy}-(\\d{3})-`);
+  let maxNum = 0;
+  for (const d of snap.docs) {
+    const fn = d.data().form_no;
+    if (typeof fn !== 'string') continue;
+    const m = fn.match(re);
+    if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > maxNum) maxNum = n; }
+  }
+  return `LQ${yy}-${String(maxNum + 1).padStart(3, '0')}-${formSubmitterInitials(user)}`;
+}
+
 function isActiveUser(user) {
   if (!user) return false;
   return user.role === 'superadmin' || user.approved === 1 || user.approved === true;
@@ -1449,15 +1475,8 @@ const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
       }
     }
 
-    // Same LQ-#### numbering scheme as /api/liquidations/next-form-no.
-    const formNoSnap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
-    const formNos = formNoSnap.docs.map(d => d.data().form_no).filter(fn => fn && typeof fn === 'string' && fn.startsWith('LQ-'));
-    let nextNum = 1;
-    if (formNos.length > 0) {
-      const nums = formNos.map(fn => { const m = fn.match(/LQ-0*(\d+)/); return m ? parseInt(m[1], 10) : 0; }).filter(n => n > 0);
-      if (nums.length > 0) nextNum = Math.max(...nums) + 1;
-    }
-    const formNo = `LQ-${String(nextNum).padStart(4, '0')}`;
+    // Same LQ<YY><###>-<INITIALS> numbering scheme as /api/liquidations/next-form-no.
+    const formNo = await nextLiquidationFormNo(targetUser);
 
     const now = Math.floor(Date.now() / 1000);
     const nowIso = new Date().toISOString();
@@ -1804,14 +1823,8 @@ app.get('/api/liquidations/next-form-no', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   try {
-    const snap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
-    const formNos = snap.docs.map(d => d.data().form_no).filter(fn => fn && typeof fn === 'string' && fn.startsWith('LQ-'));
-    let nextNum = 1;
-    if (formNos.length > 0) {
-      const nums = formNos.map(fn => { const m = fn.match(/LQ-0*(\d+)/); return m ? parseInt(m[1], 10) : 0; }).filter(n => n > 0);
-      if (nums.length > 0) nextNum = Math.max(...nums) + 1;
-    }
-    res.json({ success: true, form_no: `LQ-${String(nextNum).padStart(4, '0')}` });
+    const form_no = await nextLiquidationFormNo(user);
+    res.json({ success: true, form_no });
   } catch (err) {
     console.error('Error fetching next form number:', err);
     res.status(500).json({ success: false, error: 'Database error' });
@@ -3308,6 +3321,35 @@ function clientApproverFromClient(client) {
   return primary ? [primary.name, primary.position].filter(Boolean).join(' – ') : '';
 }
 
+/**
+ * Safe Sales → Project List contract patch.
+ * Source of truth: latest IOCT quotation grand total (ACTI only if no IOCT).
+ * Updates amount/WIP/balance fields only — never wipes status, billing progress,
+ * or site progress (those can already be in flight when price is settled late).
+ */
+function contractAmountPatchFromSales(mainData, amount, quotation, project, now) {
+  const billed = Number(mainData.amount_contract_billed_net) || 0;
+  const safeAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0;
+  const balance = Math.max(0, safeAmount - billed);
+  const balPct = safeAmount > 0 ? balance / safeAmount : 0;
+  return {
+    contract_amount: safeAmount,
+    updated_contract_amount: safeAmount,
+    work_in_progress_ap: safeAmount,
+    work_in_progress_ep: safeAmount,
+    total_contract_balance: balance,
+    updated_contract_balance_net: balance,
+    updated_contract_balance_percent: balPct,
+    updated_contract_balance_net_percent: balPct,
+    calcsheet_project_id: project.id,
+    calcsheet_code: project.code || '',
+    calcsheet_quotation_id: quotation?.id || null,
+    source_module: 'calcsheet',
+    qtn_no: project.code || mainData.qtn_no || '',
+    updated_at: now,
+  };
+}
+
 function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
   const amount = quotationGrandTotal(quotation);
@@ -3437,8 +3479,22 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   }
 
   const linkedDoc = await findLinkedMainProject(project);
+  const salesAmount = quotationGrandTotal(selectedQuotation);
+  // Default path when already linked: push Sales contract amount (IOCT/ACTI grand
+  // total) without remapping the whole Project List row. Late price settlements
+  // and quotation revisions used to leave Projects monitoring stuck on the first
+  // seed amount — Resync / sync-main now corrects that. Use force:true only when
+  // you intentionally want a full field remap (resets status/billing defaults).
   if (linkedDoc && !options.force) {
     const linkedData = linkedDoc.data() || {};
+    const amountPatch = contractAmountPatchFromSales(
+      linkedData,
+      salesAmount,
+      selectedQuotation,
+      project,
+      now,
+    );
+    await linkedDoc.ref.update(amountPatch);
     await projectRef.update({
       mainProjectId: linkedDoc.id,
       mainProjectNo: linkedData.project_no || '',
@@ -3451,12 +3507,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
       mainProjectStatusSyncedAt: now,
     });
     return {
-      action: 'linked-existing',
+      action: 'amount-synced',
       mainProjectId: linkedDoc.id,
       projectNo: linkedData.project_no || '',
       quotationId: selectedQuotation.id,
       quotationKind: selectedQuotation.kind,
-      amount: quotationGrandTotal(selectedQuotation),
+      amount: salesAmount,
+      previousAmount: Number(linkedData.updated_contract_amount) || Number(linkedData.contract_amount) || 0,
     };
   }
 
@@ -3599,13 +3656,21 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
       mainProjectCompletionDate: mainData.completion_date || null,
       mainProjectStatusSyncedAt: now,
     });
-    const mainPatch = {
-      calcsheet_project_id: req.params.id,
-      calcsheet_code: calcsheet.code || '',
-      source_module: 'calcsheet',
-      updated_at: now,
-      ...(selectedQuotation ? { calcsheet_quotation_id: selectedQuotation.id } : {}),
-    };
+    // Sales is source of truth for contract value when linking.
+    const mainPatch = selectedQuotation
+      ? contractAmountPatchFromSales(
+          mainData,
+          quotationGrandTotal(selectedQuotation),
+          selectedQuotation,
+          calcsheet,
+          now,
+        )
+      : {
+          calcsheet_project_id: req.params.id,
+          calcsheet_code: calcsheet.code || '',
+          source_module: 'calcsheet',
+          updated_at: now,
+        };
     await mainDoc.ref.update(mainPatch);
     res.json({
       success: true,
@@ -5092,6 +5157,39 @@ app.post('/api/onedrive/move', async (req, res) => {
     }
     const data = await r.json();
     res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 6b. Rename a drive item in place (same parent). Used to fix execution folders
+// that were promoted under a PCS name before the IOCT project number was known.
+app.post('/api/onedrive/rename', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { itemId, name } = req.body || {};
+  if (!itemId || !name || typeof name !== 'string') {
+    return res.status(400).json({ error: 'itemId and name are required' });
+  }
+  const safeName = String(name).replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+  if (!safeName) return res.status(400).json({ error: 'name is empty after sanitization' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(itemId)}`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: safeName }),
+      }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Rename failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl, name: data.name || safeName });
   } catch (err) {
     res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
   }

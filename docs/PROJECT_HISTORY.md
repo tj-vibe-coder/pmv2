@@ -502,3 +502,20 @@ Calcsheet Add Product now has two deliberately separate sources: **Pricelists** 
 - Main implementation commits: `91dcea6` through `3344577`, including final integrity hardening in `d501e28` and `3344577`.
 - Verification: 36/36 server product-history tests, 73/73 frontend tests, TypeScript, production build, live emulator API smoke, and independent review all passed.
 - Local smoke used the flat backup `backups/2026-07-15T05-32-40` because the newer recursive backup is not compatible with `scripts/sandbox-seed.js`.
+
+### Payroll meal allowance basis DAILY | MONTHLY (2026-07-30, on `rj/dev`)
+
+Problem: Kim Kerwin Solis was set as monthlyRate ₱15,000 + mealAllowance ₱1,000 with the intent of a ₱16k/mo package (₱8k/cutoff) and OT/SSS based on basic only. The engine always treated meal as **per day** (`mealAllowance × workingDays`), so ~13 workdays produced ~₱13k meal alone per cutoff.
+
+Fix: added `mealAllowanceBasis?: 'DAILY' | 'MONTHLY'` on `Employee` (default **DAILY** for backward compat and pro-rated electricians).
+
+- **DAILY** (default): `mealAllowance × workingDays`
+- **MONTHLY**: `toPerPeriod(mealAllowance, payFrequency)` — e.g. ₱1,000/mo semi-monthly → ₱500/cutoff
+
+OT still uses basic rate only (dailyRate for DAILY rate basis; monthly-rate employees still have no OT premiums by design). Meal remains excluded from taxable income computation.
+
+UI: Employee form select + dynamic ₱/day vs ₱/month label; Employee list and payslip show the correct unit.
+
+Kim fix after deploy: edit employee → Meal Allowance Basis = **Per month (fixed)**, amount **1000**, Monthly Rate **15000**, Semi-monthly → ₱7,500 + ₱500 = ₱8,000/cutoff. Recompute any draft July 15 run after saving.
+
+Verified: 19/19 payrollEngine tests; `tsc --noEmit` clean. Not committed unless RJ asks.

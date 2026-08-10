@@ -187,7 +187,7 @@ export async function verifyDriveItem(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   driveId: string,
   itemId: string,
-): Promise<{ webUrl: string } | null> {
+): Promise<{ id?: string; webUrl: string; name?: string } | null> {
   if (!itemId) return null;
   const res = await fetch(`${API_BASE}/api/onedrive/item/${encodeURIComponent(itemId)}`, {
     headers: authHeaders(),
@@ -198,7 +198,7 @@ export async function verifyDriveItem(
   }
   const data = await res.json();
   if (!data?.ok) return null;
-  return { webUrl: data.webUrl || '' };
+  return { id: data.id, webUrl: data.webUrl || '', name: data.name || '' };
 }
 
 /**
@@ -440,6 +440,32 @@ export function projectFolderName(project: { code: string; name: string }): stri
   return `${codeNoRev} ${safeName}`.trim();
 }
 
+/** Customer segment from a PCS code: `PCS2605023-LBI-00` → `LBI`. */
+export function customerCodeFromPcs(code: string): string {
+  const m = (code || '').match(/^PCS\d{7}-([A-Z0-9]+)-/i);
+  return m ? m[1].toUpperCase() : '';
+}
+
+/**
+ * Canonical **execution** ops folder name once a Project List number exists.
+ * Example: `IOCT2605001-LBI RCS Plaridel Troubleshooting`
+ *
+ * Falls back to the PCS proposal folder name when `mainProjectNo` is missing
+ * (e.g. "Mark Won Only" before a Project List record is linked).
+ */
+export function executionProjectFolderName(project: {
+  code: string;
+  name: string;
+  mainProjectNo?: string | null;
+}): string {
+  const mainNo = (project.mainProjectNo || '').trim();
+  if (!mainNo) return projectFolderName(project);
+  const cust = customerCodeFromPcs(project.code);
+  const suffix = cust ? `-${cust}` : '';
+  const title = (project.name || '').trim();
+  return sanitizeForOneDrive(`${mainNo}${suffix}${title ? ` ${title}` : ''}`);
+}
+
 /**
  * Remove characters that OneDrive/SharePoint disallow or treat specially in item names:
  *   < > : " / \ | ? *
@@ -638,6 +664,107 @@ async function createExecutionProjectSubfolders(
 }
 
 /**
+ * Rename a drive item in place (same parent). Used to fix execution folders that
+ * were promoted under a PCS name before `mainProjectNo` was known.
+ */
+export async function renameDriveItem(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  token: string,
+  itemId: string,
+  newName: string,
+): Promise<DriveItemRef> {
+  const name = sanitizeForOneDrive(newName);
+  if (!itemId || !name) throw new Error('itemId and newName are required');
+  const res = await fetch(`${API_BASE}/api/onedrive/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ itemId, name }),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Rename failed (${res.status}) item ${itemId} → "${name}": ${errText.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return { id: data.id || itemId, webUrl: data.webUrl || '', name: data.name || name };
+}
+
+/**
+ * Ensure a won project's OneDrive layout uses the IOCT execution naming convention
+ * (`IOCT2605001-LBI Project Name`).
+ *
+ * - Already has an execution folder → rename in place if the name is wrong
+ * - Has a proposal folder only → promote (move PCS folder inside a new IOCT parent)
+ * - Neither → create a fresh execution folder with the correct name
+ *
+ * Best-effort helper for the store; callers persist the returned IDs/URLs.
+ */
+export async function ensureWonExecutionLayout(
+  token: string,
+  project: {
+    code: string;
+    name: string;
+    mainProjectNo?: string | null;
+    proposalFolderId?: string;
+    executionFolderId?: string;
+  },
+): Promise<{ executionFolder: DriveItemRef; proposalFolder?: DriveItemRef }> {
+  const desiredName = executionProjectFolderName(project);
+  const driveId = await resolveCorporateDriveId(token);
+
+  // Path A: execution folder already linked — rename if it still looks like a PCS
+  // folder (or any other name that isn't the canonical IOCT form).
+  if (project.executionFolderId) {
+    const meta = await verifyDriveItem(token, driveId, project.executionFolderId);
+    if (!meta) {
+      // Stale id — fall through to recreate/promote below.
+    } else {
+      const current = (meta.name || '').trim();
+      if (current && current === desiredName) {
+        return {
+          executionFolder: {
+            id: project.executionFolderId,
+            webUrl: meta.webUrl,
+            name: current,
+          },
+        };
+      }
+      // Only auto-rename when we have a real project number (avoid thrashing PCS↔PCS).
+      if (project.mainProjectNo && current !== desiredName) {
+        const renamed = await renameDriveItem(token, project.executionFolderId, desiredName);
+        return { executionFolder: renamed };
+      }
+      return {
+        executionFolder: {
+          id: project.executionFolderId,
+          webUrl: meta.webUrl,
+          name: current || desiredName,
+        },
+      };
+    }
+  }
+
+  // Path B: promote existing proposal folder into execution.
+  if (project.proposalFolderId) {
+    const stillThere = await verifyDriveItem(token, driveId, project.proposalFolderId).catch(() => null);
+    if (stillThere) {
+      const { executionFolder, proposalFolder } = await moveProposalToExecution(token, {
+        code: project.code,
+        name: project.name,
+        proposalFolderId: project.proposalFolderId,
+        executionFolderName: desiredName,
+        mainProjectNo: project.mainProjectNo,
+      });
+      return { executionFolder, proposalFolder };
+    }
+  }
+
+  // Path C: create a fresh execution folder under the year root with the desired name.
+  // projectFolderName(code=desiredName, name='') returns desiredName (no -REV strip match).
+  const created = await ensureExecutionFolder(token, { code: desiredName, name: '' });
+  return { executionFolder: created };
+}
+
+/**
  * Promote a project's proposal folder to the execution location:
  *
  *   1. Create (or find) a project folder in `executionRoot` named `executionFolderName`
@@ -662,13 +789,20 @@ async function createExecutionProjectSubfolders(
  */
 export async function moveProposalToExecution(
   token: string,
-  project: { code: string; name: string; proposalFolderId: string; executionFolderName?: string },
+  project: {
+    code: string;
+    name: string;
+    proposalFolderId: string;
+    executionFolderName?: string;
+    mainProjectNo?: string | null;
+  },
 ): Promise<{ executionFolder: DriveItemRef; proposalFolder: DriveItemRef; shortcut: DriveItemRef | null }> {
   const driveId = await resolveCorporateDriveId(token);
   const pcsFolderName = projectFolderName(project);
+  // Prefer explicit name → IOCT convention from mainProjectNo → PCS fallback
   const execFolderName = project.executionFolderName
     ? sanitizeForOneDrive(project.executionFolderName)
-    : pcsFolderName;
+    : executionProjectFolderName(project);
 
   // Year-aware roots — execution folder lands in e.g. "01 Execution/2026/IOCT2605001-…"
   const year = String(new Date().getFullYear());

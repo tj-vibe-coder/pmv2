@@ -2382,6 +2382,35 @@ function clientApproverFromClient(client) {
   return primary ? [primary.name, primary.position].filter(Boolean).join(' – ') : '';
 }
 
+/**
+ * Safe Sales → Project List contract patch.
+ * Source of truth: latest IOCT quotation grand total (ACTI only if no IOCT).
+ * Updates amount/WIP/balance fields only — never wipes status, billing progress,
+ * or site progress (those can already be in flight when price is settled late).
+ */
+function contractAmountPatchFromSales(mainData, amount, quotation, project, now) {
+  const billed = Number(mainData.amount_contract_billed_net) || 0;
+  const safeAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0;
+  const balance = Math.max(0, safeAmount - billed);
+  const balPct = safeAmount > 0 ? balance / safeAmount : 0;
+  return {
+    contract_amount: safeAmount,
+    updated_contract_amount: safeAmount,
+    work_in_progress_ap: safeAmount,
+    work_in_progress_ep: safeAmount,
+    total_contract_balance: balance,
+    updated_contract_balance_net: balance,
+    updated_contract_balance_percent: balPct,
+    updated_contract_balance_net_percent: balPct,
+    calcsheet_project_id: project.id,
+    calcsheet_code: project.code || '',
+    calcsheet_quotation_id: quotation?.id || null,
+    source_module: 'calcsheet',
+    qtn_no: project.code || mainData.qtn_no || '',
+    updated_at: now,
+  };
+}
+
 function mapCalcsheetToMainProject(project, client, quotation, now, projectNo) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
   const amount = quotationGrandTotal(quotation);
@@ -2504,8 +2533,19 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   }
 
   const linkedDoc = await findLinkedMainProject(project);
+  const salesAmount = quotationGrandTotal(selectedQuotation);
+  // Default path when already linked: push Sales contract amount without remapping
+  // the whole Project List row (late price settlements / quotation revisions).
   if (linkedDoc && !options.force) {
     const linkedData = linkedDoc.data() || {};
+    const amountPatch = contractAmountPatchFromSales(
+      linkedData,
+      salesAmount,
+      selectedQuotation,
+      project,
+      now,
+    );
+    await linkedDoc.ref.update(amountPatch);
     await projectRef.update({
       mainProjectId: linkedDoc.id,
       mainProjectNo: linkedData.project_no || '',
@@ -2518,12 +2558,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
       mainProjectStatusSyncedAt: now,
     });
     return {
-      action: 'linked-existing',
+      action: 'amount-synced',
       mainProjectId: linkedDoc.id,
       projectNo: linkedData.project_no || '',
       quotationId: selectedQuotation.id,
       quotationKind: selectedQuotation.kind,
-      amount: quotationGrandTotal(selectedQuotation),
+      amount: salesAmount,
+      previousAmount: Number(linkedData.updated_contract_amount) || Number(linkedData.contract_amount) || 0,
     };
   }
 
@@ -2657,13 +2698,21 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
       mainProjectCompletionDate: mainData.completion_date || null,
       mainProjectStatusSyncedAt: now,
     });
-    const mainPatch = {
-      calcsheet_project_id: req.params.id,
-      calcsheet_code: calcsheet.code || '',
-      source_module: 'calcsheet',
-      updated_at: now,
-      ...(selectedQuotation ? { calcsheet_quotation_id: selectedQuotation.id } : {}),
-    };
+    // Sales is source of truth for contract value when linking.
+    const mainPatch = selectedQuotation
+      ? contractAmountPatchFromSales(
+          mainData,
+          quotationGrandTotal(selectedQuotation),
+          selectedQuotation,
+          calcsheet,
+          now,
+        )
+      : {
+          calcsheet_project_id: req.params.id,
+          calcsheet_code: calcsheet.code || '',
+          source_module: 'calcsheet',
+          updated_at: now,
+        };
     await mainDoc.ref.update(mainPatch);
     res.json({
       success: true,
@@ -3669,6 +3718,39 @@ app.post('/api/onedrive/move', async (req, res) => {
     }
     const data = await r.json();
     res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
+// 6b. Rename a drive item in place (same parent). Used to fix execution folders
+// that were promoted under a PCS name before the IOCT project number was known.
+app.post('/api/onedrive/rename', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { itemId, name } = req.body || {};
+  if (!itemId || !name || typeof name !== 'string') {
+    return res.status(400).json({ error: 'itemId and name are required' });
+  }
+  const safeName = String(name).replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+  if (!safeName) return res.status(400).json({ error: 'name is empty after sanitization' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(itemId)}`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: safeName }),
+      }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Rename failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl, name: data.name || safeName });
   } catch (err) {
     res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
   }
