@@ -1124,7 +1124,9 @@ export default function LiquidationFormPage() {
           finalFormNo = data.form_no;
           setFormNo(finalFormNo);
         } else {
-          finalFormNo = 'LQ-0001';
+          const initials = (user?.username || 'NA').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'NA';
+          const yy = String(new Date().getFullYear()).slice(-2);
+          finalFormNo = `LQ${yy}-001-${initials}`;
         }
       }
       const body = { ...payload(), form_no: finalFormNo, status: 'submitted' };
@@ -1260,11 +1262,11 @@ export default function LiquidationFormPage() {
     let logoWidth = 0;
     let logoHeight = 0;
     try {
-      const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
-      const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
+      const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
+      const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
       logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-      logoWidth = ACT_LOGO_PDF_WIDTH;
-      logoHeight = ACT_LOGO_PDF_HEIGHT;
+      logoWidth = IOCT_LOGO_PDF_WIDTH;
+      logoHeight = IOCT_LOGO_PDF_HEIGHT;
     } catch (_) {}
 
     const lineHeight = 5;
@@ -1274,7 +1276,7 @@ export default function LiquidationFormPage() {
         doc.addImage(logoDataUrl, 'PNG', margin, headerY - 2, logoWidth, logoHeight);
         doc.setFontSize(9);
         fontBold();
-        doc.text('Advance Controle Technologie Inc.', margin, headerY + logoHeight + 4);
+        doc.text('IO Control Technologie OPC', margin, headerY + logoHeight + 4);
       }
       doc.setFontSize(16);
       doc.setFont('helvetica', 'bold'); // Use Arial Bold (helvetica bold) for title
@@ -1422,9 +1424,19 @@ export default function LiquidationFormPage() {
       doc.setFontSize(8);
     }
 
-    // Add footer with page number and Doc No. on all pages (Doc No. is LIQ-001, not LIQ-LQ-001)
+    // Add footer with page number and Doc No. on all pages (Doc No. is LIQ-26-022, not LIQ-LQ26-022-RJR)
     const totalPages = doc.getNumberOfPages();
-    const docNo = !formNo ? 'LIQ-001' : formNo.startsWith('LIQ-') ? formNo : formNo.startsWith('LQ-') ? 'LIQ-' + formNo.slice(3) : 'LIQ-' + formNo;
+    const yySeqMatch = formNo.match(/^LQ(\d{2})-(\d{3})-/);
+    const legacyMatch = formNo.match(/^LQ-?(\d+)/);
+    const docNo = !formNo
+      ? 'LIQ-001'
+      : formNo.startsWith('LIQ-')
+      ? formNo
+      : yySeqMatch
+      ? `LIQ-${yySeqMatch[1]}-${yySeqMatch[2]}`
+      : legacyMatch
+      ? 'LIQ-' + legacyMatch[1]
+      : 'LIQ-' + formNo;
     doc.setFontSize(8);
     for (let p = 1; p <= totalPages; p++) {
       doc.setPage(p);

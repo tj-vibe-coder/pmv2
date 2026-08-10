@@ -141,6 +141,32 @@ async function getCurrentUser(req) {
   }
 }
 
+// Liquidation form numbers append the submitter's initials, e.g. LQ26-022-RJR.
+// Prefer an explicit `initials` field on the user doc (set for accounts whose
+// username isn't already initials-style, e.g. Renzel/Kim/Nylle); fall back to
+// username for accounts where it already is (TJC, RJR, ...).
+function formSubmitterInitials(user) {
+  const raw = (user && (user.initials || user.username)) ? String(user.initials || user.username) : '';
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '') || 'NA';
+}
+
+// LQ<YY>-<###>-<INITIALS>, e.g. LQ26-022-RJR — 22nd liquidation submitted in 2026 by RJR.
+// Sequence resets each calendar year (Philippine business date, same convention as
+// nextCaNo/nextIoctProjectNo); only form numbers already carrying that year's prefix count.
+async function nextLiquidationFormNo(user) {
+  const yy = phYearMonth(new Date()).slice(0, 2);
+  const snap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
+  const re = new RegExp(`^LQ${yy}-(\\d{3})-`);
+  let maxNum = 0;
+  for (const d of snap.docs) {
+    const fn = d.data().form_no;
+    if (typeof fn !== 'string') continue;
+    const m = fn.match(re);
+    if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > maxNum) maxNum = n; }
+  }
+  return `LQ${yy}-${String(maxNum + 1).padStart(3, '0')}-${formSubmitterInitials(user)}`;
+}
+
 function isActiveUser(user) {
   if (!user) return false;
   return user.role === 'superadmin' || user.approved === 1 || user.approved === true;
@@ -1449,15 +1475,8 @@ const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
       }
     }
 
-    // Same LQ-#### numbering scheme as /api/liquidations/next-form-no.
-    const formNoSnap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
-    const formNos = formNoSnap.docs.map(d => d.data().form_no).filter(fn => fn && typeof fn === 'string' && fn.startsWith('LQ-'));
-    let nextNum = 1;
-    if (formNos.length > 0) {
-      const nums = formNos.map(fn => { const m = fn.match(/LQ-0*(\d+)/); return m ? parseInt(m[1], 10) : 0; }).filter(n => n > 0);
-      if (nums.length > 0) nextNum = Math.max(...nums) + 1;
-    }
-    const formNo = `LQ-${String(nextNum).padStart(4, '0')}`;
+    // Same LQ<YY><###>-<INITIALS> numbering scheme as /api/liquidations/next-form-no.
+    const formNo = await nextLiquidationFormNo(targetUser);
 
     const now = Math.floor(Date.now() / 1000);
     const nowIso = new Date().toISOString();
@@ -1804,14 +1823,8 @@ app.get('/api/liquidations/next-form-no', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   try {
-    const snap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
-    const formNos = snap.docs.map(d => d.data().form_no).filter(fn => fn && typeof fn === 'string' && fn.startsWith('LQ-'));
-    let nextNum = 1;
-    if (formNos.length > 0) {
-      const nums = formNos.map(fn => { const m = fn.match(/LQ-0*(\d+)/); return m ? parseInt(m[1], 10) : 0; }).filter(n => n > 0);
-      if (nums.length > 0) nextNum = Math.max(...nums) + 1;
-    }
-    res.json({ success: true, form_no: `LQ-${String(nextNum).padStart(4, '0')}` });
+    const form_no = await nextLiquidationFormNo(user);
+    res.json({ success: true, form_no });
   } catch (err) {
     console.error('Error fetching next form number:', err);
     res.status(500).json({ success: false, error: 'Database error' });
