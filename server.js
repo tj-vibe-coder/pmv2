@@ -5,6 +5,12 @@ const path = require('path');
 const crypto = require('crypto');
 const { createProductHistoryRouter } = require('./server/calcsheetProductHistoryRouter');
 const { validateQuotationPurchaseTiming } = require('./server/calcsheetPurchaseTiming');
+const { loadAiAssistConfig } = require('./server/aiAssist/config');
+const { createAiAssistRouter } = require('./server/aiAssist/router');
+const { createToolRegistry: createAiAssistToolRegistry } = require('./server/aiAssist/tools');
+const { buildTextSystemInstruction } = require('./server/aiAssist/prompt');
+const { createGeminiChatClient } = require('./server/aiAssist/geminiClient');
+const { GoogleGenAI: AiAssistGoogleGenAI } = require('@google/genai');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -6357,6 +6363,27 @@ app.post('/api/project-expenses/:id/convert-to-overhead', async (req, res) => {
   }
 });
 // ========== END OVERHEAD EXPENSES ==========
+
+// ========== AI ASSIST (read-only chat/voice, RJR/TJC only, off by default) ==========
+const aiAssistConfig = loadAiAssistConfig(process.env);
+app.use('/api/ai-assist', createAiAssistRouter({
+  db,
+  getCurrentUser,
+  config: aiAssistConfig,
+  createChatClient: (config) => {
+    const registry = createAiAssistToolRegistry({ db });
+    const toolDeclarations = [...registry.values()].map((tool) => tool.declaration);
+    return createGeminiChatClient({
+      apiKey: process.env.GEMINI_API_KEY,
+      model: config.chatModel,
+      systemInstruction: buildTextSystemInstruction(config),
+      toolDeclarations,
+    });
+  },
+  createLiveClient: (apiKey) => new AiAssistGoogleGenAI({ apiKey }),
+  geminiApiKey: process.env.GEMINI_API_KEY,
+}));
+// ========== END AI ASSIST ==========
 
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {
