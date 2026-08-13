@@ -1,5 +1,20 @@
 # Task Log
 
+## 2026-08-13 — Read-only AI Assist chat and voice design
+
+### Completed
+
+- Approved a read-only RJR/TJC first release with no create, edit, approve, submit, upload, or delete authority.
+- Chose Gemini 3.5 Flash-Lite for structured text and a configurable Gemini Live native-audio model for push-to-talk voice over one allowlisted server tool layer.
+- Designed server-derived citations, constrained ephemeral Live tokens, strict input/output schemas, excluded-data projections, bounded tool use, metadata-only audit, and a feature flag defaulting off.
+- Created the design spec, detailed task-by-task implementation plan, Bayanihan source reference map, and a self-contained prompt for a fresh builder CLI session.
+- Recorded the existing custom base64-token authentication as a production enablement gate.
+
+### Verification
+
+- Reviewed the artifacts for placeholders, model/config consistency, write-authority leakage, secret exposure, root/Functions deployment mirroring, and overlap with existing dirty worktree changes.
+- No application code, dependencies, secrets, or production settings were changed.
+
 ## 2026-07-24 to 2026-07-27 — Calcsheet quotation-history pricing
 
 ### Completed
