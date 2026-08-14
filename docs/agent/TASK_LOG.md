@@ -106,3 +106,26 @@ Meal allowance was always per-day. TJ set Kim to 15k/mo + 1k meal intending 16k 
 - `node --test server/*.test.js` — 68/68 passed.
 - Live read-only API check for the ₱240.23 Microsoft record returned only the plausible February 26 Microsoft MSBILL candidate; Easytrip, Lalamove, reflective vest, and out-of-window candidates were absent.
 - No production finance records were changed.
+
+## 2026-08-14 — Desktop PDF receipt scanning
+
+### Completed
+
+- Added PDF selection to Expense Monitoring's **Scan One** and **Scan Multiple** desktop flows.
+- Defined the current behavior as one selected PDF per receipt/expense; multi-page PDFs are not split into separate items.
+- Sent PDFs directly to the existing Gemini receipt parser as `application/pdf` without opening the image cropper.
+- Preserved image auto-crop behavior and added mixed batch sequencing that crops only images while parsing PDFs in their original order.
+- Preserved PDF bytes and `.pdf` filenames for OneDrive uploads; image scans remain JPEG uploads.
+- Added a shared receipt-file policy with a 15 MB PDF limit, supported raster-image validation, generic-MIME extension fallback, and rejection of contradictory MIME types.
+- Kept rejected-file feedback visible through crop, parse, and review, and guarded scan results against stale overlapping selections.
+- Independent review findings were checked against the real helpers: raw-byte hashing already supports PDFs and `compressForUpload` already bypasses non-images; explicit PDF upload and thumbnail bypasses plus race/validation hardening were added.
+
+### Verification
+
+- Focused receipt policy and batch PDF tests passed, including PDF-only, mixed PDF-image-PDF, skipped-file feedback, size limits, MIME handling, and upload filename rules.
+- `npm test -- --watchAll=false` — 22 suites, 134/134 passed.
+- `npx tsc --noEmit` — passed.
+- `npm run build` — compiled successfully.
+- `git diff --check` — passed.
+- CUI preview started at `http://localhost:3001`; authenticated file-picker smoke was not completed because the preview was at login and credentials were intentionally not entered into tool logs.
+- No production Firestore writes or OneDrive uploads were made during verification.

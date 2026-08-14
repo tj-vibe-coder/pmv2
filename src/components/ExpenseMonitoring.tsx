@@ -71,6 +71,13 @@ import {
   type DuplicateMatch,
 } from '../services/receiptDuplicateService';
 import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress';
+import {
+  getReceiptParseMimeType,
+  isPdfReceipt,
+  makeReceiptUploadFilename,
+  RECEIPT_FILE_ACCEPT,
+  validateReceiptFile,
+} from '../utils/receipts/receiptFile';
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import ReceiptCropper from './ReceiptCropper';
@@ -83,6 +90,7 @@ import MoneyTrailButton from './finance/MoneyTrailButton';
 import { useFinanceRowFocus } from '../hooks/useFinanceRowFocus';
 import { financeFocusToken, financeFocusUrl } from '../utils/financeTraceFocus';
 import { expenseOrigin, linkedOriginsForExpense } from '../utils/expenseFinanceTrace';
+import type { ParsedReceipt } from '../types/Receipt';
 
 const EXPENSES_KEY = 'projectExpenses';
 
@@ -1100,13 +1108,82 @@ const ExpenseMonitoring: React.FC = () => {
     }
   };
 
-  // Phase 1: pick a photo, auto-detect its corners, and open the crop dialog.
+  const applyParsedReceipt = async (parsed: ParsedReceipt, receiptBase64: string, gen: number) => {
+    if (gen !== scanGenRef.current) return;
+    const amt = parsed.total ?? parsed.subtotal;
+    if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
+    if (parsed.date) setExpenseDate(parsed.date);
+    const scanCategoryList: readonly string[] = expenseScope === 'overhead' ? OVERHEAD_CATEGORIES : PROJECT_EXPENSE_CATEGORIES;
+    if (parsed.suggestedCategory && scanCategoryList.includes(parsed.suggestedCategory)) {
+      setExpenseCategory(parsed.suggestedCategory);
+    }
+    const desc = parsed.vendor || parsed.lineItems?.[0]?.description;
+    if (desc && !expenseDescription.trim()) setExpenseDescription(desc);
+    if (parsed.vendor) setExpenseSupplier(parsed.vendor);
+    if (parsed.invoiceNumber) setExpenseInvoiceNo(parsed.invoiceNumber);
+    if (parsed.invoiceType) {
+      const matched = INVOICE_TYPES.find((t) => t.toLowerCase() === parsed.invoiceType?.toLowerCase());
+      setExpenseInvoiceType(matched || '');
+    }
+    if (parsed.tax !== null && parsed.tax !== undefined) setExpenseVat(String(parsed.tax));
+    if (typeof parsed.deductible === 'boolean') setExpenseDeductible(parsed.deductible);
+    if (parsed.deductibleReason) setExpenseDeductibleReason(parsed.deductibleReason);
+    const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
+    const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
+    if (lowConf) {
+      setScanSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category. Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+    } else {
+      setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+    }
+    // Duplicate-receipt check — best-effort, never blocks the scan flow.
+    const imageHash = await computeImageHash(receiptBase64);
+    if (gen !== scanGenRef.current) return;
+    setExpenseImageHash(imageHash || null);
+    try {
+      const matchesMap = await checkDuplicates([{
+        key: 'scan',
+        supplier: parsed.vendor || undefined,
+        invoiceNo: parsed.invoiceNumber || undefined,
+        amount: typeof amt === 'number' ? amt : undefined,
+        date: parsed.date || undefined,
+        imageHash: imageHash || undefined,
+      }]);
+      if (gen !== scanGenRef.current) return;
+      const matches: DuplicateMatch[] = matchesMap.get('scan') || [];
+      if (matches.length > 0) {
+        const warnings = matches.map(describeMatch);
+        setExpenseDuplicateWarnings(warnings);
+        setScanSnackbar({ open: true, severity: 'warning', message: `Possible duplicate receipt: ${warnings[0]}` });
+      }
+    } catch (err) {
+      console.warn('[ExpenseMonitoring] duplicate check failed:', err);
+    }
+  };
+
+  // Phase 1: PDFs parse directly; photos auto-detect their corners and open the crop dialog.
   const handleScanInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    scanGenRef.current += 1;
+    const selectionGen = scanGenRef.current;
+    const validationError = validateReceiptFile(file);
+    if (validationError) {
+      setScanSnackbar({ open: true, severity: 'error', message: validationError });
+      setIsScanning(false);
+      return;
+    }
     setIsScanning(true);
     try {
+      if (isPdfReceipt(file)) {
+        setExpenseImageHash(null);
+        setExpenseDuplicateWarnings([]);
+        pendingReceiptRef.current = file;
+        const receiptBase64 = await blobToBase64(file);
+        const parsed = await parseReceipt(receiptBase64, getReceiptParseMimeType(file));
+        await applyParsedReceipt(parsed, receiptBase64, selectionGen);
+        return;
+      }
       const safeFile = await convertHeicToJpeg(file);
       let detected = await detectReceiptQuad(safeFile);
       if (!detected) {
@@ -1120,11 +1197,14 @@ const ExpenseMonitoring: React.FC = () => {
       const quad: Quad = detected ?? [
         { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 }, { x: 0.88, y: 0.86 }, { x: 0.12, y: 0.86 },
       ];
+      if (selectionGen !== scanGenRef.current) return;
       setEdit(safeFile, quad);
     } catch (err) {
-      setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Could not process photo' });
+      if (selectionGen === scanGenRef.current) {
+        setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Could not process receipt' });
+      }
     } finally {
-      setIsScanning(false);
+      if (selectionGen === scanGenRef.current) setIsScanning(false);
     }
   };
 
@@ -1153,55 +1233,7 @@ const ExpenseMonitoring: React.FC = () => {
       pendingReceiptRef.current = croppedFile;
       const imageBase64 = await blobToBase64(flattened);
       const parsed = await parseReceipt(imageBase64, 'image/jpeg');
-      if (gen !== scanGenRef.current) return;
-      const amt = parsed.total ?? parsed.subtotal;
-      if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
-      if (parsed.date) setExpenseDate(parsed.date);
-      const scanCategoryList: readonly string[] = expenseScope === 'overhead' ? OVERHEAD_CATEGORIES : PROJECT_EXPENSE_CATEGORIES;
-      if (parsed.suggestedCategory && scanCategoryList.includes(parsed.suggestedCategory)) {
-        setExpenseCategory(parsed.suggestedCategory);
-      }
-      const desc = parsed.vendor || parsed.lineItems?.[0]?.description;
-      if (desc && !expenseDescription.trim()) setExpenseDescription(desc);
-      if (parsed.vendor) setExpenseSupplier(parsed.vendor);
-      if (parsed.invoiceNumber) setExpenseInvoiceNo(parsed.invoiceNumber);
-      if (parsed.invoiceType) {
-        const matched = INVOICE_TYPES.find((t) => t.toLowerCase() === parsed.invoiceType?.toLowerCase());
-        setExpenseInvoiceType(matched || '');
-      }
-      if (parsed.tax !== null && parsed.tax !== undefined) setExpenseVat(String(parsed.tax));
-      if (typeof parsed.deductible === 'boolean') setExpenseDeductible(parsed.deductible);
-      if (parsed.deductibleReason) setExpenseDeductibleReason(parsed.deductibleReason);
-      const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
-      const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
-      if (lowConf) {
-        setScanSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category. Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
-      } else {
-        setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
-      }
-      // Duplicate-receipt check — best-effort, never blocks the scan flow.
-      const imageHash = await computeImageHash(imageBase64);
-      if (gen !== scanGenRef.current) return;
-      setExpenseImageHash(imageHash || null);
-      try {
-        const matchesMap = await checkDuplicates([{
-          key: 'scan',
-          supplier: parsed.vendor || undefined,
-          invoiceNo: parsed.invoiceNumber || undefined,
-          amount: typeof amt === 'number' ? amt : undefined,
-          date: parsed.date || undefined,
-          imageHash: imageHash || undefined,
-        }]);
-        if (gen !== scanGenRef.current) return;
-        const matches: DuplicateMatch[] = matchesMap.get('scan') || [];
-        if (matches.length > 0) {
-          const warnings = matches.map(describeMatch);
-          setExpenseDuplicateWarnings(warnings);
-          setScanSnackbar({ open: true, severity: 'warning', message: `Possible duplicate receipt: ${warnings[0]}` });
-        }
-      } catch (err) {
-        console.warn('[ExpenseMonitoring] duplicate check failed:', err);
-      }
+      await applyParsedReceipt(parsed, imageBase64, gen);
       setEdit(null, null);
     } catch (err) {
       setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Failed to parse receipt' });
@@ -1246,10 +1278,10 @@ const ExpenseMonitoring: React.FC = () => {
       const pendingFile = pendingReceiptRef.current;
       if (pendingFile) {
         try {
-          const compressed = await compressForUpload(pendingFile);
+          const compressed = isPdfReceipt(pendingFile) ? pendingFile : await compressForUpload(pendingFile);
           const contentBase64 = await blobToBase64(compressed);
           const year = String(new Date().getFullYear());
-          const filename = `SCAN-${Date.now()}.jpg`;
+          const filename = makeReceiptUploadFilename(pendingFile);
           const folderPath = expenseScope === 'project'
             ? `Project Receipts/${project?.project_no || pid}/${year}`
             : `00 Overhead Receipts/${year}`;
@@ -2172,7 +2204,7 @@ const ExpenseMonitoring: React.FC = () => {
         <input
           type="file"
           ref={scanInputRef}
-          accept="image/*"
+          accept={RECEIPT_FILE_ACCEPT}
           capture="environment"
           style={{ display: 'none' }}
           onChange={handleScanInputChange}

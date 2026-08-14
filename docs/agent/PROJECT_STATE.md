@@ -5,6 +5,7 @@ Updated: 2026-08-14
 ## Current status
 
 - Finance Money Trail is complete on branch `feat/finance-money-trail` and has not been merged or deployed.
+- Expense Monitoring's desktop **Scan One** and **Scan Multiple** flows now accept receipt PDFs; one PDF is treated as one receipt, bypasses image cropping, parses natively with Gemini, and uploads to OneDrive as `.pdf`. Mixed image/PDF batches crop only the images.
 - Investment Tracker, project/overhead expenses, liquidation rows, cash advances, and reimbursements now expose confirmed cross-record trails and exact-record deep links.
 - Possible duplicates use deterministic review signals (including centavo/small-peso differences), remain separate from confirmed links, and can only be resolved by admins.
 - Possible matches now require semantic description/vendor/reference identity; amount, date, project, and investor alone cannot create a suggestion, and dated records more than 14 days apart are rejected.
@@ -19,7 +20,7 @@ Updated: 2026-08-14
 ## Verification
 
 - Finance trace server and packaging suite: 68/68 passing.
-- Frontend suite: 126/126 passing.
+- Frontend suite: 134/134 passing.
 - TypeScript and production build passing for the money-trail branch.
 - No production write tests or live Firestore mutations were used during verification.
 - Server product-history tests: 36/36 passing.
@@ -36,5 +37,6 @@ Updated: 2026-08-14
 
 - Review and merge `feat/finance-money-trail` independently from the AI receipt-assist work when requested.
 - Run a browser smoke against a safe Firestore emulator dataset before deployment; automated integration coverage and the production build are already green.
+- Run an authenticated browser smoke with a real single-page receipt PDF before deployment; the current CUI preview reached the login screen but no credential was entered into tool logs.
 - Deploy or merge according to the repository branch workflow when requested.
 - Consider improving the insufficient-history panel to show excluded evidence reasons; this is explanatory polish, not a correctness blocker.
