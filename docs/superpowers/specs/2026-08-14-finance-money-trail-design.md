@@ -180,6 +180,9 @@ Possible matches are deterministic and bounded. A candidate requires at least tw
 
 Rules:
 
+- When both records have valid dates, a difference greater than 14 calendar days rejects the candidate rather than merely reducing its score.
+- Every candidate must have at least one semantic identity signal: two or more meaningful normalized description/vendor words, or an exact supplier, invoice, receipt, or source-reference match.
+- Amount, date, project, and investor matches are supporting evidence only. Amount plus date—or amount/date plus project/investor—cannot propose a match when descriptions and strong references are unrelated.
 - An exact invoice, receipt, or source reference is strong evidence but does not auto-confirm a link.
 - Candidates already confirmed to a different record are excluded.
 - Explicit confirmed links always appear before candidates.
