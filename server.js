@@ -1440,16 +1440,21 @@ app.post('/api/project-expenses/backfill-liquidation-receipts', async (req, res)
 });
 
 // Superadmin-only: reclassify a manually-entered / receipt-scanned project expense as an
-// employee out-of-pocket claim instead of a company-paid one. Creates a submitted liquidation
-// for the chosen employee (optionally against one of their approved CAs) and removes the
-// original project_expense in one batch, so the cost is never counted twice.
+// employee out-of-pocket claim instead of a company-paid one. By default creates a new
+// submitted liquidation for the chosen employee (optionally against one of their approved
+// CAs); passing targetLiquidationId instead appends the row to one of that employee's
+// existing DRAFT liquidations (submitted ones go through the revision-approval flow, not
+// this endpoint, since they've already affected CA balance/reimbursement tracking). Either
+// way the original project_expense/overhead_expense is removed in the same batch, so the
+// cost is never counted twice, and the expense's attached receipt (if any) carries over
+// onto the new row instead of being silently dropped.
 // Shared by project_expenses and overhead_expenses — an overhead receipt an
 // employee paid out-of-pocket is just as promotable as a project one.
 const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
-  const { userId, caId } = req.body || {};
+  const { userId, caId, targetLiquidationId } = req.body || {};
   if (!userId) return res.status(400).json({ success: false, error: 'userId is required' });
   try {
     const expenseRef = db.collection(collectionName).doc(req.params.id);
@@ -1463,55 +1468,129 @@ const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
     if (!targetUserSnap.exists) return res.status(404).json({ success: false, error: 'Employee not found' });
     const targetUser = targetUserSnap.data();
 
-    let caRef = null;
-    if (caId) {
-      caRef = db.collection('cash_advances').doc(String(caId));
-      const caSnap = await caRef.get();
-      if (!caSnap.exists || caSnap.data().user_id !== String(userId) || caSnap.data().status !== 'approved') {
-        return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance for this employee' });
-      }
-      const bal = parseFloat(caSnap.data().balance_remaining) || 0;
-      if ((Number(expense.amount) || 0) > bal) {
-        return res.status(400).json({ success: false, error: `Expense (₱${Number(expense.amount).toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
-      }
-    }
-
-    // Same LQ<YY><###>-<INITIALS> numbering scheme as /api/liquidations/next-form-no.
-    const formNo = await nextLiquidationFormNo(targetUser);
-
     const now = Math.floor(Date.now() / 1000);
     const nowIso = new Date().toISOString();
-    const liquidationRef = db.collection('liquidations').doc();
-    const rows = [{ category: expense.category || 'Others', description: expense.description || '', amount: Number(expense.amount) || 0 }];
+    const rowId = `row-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const newRow = {
+      id: rowId,
+      date: expense.date || nowIso.slice(0, 10),
+      category: expense.category || 'Others',
+      projectId: '',
+      projectName: '',
+      projectNo: '',
+      particulars: expense.description || '',
+      amount: Number(expense.amount) || 0,
+      remarks: expense.remarks || '',
+      deductible: typeof expense.deductible === 'boolean' ? expense.deductible : true,
+      deductibleReason: expense.deductibleReason || null,
+      supplier: expense.supplier || '',
+      invoiceNo: expense.invoiceNo || '',
+      customerInfoIssues: [],
+    };
+    const newReceipts = (expense.receiptRef && (expense.receiptRef.oneDriveId || expense.receiptRef.webUrl))
+      ? [{
+          id: `rcpt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          rowId,
+          filename: expense.receiptRef.filename || 'receipt',
+          oneDriveId: expense.receiptRef.oneDriveId || null,
+          webUrl: expense.receiptRef.webUrl || null,
+        }]
+      : [];
 
     const batch = db.batch();
-    batch.set(liquidationRef, {
-      user_id: String(userId),
-      form_no: formNo,
-      date_of_submission: nowIso.slice(0, 10),
-      employee_name: targetUser.full_name || targetUser.username || null,
-      employee_number: null,
-      rows_json: JSON.stringify(rows),
-      receipts_json: '[]',
-      total_amount: Number(expense.amount) || 0,
-      ca_id: caId || null,
-      status: 'submitted',
-      reimbursement_status: caId ? null : 'pending',
-      reimbursed_at: null,
-      reimbursed_by: null,
-      promotedFromExpenseId: req.params.id,
-      created_at: now,
-      updated_at: now,
-    });
-    if (caRef) {
-      batch.update(caRef, { balance_remaining: FieldValue.increment(-(Number(expense.amount) || 0)), updated_at: now });
-    }
-    batch.delete(expenseRef);
-    // Clean up any linked out-of-pocket investment row — the expense is no longer company-paid.
-    batch.delete(db.collection('investments').doc(`expense_sync_${req.params.id}`));
-    await batch.commit();
+    let liquidationId, formNo;
+    // Set when the append went through applyLiquidationRevision (submitted target) —
+    // that call already committed its own writes, so the expense/investment cleanup
+    // below needs a second, separate commit instead of joining the batch above.
+    let revisionAlreadyApplied = false;
 
-    res.json({ success: true, liquidationId: liquidationRef.id, formNo });
+    if (targetLiquidationId) {
+      const targetRef = db.collection('liquidations').doc(String(targetLiquidationId));
+      const targetSnap = await targetRef.get();
+      if (!targetSnap.exists) return res.status(404).json({ success: false, error: 'Target liquidation not found' });
+      const target = targetSnap.data();
+      if (target.user_id !== String(userId)) return res.status(400).json({ success: false, error: 'Target liquidation does not belong to this employee' });
+      if (target.status !== 'draft' && target.status !== 'submitted') {
+        return res.status(400).json({ success: false, error: 'Target liquidation must be a draft or a submitted liquidation' });
+      }
+      const existingRows = parseLiqRows(target.rows_json);
+      const existingReceipts = parseLiqRows(target.receipts_json);
+      const updatedRows = [...existingRows, newRow];
+      const updatedTotal = updatedRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+      if (target.status === 'draft') {
+        batch.update(targetRef, {
+          rows_json: JSON.stringify(updatedRows),
+          receipts_json: JSON.stringify([...existingReceipts, ...newReceipts]),
+          total_amount: updatedTotal,
+          updated_at: now,
+        });
+      } else {
+        // Submitted liquidations go through the same revision machinery as
+        // "Edit (applies immediately)" so CA balance / reimbursement / the
+        // project_expenses-or-overhead_expenses sync all stay consistent.
+        const revision = {
+          rows_json: JSON.stringify(updatedRows),
+          receipts_json: JSON.stringify([...existingReceipts, ...newReceipts]),
+          total_amount: updatedTotal,
+          employee_name: target.employee_name ?? null,
+          date_of_submission: target.date_of_submission ?? null,
+          note: `Promoted expense (${collectionName}/${req.params.id}) added as a new row`,
+          proposed_by: user.id,
+          proposed_by_name: user.full_name || user.username || null,
+          proposed_at: now,
+        };
+        await applyLiquidationRevision(targetRef.id, target, revision, user);
+        revisionAlreadyApplied = true;
+      }
+      liquidationId = targetRef.id;
+      formNo = target.form_no;
+    } else {
+      let caRef = null;
+      if (caId) {
+        caRef = db.collection('cash_advances').doc(String(caId));
+        const caSnap = await caRef.get();
+        if (!caSnap.exists || caSnap.data().user_id !== String(userId) || caSnap.data().status !== 'approved') {
+          return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance for this employee' });
+        }
+        const bal = parseFloat(caSnap.data().balance_remaining) || 0;
+        if ((Number(expense.amount) || 0) > bal) {
+          return res.status(400).json({ success: false, error: `Expense (₱${Number(expense.amount).toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+        }
+      }
+      // Same LQ<YY><###>-<INITIALS> numbering scheme as /api/liquidations/next-form-no.
+      formNo = await nextLiquidationFormNo(targetUser);
+      const liquidationRef = db.collection('liquidations').doc();
+      batch.set(liquidationRef, {
+        user_id: String(userId),
+        form_no: formNo,
+        date_of_submission: nowIso.slice(0, 10),
+        employee_name: targetUser.full_name || targetUser.username || null,
+        employee_number: null,
+        rows_json: JSON.stringify([newRow]),
+        receipts_json: JSON.stringify(newReceipts),
+        total_amount: Number(expense.amount) || 0,
+        ca_id: caId || null,
+        status: 'submitted',
+        reimbursement_status: caId ? null : 'pending',
+        reimbursed_at: null,
+        reimbursed_by: null,
+        promotedFromExpenseId: req.params.id,
+        created_at: now,
+        updated_at: now,
+      });
+      if (caRef) {
+        batch.update(caRef, { balance_remaining: FieldValue.increment(-(Number(expense.amount) || 0)), updated_at: now });
+      }
+      liquidationId = liquidationRef.id;
+    }
+
+    const cleanupBatch = revisionAlreadyApplied ? db.batch() : batch;
+    cleanupBatch.delete(expenseRef);
+    // Clean up any linked out-of-pocket investment row — the expense is no longer company-paid.
+    cleanupBatch.delete(db.collection('investments').doc(`expense_sync_${req.params.id}`));
+    await cleanupBatch.commit();
+
+    res.json({ success: true, liquidationId, formNo });
   } catch (err) {
     console.error(`Error promoting ${collectionName} row to liquidation:`, err);
     res.status(500).json({ success: false, error: 'Database error' });
