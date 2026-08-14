@@ -49,3 +49,40 @@ Meal allowance was always per-day. TJ set Kim to 15k/mo + 1k meal intending 16k 
 ### Checked
 - `npm test -- --watchAll=false --testPathPattern=payrollEngine.test` — 19/19 pass
 - `npx tsc --noEmit` — clean
+
+## 2026-08-14 — Finance Money Trail
+
+### Completed
+
+- Added a derived, read-only money trail across investments, project/overhead expenses, liquidation rows, cash advances, and reimbursements.
+- Added exact-record focus URLs that adjust filters and pagination, scroll to the target, retain a visible highlight, and provide Back to source/Clear focus actions.
+- Added deterministic possible-match review for amount differences down to centavos and up to ₱500, dates within 14 days, matching text, project, investor/supplier, invoice, receipt, and source references.
+- Kept possible matches visually and structurally separate from confirmed relationships; only investment-expense candidates are directly confirmable.
+- Added admin-only transactional resolution actions: confirm match, keep both separate, keep investment/delete expense with optional reclassification, and keep expense/delete investment.
+- Added reopening of confirmed investment-expense links through **Review or unlink**, covering the same separation/deletion actions without allowing duplicate confirmation.
+- Protected liquidation-, PO-, payroll-, and CA-owned synced expenses from every resolver mutation and return the exact source link when correction must happen upstream.
+- Added append-only `finance_trace_audit` entries with actor, reason, request ID, pair, timestamp, and accurate before/after snapshots.
+- Hardened visibility so possible matches and graph traversal never expose another user's inaccessible manual finance records.
+- Added packaging coverage so the Finance Functions deployment includes runtime trace modules but excludes tests.
+
+### Commits
+
+- `aabc516` — design Finance Money Trail
+- `9103adb` — plan Finance Money Trail implementation
+- `0d68a1b` through `1bae4bc` — trace contracts, API, resolver, drawer, exact-focus integrations, and module coverage
+- `b491197` — harden trace visibility, resolver safety, confirmed-link unlinking, audit snapshots, and staged focus
+
+### Verification
+
+- `node --test server/*.test.js` — 63/63 passed.
+- `npm test -- --watchAll=false` — 20 suites, 126/126 passed.
+- `npx tsc --noEmit` — passed.
+- `npm run build` — compiled successfully.
+- `git diff --check` — passed.
+- No production Firestore writes were made during implementation or verification.
+
+### Notes
+
+- Work is isolated on `feat/finance-money-trail`, separate from the AI receipt-assist branch, and is not merged or deployed.
+- Browser QA was not run because the available local startup path can initialize default users unless it is paired with a verified Firestore emulator dataset.
+- `npm ci` required a temporary cache because the user npm cache contains root-owned files; install completed without changing dependencies.
