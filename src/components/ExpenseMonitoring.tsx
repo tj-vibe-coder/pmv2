@@ -660,6 +660,7 @@ const ExpenseMonitoring: React.FC = () => {
 
       const submitted = data.liquidations.filter((l: any) => l.status === 'submitted');
       const newExpenses: ProjectExpense[] = [];
+      const newOverheadExpenses: ProjectExpense[] = [];
       for (const liq of submitted) {
         let rows: any[] = [];
         try { rows = JSON.parse(liq.rows_json || '[]'); } catch (_) { continue; }
@@ -674,18 +675,10 @@ const ExpenseMonitoring: React.FC = () => {
 
         for (const row of rows) {
           const pid = row.projectId != null && row.projectId !== '' ? String(row.projectId) : '';
-          if (!pid) continue;
           const amt = Number(row.amount);
           if (!amt || amt <= 0) continue;
-
-          const project = allProjects.find((p) => String(p.id) === pid);
-          const projectName = row.projectName || project?.project_name || '—';
-
-          newExpenses.push({
+          const base = {
             id: `exp-liq-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            scope: 'project',
-            projectId: pid,
-            projectName,
             description: `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`,
             remarks: (row.remarks || '').trim() || undefined,
             amount: amt,
@@ -694,11 +687,20 @@ const ExpenseMonitoring: React.FC = () => {
             createdAt: new Date().toISOString(),
             sourceLiquidationId: liq.id,
             sourceLiquidationRowId: row.id,
-            sourceType: 'liquidation_sync',
+            sourceType: 'liquidation_sync' as const,
             ...(liq.employee_name ? { liquidationFiledBy: liq.employee_name } : {}),
             ...(liq.date_of_submission ? { liquidationFiledAt: liq.date_of_submission } : {}),
             ...(receiptByRowId.get(row.id) ? { receiptRef: receiptByRowId.get(row.id) } : {}),
-          });
+          };
+          if (pid) {
+            const project = allProjects.find((p) => String(p.id) === pid);
+            const projectName = row.projectName || project?.project_name || '—';
+            newExpenses.push({ ...base, scope: 'project', projectId: pid, projectName });
+          } else {
+            // No project assigned — this is an overhead cost (e.g. a software
+            // subscription liquidated without a project), not a dropped row.
+            newOverheadExpenses.push({ ...base, scope: 'overhead' });
+          }
         }
       }
 
@@ -713,6 +715,20 @@ const ExpenseMonitoring: React.FC = () => {
         const syncData = await syncRes.json().catch(() => ({ success: false }));
         if (syncData.success) {
           syncedCount = syncData.count ?? newExpenses.length;
+        } else {
+          syncFailed = true;
+        }
+      }
+      let overheadSyncedCount = 0;
+      if (newOverheadExpenses.length > 0) {
+        const overheadRes = await fetch(`${API_BASE}/api/overhead-expenses`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ expenses: newOverheadExpenses }),
+        });
+        const overheadData = await overheadRes.json().catch(() => ({ success: false }));
+        if (overheadData.success) {
+          overheadSyncedCount = overheadData.count ?? newOverheadExpenses.length;
         } else {
           syncFailed = true;
         }
@@ -734,15 +750,16 @@ const ExpenseMonitoring: React.FC = () => {
 
       if (syncFailed) {
         setSyncMessage({ type: 'error', text: 'Failed to save liquidation expenses.' });
-      } else if (syncedCount === 0 && backfilledCount === 0) {
+      } else if (syncedCount === 0 && overheadSyncedCount === 0 && backfilledCount === 0) {
         setSyncMessage({ type: 'info', text: 'No new liquidation expenses to sync. All submitted liquidations are already logged.' });
       } else {
         const parts = [];
-        if (syncedCount > 0) parts.push(`Synced ${syncedCount} liquidation expense(s)`);
+        if (syncedCount > 0) parts.push(`Synced ${syncedCount} project expense(s)`);
+        if (overheadSyncedCount > 0) parts.push(`${overheadSyncedCount} overhead expense(s) (no project assigned)`);
         if (backfilledCount > 0) parts.push(`linked ${backfilledCount} scanned receipt(s) to existing entries`);
         setSyncMessage({ type: 'success', text: `${parts.join('; ')}.` });
       }
-      if (syncedCount > 0 || backfilledCount > 0) await fetchExpenses();
+      if (syncedCount > 0 || overheadSyncedCount > 0 || backfilledCount > 0) await fetchExpenses();
     } catch (err) {
       setSyncMessage({ type: 'error', text: 'Error syncing liquidations.' });
     }
