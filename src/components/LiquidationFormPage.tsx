@@ -28,7 +28,7 @@ import {
   Tooltip,
   Checkbox,
 } from '@mui/material';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, Edit as EditIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, WarningAmber as WarningAmberIcon } from '@mui/icons-material';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
@@ -53,6 +53,9 @@ import ReceiptViewer from './ReceiptViewer';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 import { LIQUIDATION_CATEGORIES } from '../data/financeCategories';
 import { blobToBase64 } from '../utils/receipts/imageCompress';
+import MoneyTrailButton from './finance/MoneyTrailButton';
+import { financeFocusToken, financeFocusUrl, parseFinanceFocus } from '../utils/financeTraceFocus';
+import { liquidationRowOrigin } from '../utils/financeModuleOrigins';
 import {
   checkDuplicates,
   computeImageHash,
@@ -316,11 +319,20 @@ export default function LiquidationFormPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const financeRowRefs = useRef(new Map<string, HTMLElement>());
+  const [financeFocusError, setFinanceFocusError] = useState('');
+  const [financeFocusLoading, setFinanceFocusLoading] = useState(false);
 
   const canDeleteLiquidation = draftId !== null || loadedOptionValue.startsWith('submitted:');
   const liquidationToDeleteId = draftId ?? (loadedOptionValue.startsWith('submitted:') ? loadedOptionValue.split(':')[1] : null);
   const isAdmin = user?.role === 'superadmin' || user?.role === 'admin';
   const location = useLocation();
+  const navigate = useNavigate();
+  const rawFinanceFocus = new URLSearchParams(location.search).get('focus') || '';
+  const focusedFinanceOrigin = parseFinanceFocus(rawFinanceFocus);
+  const loadedLiquidationId = loadedOptionValue.includes(':')
+    ? loadedOptionValue.slice(loadedOptionValue.indexOf(':') + 1)
+    : '';
 
   const handleSort = (key: 'date' | 'amount') => {
     setSortConfig((prev) => {
@@ -771,11 +783,11 @@ export default function LiquidationFormPage() {
     }
   };
 
-  const loadDraft = async (id: string, isSubmitted = false) => {
-    if (!token) return;
+  const loadDraft = async (id: string, isSubmitted = false): Promise<LiquidationRow[] | null> => {
+    if (!token) return null;
     const res = await fetch(`${API_BASE}/api/liquidations/${id}`, { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json().catch(() => ({}));
-    if (!data.success || !data.liquidation) return;
+    if (!data.success || !data.liquidation) return null;
     const l = data.liquidation;
     const serverStatus = String(l.status ?? '').toLowerCase().trim();
     const submitted =
@@ -890,6 +902,54 @@ export default function LiquidationFormPage() {
       setPendingRevision(null);
     }
     setSubmitSuccess(null);
+    return loadedRows;
+  };
+
+  useEffect(() => {
+    if (!token || focusedFinanceOrigin?.type !== 'liquidation') return;
+    let cancelled = false;
+    setFinanceFocusLoading(true);
+    setFinanceFocusError('');
+    loadDraft(focusedFinanceOrigin.id, true)
+      .then((loadedRows) => {
+        if (cancelled) return;
+        if (!loadedRows) {
+          setFinanceFocusError('Liquidation could not be loaded or is not visible to this account.');
+          return;
+        }
+        if (focusedFinanceOrigin.rowId === '__form__') return;
+        if (!loadedRows.some((row) => row.id === focusedFinanceOrigin.rowId)) {
+          setFinanceFocusError('The liquidation was loaded, but the linked itemized row no longer exists.');
+          return;
+        }
+        window.requestAnimationFrame(() => {
+          financeRowRefs.current.get(financeFocusToken(focusedFinanceOrigin))?.scrollIntoView({
+            behavior: 'smooth', block: 'center', inline: 'nearest',
+          });
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setFinanceFocusError('Failed to load the linked liquidation.');
+      })
+      .finally(() => {
+        if (!cancelled) setFinanceFocusLoading(false);
+      });
+    return () => { cancelled = true; };
+    // loadDraft intentionally reads the latest form setters; the stable URL token is
+    // the trigger, avoiding reloads on every row edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawFinanceFocus, token]);
+
+  const clearFinanceFocus = () => {
+    const params = new URLSearchParams(location.search);
+    params.delete('focus');
+    params.delete('from');
+    navigate({ pathname: location.pathname, search: params.toString() ? `?${params.toString()}` : '' }, { replace: true });
+  };
+
+  const backToFinanceSource = () => {
+    const from = new URLSearchParams(location.search).get('from');
+    if (from) navigate(from);
   };
 
   // Admin: flip the reimbursement status of the loaded no-CA liquidation.
@@ -1691,6 +1751,52 @@ export default function LiquidationFormPage() {
           </Button>
         </Box>
       </Box>
+      {(rawFinanceFocus || financeFocusError) && (
+        <Alert
+          severity={financeFocusError ? 'warning' : 'info'}
+          sx={{ mb: 2 }}
+          action={(
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              {new URLSearchParams(location.search).get('from') && (
+                <Button color="inherit" size="small" onClick={backToFinanceSource}>Back to source</Button>
+              )}
+              <Button color="inherit" size="small" onClick={clearFinanceFocus}>Clear focus</Button>
+            </Box>
+          )}
+        >
+          {financeFocusLoading
+            ? 'Loading the exact liquidation item…'
+            : financeFocusError || 'Showing the exact liquidation item from the money trail.'}
+        </Alert>
+      )}
+      {loadedLiquidationId && (caId || loadedReimb) && (
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+          {caId && (
+            <Chip
+              label="Open linked cash advance"
+              color="primary"
+              variant="outlined"
+              onClick={() => navigate(financeFocusUrl(
+                { type: 'cash_advance', id: caId },
+                `${location.pathname}${location.search}`,
+              ))}
+              sx={{ cursor: 'pointer' }}
+            />
+          )}
+          {loadedReimb && (
+            <Chip
+              label="Open linked reimbursement"
+              color="info"
+              variant="outlined"
+              onClick={() => navigate(financeFocusUrl(
+                { type: 'reimbursement', id: loadedReimb.id },
+                `${location.pathname}${location.search}`,
+              ))}
+              sx={{ cursor: 'pointer' }}
+            />
+          )}
+        </Box>
+      )}
       {submitSuccess && (
         <Typography variant="body2" sx={{ mb: 2, color: submitSuccess.startsWith('Liquidation submitted') ? 'success.main' : submitSuccess.startsWith('Draft saved') ? 'info.main' : 'error.main' }}>
           {submitSuccess}
@@ -2038,8 +2144,33 @@ export default function LiquidationFormPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                sortedRows.map((row, index) => (
-                  <TableRow key={row.id} hover sx={{ '&:hover .delete-btn': { opacity: 1 } }}>
+                sortedRows.map((row, index) => {
+                  const origin = loadedLiquidationId ? liquidationRowOrigin(loadedLiquidationId, row) : null;
+                  const rowToken = origin ? financeFocusToken(origin) : '';
+                  const focused = Boolean(
+                    origin
+                    && focusedFinanceOrigin?.type === 'liquidation'
+                    && focusedFinanceOrigin.id === loadedLiquidationId
+                    && focusedFinanceOrigin.rowId === row.id,
+                  );
+                  return (
+                  <TableRow
+                    key={row.id}
+                    ref={(element: HTMLTableRowElement | null) => {
+                      if (!rowToken) return;
+                      if (element) financeRowRefs.current.set(rowToken, element);
+                      else financeRowRefs.current.delete(rowToken);
+                    }}
+                    hover
+                    aria-current={focused ? 'true' : undefined}
+                    sx={{
+                      '&:hover .delete-btn': { opacity: 1 },
+                      ...(focused ? {
+                        bgcolor: 'rgba(44,90,160,0.14)',
+                        outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px',
+                      } : {}),
+                    }}
+                  >
                     <TableCell sx={{ color: 'text.secondary' }}>{index + 1}</TableCell>
                     <TableCell>
                       <TextField
@@ -2239,9 +2370,12 @@ export default function LiquidationFormPage() {
                       >
                         <DeleteIcon fontSize="small" />
                       </IconButton>
+                      {origin && (
+                        <MoneyTrailButton origin={origin} compact />
+                      )}
                     </TableCell>
                   </TableRow>
-                ))
+                );})
               )}
             </TableBody>
           </Table>

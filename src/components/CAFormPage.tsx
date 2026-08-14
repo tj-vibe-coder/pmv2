@@ -47,6 +47,10 @@ import { fileToParseInput, compressForUpload } from '../utils/receipts/imageComp
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { resolveCorporateDriveId, ensureFolder, uploadFileToFolderById, sanitizeForOneDrive } from '../services/onedriveFolderService';
+import MoneyTrailButton from './finance/MoneyTrailButton';
+import { useFinanceRowFocus } from '../hooks/useFinanceRowFocus';
+import { financeFocusToken, financeFocusUrl } from '../utils/financeTraceFocus';
+import { cashAdvanceOrigin } from '../utils/financeModuleOrigins';
 
 const CA_CATEGORIES = ['Materials', 'Accommodation', 'Allowance', 'Transportation', 'Entertainment'] as const;
 
@@ -213,11 +217,19 @@ export default function CAFormPage() {
   const pendingReceiptsRef = useRef<Record<string, File>>({});
   const [scanningRowId, setScanningRowId] = useState<string | null>(null);
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; severity: 'success' | 'error' | 'warning'; message: string }>({ open: false, severity: 'success', message: '' });
+  const financeRowRefs = useRef(new Map<string, HTMLElement>());
 
   const breakdownTotal = breakdown.reduce((sum, r) => sum + (parseFloat(String(r.amount)) || 0), 0);
   const canSubmit = breakdownTotal > 0 && (selectedProject != null || purpose.trim() !== '');
 
   const isAdmin = user?.role === 'superadmin' || user?.role === 'admin';
+
+  const financeFocus = useFinanceRowFocus({
+    records: list,
+    originForRecord: cashAdvanceOrigin,
+    loading,
+    rowRefs: financeRowRefs,
+  });
 
   const fetchList = useCallback(async () => {
     const token = localStorage.getItem('netpacific_token');
@@ -846,6 +858,21 @@ export default function CAFormPage() {
         </Alert>
       )}
 
+      {(financeFocus.focusedKey || financeFocus.focusError) && (
+        <Alert
+          severity={financeFocus.focusError ? 'warning' : 'info'}
+          sx={{ mb: 2 }}
+          action={(
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              {financeFocus.hasBackSource && <Button color="inherit" size="small" onClick={financeFocus.backToSource}>Back to source</Button>}
+              <Button color="inherit" size="small" onClick={financeFocus.clearFocus}>Clear focus</Button>
+            </Box>
+          )}
+        >
+          {financeFocus.focusError || 'Showing the exact cash advance from the money trail.'}
+        </Alert>
+      )}
+
       <Paper sx={{ mb: 3, borderRadius: 2, overflow: 'hidden', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0' }}>
         <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0' }}>
           <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
@@ -1203,9 +1230,23 @@ export default function CAFormPage() {
                   const linkedLiqs = liquidations.filter((l) => l.ca_id === ca.id && l.status === 'submitted');
                   const liquidatedTotal = linkedLiqs.reduce((s, l) => s + (Number(l.total_amount) || 0), 0);
                   const expanded = expandedId === ca.id;
+                  const origin = cashAdvanceOrigin(ca);
+                  const rowToken = financeFocusToken(origin);
+                  const focused = financeFocus.isFocused(origin);
                   return (
                   <React.Fragment key={ca.id}>
-                  <TableRow hover>
+                  <TableRow
+                    hover
+                    ref={(element: HTMLTableRowElement | null) => {
+                      if (element) financeRowRefs.current.set(rowToken, element);
+                      else financeRowRefs.current.delete(rowToken);
+                    }}
+                    aria-current={focused ? 'true' : undefined}
+                    sx={focused ? {
+                      bgcolor: 'rgba(44,90,160,0.14)',
+                      outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px',
+                    } : undefined}
+                  >
                     <TableCell sx={{ py: 0, whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
                       <IconButton
                         size="small"
@@ -1361,6 +1402,7 @@ export default function CAFormPage() {
                           Delete
                         </Button>
                       )}
+                      <MoneyTrailButton origin={origin} compact onResolved={() => { void fetchList(); }} />
                     </TableCell>
                   </TableRow>
                   <TableRow>
@@ -1377,9 +1419,17 @@ export default function CAFormPage() {
                                 Liquidated {liquidatedTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })} of {Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
                               </Typography>
                               {linkedLiqs.map((l) => (
-                                <Typography key={l.id} variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
-                                  {l.form_no || l.id} · {l.date_of_submission || (l.created_at ? new Date(l.created_at * 1000).toLocaleDateString() : '—')} · ₱{Number(l.total_amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })} · {l.status || '—'}
-                                </Typography>
+                                <Chip
+                                  key={l.id}
+                                  variant="outlined"
+                                  color="warning"
+                                  label={`${l.form_no || l.id} · ${l.date_of_submission || (l.created_at ? new Date(l.created_at * 1000).toLocaleDateString() : '—')} · ₱${Number(l.total_amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`}
+                                  onClick={() => navigate(financeFocusUrl(
+                                    { type: 'liquidation', id: l.id, rowId: '__form__' },
+                                    `${location.pathname}${location.search}`,
+                                  ))}
+                                  sx={{ mr: 1, mb: 0.5, cursor: 'pointer', fontFamily: 'monospace' }}
+                                />
                               ))}
                             </>
                           )}
