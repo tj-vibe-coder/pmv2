@@ -305,6 +305,20 @@ function confirmedIds(record) {
   ].filter(Boolean).map(String));
 }
 
+function isExplicitlySeparated(origin, candidate) {
+  const investment = origin.type === 'investment'
+    ? origin
+    : candidate.type === 'investment' ? candidate : null;
+  const expense = origin.type === 'expense'
+    ? origin
+    : candidate.type === 'expense' ? candidate : null;
+  if (!investment || !expense || !expense.collection) return false;
+  const excluded = Array.isArray(investment.data?.financeTraceExcludedExpenseKeys)
+    ? investment.data.financeTraceExcludedExpenseKeys.map(String)
+    : [];
+  return excluded.includes(`${expense.collection}:${expense.id}`);
+}
+
 function rankCandidates(origin, candidates) {
   const originValues = candidateFields(origin);
   const excludedIds = confirmedIds(origin);
@@ -313,6 +327,7 @@ function rankCandidates(origin, candidates) {
   return (candidates || []).flatMap((candidate) => {
     if (!candidate || !candidate.id || nodeKey(candidate) === originKeyValue) return [];
     if (excludedIds.has(String(candidate.id))) return [];
+    if (isExplicitlySeparated(origin, candidate)) return [];
 
     const values = candidateFields(candidate);
     const evidence = [];

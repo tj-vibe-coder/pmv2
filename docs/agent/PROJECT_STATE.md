@@ -17,7 +17,7 @@ Updated: 2026-08-14
 
 ## Verification
 
-- Finance trace server and packaging suite: 63/63 passing.
+- Finance trace server and packaging suite: 65/65 passing.
 - Frontend suite: 126/126 passing.
 - TypeScript and production build passing for the money-trail branch.
 - No production write tests or live Firestore mutations were used during verification.

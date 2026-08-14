@@ -60,9 +60,11 @@ Meal allowance was always per-day. TJ set Kim to 15k/mo + 1k meal intending 16k 
 - Kept possible matches visually and structurally separate from confirmed relationships; only investment-expense candidates are directly confirmable.
 - Added admin-only transactional resolution actions: confirm match, keep both separate, keep investment/delete expense with optional reclassification, and keep expense/delete investment.
 - Added reopening of confirmed investment-expense links through **Review or unlink**, covering the same separation/deletion actions without allowing duplicate confirmation.
+- Made **Keep both separate** durable so the reviewed pair is suppressed in future possible-match results from either record.
 - Protected liquidation-, PO-, payroll-, and CA-owned synced expenses from every resolver mutation and return the exact source link when correction must happen upstream.
 - Added append-only `finance_trace_audit` entries with actor, reason, request ID, pair, timestamp, and accurate before/after snapshots.
 - Hardened visibility so possible matches and graph traversal never expose another user's inaccessible manual finance records.
+- Rejected inactive accounts and scanner-scoped tokens, bounded resolver identifiers/reasons/categories/request IDs, and prevented mutation of unrelated or conflicting pairs.
 - Added packaging coverage so the Finance Functions deployment includes runtime trace modules but excludes tests.
 
 ### Commits
@@ -74,7 +76,7 @@ Meal allowance was always per-day. TJ set Kim to 15k/mo + 1k meal intending 16k 
 
 ### Verification
 
-- `node --test server/*.test.js` — 63/63 passed.
+- `node --test server/*.test.js` — 65/65 passed.
 - `npm test -- --watchAll=false` — 20 suites, 126/126 passed.
 - `npx tsc --noEmit` — passed.
 - `npm run build` — compiled successfully.

@@ -162,9 +162,12 @@ async function createTestServer({ user, seed = seedData() } = {}) {
   const app = express();
   app.use(express.json());
   const db = new FakeFirestore(seed);
+  const effectiveUser = user && user.approved === undefined
+    ? { ...user, approved: true }
+    : user;
   app.use('/api/finance-trace', createFinanceTraceRouter({
     db,
-    getCurrentUser: async (req) => req.headers.authorization ? user : null,
+    getCurrentUser: async (req) => req.headers.authorization ? effectiveUser : null,
     FieldValue: { delete: () => ({ __delete: true }) },
   }));
   const server = await new Promise((resolve) => {
@@ -188,11 +191,27 @@ async function request(server, path, authorized = true, options = {}) {
 }
 
 test('GET requires authentication', async (t) => {
-  const server = await createTestServer({ user: { id: 'u1', role: 'user' } });
+  const server = await createTestServer({ user: { id: 'u1', role: 'user', approved: true } });
   t.after(() => server.close());
   const response = await request(server, '/api/finance-trace/investment/i1', false);
   assert.equal(response.status, 401);
   assert.equal(response.body.code, 'UNAUTHORIZED');
+});
+
+test('GET rejects inactive accounts and scanner-scoped sessions', async (t) => {
+  const inactive = await createTestServer({ user: { id: 'u1', role: 'user', approved: false } });
+  const scanner = await createTestServer({
+    user: { id: 'u1', role: 'user', approved: true, scannerScope: true },
+  });
+  t.after(() => inactive.close());
+  t.after(() => scanner.close());
+
+  const inactiveResponse = await request(inactive, '/api/finance-trace/investment/i1');
+  assert.equal(inactiveResponse.status, 401);
+  assert.equal(inactiveResponse.body.code, 'ACCOUNT_INACTIVE');
+  const scannerResponse = await request(scanner, '/api/finance-trace/investment/i1');
+  assert.equal(scannerResponse.status, 403);
+  assert.equal(scannerResponse.body.code, 'SCANNER_SCOPE_FORBIDDEN');
 });
 
 test('GET validates record type, expense collection, and liquidation row', async (t) => {
@@ -227,7 +246,7 @@ test('GET follows the full confirmed chain and keeps possible matches separate',
 });
 
 test('GET gives authenticated non-admin users view-only permissions', async (t) => {
-  const server = await createTestServer({ user: { id: 'u1', role: 'user' } });
+  const server = await createTestServer({ user: { id: 'u1', role: 'user', approved: true } });
   t.after(() => server.close());
   const response = await request(
     server,
@@ -238,7 +257,7 @@ test('GET gives authenticated non-admin users view-only permissions', async (t) 
 });
 
 test('GET opens a form-level liquidation focus used by CA and reimbursement links', async (t) => {
-  const server = await createTestServer({ user: { id: 'u1', role: 'user' } });
+  const server = await createTestServer({ user: { id: 'u1', role: 'user', approved: true } });
   t.after(() => server.close());
   const response = await request(
     server,
@@ -254,7 +273,7 @@ test('GET never exposes another user\'s manual expense as a possible match', asy
     date: '2026-03-14', amount: 494.27, description: 'Microsoft MSBill Info SGP',
     projectId: 'p1', sourceType: 'manual', createdBy: 'u2',
   };
-  const server = await createTestServer({ user: { id: 'u1', role: 'user' }, seed });
+  const server = await createTestServer({ user: { id: 'u1', role: 'user', approved: true }, seed });
   t.after(() => server.close());
   const response = await request(server, '/api/finance-trace/investment/i1');
   assert.equal(response.status, 200);
@@ -262,7 +281,7 @@ test('GET never exposes another user\'s manual expense as a possible match', asy
 });
 
 test('GET hides another employee liquidation from a non-admin', async (t) => {
-  const server = await createTestServer({ user: { id: 'u2', role: 'user' } });
+  const server = await createTestServer({ user: { id: 'u2', role: 'user', approved: true } });
   t.after(() => server.close());
   const response = await request(
     server,
@@ -292,13 +311,30 @@ function resolutionBody(action, overrides = {}) {
 }
 
 test('POST resolve requires an admin or superadmin', async (t) => {
-  const server = await createTestServer({ user: { id: 'u1', role: 'user' }, seed: unlinkSeed() });
+  const server = await createTestServer({ user: { id: 'u1', role: 'user', approved: true }, seed: unlinkSeed() });
   t.after(() => server.close());
   const response = await request(server, '/api/finance-trace/resolve', true, {
     method: 'POST', body: JSON.stringify(resolutionBody('confirm_match')),
   });
   assert.equal(response.status, 403);
   assert.equal(response.body.code, 'ADMIN_REQUIRED');
+});
+
+test('POST resolve bounds identifiers, reasons, and categories', async (t) => {
+  const server = await createTestServer({ user: { id: 'a1', role: 'admin' }, seed: unlinkSeed() });
+  t.after(() => server.close());
+  for (const overrides of [
+    { investmentId: 'bad/id' },
+    { reason: 'x'.repeat(1001) },
+    { investmentCategory: 'x'.repeat(101) },
+  ]) {
+    const response = await request(server, '/api/finance-trace/resolve', true, {
+      method: 'POST', body: JSON.stringify(resolutionBody('confirm_match', overrides)),
+    });
+    assert.equal(response.status, 400);
+    assert.match(response.body.code, /^INVALID_|REASON_TOO_LONG$/);
+  }
+  assert.equal(server.fakeDb.store.finance_trace_audit, undefined);
 });
 
 test('confirm_match writes reciprocal links and one append-only audit row', async (t) => {
@@ -401,6 +437,17 @@ test('keep_both_separate clears links and retains both records with corporate fu
   assert.equal('linkedExpenseId' in audit.after.investment, false);
   assert.equal('linkedExpenseCollection' in audit.after.investment, false);
   assert.equal('linkedInvestmentId' in audit.after.expense, false);
+  assert.deepEqual(
+    server.fakeDb.store.investments.i1.financeTraceExcludedExpenseKeys,
+    ['project_expenses:e2'],
+  );
+  assert.equal(response.body.trace.candidates.some((item) => item.node.id === 'e2'), false);
+  const expenseTrace = await request(
+    server,
+    '/api/finance-trace/expense/e2?collection=project_expenses',
+  );
+  assert.equal(expenseTrace.status, 200);
+  assert.equal(expenseTrace.body.candidates.some((item) => item.node.id === 'i1'), false);
 });
 
 test('keep_investment_delete_expense reclassifies the investment and deletes an eligible expense', async (t) => {

@@ -200,18 +200,32 @@ function validateResolutionBody(body) {
   if (!body.investmentId || !body.expenseId || !EXPENSE_COLLECTIONS.has(body.expenseCollection)) {
     throw resolutionError(400, 'INVALID_PAIR', 'A valid investment and expense pair is required');
   }
+  const investmentId = String(body.investmentId).trim();
+  const expenseId = String(body.expenseId).trim();
+  const validDocumentId = (value) => (
+    value.length > 0 && value.length <= 256 && !/[\/\u0000-\u001f\u007f]/.test(value)
+  );
+  if (!validDocumentId(investmentId) || !validDocumentId(expenseId)) {
+    throw resolutionError(400, 'INVALID_PAIR', 'Finance record identifiers are invalid');
+  }
   const reason = String(body.reason || '').trim();
   if (!reason) throw resolutionError(400, 'REASON_REQUIRED', 'A review reason is required');
+  if (reason.length > 1000) {
+    throw resolutionError(400, 'REASON_TOO_LONG', 'Review reason must be 1000 characters or fewer');
+  }
   const investmentCategory = body.investmentCategory === undefined
     ? undefined
     : String(body.investmentCategory).trim();
   if (body.investmentCategory !== undefined && !investmentCategory) {
     throw resolutionError(400, 'INVALID_CATEGORY', 'Investment category cannot be blank');
   }
+  if (investmentCategory && investmentCategory.length > 100) {
+    throw resolutionError(400, 'INVALID_CATEGORY', 'Investment category must be 100 characters or fewer');
+  }
   return {
     ...body,
-    investmentId: String(body.investmentId),
-    expenseId: String(body.expenseId),
+    investmentId,
+    expenseId,
     reason,
     investmentCategory,
   };
@@ -349,6 +363,16 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
       ...(investment.sourceType === 'expense_sync' ? { sourceType: 'manual' } : {}),
       updated_at: timestamp,
     };
+    const excludedExpenseKey = `${input.expenseCollection}:${input.expenseId}`;
+    const excludedExpenseKeys = Array.isArray(investment.financeTraceExcludedExpenseKeys)
+      ? investment.financeTraceExcludedExpenseKeys.map(String)
+      : [];
+    const separationPatch = {
+      ...independentInvestmentPatch,
+      financeTraceExcludedExpenseKeys: excludedExpenseKeys.includes(excludedExpenseKey)
+        ? excludedExpenseKeys
+        : [...excludedExpenseKeys, excludedExpenseKey],
+    };
     const corporateExpensePatch = {
       fundingSource: { type: 'corporate_bank' },
       ...deleteFields(FieldValue, ['linkedInvestmentId']),
@@ -376,11 +400,12 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
       afterExpense = { ...afterExpense, ...expensePatch };
       retainedOrigin = { type: 'investment', id: input.investmentId };
     } else if (input.action === 'keep_both_separate') {
-      await transaction.update(investmentRef, independentInvestmentPatch);
+      await transaction.update(investmentRef, separationPatch);
       await transaction.update(expenseRef, corporateExpensePatch);
       afterInvestment = {
         ...withoutFields(afterInvestment, investmentLinkFields),
         ...(investment.sourceType === 'expense_sync' ? { sourceType: 'manual' } : {}),
+        financeTraceExcludedExpenseKeys: separationPatch.financeTraceExcludedExpenseKeys,
         updated_at: timestamp,
       };
       afterExpense = {
@@ -445,9 +470,27 @@ function createFinanceTraceRouter({ db, getCurrentUser, FieldValue }) {
   }
   const router = express.Router();
 
-  router.get('/:recordType/:recordId', async (req, res) => {
+  const authorize = async (req, res) => {
     const user = await getCurrentUser(req);
-    if (!user) return errorResponse(res, 401, 'UNAUTHORIZED', 'Unauthorized');
+    if (!user) {
+      errorResponse(res, 401, 'UNAUTHORIZED', 'Unauthorized');
+      return null;
+    }
+    if (user.scannerScope) {
+      errorResponse(res, 403, 'SCANNER_SCOPE_FORBIDDEN', 'Scanner sessions cannot access finance trails');
+      return null;
+    }
+    const active = user.role === 'superadmin' || user.approved === 1 || user.approved === true;
+    if (!active) {
+      errorResponse(res, 401, 'ACCOUNT_INACTIVE', 'Account is not active');
+      return null;
+    }
+    return user;
+  };
+
+  router.get('/:recordType/:recordId', async (req, res) => {
+    const user = await authorize(req, res);
+    if (!user) return;
     const parsed = parseOrigin(req);
     if (parsed.error) return errorResponse(res, 400, 'INVALID_ORIGIN', parsed.error);
 
@@ -465,8 +508,8 @@ function createFinanceTraceRouter({ db, getCurrentUser, FieldValue }) {
   });
 
   router.post('/resolve', async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return errorResponse(res, 401, 'UNAUTHORIZED', 'Unauthorized');
+    const user = await authorize(req, res);
+    if (!user) return;
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin) return errorResponse(res, 403, 'ADMIN_REQUIRED', 'Admin only');
 
@@ -476,7 +519,12 @@ function createFinanceTraceRouter({ db, getCurrentUser, FieldValue }) {
         FieldValue,
         user,
         body: req.body,
-        requestId: String(req.headers['x-request-id'] || randomUUID()),
+        requestId: (() => {
+          const supplied = String(req.headers['x-request-id'] || '').trim();
+          return supplied && supplied.length <= 128 && !/[\u0000-\u001f\u007f]/.test(supplied)
+            ? supplied
+            : randomUUID();
+        })(),
       });
       const records = await loadRecords(db);
       const trace = traceResponseFor(result.retainedOrigin, records, user);
