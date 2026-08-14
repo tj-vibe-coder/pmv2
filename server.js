@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { createProductHistoryRouter } = require('./server/calcsheetProductHistoryRouter');
 const { validateQuotationPurchaseTiming } = require('./server/calcsheetPurchaseTiming');
+const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -3731,6 +3732,11 @@ app.delete('/api/calcsheet/projects/:id', async (req, res) => {
 app.use(
   '/api/calcsheet/product-history',
   createProductHistoryRouter({ db, requireActiveUser }),
+);
+
+app.use(
+  '/api/finance-trace',
+  createFinanceTraceRouter({ db, getCurrentUser, FieldValue }),
 );
 
 app.get('/api/calcsheet/quotations', async (req, res) => {
