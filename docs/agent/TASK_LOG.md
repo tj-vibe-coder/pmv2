@@ -1,5 +1,100 @@
 # Task Log
 
+## 2026-08-14 — Hands-free P1: page follows Assist
+
+Implemented the parked P1 slice on `rj/dev` after merging `origin/main` (Work Schedule Gantt). Assist now lives above per-route `AppLayout`, so Live is not remounted on navigation. Citation chips and `navigate_to_record` use an allowlisted navigator. `/projects/:id` is a real route. `pageContext` carries project/opportunity/quotation ids and is sent into an open Live session as an untrusted now-viewing note. Added `list_quotations_for_opportunity`. Assist stays read-only.
+
+### Verification
+
+- `npm run test:ai-assist` 69/69
+- Jest AI client suites 62/62
+- `tsc --noEmit` clean; `ai-assist:check` clean after Functions sync
+- Live browser pass of spoken navigate still needs an RJR/TJC session in the preview
+
+## 2026-08-14 — Hands-free plan reviewed and tightened (still parked)
+
+Reviewed the parked IOCT Assist hands-free roadmap against current Assist code. Direction stays the same (page follows Assist, P1 first, read-only, P5 later). The checklist was too thin to implement: `AiAssistProvider` remounts per route so Live would die on navigate; `pageContext` is `{ route, projectId: null }` and Live never receives it; operational citations use `/projects/:id` which is not a React route; persist-thread contradicted the memory-only design; invoices/work-schedule had no tool names; P3 writes sat before the auth gate. Rewrote `docs/agent/memory/roadmaps/ioct-assist-hands-free.md`. No product code changed.
+
+## 2026-08-14 — Hands-free plan parked for a later session
+
+RJ asked to ready the plan and stop. Canonical parked plan is `docs/agent/memory/roadmaps/ioct-assist-hands-free.md` (also the Bayanihan roadmap **IOCT Assist hands-free**). First implement session is P1 only: wire citation navigation, keep the drawer/Live up, parse pageContext ids, allowlisted “go to this proposal/project.” No code started. Weekly usage was about to max out.
+
+## 2026-08-14 — External LLM/CLI should sit on the operator contract
+
+RJ wants the option to plug a stronger external LLM or CLI into Assist later. Decision: do not open the whole PMv2 API and do not make MCP the source of truth. Freeze the existing allowlisted tool layer as a model-agnostic operator contract (catalog + execute + later navigate/propose), expose it as authenticated HTTP first, then a thin MCP adapter for Claude/Grok/Bayanihan, plus a later in-app provider swap. Auth hardening remains the gate. Added P5 to the hands-free roadmap. No product code changed.
+
+## 2026-08-14 — Hands-free means the page follows Assist
+
+RJ clarified hands-free: the main PMv2 page must move so the user can see what Assist is working on (“go to this proposal / project”). Citation chips already carry routes but `AiAssistDrawer` is mounted without `onNavigateSource`, so taps are a no-op. Updated the **IOCT Assist hands-free** roadmap: P1 is now follow-the-agent navigation (allowlisted React Router, docked drawer, mobile bottom sheet, Now viewing chip). No product code changed.
+
+## 2026-08-14 — IOCT Assist hands-free scout + roadmap
+
+Scouted current Assist vs a Kabayan-style hands-free operator. Confirmed text Flash-Lite and Gemini Live are different model sessions; the drawer can share transcripts after the voice-bubble fix, but Live tool memory does not transfer and typing still calls `stopVoice()`. Rezcoat follow-up “how many quotations” fails because there is no `list_quotations_for_opportunity` tool (`get_quotation_summary` needs a quotation id). Recorded roadmap **IOCT Assist hands-free** (P0 shared session → P1 deeper read tools → P2 navigate-with-confirm → P3 propose-then-confirm drafts → P4 always-on). No product code changed.
+
+## 2026-08-14 — Typed follow-up after voice no longer 502s
+
+Switching from Live to typed chat after a misspelled name failed with “The assistant could not answer that.” Flash-Lite was using JSON `responseSchema` plus function calling, which breaks on follow-ups; the first user message also dropped prior voice turns. Removed JSON-mode, pack conversation history into the first turn, accept prose answers, and match project search on compact spellings (`rezcoat` → `Rez-Coat`). Typed send now ends the live session.
+
+## 2026-08-14 — Live badge on tucked Gemini launcher
+
+The floating Assist FAB now shows a LIVE pill and a mic-level ring while a voice session is running, so the session is visible when the drawer is closed.
+
+## 2026-08-14 — Dedup voice bubbles + single AudioContext
+
+Gemini Live was repeating the finished user/assistant transcript, which created a second pair of bubbles. Replays of the last same-role line now update in place. Capture and playback share one hardware-rate AudioContext (no 24 kHz graph) so Continuity is less likely to drop.
+
+## 2026-08-14 — Live voice is click-to-toggle (Continuity)
+
+Press-and-hold `pointerleave` was stopping the MediaStream and dropping macOS Continuity / iPhone-as-mic. Mic is now click to start, click to stop. Unexpected `track.ended` goes to the error phase.
+
+## 2026-08-14 — AI Assist live-mode mic meter
+
+### Completed
+
+- Live session shows a Live chip, phase label, and a bar meter driven by real microphone RMS.
+- Typed composer is disabled while live, with a “speak or click the mic to finish” label.
+
+## 2026-08-14 — AI Assist voice transcript in chat
+
+### Completed
+
+- Enabled Gemini Live `inputAudioTranscription` / `outputAudioTranscription` on the ephemeral token and `live.connect` config.
+- Voice input/output text now upserts into the same memory-only chat messages as typed turns, including the standard AI disclaimer and tool source chips.
+
+### Verification
+
+- Token mint with the new transcription fields still succeeds.
+- `tsc --noEmit` clean; Jest liveClient/provider/drawer passing.
+
+## 2026-08-14 — AI Assist voice unblock
+
+### Completed
+
+- Default Live model is now `gemini-3.1-flash-live-preview` (`config.js` + local `.env`).
+- Removed `lockAdditionalFields` from `liveToken.js` — Gemini 400s it whenever function-calling tools are in the constraints.
+- Client sends `liveSessionId` on `/api/ai-assist/tools/:name`; token response type requires it.
+- Pointer-up during `connecting` no longer cancels start (mic permission prompt).
+- AudioContext is created before `getUserMedia` so it stays in the user-gesture window.
+
+### Verification
+
+- `npm run test:ai-assist` 57/57; `tsc --noEmit` clean; Jest aiAssistService/liveClient/drawer/provider 24/24; `ai-assist:check` clean.
+- Local `POST /api/ai-assist/live-token` as allowlisted user: **200** with token + liveSessionId.
+- Real microphone conversation not confirmed in the CUI preview browser.
+
+## 2026-08-14 — AI Assist runtime verification
+
+### Completed
+
+- Confirmed local-only enablement (`AI_ASSIST_ENABLED=true` in gitignored `.env`) and that the text path works (RJR manual).
+- Runtime-hit `POST /api/ai-assist/live-token` on the live local API: allowlisted user `502 provider_error`, unauthenticated `401`, non-allowlisted `admin` `403`.
+- Isolated the 502: Gemini `authTokens.create()` returns `400 field_mask is invalid for BidiGenerateContentSetup` for default `gemini-2.5-flash-native-audio-preview-12-2025` + `lockAdditionalFields`. 3.1 Live accepts that lock list; 2.5 mints only if the field is omitted. Both successful tokens opened a Live WebSocket from Node.
+- Documented follow-on voice gaps (PTT/permission race, missing `liveSessionId` on tool POST, silent worklet failures).
+
+### Verification
+
+- No product code changed. No production flag. Paid Gemini calls limited to token mint + two short Node connects.
+
 ## 2026-08-13 — Read-only AI Assist chat and voice design
 
 ### Completed

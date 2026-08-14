@@ -2,8 +2,10 @@ import {
   float32ToPcm16Le,
   pcm16LeToFloat32,
   downsampleMono,
+  resampleMono,
   arrayBufferToBase64,
   base64ToArrayBuffer,
+  rmsLevel,
 } from './pcm';
 
 it('encodes float samples as little-endian signed 16-bit PCM and clips out-of-range values', () => {
@@ -53,6 +55,19 @@ it('returns the input unchanged when source and target rates match', () => {
 it('throws if asked to upsample (only downsampling is supported)', () => {
   const input = new Float32Array([0.1, 0.2]);
   expect(() => downsampleMono(input, 8000, 16000)).toThrow();
+});
+
+it('resampleMono upsamples 24kHz to 48kHz at roughly 2x length', () => {
+  const input = new Float32Array(240).fill(0.5);
+  const output = resampleMono(input, 24000, 48000);
+  expect(Math.abs(output.length - 480)).toBeLessThanOrEqual(1);
+  expect(Math.abs(output[10] - 0.5)).toBeLessThan(1e-6);
+});
+
+it('rmsLevel is 0 for silence and rises for a louder frame', () => {
+  expect(rmsLevel(new Float32Array(128))).toBe(0);
+  expect(rmsLevel(new Float32Array(128).fill(0.2))).toBeGreaterThan(0.5);
+  expect(rmsLevel(new Float32Array(128).fill(1))).toBe(1);
 });
 
 it('round-trips an ArrayBuffer through base64 unchanged', () => {

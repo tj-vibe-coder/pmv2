@@ -28,6 +28,20 @@ function toYear(value) {
   return text.slice(0, 4);
 }
 
+function compactAlnum(value) {
+  return String(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function textMatches(haystack, needle) {
+  if (haystack === undefined || haystack === null) return false;
+  const hay = String(haystack);
+  const n = String(needle).trim().toLowerCase();
+  if (!n) return false;
+  if (hay.toLowerCase().includes(n)) return true;
+  const compactNeedle = compactAlnum(n);
+  return compactNeedle.length >= 3 && compactAlnum(hay).includes(compactNeedle);
+}
+
 function docDataWithId(doc) {
   return { id: doc.id, ...(doc.data() || {}) };
 }
@@ -112,6 +126,29 @@ const TOOL_DECLARATIONS = {
       required: [],
     },
   },
+  navigate_to_record: {
+    name: 'navigate_to_record',
+    description: 'Resolve a spoken or typed name to an allowlisted PMv2 page. Returns action navigate (one match), choose (several), or none. Never accepts a route — the server picks the path.',
+    parameters: {
+      type: 'object',
+      properties: {
+        search: { type: 'string', description: 'Name, code, or id the user said (for example Rezcoat or PCS2602005).' },
+        kind: { type: 'string', description: 'project, opportunity, quotation, or any. proposal means opportunity.' },
+      },
+      required: ['search'],
+    },
+  },
+  list_quotations_for_opportunity: {
+    name: 'list_quotations_for_opportunity',
+    description: 'List quotations that belong to one Calcsheet opportunity. Returns allowlisted quotation fields only — never cost line items.',
+    parameters: {
+      type: 'object',
+      properties: {
+        opportunityId: { type: 'string', description: 'The calcsheet opportunity / project document ID.' },
+      },
+      required: ['opportunityId'],
+    },
+  },
 };
 
 function sourceFor(recordId, label, route, asOf) {
@@ -142,11 +179,9 @@ async function searchProjects(db, args, asOf) {
     rows = rows.filter((r) => String(r.year) === String(args.year));
   }
   if (args.search !== undefined && args.search !== null && args.search !== '') {
-    const needle = String(args.search).toLowerCase();
+    const needle = String(args.search);
     rows = rows.filter((r) =>
-      [r.project_name, r.account_name, r.ovp_number].some((v) =>
-        v !== undefined && v !== null && String(v).toLowerCase().includes(needle),
-      ),
+      [r.project_name, r.account_name, r.ovp_number].some((v) => textMatches(v, needle)),
     );
   }
   if (args.client !== undefined && args.client !== null && args.client !== '') {
@@ -234,9 +269,9 @@ async function searchSalesOpportunities(db, args, asOf) {
   const snap = await db.collection(OPPORTUNITY_COLLECTION).get();
   let rows = snap.docs.map(docDataWithId);
   if (args.search !== undefined && args.search !== null && args.search !== '') {
-    const needle = String(args.search).toLowerCase();
+    const needle = String(args.search);
     rows = rows.filter((r) =>
-      [r.name, r.code].some((v) => v !== undefined && v !== null && String(v).toLowerCase().includes(needle)),
+      [r.name, r.code].some((v) => textMatches(v, needle)),
     );
   }
   if (args.client !== undefined && args.client !== null && args.client !== '') {
@@ -339,6 +374,109 @@ async function getExpenseSummary(db, args, asOf) {
   };
 }
 
+function quotationLabel(row) {
+  const kind = row.kind ? String(row.kind) : '';
+  const revision = row.revision ? String(row.revision) : '';
+  const joined = [kind, revision].filter(Boolean).join(' ');
+  return joined || `Quotation ${row.id}`;
+}
+
+async function listQuotationsForOpportunity(db, args, asOf) {
+  const snap = await db.collection(QUOTATION_COLLECTION).get();
+  let rows = snap.docs.map(docDataWithId).filter((row) => String(row.projectId) === String(args.opportunityId));
+  rows.sort(compareByUpdatedAtDesc);
+  rows = rows.slice(0, MAX_LIST_RESULTS);
+  return {
+    data: rows.map((row) => quotationProjection(row)),
+    sources: rows.map((row) => sourceFor(row.id, quotationLabel(row), QUOTATION_ROUTE_PREFIX + row.id, asOf)),
+    asOf,
+  };
+}
+
+async function collectQuotationCandidates(db, search, asOf) {
+  const snap = await db.collection(QUOTATION_COLLECTION).get();
+  const rows = snap.docs.map(docDataWithId);
+  const direct = rows.filter((row) =>
+    textMatches(row.id, search) || textMatches(row.kind, search) || textMatches(row.revision, search),
+  );
+  const opps = await searchSalesOpportunities(db, { search }, asOf);
+  const oppIds = new Set(opps.data.map((row) => String(row.id)));
+  const viaOpp = rows.filter((row) => oppIds.has(String(row.projectId)));
+  const seen = new Set();
+  const merged = [];
+  for (const row of [...direct, ...viaOpp]) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    merged.push({
+      kind: 'quotation',
+      id: row.id,
+      label: quotationLabel(row),
+      route: QUOTATION_ROUTE_PREFIX + row.id,
+    });
+  }
+  return merged.slice(0, MAX_LIST_RESULTS);
+}
+
+async function navigateToRecord(db, args, asOf) {
+  const search = String(args.search || '').trim();
+  const kind = args.kind || 'any';
+  const candidates = [];
+
+  if (kind === 'project' || kind === 'any') {
+    const projects = await searchProjects(db, { search }, asOf);
+    for (let i = 0; i < projects.data.length; i += 1) {
+      const row = projects.data[i];
+      const source = projects.sources[i];
+      candidates.push({
+        kind: 'project',
+        id: row.id,
+        label: source.label,
+        route: PROJECT_ROUTE_PREFIX + row.id,
+      });
+    }
+  }
+  if (kind === 'opportunity' || kind === 'any') {
+    const opps = await searchSalesOpportunities(db, { search }, asOf);
+    for (let i = 0; i < opps.data.length; i += 1) {
+      const row = opps.data[i];
+      const source = opps.sources[i];
+      candidates.push({
+        kind: 'opportunity',
+        id: row.id,
+        label: source.label,
+        route: OPPORTUNITY_ROUTE_PREFIX + row.id,
+      });
+    }
+  }
+  if (kind === 'quotation' || kind === 'any') {
+    candidates.push(...await collectQuotationCandidates(db, search, asOf));
+  }
+
+  if (candidates.length === 0) {
+    return { data: { action: 'none', search, kind }, sources: [], asOf };
+  }
+  if (candidates.length === 1) {
+    const match = candidates[0];
+    return {
+      data: {
+        action: 'navigate',
+        kind: match.kind,
+        id: match.id,
+        label: match.label,
+        route: match.route,
+      },
+      sources: [sourceFor(match.id, match.label, match.route, asOf)],
+      asOf,
+    };
+  }
+  const limited = candidates.slice(0, MAX_LIST_RESULTS);
+  return {
+    data: { action: 'choose', search, kind, candidates: limited },
+    sources: limited.map((item) => sourceFor(item.id, item.label, item.route, asOf)),
+    asOf,
+  };
+}
+
 function createToolRegistry({ db, now = () => new Date() }) {
   const tools = new Map();
   for (const toolName of Object.keys(TOOL_DECLARATIONS)) {
@@ -359,6 +497,10 @@ function createToolRegistry({ db, now = () => new Date() }) {
             return getQuotationSummary(db, args, asOf);
           case 'get_expense_summary':
             return getExpenseSummary(db, args, asOf);
+          case 'navigate_to_record':
+            return navigateToRecord(db, args, asOf);
+          case 'list_quotations_for_opportunity':
+            return listQuotationsForOpportunity(db, args, asOf);
           default:
             throw new Error(`Unknown tool: ${toolName}`);
         }

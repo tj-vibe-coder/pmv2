@@ -8,6 +8,8 @@ test('text system instruction contains the required safety phrases', () => {
   assert.ok(text.includes('untrusted data'));
   assert.ok(text.includes('Never guess'));
   assert.ok(text.includes('Never manufacture a citation'));
+  assert.ok(text.includes('navigate_to_record'));
+  assert.ok(text.includes('list_quotations_for_opportunity'));
 });
 
 test('live system instruction extends the text instruction with voice rules', () => {

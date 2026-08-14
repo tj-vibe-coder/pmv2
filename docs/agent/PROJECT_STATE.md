@@ -1,15 +1,15 @@
 # Project State
 
-Updated: 2026-08-13
+Updated: 2026-08-14
 
 ## Current status
 
-- Read-only AI Assist chat and push-to-talk voice: **implemented on `rj/dev`, NOT committed/deployed, `AI_ASSIST_ENABLED` never set to `true`.** See `docs/agent/memory/log/2026-08-13-ai-assist-chat-voice-implementation.md` for the full task-by-task detail.
-- The implementation contract uses Gemini 3.5 Flash-Lite for structured text chat and a separately configurable Gemini Live native-audio model over one allowlisted read-only PMv2 tool layer.
-- Durable artifacts: `docs/superpowers/specs/2026-08-13-ai-assist-chat-voice-design.md`, `docs/superpowers/plans/2026-08-13-ai-assist-chat-voice.md`, `docs/AI_ASSIST_REFERENCE_MAP.md`, `docs/AI_ASSIST_BUILDER_PROMPT.md`, and `docs/ai-assist-golden-questions.json` (25-case rubric, authored, not yet run).
-- Server: `server/aiAssist/{config,access,schemas,tools,prompt,chat,router,audit,liveToken,geminiClient}.js`, mounted in `server.js` before the SPA catch-all and mirrored into `functions/server/aiAssist/` via `scripts/sync-ai-assist.mjs` (`npm run ai-assist:check` — clean). 57/57 `node --test` passing.
-- Client: `src/services/aiAssistService.ts`, `src/components/ai/*`, `src/ai/{liveClient,liveSession}.ts`, `src/ai/audio/*`, mounted globally in `AppLayout` (`src/App.tsx`), gated client-side to RJR/TJC. 112/112 Jest passing, `tsc --noEmit` clean, CI build clean.
-- **Not yet done**: no Firestore Emulator integration test, no manual browser/device verification, golden-set not run against a live model, `geminiClient.js`/`liveToken.js`/`liveSession.ts` (real network/browser wiring) not runtime-verified — all are required gates before enabling the feature flag in production, per the plan's own stop conditions.
+- Read-only AI Assist: implemented on `rj/dev` (`398f961`, later voice-unblock + hands-free P1 edits uncommitted). Not on `main`, not deployed. `AI_ASSIST_ENABLED` is `true` only in the local gitignored `.env`. See `docs/agent/memory/log/2026-08-14-ai-assist-runtime-verification.md`.
+- **Hands-free P1 is in the working tree.** Assist is mounted once above the router outlet. Citation chips and `navigate_to_record` move the main page. `/projects/:id` opens operational project details. The drawer shows a Now viewing chip. Live receives an untrusted page-context note after each move. `list_quotations_for_opportunity` is available.
+- **Text chat works** (RJR manual). Health: `chatModel: gemini-3.5-flash-lite`, `liveModel: gemini-3.1-flash-live-preview`.
+- **Voice token mint now works locally.** `POST /api/ai-assist/live-token` is `200` with a token + `liveSessionId` after (1) defaulting the Live model to `gemini-3.1-flash-live-preview` and (2) omitting `lockAdditionalFields` — Gemini 400s that field whenever tools are present. Client now sends `liveSessionId` on tool POSTs and does not cancel start on pointer-up during `connecting`.
+- **Voice replied** in RJ's RJR session. Transcripts were not in the chat thread at that moment; a follow-up now streams Live input/output transcription into the same in-memory conversation (plus tool source chips). Refresh and speak again to confirm bubbles appear. Still not persisted (clears on reload/logout).
+- The 25-case golden set is still unrun against live or emulator data.
 - Calcsheet quotation-history pricing is complete and committed through `3344577`.
 - Add Product keeps managed **Pricelists** separate from read-only **Quotation History**.
 - Historical product search, provenance display, expected-purchase-date handling, and contingency suggestions are implemented across the Express API and React UI.
@@ -26,13 +26,15 @@ Updated: 2026-08-13
 
 ## Current blockers
 
-- AI Assist production enablement is gated by explicit acceptance of the existing forgeable base64-token authentication risk, plus the manual-verification items below — code is implemented and automated-tested, but that is not the same as production-ready.
-- `gemini-2.5-flash-native-audio-preview-12-2025` (the configured Live voice default) was confirmed to still exist as of 2026-08-13, but a newer `gemini-3.1-flash-live-preview` also exists — worth a deliberate choice before enabling voice, not just inertia.
-- The `@google/genai` browser Live wiring (`src/ai/liveSession.ts`) and the ephemeral-token provisioning (`server/aiAssist/liveToken.js`) were built against the installed SDK's own type definitions (verified directly, not guessed from web docs — the web docs describe a different "Interactions API") but have not been exercised against the real API/a real microphone.
+- AI Assist voice needs a real-mic confirmation after the live-token 200 fix. Do not enable the flag in production until that pass (permission, listen/speak, a tool-backed question, interruption) succeeds.
+- Remaining voice gaps: capture worklet `addModule` is still fire-and-forget; no voice error transcript in the drawer.
+- Production enablement is still gated by the forgeable base64-token auth risk. Text works locally for RJR/TJC only.
 
 ## Next considerations
 
-- Before enabling `AI_ASSIST_ENABLED=true` anywhere: run the Firestore Emulator with synthetic fixtures, execute `docs/ai-assist-golden-questions.json` against it, and do the manual browser pass (desktop, mobile, mic permission allow/deny, interruption, reconnect, logout cleanup, source navigation, unauthorized-account 403, unauthenticated 401).
-- Not yet committed to git — review the diff (`server/aiAssist/`, `functions/server/aiAssist/`, `src/services/aiAssistService.ts`, `src/components/ai/`, `src/ai/`, `public/ai/`, `server.js`, `functions/server.js`, `package.json`, docs) before committing/merging.
+- Hands-free P0 (typed/Live continuity), P1.1 mobile sheet, P3 writes, P4 always-on, and P5 external LLM/MCP stay later. Current Assist stays read-only.
+- Confirm a real RJR/TJC mic session: click mic, allow permission, say “go to the Rezcoat proposal”, confirm the page moves and Live stays up.
+- Before enabling `AI_ASSIST_ENABLED=true` anywhere but local `.env`: run the golden set, and do the manual browser pass (desktop, mobile, mic permission allow/deny, interruption, reconnect, logout cleanup, source navigation). 401/403 and live-token 200 already verified.
+- `origin/main` Work Schedule Gantt is now merged into local `rj/dev`. AI Assist commits are still not on `main` and not pushed.
 - Deploy or merge according to the repository branch workflow when requested.
 - Consider improving the insufficient-history panel to show excluded evidence reasons; this is explanatory polish, not a correctness blocker.

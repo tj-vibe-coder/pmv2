@@ -20,6 +20,24 @@ export function pcm16LeToFloat32(input: ArrayBuffer): Float32Array {
   return out;
 }
 
+/** Linear-interpolation resample. Upsamples or downsamples. */
+export function resampleMono(input: Float32Array, sourceRate: number, targetRate: number): Float32Array {
+  if (targetRate === sourceRate) return input;
+  if (targetRate < sourceRate) return downsampleMono(input, sourceRate, targetRate);
+  const ratio = sourceRate / targetRate;
+  const outLength = Math.max(1, Math.round(input.length / ratio));
+  const out = new Float32Array(outLength);
+  const last = input.length - 1;
+  for (let i = 0; i < outLength; i += 1) {
+    const srcIndex = i * ratio;
+    const j = Math.min(last, Math.floor(srcIndex));
+    const frac = srcIndex - j;
+    const next = Math.min(last, j + 1);
+    out[i] = input[j] + (input[next] - input[j]) * frac;
+  }
+  return out;
+}
+
 /** Linear-interpolation resample from sourceRate to targetRate (mono). */
 export function downsampleMono(input: Float32Array, sourceRate: number, targetRate: number): Float32Array {
   if (targetRate === sourceRate) return input;
@@ -41,6 +59,16 @@ export function downsampleMono(input: Float32Array, sourceRate: number, targetRa
     out[i] = count > 0 ? sum / count : input[Math.min(start, input.length - 1)];
   }
   return out;
+}
+
+/** Peak-normalized RMS in 0..1, gained so conversational speech is visible. */
+export function rmsLevel(frame: Float32Array, gain = 8): number {
+  if (frame.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < frame.length; i += 1) {
+    sum += frame[i] * frame[i];
+  }
+  return Math.min(1, Math.sqrt(sum / frame.length) * gain);
 }
 
 export function arrayBufferToBase64(buffer: ArrayBuffer): string {

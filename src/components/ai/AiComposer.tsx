@@ -4,9 +4,10 @@ import { Box, Button, TextField } from '@mui/material';
 interface AiComposerProps {
   onSend: (text: string) => void;
   disabled: boolean;
+  liveMode?: boolean;
 }
 
-export default function AiComposer({ onSend, disabled }: AiComposerProps): React.ReactElement {
+export default function AiComposer({ onSend, disabled, liveMode = false }: AiComposerProps): React.ReactElement {
   const [text, setText] = useState('');
 
   const submit = () => {
@@ -22,7 +23,7 @@ export default function AiComposer({ onSend, disabled }: AiComposerProps): React
         multiline
         minRows={2}
         disabled={disabled}
-        label="Ask IOCT Assist"
+        label={liveMode ? 'Live mode — speak, or click the mic to finish' : 'Ask IOCT Assist'}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {

@@ -32,6 +32,33 @@ test('happy path: one tool round then final answer, citations restricted to exec
   assert.equal(result.answer, 'Project P1 is largest.');
   assert.deepEqual(result.citations.map((c) => c.id), ['project:p1']);
   assert.ok(typeof result.notice === 'string' && result.notice.length > 0);
+  assert.equal(result.navigateTo, null);
+});
+
+test('surfaces a unique navigate_to_record match as navigateTo', async () => {
+  const registry = makeRegistry({
+    navigate_to_record: {
+      data: { action: 'navigate', route: '/sales/calcsheet/projects/opp1', label: 'Rezcoat' },
+      sources: [{ id: 'opp1', label: 'Rezcoat', route: '/sales/calcsheet/projects/opp1', asOf: 'x' }],
+    },
+  });
+  let call = 0;
+  const client = {
+    send: async () => {
+      call += 1;
+      if (call === 1) return { functionCalls: [{ name: 'navigate_to_record', args: { search: 'rezcoat' } }] };
+      return { finalResponse: { answer: 'Opening Rezcoat.', citationIds: ['opp1'], followUps: [] } };
+    },
+  };
+  const result = await runChat({
+    client,
+    registry,
+    config: { maxToolRounds: 4, maxResultBytes: 60000 },
+    messages: [{ role: 'user', text: 'go to rezcoat' }],
+    pageContext: null,
+    requestId: 'r-nav',
+  });
+  assert.deepEqual(result.navigateTo, { route: '/sales/calcsheet/projects/opp1', label: 'Rezcoat' });
 });
 
 test('rejects a tool call for an unregistered tool name', async () => {

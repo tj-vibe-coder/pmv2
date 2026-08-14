@@ -2,6 +2,7 @@ import React from 'react';
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { AiAssistProvider, useAiAssist } from './AiAssistProvider';
 import { sendAiChat } from '../../services/aiAssistService';
+import * as liveSession from '../../ai/liveSession';
 
 jest.mock('../../ai/liveSession', () => ({
   getUserMedia: jest.fn(),
@@ -36,6 +37,7 @@ function Harness({ enabled }: { enabled: boolean }): React.ReactElement {
       <button onClick={() => ai.stop()}>stop</button>
       <button onClick={() => ai.retry(null)}>retry</button>
       <button onClick={() => ai.clear()}>clear</button>
+      <button onClick={() => { void ai.startVoice(); }}>start-voice</button>
     </div>
   );
 }
@@ -55,6 +57,50 @@ beforeEach(() => {
 it('starts closed — the drawer must never auto-open on mount, only via the launcher', () => {
   renderHarness();
   expect(screen.getByTestId('open').textContent).toBe('false');
+});
+
+it('stops an active voice session when the user sends a typed message', async () => {
+  sendAiChatMock.mockResolvedValue({
+    ok: true, requestId: 'r1', answer: 'ok', citations: [], followUps: [], notice: 'n',
+  });
+  (liveSession.getUserMedia as jest.Mock).mockResolvedValue({ getTracks: () => [] });
+  (liveSession.createCaptureContext as jest.Mock).mockReturnValue({
+    sampleRate: 48000,
+    createCaptureNode: () => ({ onFrame: null, disconnect: () => {} }),
+    close: async () => {},
+  });
+  (liveSession.createPlaybackContext as jest.Mock).mockReturnValue({
+    currentTime: 0,
+    createSourceFromPcm16: () => ({ onended: null, start: () => {}, stop: () => {} }),
+    close: async () => {},
+  });
+  const close = jest.fn();
+  (liveSession.connectSession as jest.Mock).mockResolvedValue({
+    sendRealtimeInputPcm: () => {},
+    sendToolResponse: () => {},
+    close,
+  });
+
+  function TypedSend(): React.ReactElement {
+    const ai = useAiAssist();
+    return (
+      <div>
+        <button onClick={() => { void ai.startVoice(); }}>start-voice</button>
+        <button onClick={() => { void ai.send('i mean rezcoat', null); }}>typed-send</button>
+      </div>
+    );
+  }
+
+  render(
+    <AiAssistProvider enabled>
+      <TypedSend />
+    </AiAssistProvider>,
+  );
+  fireEvent.click(screen.getByText('start-voice'));
+  await waitFor(() => expect(liveSession.connectSession).toHaveBeenCalled());
+  fireEvent.click(screen.getByText('typed-send'));
+  await waitFor(() => expect(close).toHaveBeenCalled());
+  await waitFor(() => expect(sendAiChatMock).toHaveBeenCalled());
 });
 
 it('sends a message and appends the assistant answer with citations', async () => {
@@ -134,6 +180,135 @@ it('clear resets messages and stop aborts an in-flight request', async () => {
   await waitFor(() => {
     expect(screen.getByTestId('messages').textContent).toBe('[]');
   });
+});
+
+it('appends voice transcripts to the same in-memory conversation', async () => {
+  let handlers: { onServerContent: (content: Record<string, unknown>) => void } | undefined;
+  (liveSession.getUserMedia as jest.Mock).mockResolvedValue({ getTracks: () => [] });
+  (liveSession.createCaptureContext as jest.Mock).mockReturnValue({
+    sampleRate: 48000,
+    createCaptureNode: () => ({ onFrame: null, disconnect: () => {} }),
+    close: async () => {},
+  });
+  (liveSession.createPlaybackContext as jest.Mock).mockReturnValue({
+    currentTime: 0,
+    createSourceFromPcm16: () => ({ onended: null, start: () => {}, stop: () => {} }),
+    close: async () => {},
+  });
+  (liveSession.connectSession as jest.Mock).mockImplementation(async (nextHandlers) => {
+    handlers = nextHandlers;
+    return { sendRealtimeInputPcm: () => {}, sendToolResponse: () => {}, close: () => {} };
+  });
+
+  renderHarness();
+  fireEvent.click(screen.getByText('start-voice'));
+  await waitFor(() => expect(handlers).toBeDefined());
+
+  act(() => {
+    handlers!.onServerContent({ inputText: 'Status of Clarktel?', inputDone: true });
+    handlers!.onServerContent({ outputText: 'It is ongoing.', outputDone: true });
+  });
+
+  await waitFor(() => {
+    const messages = JSON.parse(screen.getByTestId('messages').textContent || '[]');
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({ role: 'user', text: 'Status of Clarktel?' });
+    expect(messages[1]).toMatchObject({ role: 'assistant', text: 'It is ongoing.' });
+    expect(messages[1].notice).toMatch(/verify/i);
+  });
+});
+
+it('does not duplicate a voice turn when Gemini repeats the finished transcript', async () => {
+  let handlers: { onServerContent: (content: Record<string, unknown>) => void } | undefined;
+  (liveSession.getUserMedia as jest.Mock).mockResolvedValue({ getTracks: () => [] });
+  (liveSession.createCaptureContext as jest.Mock).mockReturnValue({
+    sampleRate: 48000,
+    createCaptureNode: () => ({ onFrame: null, disconnect: () => {} }),
+    close: async () => {},
+  });
+  (liveSession.createPlaybackContext as jest.Mock).mockReturnValue({
+    currentTime: 0,
+    createSourceFromPcm16: () => ({ onended: null, start: () => {}, stop: () => {} }),
+    close: async () => {},
+  });
+  (liveSession.connectSession as jest.Mock).mockImplementation(async (nextHandlers) => {
+    handlers = nextHandlers;
+    return { sendRealtimeInputPcm: () => {}, sendToolResponse: () => {}, close: () => {} };
+  });
+
+  renderHarness();
+  fireEvent.click(screen.getByText('start-voice'));
+  await waitFor(() => expect(handlers).toBeDefined());
+
+  act(() => {
+    handlers!.onServerContent({ inputText: 'Hello.', inputDone: true });
+    handlers!.onServerContent({ outputText: 'How can I help?', outputDone: true });
+    handlers!.onServerContent({ inputText: 'Hello.', inputDone: true });
+    handlers!.onServerContent({ outputText: 'How can I help?', outputDone: true, turnComplete: true });
+  });
+
+  await waitFor(() => {
+    const messages = JSON.parse(screen.getByTestId('messages').textContent || '[]');
+    expect(messages).toHaveLength(2);
+    expect(messages[0].text).toBe('Hello.');
+    expect(messages[1].text).toBe('How can I help?');
+  });
+});
+
+it('executes an allowlisted navigate_to_record result from a Live tool call', async () => {
+  const onNavigateRoute = jest.fn();
+  let handlers: { onToolCall: (call: { name: string; args: Record<string, unknown>; id: string }) => Promise<void> } | undefined;
+  (liveSession.getUserMedia as jest.Mock).mockResolvedValue({ getTracks: () => [] });
+  (liveSession.createCaptureContext as jest.Mock).mockReturnValue({
+    sampleRate: 48000,
+    createCaptureNode: () => ({ onFrame: null, disconnect: () => {} }),
+    close: async () => {},
+  });
+  (liveSession.createPlaybackContext as jest.Mock).mockReturnValue({
+    currentTime: 0,
+    createSourceFromPcm16: () => ({ onended: null, start: () => {}, stop: () => {} }),
+    close: async () => {},
+  });
+  (liveSession.connectSession as jest.Mock).mockImplementation(async (nextHandlers) => {
+    handlers = nextHandlers;
+    return { sendRealtimeInputPcm: () => {}, sendToolResponse: () => {}, sendClientContent: () => {}, close: () => {} };
+  });
+  (liveSession.executeLiveToolCall as jest.Mock).mockResolvedValue({
+    result: { action: 'navigate', route: '/sales/calcsheet/projects/opp1', label: 'Rezcoat' },
+    sources: [{ id: 'opp1', label: 'Rezcoat', route: '/sales/calcsheet/projects/opp1', asOf: 'x' }],
+  });
+
+  render(
+    <AiAssistProvider enabled onNavigateRoute={onNavigateRoute}>
+      <Harness enabled />
+    </AiAssistProvider>,
+  );
+  fireEvent.click(screen.getByText('start-voice'));
+  await waitFor(() => expect(handlers).toBeDefined());
+  await act(async () => {
+    await handlers!.onToolCall({ name: 'navigate_to_record', args: { search: 'rezcoat' }, id: 'c1' });
+  });
+  expect(onNavigateRoute).toHaveBeenCalledWith('/sales/calcsheet/projects/opp1');
+});
+
+it('applies navigateTo from a typed chat answer', async () => {
+  const onNavigateRoute = jest.fn();
+  sendAiChatMock.mockResolvedValue({
+    ok: true,
+    requestId: 'r1',
+    answer: 'Opening Rezcoat.',
+    citations: [],
+    followUps: [],
+    notice: 'n',
+    navigateTo: { route: '/projects/p1', label: 'P1' },
+  });
+  render(
+    <AiAssistProvider enabled onNavigateRoute={onNavigateRoute}>
+      <Harness enabled />
+    </AiAssistProvider>,
+  );
+  fireEvent.click(screen.getByText('send'));
+  await waitFor(() => expect(onNavigateRoute).toHaveBeenCalledWith('/projects/p1'));
 });
 
 it('disabling the feature (e.g. logout) clears history and closes the drawer', async () => {

@@ -39,6 +39,13 @@ const TOOL_ARG_SHAPES = {
     year: { type: 'integer' },
     category: { type: 'string' },
   },
+  navigate_to_record: {
+    search: { type: 'string', required: true },
+    kind: { type: 'enum', values: ['project', 'opportunity', 'quotation', 'any'] },
+  },
+  list_quotations_for_opportunity: {
+    opportunityId: { type: 'string', required: true },
+  },
 };
 
 const MAX_MESSAGES = 12;
@@ -91,7 +98,7 @@ function validateChatRequest(body) {
     if (!isPlainObject(body.pageContext)) {
       throw new Error('"pageContext" must be a plain object');
     }
-    const allowedPageKeys = new Set(['route', 'projectId']);
+    const allowedPageKeys = new Set(['route', 'projectId', 'opportunityId', 'quotationId']);
     for (const key of Object.keys(body.pageContext)) {
       if (!allowedPageKeys.has(key)) {
         throw new Error(`Unexpected field "${key}" in pageContext`);
@@ -100,16 +107,18 @@ function validateChatRequest(body) {
     if (body.pageContext.route !== undefined && typeof body.pageContext.route !== 'string') {
       throw new Error('pageContext.route must be a string');
     }
-    if (
-      body.pageContext.projectId !== undefined &&
-      body.pageContext.projectId !== null &&
-      typeof body.pageContext.projectId !== 'string'
-    ) {
-      throw new Error('pageContext.projectId must be a string or null');
+    function optionalId(field) {
+      const value = body.pageContext[field];
+      if (value !== undefined && value !== null && typeof value !== 'string') {
+        throw new Error(`pageContext.${field} must be a string or null`);
+      }
+      return value === undefined ? null : value;
     }
     pageContext = {
       route: body.pageContext.route,
-      projectId: body.pageContext.projectId === undefined ? null : body.pageContext.projectId,
+      projectId: optionalId('projectId'),
+      opportunityId: optionalId('opportunityId'),
+      quotationId: optionalId('quotationId'),
     };
   }
 

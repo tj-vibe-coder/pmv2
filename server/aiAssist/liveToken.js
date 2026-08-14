@@ -32,14 +32,17 @@ async function issueLiveToken({ createClient, apiKey, config, systemInstruction,
           config: {
             responseModalities: ['AUDIO'],
             sessionResumption: {},
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
             systemInstruction,
             tools: [{ functionDeclarations: toolDeclarations }],
           },
         },
-        // Locks every field under liveConnectConstraints.config so a
-        // browser holding the token cannot request a different model,
-        // modality, or tool set than what was approved server-side.
-        lockAdditionalFields: ['model', 'responseModalities', 'sessionResumption', 'systemInstruction', 'tools'],
+        // Do not send lockAdditionalFields. Gemini 400s
+        // `field_mask is invalid for BidiGenerateContentSetup` whenever that
+        // key is present alongside function-calling tools (empty array
+        // included). Fields set under liveConnectConstraints stay locked by
+        // the token service without it.
       },
     });
   } catch (error) {

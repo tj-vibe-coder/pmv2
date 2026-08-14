@@ -5,6 +5,11 @@ export interface AiCitation {
   asOf: string;
 }
 
+export interface AiNavigateTo {
+  route: string;
+  label: string;
+}
+
 export interface AiAnswer {
   ok: true;
   requestId: string;
@@ -12,6 +17,7 @@ export interface AiAnswer {
   citations: AiCitation[];
   followUps: string[];
   notice: string;
+  navigateTo?: AiNavigateTo | null;
 }
 
 export type AiMessage =
@@ -32,12 +38,15 @@ export type AiLivePhase =
 export interface AiPageContext {
   route: string;
   projectId: string | null;
+  opportunityId: string | null;
+  quotationId: string | null;
 }
 
 export interface AiLiveTokenResponse {
   ok: true;
   token: string;
   model: string;
+  liveSessionId: string;
   expireTime: string;
   newSessionExpireTime: string;
 }

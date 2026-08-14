@@ -40,11 +40,14 @@ test('locks the ephemeral token to one use, the configured model, audio output, 
   assert.equal(capturedConfig.liveConnectConstraints.model, args.config.liveModel);
   assert.deepEqual(capturedConfig.liveConnectConstraints.config.responseModalities, ['AUDIO']);
   assert.ok(capturedConfig.liveConnectConstraints.config.sessionResumption);
+  assert.deepEqual(capturedConfig.liveConnectConstraints.config.inputAudioTranscription, {});
+  assert.deepEqual(capturedConfig.liveConnectConstraints.config.outputAudioTranscription, {});
   assert.equal(capturedConfig.liveConnectConstraints.config.systemInstruction, args.systemInstruction);
   assert.deepEqual(
     capturedConfig.liveConnectConstraints.config.tools,
     [{ functionDeclarations: args.toolDeclarations }],
   );
+  assert.equal(capturedConfig.lockAdditionalFields, undefined);
 
   const now = Date.now();
   const newSessionMs = new Date(capturedConfig.newSessionExpireTime).getTime() - now;

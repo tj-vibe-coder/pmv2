@@ -1,8 +1,23 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect, ReactNode } from 'react';
-import type { AiMessage, AiPageContext } from '../../types/AiAssist';
+import type { AiCitation, AiMessage, AiPageContext } from '../../types/AiAssist';
 import { sendAiChat, AiAssistError } from '../../services/aiAssistService';
-import { createLiveClient, LivePhase } from '../../ai/liveClient';
+import { createLiveClient, LivePhase, LiveTranscriptEvent, mergeTranscript } from '../../ai/liveClient';
 import * as liveSession from '../../ai/liveSession';
+import { formatPageContextNote } from '../../ai/pageContext';
+import { resolveAiNavigatePath } from '../../ai/navigate';
+
+const VOICE_NOTICE = 'AI-generated summary from IOCT records. Verify before making decisions.';
+
+function asCitations(sources: unknown[]): AiCitation[] {
+  return sources.filter((source): source is AiCitation => {
+    if (!source || typeof source !== 'object') return false;
+    const value = source as Partial<AiCitation>;
+    return typeof value.id === 'string'
+      && typeof value.label === 'string'
+      && typeof value.route === 'string'
+      && typeof value.asOf === 'string';
+  });
+}
 
 interface AiAssistContextType {
   isOpen: boolean;
@@ -19,8 +34,10 @@ interface AiAssistContextType {
    *  src/ai/liveClient.ts for the full lifecycle (interruption, race guards,
    *  teardown). Not runtime-verified against a live device/API yet. */
   livePhase: LivePhase;
+  micLevel: number;
   startVoice: () => Promise<void>;
   stopVoice: () => void;
+  sendPageContext: (pageContext: AiPageContext | null) => void;
 }
 
 const AiAssistContext = createContext<AiAssistContextType | undefined>(undefined);
@@ -49,15 +66,85 @@ interface AiAssistProviderProps {
    *  The server independently re-checks authorization on every request; this
    *  flag existing as `true` never grants access on its own. */
   enabled: boolean;
+  pageContext?: AiPageContext | null;
+  onNavigateRoute?: (route: string) => void;
 }
 
-export function AiAssistProvider({ children, enabled }: AiAssistProviderProps): React.ReactElement {
+function navigationRouteFromToolResult(name: string, result: unknown): string | null {
+  if (name !== 'navigate_to_record' || !result || typeof result !== 'object') return null;
+  const value = result as { action?: unknown; route?: unknown };
+  if (value.action !== 'navigate' || typeof value.route !== 'string') return null;
+  return resolveAiNavigatePath(value.route);
+}
+
+export function AiAssistProvider({
+  children,
+  enabled,
+  pageContext = null,
+  onNavigateRoute,
+}: AiAssistProviderProps): React.ReactElement {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [livePhase, setLivePhase] = useState<LivePhase>('idle');
+  const [micLevel, setMicLevel] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const liveClientRef = useRef<ReturnType<typeof createLiveClient> | null>(null);
+  const voiceUserIdRef = useRef<string | null>(null);
+  const voiceAssistantIdRef = useRef<string | null>(null);
+  const pendingVoiceCitationsRef = useRef<AiCitation[]>([]);
+  const pageContextRef = useRef<AiPageContext | null>(pageContext);
+  const onNavigateRouteRef = useRef(onNavigateRoute);
+  pageContextRef.current = pageContext;
+  onNavigateRouteRef.current = onNavigateRoute;
+
+  const applyVoiceTranscript = useCallback((event: LiveTranscriptEvent) => {
+    setMessages((prev) => {
+      const lastSameRole = [...prev].reverse().find((message) => message.role === event.role);
+      const sameUtterance = lastSameRole
+        && (lastSameRole.text === event.text
+          || lastSameRole.text.startsWith(event.text)
+          || event.text.startsWith(lastSameRole.text));
+
+      if (sameUtterance && lastSameRole) {
+        const merged = mergeTranscript(lastSameRole.text, event.text);
+        if (lastSameRole.role === 'assistant') {
+          const citations = pendingVoiceCitationsRef.current;
+          if (event.done) pendingVoiceCitationsRef.current = [];
+          if (merged === lastSameRole.text && citations.length === 0) return prev;
+          return prev.map((message) => (
+            message.id === lastSameRole.id
+              ? { ...lastSameRole, text: merged, citations: citations.length ? citations : lastSameRole.citations }
+              : message
+          ));
+        }
+        if (merged === lastSameRole.text) return prev;
+        return prev.map((message) => (
+          message.id === lastSameRole.id ? { ...lastSameRole, text: merged } : message
+        ));
+      }
+
+      if (event.role === 'user') {
+        voiceAssistantIdRef.current = null;
+        const id = nextId();
+        voiceUserIdRef.current = id;
+        return [...prev, { id, role: 'user', text: event.text }];
+      }
+
+      voiceUserIdRef.current = null;
+      const id = nextId();
+      voiceAssistantIdRef.current = id;
+      const citations = pendingVoiceCitationsRef.current;
+      if (event.done) pendingVoiceCitationsRef.current = [];
+      return [...prev, {
+        id,
+        role: 'assistant',
+        text: event.text,
+        citations,
+        notice: VOICE_NOTICE,
+      }];
+    });
+  }, []);
 
   const getLiveClient = useCallback(() => {
     if (!liveClientRef.current) {
@@ -66,16 +153,40 @@ export function AiAssistProvider({ children, enabled }: AiAssistProviderProps): 
         createCaptureContext: liveSession.createCaptureContext,
         createPlaybackContext: liveSession.createPlaybackContext,
         connectSession: liveSession.connectSession,
-        onExecuteTool: liveSession.executeLiveToolCall,
-        onPhaseChange: setLivePhase,
+        onExecuteTool: async (name, args) => {
+          const { result, sources } = await liveSession.executeLiveToolCall(name, args);
+          pendingVoiceCitationsRef.current = [
+            ...pendingVoiceCitationsRef.current,
+            ...asCitations(sources),
+          ];
+          const dest = navigationRouteFromToolResult(name, result);
+          if (dest) onNavigateRouteRef.current?.(dest);
+          return result;
+        },
+        onPhaseChange: (phase) => {
+          setLivePhase(phase);
+          if (phase === 'idle' || phase === 'error') setMicLevel(0);
+        },
+        onTranscript: applyVoiceTranscript,
+        onMicLevel: setMicLevel,
       });
     }
     return liveClientRef.current;
+  }, [applyVoiceTranscript]);
+
+  const sendPageContext = useCallback((next: AiPageContext | null) => {
+    liveClientRef.current?.sendPageContext(formatPageContextNote(next));
   }, []);
 
   const startVoice = useCallback(async () => {
-    await getLiveClient().start();
+    const client = getLiveClient();
+    await client.start();
+    client.sendPageContext(formatPageContextNote(pageContextRef.current));
   }, [getLiveClient]);
+
+  useEffect(() => {
+    sendPageContext(pageContext);
+  }, [pageContext, sendPageContext]);
 
   const stopVoice = useCallback(() => {
     liveClientRef.current?.stop();
@@ -92,6 +203,9 @@ export function AiAssistProvider({ children, enabled }: AiAssistProviderProps): 
     abortActive();
     setMessages([]);
     setIsLoading(false);
+    voiceUserIdRef.current = null;
+    voiceAssistantIdRef.current = null;
+    pendingVoiceCitationsRef.current = [];
   }, [abortActive]);
 
   useEffect(() => {
@@ -122,6 +236,10 @@ export function AiAssistProvider({ children, enabled }: AiAssistProviderProps): 
         ...prev,
         { id: nextId(), role: 'assistant', text: answer.answer, citations: answer.citations, notice: answer.notice },
       ]);
+      if (answer.navigateTo?.route) {
+        const dest = resolveAiNavigatePath(answer.navigateTo.route);
+        if (dest) onNavigateRouteRef.current?.(dest);
+      }
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof AiAssistError ? error.message : 'Something went wrong. Please try again.';
@@ -137,11 +255,12 @@ export function AiAssistProvider({ children, enabled }: AiAssistProviderProps): 
   const send = useCallback(async (text: string, pageContext: AiPageContext | null) => {
     const trimmed = text.trim();
     if (!trimmed || isLoading) return;
+    stopVoice();
     const userMessage: AiMessage = { id: nextId(), role: 'user', text: trimmed };
     const nextMessages = [...messages, userMessage];
     setMessages(nextMessages);
     await performSend(nextMessages, pageContext);
-  }, [isLoading, messages, performSend]);
+  }, [isLoading, messages, performSend, stopVoice]);
 
   const stop = useCallback(() => {
     abortActive();
@@ -171,8 +290,10 @@ export function AiAssistProvider({ children, enabled }: AiAssistProviderProps): 
     retry,
     clear,
     livePhase,
+    micLevel,
     startVoice,
     stopVoice,
+    sendPageContext,
   };
 
   return <AiAssistContext.Provider value={value}>{children}</AiAssistContext.Provider>;

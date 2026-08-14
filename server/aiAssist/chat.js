@@ -52,6 +52,7 @@ async function runChat({ client, registry, config, messages, pageContext, reques
   const toolResults = [];
   let toolRounds = 0;
   let totalResultBytes = 0;
+  let navigateTo = null;
 
   for (;;) {
     let result;
@@ -71,6 +72,7 @@ async function runChat({ client, registry, config, messages, pageContext, reques
         citations,
         followUps: finalResponse.followUps,
         notice: 'AI-generated summary from IOCT records. Verify before making decisions.',
+        navigateTo,
       };
     }
 
@@ -93,6 +95,14 @@ async function runChat({ client, registry, config, messages, pageContext, reques
           for (const source of toolResult.sources) {
             sourceMap.set(source.id, source);
           }
+        }
+        if (call.name === 'navigate_to_record' && toolResult.data && toolResult.data.action === 'navigate' && typeof toolResult.data.route === 'string') {
+          navigateTo = {
+            route: toolResult.data.route,
+            label: typeof toolResult.data.label === 'string' ? toolResult.data.label : '',
+          };
+        } else if (call.name === 'navigate_to_record') {
+          navigateTo = null;
         }
         toolResults.push({ name: call.name, data: toolResult.data });
       }

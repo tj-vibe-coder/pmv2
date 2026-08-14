@@ -5,9 +5,7 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { Box } from '@mui/material';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
-import { AiAssistProvider } from './components/ai/AiAssistProvider';
-import AiAssistLauncher from './components/ai/AiAssistLauncher';
-import AiAssistDrawer from './components/ai/AiAssistDrawer';
+import AiAssistHost from './components/ai/AiAssistHost';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
@@ -214,41 +212,24 @@ const LastPageTracker: React.FC = () => {
 // the Dashboard when nothing is saved yet (first visit, or after logout).
 const RootRedirect: React.FC = () => <Navigate to={getLastPage() ?? '/dashboard'} replace />;
 
-// Main App Layout component
-// UI gate only — the server independently re-checks the RJR/TJC allowlist on
-// every AI Assist request, so a stale/incorrect client-side list here can
-// only hide or show the launcher, never grant real access.
-const AI_ASSIST_ALLOWED_USERNAMES = ['RJR', 'TJC'];
-
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const { user } = useAuth();
-  const location = useLocation();
-  const aiAssistEnabled = !!user && AI_ASSIST_ALLOWED_USERNAMES.includes(String(user.username || '').toUpperCase());
   return (
-    <AiAssistProvider enabled={aiAssistEnabled}>
-      <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-        <Header onMenuClick={() => setMobileNavOpen((o) => !o)} />
-        <Box sx={{ display: 'flex', flexGrow: 1 }}>
-          <Sidebar mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
-          <Box sx={{
-            flexGrow: 1,
-            minWidth: 0,
-            backgroundColor: '#f5f5f5',
-            minHeight: 'calc(100vh - 80px)',
-            p: { xs: 1, md: 2 }
-          }}>
-            {children}
-          </Box>
+    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+      <Header onMenuClick={() => setMobileNavOpen((o) => !o)} />
+      <Box sx={{ display: 'flex', flexGrow: 1 }}>
+        <Sidebar mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
+        <Box sx={{
+          flexGrow: 1,
+          minWidth: 0,
+          backgroundColor: '#f5f5f5',
+          minHeight: 'calc(100vh - 80px)',
+          p: { xs: 1, md: 2 }
+        }}>
+          {children}
         </Box>
       </Box>
-      {aiAssistEnabled && (
-        <>
-          <AiAssistLauncher />
-          <AiAssistDrawer pageContext={{ route: location.pathname, projectId: null }} enabled={aiAssistEnabled} />
-        </>
-      )}
-    </AiAssistProvider>
+    </Box>
   );
 };
 
@@ -260,11 +241,24 @@ function App() {
         <CssBaseline />
         <Router>
           <LastPageTracker />
+          <AiAssistHost>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/scan" element={<ScanPage />} />
             <Route
               path="/dashboard"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <ProjectMonitoringApp />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/projects/:projectId"
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
@@ -863,6 +857,7 @@ function App() {
               }
             />
           </Routes>
+          </AiAssistHost>
         </Router>
       </ThemeProvider>
       </OneDriveAuthProvider>

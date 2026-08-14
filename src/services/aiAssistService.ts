@@ -1,5 +1,5 @@
 import { API_BASE } from '../config/api';
-import type { AiAnswer, AiMessage, AiPageContext, AiLiveTokenResponse } from '../types/AiAssist';
+import type { AiAnswer, AiMessage, AiNavigateTo, AiPageContext, AiLiveTokenResponse } from '../types/AiAssist';
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
@@ -57,7 +57,15 @@ export async function sendAiChat(
     throw new AiAssistError('The assistant returned an unexpected response.', res.status);
   }
 
-  return parsed as AiAnswer;
+  const answer = parsed as AiAnswer;
+  if (parsed.navigateTo != null) {
+    const nav = parsed.navigateTo as Partial<AiNavigateTo>;
+    if (typeof nav.route !== 'string' || typeof nav.label !== 'string') {
+      throw new AiAssistError('The assistant returned an unexpected response.', res.status);
+    }
+    answer.navigateTo = { route: nav.route, label: nav.label };
+  }
+  return answer;
 }
 
 export async function requestLiveToken(signal?: AbortSignal): Promise<AiLiveTokenResponse> {
@@ -73,7 +81,13 @@ export async function requestLiveToken(signal?: AbortSignal): Promise<AiLiveToke
     throw new AiAssistError('Could not start a voice session.', res.status);
   }
   const parsed = body as Partial<AiLiveTokenResponse>;
-  if (!res.ok || !parsed.ok || typeof parsed.token !== 'string') {
+  if (
+    !res.ok
+    || !parsed.ok
+    || typeof parsed.token !== 'string'
+    || typeof parsed.liveSessionId !== 'string'
+    || !parsed.liveSessionId
+  ) {
     throw new AiAssistError('Could not start a voice session.', res.status);
   }
   return parsed as AiLiveTokenResponse;
@@ -82,6 +96,7 @@ export async function requestLiveToken(signal?: AbortSignal): Promise<AiLiveToke
 export async function executeLiveTool(
   name: string,
   args: Record<string, unknown>,
+  liveSessionId: string,
   signal?: AbortSignal,
 ): Promise<{ result: unknown; sources: unknown[] }> {
   const res = await fetch(`${API_BASE}/api/ai-assist/tools/${encodeURIComponent(name)}`, {
@@ -90,7 +105,7 @@ export async function executeLiveTool(
       'Content-Type': 'application/json',
       ...authHeaders(),
     },
-    body: JSON.stringify({ args }),
+    body: JSON.stringify({ args, liveSessionId }),
     signal,
   });
   let body: unknown;

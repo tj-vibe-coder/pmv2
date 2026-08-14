@@ -2,7 +2,7 @@ jest.mock('../config/api', () => ({
   API_BASE: 'http://lan-host:3001',
 }));
 
-import { sendAiChat, AiAssistError } from './aiAssistService';
+import { sendAiChat, requestLiveToken, executeLiveTool, AiAssistError } from './aiAssistService';
 
 const fetchMock = jest.fn();
 global.fetch = fetchMock as unknown as typeof fetch;
@@ -26,7 +26,7 @@ it('includes the bearer token and the request body on a successful call', async 
     }),
   });
 
-  const result = await sendAiChat([{ role: 'user', text: 'hi' }], { route: '/projects', projectId: null });
+  const result = await sendAiChat([{ role: 'user', text: 'hi' }], { route: '/projects', projectId: null, opportunityId: null, quotationId: null });
 
   expect(result.answer).toBe('hello');
   expect(fetchMock).toHaveBeenCalledWith(
@@ -36,7 +36,7 @@ it('includes the bearer token and the request body on a successful call', async 
       headers: expect.objectContaining({ Authorization: 'Bearer token' }),
       body: JSON.stringify({
         messages: [{ role: 'user', text: 'hi' }],
-        pageContext: { route: '/projects', projectId: null },
+        pageContext: { route: '/projects', projectId: null, opportunityId: null, quotationId: null },
       }),
     }),
   );
@@ -71,6 +71,49 @@ it('distinguishes 401 from 403', async () => {
 
   fetchMock.mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({ ok: false, error: 'not_allowlisted' }) });
   await expect(sendAiChat([{ role: 'user', text: 'hi' }], null)).rejects.toMatchObject({ status: 403 });
+});
+
+it('requestLiveToken requires a liveSessionId and executeLiveTool sends it', async () => {
+  fetchMock.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      token: 'ephemeral',
+      model: 'gemini-3.1-flash-live-preview',
+      expireTime: '2026-08-14T00:00:00.000Z',
+      newSessionExpireTime: '2026-08-14T00:00:00.000Z',
+    }),
+  });
+  await expect(requestLiveToken()).rejects.toThrow(AiAssistError);
+
+  fetchMock.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      token: 'ephemeral',
+      model: 'gemini-3.1-flash-live-preview',
+      liveSessionId: 'sess-1',
+      expireTime: '2026-08-14T00:00:00.000Z',
+      newSessionExpireTime: '2026-08-14T00:00:00.000Z',
+    }),
+  });
+  await expect(requestLiveToken()).resolves.toMatchObject({ liveSessionId: 'sess-1' });
+
+  fetchMock.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, result: { n: 1 }, sources: [] }),
+  });
+  await executeLiveTool('search_projects', { search: 'plant' }, 'sess-1');
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    'http://lan-host:3001/api/ai-assist/tools/search_projects',
+    expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ args: { search: 'plant' }, liveSessionId: 'sess-1' }),
+    }),
+  );
 });
 
 it('rejects a malformed successful payload instead of returning it', async () => {

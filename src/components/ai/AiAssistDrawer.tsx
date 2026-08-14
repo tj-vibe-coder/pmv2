@@ -15,20 +15,11 @@ import CloseIcon from '@mui/icons-material/Close';
 import MicIcon from '@mui/icons-material/Mic';
 import { useTheme } from '@mui/material/styles';
 import type { AiPageContext } from '../../types/AiAssist';
+import { describeAiPage } from '../../ai/pageContext';
 import { useAiAssist } from './AiAssistProvider';
 import AiComposer from './AiComposer';
+import AiLiveStatus from './AiLiveStatus';
 import AiMessageList from './AiMessageList';
-
-const LIVE_PHASE_LABEL: Record<string, string> = {
-  idle: '',
-  connecting: 'Connecting…',
-  listening: 'Listening…',
-  thinking: 'Thinking…',
-  speaking: 'Speaking…',
-  interrupted: 'Interrupted',
-  reconnecting: 'Reconnecting…',
-  error: 'Voice unavailable',
-};
 
 interface AiAssistDrawerProps {
   pageContext: AiPageContext | null;
@@ -48,27 +39,13 @@ export default function AiAssistDrawer({
   enabled = true,
   onNavigateSource = noOp,
 }: AiAssistDrawerProps): React.ReactElement {
-  const { isOpen, close, messages, isLoading, send, stop, retry, clear, livePhase, startVoice, stopVoice } = useAiAssist();
+  const { isOpen, close, messages, isLoading, send, stop, retry, clear, livePhase, micLevel, startVoice, stopVoice } = useAiAssist();
   const isVoiceActive = livePhase !== 'idle' && livePhase !== 'error';
 
-  // Push-to-talk: mouse/touch get real press-and-hold via pointer events.
-  // Keyboard activation (Enter/Space on a focused button) only ever fires a
-  // 'click' — never pointerdown/up — so keyboard users get toggle-on-press
-  // instead, which doubles as the "explicit click fallback" for assistive
-  // tech that can't hold a pointer down. `event.detail === 0` reliably
-  // distinguishes a keyboard/programmatic click (detail 0) from a real mouse
-  // click (detail >= 1) — mouse clicks are ignored here since pointerdown/up
-  // already handled that same interaction; without this check the trailing
-  // click after a press-and-hold would immediately restart the session.
-  const handleVoicePointerDown = (event: React.PointerEvent) => {
-    event.preventDefault();
-    if (!isVoiceActive) void startVoice();
-  };
-  const handleVoicePointerUp = () => {
-    if (isVoiceActive) stopVoice();
-  };
-  const handleVoiceClick = (event: React.MouseEvent) => {
-    if (event.detail !== 0) return;
+  // Click-to-toggle. Press-and-hold used to stop on pointerup/leave, which
+  // called MediaStreamTrack.stop() and tore down Continuity / iPhone-as-mic
+  // the moment the cursor left the tiny mic button.
+  const handleVoiceClick = () => {
     if (isVoiceActive) stopVoice();
     else void startVoice();
   };
@@ -77,7 +54,15 @@ export default function AiAssistDrawer({
   // The provider currently does not expose its feature flag. A missing page context
   // is therefore treated as unavailable too, preventing a request without scope.
   const isAvailable = enabled && pageContext !== null;
-  const suggestions = pageContext ? SUGGESTIONS[pageContext.route] || [] : [];
+  const suggestions = pageContext
+    ? SUGGESTIONS[pageContext.route]
+      || (pageContext.route === '/dashboard' || pageContext.route.startsWith('/projects')
+        ? SUGGESTIONS['/projects']
+        : pageContext.route.startsWith('/sales')
+          ? SUGGESTIONS['/sales']
+          : [])
+    : [];
+  const viewing = describeAiPage(pageContext);
   const lastMessage = messages[messages.length - 1];
 
   const content = (
@@ -86,6 +71,8 @@ export default function AiAssistDrawer({
         <Stack alignItems="center" direction="row" spacing={1}>
           <Typography component="h2" variant="h6">IOCT Assist</Typography>
           <Chip label="Read only" size="small" />
+          {viewing ? <Chip label={`Now viewing ${viewing}`} size="small" variant="outlined" /> : null}
+          {isVoiceActive && <Chip color="primary" label="Live" size="small" />}
         </Stack>
         <IconButton aria-label="Close IOCT Assist" onClick={close}>
           <CloseIcon />
@@ -104,6 +91,7 @@ export default function AiAssistDrawer({
                 ))}
               </Stack>
             )}
+            <AiLiveStatus micLevel={micLevel} phase={livePhase} />
             <AiMessageList messages={messages} onNavigateSource={onNavigateSource} />
             {lastMessage?.role === 'error' && (
               <Button onClick={() => retry(pageContext)} sx={{ mt: 1 }}>Retry</Button>
@@ -116,24 +104,22 @@ export default function AiAssistDrawer({
           <Stack alignItems="center" direction="row" justifyContent="space-between" sx={{ mb: 1 }}>
             <Button onClick={clear}>New conversation</Button>
             <Stack alignItems="center" direction="row" spacing={1}>
-              {LIVE_PHASE_LABEL[livePhase] && (
-                <Typography color="text.secondary" variant="caption">{LIVE_PHASE_LABEL[livePhase]}</Typography>
-              )}
               <IconButton
-                aria-label={isVoiceActive ? 'Stop voice session' : 'Hold to talk to IOCT Assist'}
+                aria-label={isVoiceActive ? 'Stop live session' : 'Start live voice'}
                 color={isVoiceActive ? 'primary' : 'default'}
                 disabled={isLoading}
                 onClick={handleVoiceClick}
-                onPointerDown={handleVoicePointerDown}
-                onPointerLeave={handleVoicePointerUp}
-                onPointerUp={handleVoicePointerUp}
               >
                 <MicIcon />
               </IconButton>
               {isLoading && <Button onClick={stop}>Stop</Button>}
             </Stack>
           </Stack>
-          <AiComposer disabled={isLoading} onSend={(text) => send(text, pageContext)} />
+          <AiComposer
+            disabled={isLoading || isVoiceActive}
+            liveMode={isVoiceActive}
+            onSend={(text) => send(text, pageContext)}
+          />
         </Box>
       )}
     </Box>

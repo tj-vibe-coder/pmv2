@@ -134,6 +134,7 @@ function createAiAssistRouter(opts) {
       citations: result.citations,
       followUps: result.followUps,
       notice: result.notice,
+      navigateTo: result.navigateTo || null,
     });
   });
 

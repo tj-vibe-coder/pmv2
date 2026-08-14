@@ -7,6 +7,7 @@ test('AI Assist is disabled unless explicitly enabled', () => {
   assert.equal(config.enabled, false);
   assert.deepEqual(config.allowedUsers, ['RJR', 'TJC']);
   assert.equal(config.chatModel, 'gemini-3.5-flash-lite');
+  assert.equal(config.liveModel, 'gemini-3.1-flash-live-preview');
 });
 
 test('limits are clamped to safe ranges', () => {
