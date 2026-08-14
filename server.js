@@ -3933,6 +3933,78 @@ app.delete('/api/calcsheet/presets/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to delete preset' }); }
 });
 
+// ── Project work schedule (Gantt) tasks ───────────────────────────────────────
+// Equality-only filter on projectId, sorted in memory — no composite index
+// needed (see project_expenses above for why that matters on this repo's
+// deploy pipeline: an index create 409 aborts firestore+functions+hosting).
+app.get('/api/schedule-tasks', async (req, res) => {
+  try {
+    const { projectId } = req.query;
+    if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
+    const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
+    const tasks = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+    tasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.startDate || '').localeCompare(String(b.startDate || '')));
+    res.json({ success: true, tasks });
+  } catch (err) {
+    console.error('Error fetching schedule tasks:', err);
+    res.status(500).json({ success: false, error: 'Failed to get schedule tasks' });
+  }
+});
+
+app.post('/api/schedule-tasks', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { projectId, name, startDate, endDate } = req.body || {};
+    if (!projectId || !name || !startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'projectId, name, startDate, endDate are required' });
+    }
+    const { id: _ignored, ...body } = req.body;
+    const data = stripUndefinedFields({
+      ...body,
+      progressPct: Number(body.progressPct) || 0,
+      order: Number(body.order) || 0,
+      isMilestone: !!body.isMilestone,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const ref = await db.collection('calcsheet_schedule_tasks').add(data);
+    res.json({ success: true, task: { ...data, id: ref.id } });
+  } catch (err) {
+    console.error('Error creating schedule task:', err);
+    res.status(500).json({ success: false, error: 'Failed to create schedule task' });
+  }
+});
+
+app.put('/api/schedule-tasks/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { id: _ignored, ...body } = req.body || {};
+    const data = stripUndefinedFields({ ...body, updatedAt: new Date().toISOString() });
+    const ref = db.collection('calcsheet_schedule_tasks').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Schedule task not found' });
+    await ref.update(data);
+    res.json({ success: true, task: { ...doc.data(), ...data, id: ref.id } });
+  } catch (err) {
+    console.error('Error updating schedule task:', err);
+    res.status(500).json({ success: false, error: 'Failed to update schedule task' });
+  }
+});
+
+app.delete('/api/schedule-tasks/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    await db.collection('calcsheet_schedule_tasks').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting schedule task:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete schedule task' });
+  }
+});
+
 // ── Calcsheet settings (default job titles, etc.) ────────────────────────────
 app.get('/api/calcsheet/settings', async (req, res) => {
   try {

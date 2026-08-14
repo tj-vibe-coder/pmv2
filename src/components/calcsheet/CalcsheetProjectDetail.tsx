@@ -12,6 +12,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import EditIcon from '@mui/icons-material/Edit';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import HistoryIcon from '@mui/icons-material/History';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import FolderIcon from '@mui/icons-material/Folder';
@@ -1351,6 +1352,15 @@ export default function ProjectDetail() {
       <Stack direction="row" alignItems="center" justifyContent="space-between">
         <Typography variant="h5" sx={{ fontWeight: 600 }}>Quotations</Typography>
         <Stack direction="row" spacing={1}>
+          <Button
+            component={Link}
+            to={`/sales/calcsheet/projects/${project.id}/schedule`}
+            variant="outlined"
+            startIcon={<CalendarMonthIcon />}
+            size="small"
+          >
+            Schedule
+          </Button>
           {quotations.length >= 2 && (
             <Button
               component={Link}
