@@ -152,6 +152,8 @@ export interface ProjectExpense {
   tin?: string;
   fundingSource?: FundingSource;
   receiptRef?: { oneDriveId: string; webUrl: string; filename: string };
+  /** Income-tax-deductible business expense — AI-suggested on scan, editable by accounting. */
+  deductible?: boolean | null;
 }
 
 const loadExpenses = (): ProjectExpense[] => {
@@ -272,6 +274,8 @@ const ExpenseMonitoring: React.FC = () => {
   const [promoteUserId, setPromoteUserId] = useState('');
   const [promoteCAs, setPromoteCAs] = useState<{ id: string; ca_no: string; balance_remaining: number }[]>([]);
   const [promoteCaId, setPromoteCaId] = useState('');
+  const [promoteDrafts, setPromoteDrafts] = useState<{ id: string; form_no: string; total_amount: number; status: string }[]>([]);
+  const [promoteTargetLiquidationId, setPromoteTargetLiquidationId] = useState('');
   const [promoting, setPromoting] = useState(false);
   const [promoteError, setPromoteError] = useState('');
   const scanInputRef = useRef<HTMLInputElement>(null);
@@ -291,6 +295,7 @@ const ExpenseMonitoring: React.FC = () => {
   const [editExpense, setEditExpense] = useState<ProjectExpense | null>(null);
   const [editFields, setEditFields] = useState({ description: '', remarks: '', amount: '', date: '', category: '', supplier: '', invoiceNo: '', invoiceType: '', vat: '', tin: '' });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [savingDeductibleId, setSavingDeductibleId] = useState<string | null>(null);
   const [editError, setEditError] = useState('');
   // Move a row between overhead and a project (server-side copy+delete).
   const [moveExpense, setMoveExpense] = useState<ProjectExpense | null>(null);
@@ -885,6 +890,30 @@ const ExpenseMonitoring: React.FC = () => {
     }
   };
 
+  // Inline-edit the deductible flag directly from the table (accounting correction),
+  // mirroring the Tax Filer Ledger's same inline control.
+  const setExpenseDeductibleFlag = async (expense: ProjectExpense, value: boolean | null) => {
+    const endpoint = expense.scope === 'overhead' ? 'overhead-expenses' : 'project-expenses';
+    const prevExpenses = expenses;
+    setSavingDeductibleId(expense.id);
+    setExpenses((prev) => prev.map((e) => (e.id === expense.id && e.scope === expense.scope ? { ...e, deductible: value } : e)));
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/${endpoint}/${expense.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ deductible: value }),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (!data.success) throw new Error(data.error || 'Update failed');
+    } catch {
+      setExpenses(prevExpenses); // revert
+      setScanSnackbar({ open: true, severity: 'error', message: 'Could not update the deductible flag.' });
+    } finally {
+      setSavingDeductibleId(null);
+    }
+  };
+
   const openMoveDialog = (expense: ProjectExpense) => {
     setMoveError('');
     setMoveProjectId('');
@@ -994,6 +1023,8 @@ const ExpenseMonitoring: React.FC = () => {
     setPromoteUserId('');
     setPromoteCaId('');
     setPromoteCAs([]);
+    setPromoteDrafts([]);
+    setPromoteTargetLiquidationId('');
     setPromoteError('');
     try {
       const token = localStorage.getItem('netpacific_token');
@@ -1009,19 +1040,35 @@ const ExpenseMonitoring: React.FC = () => {
     setPromoteUserId(userId);
     setPromoteCaId('');
     setPromoteCAs([]);
+    setPromoteDrafts([]);
+    setPromoteTargetLiquidationId('');
     if (!userId) return;
     try {
       const token = localStorage.getItem('netpacific_token');
-      const res = await fetch(`${API_BASE}/api/cash-advances`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-      const data = await res.json().catch(() => ({ success: false }));
-      if (data.success) {
-        const eligible = (data.cash_advances || []).filter((ca: { user_id: string; status: string; balance_remaining: number }) =>
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+      const [caRes, liqRes] = await Promise.all([
+        fetch(`${API_BASE}/api/cash-advances`, { headers }),
+        fetch(`${API_BASE}/api/liquidations`, { headers }),
+      ]);
+      const caData = await caRes.json().catch(() => ({ success: false }));
+      if (caData.success) {
+        const eligible = (caData.cash_advances || []).filter((ca: { user_id: string; status: string; balance_remaining: number }) =>
           String(ca.user_id) === userId && ca.status === 'approved' && (Number(ca.balance_remaining) || 0) > 0
         );
         setPromoteCAs(eligible.map((ca: { id: string; ca_no: string; balance_remaining: number }) => ({ id: ca.id, ca_no: ca.ca_no, balance_remaining: Number(ca.balance_remaining) || 0 })));
       }
+      const liqData = await liqRes.json().catch(() => ({ success: false }));
+      if (liqData.success) {
+        // Both drafts and submitted liquidations of this employee are valid append
+        // targets — appending to a submitted one goes through the same revision
+        // machinery as "Edit (applies immediately)" so CA/reimbursement stay correct.
+        const eligible = (liqData.liquidations || []).filter((l: { user_id: string; status: string }) =>
+          String(l.user_id) === userId && (l.status === 'draft' || l.status === 'submitted')
+        );
+        setPromoteDrafts(eligible.map((l: { id: string; form_no: string; total_amount: number; status: string }) => ({ id: l.id, form_no: l.form_no, total_amount: Number(l.total_amount) || 0, status: l.status })));
+      }
     } catch {
-      // silent — falls back to standalone out-of-pocket
+      // silent — falls back to a new standalone out-of-pocket liquidation
     }
   };
 
@@ -1035,7 +1082,12 @@ const ExpenseMonitoring: React.FC = () => {
       const res = await fetch(`${API_BASE}/api/${endpoint}/${promoteExpense.id}/promote-to-liquidation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ userId: promoteUserId, ...(promoteCaId ? { caId: promoteCaId } : {}) }),
+        body: JSON.stringify({
+          userId: promoteUserId,
+          ...(promoteTargetLiquidationId
+            ? { targetLiquidationId: promoteTargetLiquidationId }
+            : (promoteCaId ? { caId: promoteCaId } : {})),
+        }),
       });
       const data = await res.json().catch(() => ({ success: false }));
       if (data.success) {
@@ -1822,6 +1874,7 @@ const ExpenseMonitoring: React.FC = () => {
                   <TableCell>{sortLabel('description', 'Description Part #')}</TableCell>
                   <TableCell>Remarks</TableCell>
                   <TableCell align="right">{sortLabel('amount', 'Amount', 'right')}</TableCell>
+                  <TableCell>Deductible</TableCell>
                   <TableCell>Receipt</TableCell>
                   <TableCell>Source</TableCell>
                   <TableCell padding="none" align="center" width={170}>Actions</TableCell>
@@ -1830,7 +1883,7 @@ const ExpenseMonitoring: React.FC = () => {
               <TableBody>
                 {tableRows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={11} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                    <TableCell colSpan={12} align="center" sx={{ py: 3, color: 'text.secondary' }}>
                       {selectedYear === 0
                         ? 'No expenses yet. Use the Add Expense button to add an expense.'
                         : `No expenses in ${selectedYear}. Use the Add Expense button to add an expense.`}
@@ -1881,6 +1934,27 @@ const ExpenseMonitoring: React.FC = () => {
                       </TableCell>
                       <TableCell>{expense.remarks || '—'}</TableCell>
                       <TableCell align="right">{formatCurrency(expense.amount)}</TableCell>
+                      <TableCell>
+                        <Select
+                          size="small"
+                          variant="standard"
+                          disableUnderline
+                          value={expense.deductible === true ? 'yes' : expense.deductible === false ? 'no' : 'unmarked'}
+                          disabled={savingDeductibleId === expense.id}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setExpenseDeductibleFlag(expense, v === 'yes' ? true : v === 'no' ? false : null);
+                          }}
+                          sx={{
+                            fontSize: '0.8rem',
+                            color: expense.deductible === true ? 'success.main' : expense.deductible === false ? 'error.main' : 'text.secondary',
+                          }}
+                        >
+                          <MenuItem value="unmarked">Unmarked</MenuItem>
+                          <MenuItem value="yes">Deductible</MenuItem>
+                          <MenuItem value="no">Non-deductible</MenuItem>
+                        </Select>
+                      </TableCell>
                       <TableCell>
                         {expense.receiptRef?.oneDriveId && thumbs[expense.receiptRef.oneDriveId] ? (
                           <Box
@@ -2275,7 +2349,10 @@ const ExpenseMonitoring: React.FC = () => {
             {promoteExpense && (
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 {promoteExpense.description || promoteExpense.category} — {formatCurrency(promoteExpense.amount)} on {promoteExpense.date}.
-                This will remove it from Expense Monitoring and create a submitted liquidation for the employee below.
+                This will remove it from Expense Monitoring, carry over its attached receipt, and{' '}
+                {promoteTargetLiquidationId
+                  ? `add it as a new row on the ${promoteDrafts.find((d) => d.id === promoteTargetLiquidationId)?.status === 'submitted' ? 'submitted' : 'draft'} liquidation selected below.`
+                  : 'create a new submitted liquidation for the employee below.'}
               </Typography>
             )}
             <Grid container spacing={2}>
@@ -2292,15 +2369,34 @@ const ExpenseMonitoring: React.FC = () => {
               </Grid>
               <Grid size={{ xs: 12 }}>
                 <FormControl fullWidth size="small" disabled={!promoteUserId}>
-                  <InputLabel>Cash Advance</InputLabel>
-                  <Select label="Cash Advance" value={promoteCaId} onChange={(e) => setPromoteCaId(e.target.value)}>
-                    <MenuItem value="">Standalone (Out-of-Pocket reimbursement)</MenuItem>
-                    {promoteCAs.map((ca) => (
-                      <MenuItem key={ca.id} value={ca.id}>{ca.ca_no} — balance {formatCurrency(ca.balance_remaining)}</MenuItem>
+                  <InputLabel>Add to</InputLabel>
+                  <Select
+                    label="Add to"
+                    value={promoteTargetLiquidationId}
+                    onChange={(e) => { setPromoteTargetLiquidationId(e.target.value); setPromoteCaId(''); }}
+                  >
+                    <MenuItem value="">New liquidation (submitted immediately)</MenuItem>
+                    {promoteDrafts.map((d) => (
+                      <MenuItem key={d.id} value={d.id}>
+                        {d.form_no} — {d.status === 'draft' ? 'draft' : 'submitted'}, {formatCurrency(d.total_amount)} so far
+                      </MenuItem>
                     ))}
                   </Select>
                 </FormControl>
               </Grid>
+              {!promoteTargetLiquidationId && (
+                <Grid size={{ xs: 12 }}>
+                  <FormControl fullWidth size="small" disabled={!promoteUserId}>
+                    <InputLabel>Cash Advance</InputLabel>
+                    <Select label="Cash Advance" value={promoteCaId} onChange={(e) => setPromoteCaId(e.target.value)}>
+                      <MenuItem value="">Standalone (Out-of-Pocket reimbursement)</MenuItem>
+                      {promoteCAs.map((ca) => (
+                        <MenuItem key={ca.id} value={ca.id}>{ca.ca_no} — balance {formatCurrency(ca.balance_remaining)}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+              )}
               {promoteError && (
                 <Grid size={{ xs: 12 }}>
                   <Typography variant="caption" color="error">{promoteError}</Typography>
