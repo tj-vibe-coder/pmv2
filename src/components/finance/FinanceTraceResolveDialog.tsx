@@ -52,6 +52,7 @@ const FinanceTraceResolveDialog: React.FC<FinanceTraceResolveDialogProps> = ({
   onClose,
   onResolved,
 }) => {
+  const confirmedLink = !candidate.needsReview;
   const [action, setAction] = useState<ResolutionAction>('confirm_match');
   const [reason, setReason] = useState('');
   const [investmentCategory, setInvestmentCategory] = useState('');
@@ -62,13 +63,13 @@ const FinanceTraceResolveDialog: React.FC<FinanceTraceResolveDialogProps> = ({
 
   useEffect(() => {
     if (!open) return;
-    setAction('confirm_match');
+    setAction(confirmedLink ? 'keep_both_separate' : 'confirm_match');
     setReason('');
     setInvestmentCategory('');
     setConfirmedDelete(false);
     setError('');
     setSourceFocusUrl('');
-  }, [open, anchorNode.key, candidate.node.key]);
+  }, [open, anchorNode.key, candidate.node.key, confirmedLink]);
 
   const pair = useMemo(() => {
     const nodes = [anchorNode, candidate.node];
@@ -122,13 +123,13 @@ const FinanceTraceResolveDialog: React.FC<FinanceTraceResolveDialogProps> = ({
 
   return (
     <Dialog open={open} onClose={submitting ? undefined : onClose} fullWidth maxWidth="sm">
-      <DialogTitle>Review possible match</DialogTitle>
+      <DialogTitle>{confirmedLink ? 'Review confirmed link' : 'Review possible match'}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ pt: 0.5 }}>
           <Box>
             <Typography fontWeight={700}>{anchorNode.label}</Typography>
             <Typography variant="body2" color="text.secondary">
-              compared with {candidate.node.label}
+              {confirmedLink ? 'linked with' : 'compared with'} {candidate.node.label}
             </Typography>
           </Box>
 
@@ -154,7 +155,9 @@ const FinanceTraceResolveDialog: React.FC<FinanceTraceResolveDialogProps> = ({
                     setConfirmedDelete(false);
                   }}
                 >
-                  <FormControlLabel value="confirm_match" control={<Radio />} label="Confirm match and link records" />
+                  {!confirmedLink && (
+                    <FormControlLabel value="confirm_match" control={<Radio />} label="Confirm match and link records" />
+                  )}
                   <FormControlLabel value="keep_both_separate" control={<Radio />} label="Keep both records, but separate them" />
                   <FormControlLabel value="keep_investment_delete_expense" control={<Radio />} label="Keep investment and delete expense" />
                   <FormControlLabel value="keep_expense_delete_investment" control={<Radio />} label="Keep expense and delete investment" />

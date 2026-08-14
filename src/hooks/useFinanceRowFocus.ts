@@ -68,14 +68,13 @@ export function useFinanceRowFocus<T>({
     }
     if (setPage && pageSize && index < 0) return;
     handledToken.current = focusedKey;
-    const frame = window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
       rowRefs.current.get(focusedKey)?.scrollIntoView({
         behavior: 'smooth',
         block: 'center',
         inline: 'nearest',
       });
     });
-    return () => window.cancelAnimationFrame(frame);
   }, [focusedKey, focusedRecord, indexForRecord, pageSize, records, revealRecord, rowRefs, setPage]);
 
   useEffect(() => {

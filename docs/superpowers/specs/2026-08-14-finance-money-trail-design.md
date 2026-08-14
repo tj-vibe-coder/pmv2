@@ -1,8 +1,8 @@
 # Finance Money Trail Design
 
-**Date:** 2026-08-14  
-**Status:** Approved for implementation planning  
-**Branch:** `feat/finance-money-trail`, based on `origin/main` (`32d1f49`)  
+**Date:** 2026-08-14
+**Status:** Approved for implementation planning
+**Branch:** `feat/finance-money-trail`, based on `origin/main` (`32d1f49`)
 **Scope:** Investment Tracker, Expense Monitoring, Liquidation, Cash Advance, and Reimbursement
 
 ## Problem

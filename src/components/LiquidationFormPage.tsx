@@ -910,7 +910,7 @@ export default function LiquidationFormPage() {
     let cancelled = false;
     setFinanceFocusLoading(true);
     setFinanceFocusError('');
-    loadDraft(focusedFinanceOrigin.id, true)
+    loadDraft(focusedFinanceOrigin.id, false)
       .then((loadedRows) => {
         if (cancelled) return;
         if (!loadedRows) {

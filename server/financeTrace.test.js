@@ -22,6 +22,10 @@ test('nodeKey distinguishes collections and liquidation rows', () => {
     nodeKey({ type: 'liquidation', id: 'l1', rowId: 'r1' }),
     'liquidation:l1:r1',
   );
+  assert.equal(
+    nodeKey({ type: 'liquidation', id: 'l1', rowId: '__form__' }),
+    'liquidation:l1',
+  );
 });
 
 test('parseLiquidationRows accepts stored JSON and arrays but rejects invalid shapes', () => {

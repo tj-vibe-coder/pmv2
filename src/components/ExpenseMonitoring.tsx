@@ -495,8 +495,17 @@ const ExpenseMonitoring: React.FC = () => {
   }, []);
 
   const focusedExpenseIndex = useCallback((expense: ProjectExpense) => (
-    tableRows.findIndex((row) => row.id === expense.id && row.scope === expense.scope)
-  ), [tableRows]);
+    selectedMonth !== 0
+    || selectedQuarter !== 0
+    || selectedYear !== Number(String(expense.date || '').slice(0, 4))
+    || selectedProjectId !== (
+      expense.scope === 'overhead'
+        ? OVERHEAD_SENTINEL
+        : String(expense.projectId || ALL_PROJECTS_SENTINEL)
+    )
+      ? -1
+      : tableRows.findIndex((row) => row.id === expense.id && row.scope === expense.scope)
+  ), [selectedMonth, selectedProjectId, selectedQuarter, selectedYear, tableRows]);
 
   const financeFocus = useFinanceRowFocus({
     records: expenses,

@@ -75,6 +75,16 @@ test('renders confirmed chain, relation, exact links, and clearly separate possi
   );
   expect(exactLinks[1]).toHaveAttribute('href', expect.stringContaining('from='));
   expect(screen.getByRole('button', { name: 'Review match' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Review or unlink' })).toBeInTheDocument();
+});
+
+test('opens the resolver for an existing confirmed investment-expense link', async () => {
+  renderDrawer();
+  await screen.findByText('Microsoft subscription');
+  await userEvent.click(screen.getByRole('button', { name: 'Review or unlink' }));
+  expect(screen.getByRole('heading', { name: 'Review confirmed link' })).toBeInTheDocument();
+  expect(screen.queryByRole('radio', { name: /Confirm match/i })).not.toBeInTheDocument();
+  expect(screen.getByRole('radio', { name: /Keep both.*separate/i })).toBeChecked();
 });
 
 test('view-only users can navigate but never see mutation controls', async () => {
@@ -84,6 +94,7 @@ test('view-only users can navigate but never see mutation controls', async () =>
   });
   expect(await screen.findByText('Needs review')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Review match' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Review or unlink' })).not.toBeInTheDocument();
   expect(screen.getAllByRole('link', { name: /Open exact record/i }).length).toBeGreaterThan(0);
 });
 

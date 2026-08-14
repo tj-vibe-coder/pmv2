@@ -162,3 +162,39 @@ test('uses the page index from a page-specific filtered view', async () => {
   expect(setPage).toHaveBeenCalledWith(0);
   expect(setPage).not.toHaveBeenCalledWith(2);
 });
+
+test('waits for page filters to reveal the record before paginating and scrolling', () => {
+  const records = [{ id: 'e22' }];
+  const revealRecord = jest.fn();
+  const setPage = jest.fn();
+  const rowElement = document.createElement('tr');
+  rowElement.scrollIntoView = jest.fn();
+  const { rerender } = render(
+    <MemoryRouter initialEntries={['/?focus=expense%3Aproject_expenses%3Ae22']}>
+      <Harness
+        records={records}
+        revealRecord={revealRecord}
+        setPage={setPage}
+        rowElement={rowElement}
+        indexForRecord={() => -1}
+      />
+    </MemoryRouter>,
+  );
+  expect(revealRecord).toHaveBeenCalledWith({ id: 'e22' });
+  expect(setPage).not.toHaveBeenCalled();
+  expect(rowElement.scrollIntoView).not.toHaveBeenCalled();
+
+  rerender(
+    <MemoryRouter initialEntries={['/?focus=expense%3Aproject_expenses%3Ae22']}>
+      <Harness
+        records={records}
+        revealRecord={revealRecord}
+        setPage={setPage}
+        rowElement={rowElement}
+        indexForRecord={() => 7}
+      />
+    </MemoryRouter>,
+  );
+  expect(setPage).toHaveBeenCalledWith(0);
+  expect(rowElement.scrollIntoView).toHaveBeenCalled();
+});

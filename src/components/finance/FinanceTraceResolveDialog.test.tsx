@@ -53,12 +53,37 @@ function renderDialog(onResolved = jest.fn()) {
   return onResolved;
 }
 
+function renderConfirmedDialog() {
+  render(
+    <MemoryRouter>
+      <FinanceTraceResolveDialog
+        open
+        anchorNode={investment}
+        candidate={{
+          ...candidate,
+          evidence: ['confirmed investment-expense link'],
+          needsReview: false,
+        }}
+        onClose={jest.fn()}
+        onResolved={jest.fn()}
+      />
+    </MemoryRouter>,
+  );
+}
+
 test('offers confirm plus all three approved resolution outcomes', () => {
   renderDialog();
   expect(screen.getByRole('radio', { name: /Confirm match/i })).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: /Keep both.*separate/i })).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: /Keep investment.*delete expense/i })).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: /Keep expense.*delete investment/i })).toBeInTheDocument();
+});
+
+test('an existing link starts with unlink and never offers duplicate confirmation', () => {
+  renderConfirmedDialog();
+  expect(screen.getByRole('heading', { name: 'Review confirmed link' })).toBeInTheDocument();
+  expect(screen.queryByRole('radio', { name: /Confirm match/i })).not.toBeInTheDocument();
+  expect(screen.getByRole('radio', { name: /Keep both.*separate/i })).toBeChecked();
 });
 
 test('requires a reason and explicit deletion confirmation', async () => {

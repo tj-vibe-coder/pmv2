@@ -41,7 +41,7 @@ function nodeKey(origin) {
   if (!origin || !origin.type || !origin.id) return '';
   if (origin.type === 'expense') return `expense:${origin.collection}:${origin.id}`;
   if (origin.type === 'liquidation') {
-    return origin.rowId
+    return origin.rowId && origin.rowId !== '__form__'
       ? `liquidation:${origin.id}:${origin.rowId}`
       : `liquidation:${origin.id}`;
   }

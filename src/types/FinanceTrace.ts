@@ -52,7 +52,7 @@ export interface FinanceTraceCandidate {
   proposedRelation: FinanceTraceRelation;
   score: number;
   evidence: string[];
-  needsReview: true;
+  needsReview: boolean;
   confirmable: boolean;
 }
 

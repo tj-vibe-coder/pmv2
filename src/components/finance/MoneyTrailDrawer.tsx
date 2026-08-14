@@ -63,7 +63,10 @@ const MoneyTrailDrawer: React.FC<MoneyTrailDrawerProps> = ({
   const [trace, setTrace] = useState<FinanceTraceResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [selectedCandidate, setSelectedCandidate] = useState<FinanceTraceCandidate | null>(null);
+  const [selectedPair, setSelectedPair] = useState<{
+    anchorNode: FinanceTraceNode;
+    candidate: FinanceTraceCandidate;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -85,10 +88,34 @@ const MoneyTrailDrawer: React.FC<MoneyTrailDrawerProps> = ({
   const anchorNode = useMemo(() => (
     trace?.nodes.find((node) => node.key === trace.originKey) || trace?.nodes[0] || null
   ), [trace]);
+  const confirmedInvestmentExpensePairs = useMemo(() => {
+    if (!trace) return [];
+    const byKey = new Map(trace.nodes.map((node) => [node.key, node]));
+    return trace.edges.flatMap((edge) => {
+      const left = byKey.get(edge.from);
+      const right = byKey.get(edge.to);
+      if (!left || !right || new Set([left.type, right.type]).size !== 2) return [];
+      if (!new Set([left.type, right.type]).has('investment')
+        || !new Set([left.type, right.type]).has('expense')) return [];
+      const investment = left.type === 'investment' ? left : right;
+      const expense = left.type === 'expense' ? left : right;
+      return [{
+        anchorNode: investment,
+        candidate: {
+          node: expense,
+          proposedRelation: edge.relation,
+          score: 100,
+          evidence: ['confirmed investment-expense link'],
+          needsReview: false,
+          confirmable: true,
+        } satisfies FinanceTraceCandidate,
+      }];
+    });
+  }, [trace]);
 
   const resolved = (response: FinanceTraceResolutionResponse) => {
     setTrace(response.trace);
-    setSelectedCandidate(null);
+    setSelectedPair(null);
     onResolved?.(response);
   };
 
@@ -170,6 +197,21 @@ const MoneyTrailDrawer: React.FC<MoneyTrailDrawerProps> = ({
                     ))}
                   </Stack>
                 )}
+                {trace.permissions.canResolve && confirmedInvestmentExpensePairs.length > 0 && (
+                  <Stack spacing={1} sx={{ mt: 1.5 }}>
+                    {confirmedInvestmentExpensePairs.map((pair) => (
+                      <Button
+                        key={`${pair.anchorNode.key}-${pair.candidate.node.key}`}
+                        size="small"
+                        variant="outlined"
+                        color="warning"
+                        onClick={() => setSelectedPair(pair)}
+                      >
+                        Review or unlink
+                      </Button>
+                    ))}
+                  </Stack>
+                )}
               </Box>
 
               <Divider />
@@ -194,7 +236,11 @@ const MoneyTrailDrawer: React.FC<MoneyTrailDrawerProps> = ({
                         <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>
                           {recordLink(candidate.node)}
                           {trace.permissions.canConfirm && candidate.confirmable && anchorNode && (
-                            <Button size="small" variant="contained" onClick={() => setSelectedCandidate(candidate)}>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              onClick={() => setSelectedPair({ anchorNode, candidate })}
+                            >
                               Review match
                             </Button>
                           )}
@@ -209,12 +255,12 @@ const MoneyTrailDrawer: React.FC<MoneyTrailDrawerProps> = ({
         </Box>
       </Drawer>
 
-      {anchorNode && selectedCandidate && (
+      {selectedPair && (
         <FinanceTraceResolveDialog
           open
-          anchorNode={anchorNode}
-          candidate={selectedCandidate}
-          onClose={() => setSelectedCandidate(null)}
+          anchorNode={selectedPair.anchorNode}
+          candidate={selectedPair.candidate}
+          onClose={() => setSelectedPair(null)}
           onResolved={resolved}
         />
       )}

@@ -166,11 +166,12 @@ function candidatePool(origin, records) {
 }
 
 function traceResponseFor(origin, records, user) {
-  const graph = buildGraph(records);
+  const visibleRecords = records.filter((record) => canViewOrigin(user, record));
+  const graph = buildGraph(visibleRecords);
   const originRecord = graph.byKey.get(nodeKey(origin));
   if (!originRecord || !canViewOrigin(user, originRecord)) return null;
   const trace = traceFrom(origin, graph);
-  const candidates = rankCandidates(originRecord, candidatePool(originRecord, records))
+  const candidates = rankCandidates(originRecord, candidatePool(originRecord, visibleRecords))
     .filter((candidate) => !trace.nodes.some((node) => node.key === candidate.node.key));
   const isAdmin = user.role === 'superadmin' || user.role === 'admin';
   return {
@@ -232,6 +233,10 @@ function investmentExpenseLink(data) {
   return data.sourceExpenseId || data.linkedExpenseId || null;
 }
 
+function investmentExpenseCollection(data) {
+  return data.sourceCollection || data.linkedExpenseCollection || null;
+}
+
 function expenseInvestmentLink(data) {
   return data.fundingSource?.linkedInvestmentId || data.linkedInvestmentId || null;
 }
@@ -256,6 +261,12 @@ function deleteFields(FieldValue, names) {
   return Object.fromEntries(names.map((name) => [name, FieldValue.delete()]));
 }
 
+function withoutFields(value, names) {
+  const output = { ...value };
+  for (const name of names) delete output[name];
+  return output;
+}
+
 async function resolvePair({ db, FieldValue, user, body, requestId }) {
   const input = validateResolutionBody(body);
   const investmentRef = db.collection('investments').doc(input.investmentId);
@@ -277,15 +288,12 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
     enforceExpectedVersion(input.expectedExpenseUpdatedAt, expense, 'Expense');
 
     const linkedExpenseId = investmentExpenseLink(investment);
+    const linkedExpenseCollection = investmentExpenseCollection(investment);
     const linkedInvestmentId = expenseInvestmentLink(expense);
-    if (input.action === 'confirm_match') {
-      if (linkedExpenseId && String(linkedExpenseId) !== input.expenseId) {
-        throw resolutionError(409, 'PAIR_ALREADY_LINKED', 'Investment is linked to another expense');
-      }
-      if (linkedInvestmentId && String(linkedInvestmentId) !== input.investmentId) {
-        throw resolutionError(409, 'PAIR_ALREADY_LINKED', 'Expense is linked to another investment');
-      }
-    }
+    const linkedFromInvestment = String(linkedExpenseId || '') === input.expenseId
+      && (!linkedExpenseCollection || linkedExpenseCollection === input.expenseCollection);
+    const linkedFromExpense = String(linkedInvestmentId || '') === input.investmentId;
+    const samePairLinked = linkedFromInvestment || linkedFromExpense;
 
     if (isProtectedExpense(expense)) {
       throw resolutionError(
@@ -293,6 +301,33 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
         'SOURCE_OWNED_EXPENSE',
         'This expense is synchronized from another finance record and must be corrected at its source',
         { sourceFocusUrl: protectedSourceFocusUrl(expense) },
+      );
+    }
+
+    if (linkedExpenseId && !linkedFromInvestment) {
+      throw resolutionError(409, 'PAIR_ALREADY_LINKED', 'Investment is linked to another expense');
+    }
+    if (linkedInvestmentId && !linkedFromExpense) {
+      throw resolutionError(409, 'PAIR_ALREADY_LINKED', 'Expense is linked to another investment');
+    }
+    if (input.action === 'confirm_match') {
+      if (samePairLinked) {
+        throw resolutionError(409, 'PAIR_ALREADY_RESOLVED', 'Investment and expense are already linked');
+      }
+    }
+
+    const isCandidate = rankCandidates(
+      { type: 'investment', id: input.investmentId, data: investment },
+      [{
+        type: 'expense', collection: input.expenseCollection,
+        id: input.expenseId, data: expense,
+      }],
+    ).length > 0;
+    if (!samePairLinked && !isCandidate) {
+      throw resolutionError(
+        422,
+        'PAIR_NOT_RELATED',
+        'These records are neither linked nor a qualifying possible match',
       );
     }
 
@@ -304,10 +339,11 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
     let afterExpense = { ...before.expense };
     let retainedOrigin;
 
-    const clearedInvestmentLinks = deleteFields(FieldValue, [
+    const investmentLinkFields = [
       'sourceExpenseId', 'sourceCollection', 'sourceExpenseProjectId',
       'linkedExpenseId', 'linkedExpenseCollection', 'linkedExpenseProjectId',
-    ]);
+    ];
+    const clearedInvestmentLinks = deleteFields(FieldValue, investmentLinkFields);
     const independentInvestmentPatch = {
       ...clearedInvestmentLinks,
       ...(investment.sourceType === 'expense_sync' ? { sourceType: 'manual' } : {}),
@@ -342,8 +378,15 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
     } else if (input.action === 'keep_both_separate') {
       await transaction.update(investmentRef, independentInvestmentPatch);
       await transaction.update(expenseRef, corporateExpensePatch);
-      afterInvestment = { ...afterInvestment, linkedExpenseId: undefined, sourceExpenseId: undefined, updated_at: timestamp };
-      afterExpense = { ...afterExpense, fundingSource: { type: 'corporate_bank' }, updatedAt: timestamp };
+      afterInvestment = {
+        ...withoutFields(afterInvestment, investmentLinkFields),
+        ...(investment.sourceType === 'expense_sync' ? { sourceType: 'manual' } : {}),
+        updated_at: timestamp,
+      };
+      afterExpense = {
+        ...withoutFields(afterExpense, ['linkedInvestmentId']),
+        fundingSource: { type: 'corporate_bank' }, updatedAt: timestamp,
+      };
       retainedOrigin = { type: 'investment', id: input.investmentId };
     } else if (input.action === 'keep_investment_delete_expense') {
       const investmentPatch = {
@@ -353,7 +396,8 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
       await transaction.update(investmentRef, investmentPatch);
       await transaction.delete(expenseRef);
       afterInvestment = {
-        ...afterInvestment, linkedExpenseId: undefined, sourceExpenseId: undefined,
+        ...withoutFields(afterInvestment, investmentLinkFields),
+        ...(investment.sourceType === 'expense_sync' ? { sourceType: 'manual' } : {}),
         ...(input.investmentCategory ? { category: input.investmentCategory } : {}),
         updated_at: timestamp,
       };
@@ -363,7 +407,10 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
       await transaction.delete(investmentRef);
       await transaction.update(expenseRef, corporateExpensePatch);
       afterInvestment = { id: input.investmentId, deleted: true };
-      afterExpense = { ...afterExpense, fundingSource: { type: 'corporate_bank' }, updatedAt: timestamp };
+      afterExpense = {
+        ...withoutFields(afterExpense, ['linkedInvestmentId']),
+        fundingSource: { type: 'corporate_bank' }, updatedAt: timestamp,
+      };
       retainedOrigin = { type: 'expense', collection: input.expenseCollection, id: input.expenseId };
     }
 

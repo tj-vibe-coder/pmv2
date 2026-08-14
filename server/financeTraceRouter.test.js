@@ -237,6 +237,30 @@ test('GET gives authenticated non-admin users view-only permissions', async (t) 
   assert.deepEqual(response.body.permissions, { canConfirm: false, canResolve: false });
 });
 
+test('GET opens a form-level liquidation focus used by CA and reimbursement links', async (t) => {
+  const server = await createTestServer({ user: { id: 'u1', role: 'user' } });
+  t.after(() => server.close());
+  const response = await request(
+    server,
+    '/api/finance-trace/liquidation/l1?rowId=__form__',
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.body.originKey, 'liquidation:l1');
+});
+
+test('GET never exposes another user\'s manual expense as a possible match', async (t) => {
+  const seed = seedData();
+  seed.project_expenses.hidden = {
+    date: '2026-03-14', amount: 494.27, description: 'Microsoft MSBill Info SGP',
+    projectId: 'p1', sourceType: 'manual', createdBy: 'u2',
+  };
+  const server = await createTestServer({ user: { id: 'u1', role: 'user' }, seed });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/investment/i1');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.candidates.some((candidate) => candidate.node.id === 'hidden'), false);
+});
+
 test('GET hides another employee liquidation from a non-admin', async (t) => {
   const server = await createTestServer({ user: { id: 'u2', role: 'user' } });
   t.after(() => server.close());
@@ -301,6 +325,62 @@ test('confirm_match writes reciprocal links and one append-only audit row', asyn
   assert.equal(response.body.trace.originKey, 'investment:i1');
 });
 
+test('confirm_match rejects an already-confirmed pair without duplicating audit history', async (t) => {
+  const seed = unlinkSeed();
+  seed.investments.i1.linkedExpenseId = 'e2';
+  seed.investments.i1.linkedExpenseCollection = 'project_expenses';
+  seed.project_expenses.e2.fundingSource = {
+    type: 'investor_outofpocket', investor: 'TJ Caballero', linkedInvestmentId: 'i1',
+  };
+  const server = await createTestServer({ user: { id: 'a1', role: 'admin' }, seed });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/resolve', true, {
+    method: 'POST', body: JSON.stringify(resolutionBody('confirm_match')),
+  });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.code, 'PAIR_ALREADY_RESOLVED');
+  assert.equal(server.fakeDb.store.finance_trace_audit, undefined);
+});
+
+test('resolver rejects unrelated records before any financial mutation', async (t) => {
+  const seed = unlinkSeed();
+  seed.project_expenses.e2 = {
+    date: '2025-01-01', amount: 98765.43, description: 'Unrelated warehouse rental',
+    projectId: 'other-project', sourceType: 'manual', createdBy: 'u1',
+  };
+  const server = await createTestServer({ user: { id: 'a1', role: 'admin' }, seed });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/resolve', true, {
+    method: 'POST', body: JSON.stringify(resolutionBody('keep_investment_delete_expense')),
+  });
+
+  assert.equal(response.status, 422);
+  assert.equal(response.body.code, 'PAIR_NOT_RELATED');
+  assert.ok(server.fakeDb.store.investments.i1);
+  assert.ok(server.fakeDb.store.project_expenses.e2);
+  assert.equal(server.fakeDb.store.finance_trace_audit, undefined);
+});
+
+test('resolver refuses a pair when either record is linked somewhere else', async (t) => {
+  const seed = unlinkSeed();
+  seed.investments.i1.linkedExpenseId = 'different-expense';
+  seed.investments.i1.linkedExpenseCollection = 'project_expenses';
+  seed.project_expenses.e2.fundingSource = {
+    type: 'investor_outofpocket', linkedInvestmentId: 'i1',
+  };
+  const server = await createTestServer({ user: { id: 'a1', role: 'admin' }, seed });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/resolve', true, {
+    method: 'POST', body: JSON.stringify(resolutionBody('keep_both_separate')),
+  });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.code, 'PAIR_ALREADY_LINKED');
+  assert.equal(server.fakeDb.store.investments.i1.linkedExpenseId, 'different-expense');
+  assert.equal(server.fakeDb.store.finance_trace_audit, undefined);
+});
+
 test('keep_both_separate clears links and retains both records with corporate funding', async (t) => {
   const seed = unlinkSeed();
   seed.investments.i1.linkedExpenseId = 'e2';
@@ -317,6 +397,10 @@ test('keep_both_separate clears links and retains both records with corporate fu
   assert.equal(response.status, 200);
   assert.equal(server.fakeDb.store.investments.i1.linkedExpenseId, undefined);
   assert.deepEqual(server.fakeDb.store.project_expenses.e2.fundingSource, { type: 'corporate_bank' });
+  const audit = Object.values(server.fakeDb.store.finance_trace_audit)[0];
+  assert.equal('linkedExpenseId' in audit.after.investment, false);
+  assert.equal('linkedExpenseCollection' in audit.after.investment, false);
+  assert.equal('linkedInvestmentId' in audit.after.expense, false);
 });
 
 test('keep_investment_delete_expense reclassifies the investment and deletes an eligible expense', async (t) => {
