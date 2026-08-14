@@ -38,6 +38,7 @@ import {
   ToggleButton,
   Link,
   Tooltip as MuiTooltip,
+  Stack,
 } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import {
@@ -70,6 +71,13 @@ import {
   type DuplicateMatch,
 } from '../services/receiptDuplicateService';
 import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress';
+import {
+  getReceiptParseMimeType,
+  isPdfReceipt,
+  makeReceiptUploadFilename,
+  RECEIPT_FILE_ACCEPT,
+  validateReceiptFile,
+} from '../utils/receipts/receiptFile';
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import ReceiptCropper from './ReceiptCropper';
@@ -78,6 +86,11 @@ import ScanBatch from './ScanBatch';
 import ScanWithPhoneButton from './ScanWithPhoneButton';
 import { useAuth } from '../contexts/AuthContext';
 import { getDriveItemThumbnailUrl, fetchDriveItemBlob, deleteDriveItem, replaceDriveItemContent } from '../services/onedriveFolderService';
+import MoneyTrailButton from './finance/MoneyTrailButton';
+import { useFinanceRowFocus } from '../hooks/useFinanceRowFocus';
+import { financeFocusToken, financeFocusUrl } from '../utils/financeTraceFocus';
+import { expenseOrigin, linkedOriginsForExpense } from '../utils/expenseFinanceTrace';
+import type { ParsedReceipt } from '../types/Receipt';
 
 const EXPENSES_KEY = 'projectExpenses';
 
@@ -246,6 +259,7 @@ const ExpenseMonitoring: React.FC = () => {
   // Guards against a cancelled/retaken scan's in-flight duplicate check repopulating
   // state after a newer scan has already started (or been cleared).
   const scanGenRef = useRef(0);
+  const financeRowRefs = useRef(new Map<string, HTMLElement>());
 
   // Receipt crop step (mirrors ScanPage.tsx) before the AI parse.
   const [editUrl, setEditUrl] = useState<string | null>(null);
@@ -476,6 +490,42 @@ const ExpenseMonitoring: React.FC = () => {
     setPage(0);
   }, [selectedYear, selectedMonth, selectedQuarter, selectedProjectId, sortKey, sortDir]);
 
+  const revealFocusedExpense = useCallback((expense: ProjectExpense) => {
+    const year = Number(String(expense.date || '').slice(0, 4));
+    setSelectedYear(Number.isFinite(year) ? year : 0);
+    setSelectedMonth(0);
+    setSelectedQuarter(0);
+    setSelectedProjectId(
+      expense.scope === 'overhead'
+        ? OVERHEAD_SENTINEL
+        : String(expense.projectId || ALL_PROJECTS_SENTINEL),
+    );
+  }, []);
+
+  const focusedExpenseIndex = useCallback((expense: ProjectExpense) => (
+    selectedMonth !== 0
+    || selectedQuarter !== 0
+    || selectedYear !== Number(String(expense.date || '').slice(0, 4))
+    || selectedProjectId !== (
+      expense.scope === 'overhead'
+        ? OVERHEAD_SENTINEL
+        : String(expense.projectId || ALL_PROJECTS_SENTINEL)
+    )
+      ? -1
+      : tableRows.findIndex((row) => row.id === expense.id && row.scope === expense.scope)
+  ), [selectedMonth, selectedProjectId, selectedQuarter, selectedYear, tableRows]);
+
+  const financeFocus = useFinanceRowFocus({
+    records: expenses,
+    originForRecord: expenseOrigin,
+    loading: expensesLoading,
+    pageSize: rowsPerPage,
+    setPage,
+    revealRecord: revealFocusedExpense,
+    indexForRecord: focusedExpenseIndex,
+    rowRefs: financeRowRefs,
+  });
+
   const handleSort = (key: typeof sortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(key); setSortDir(key === 'amount' || key === 'date' ? 'desc' : 'asc'); }
@@ -610,6 +660,7 @@ const ExpenseMonitoring: React.FC = () => {
 
       const submitted = data.liquidations.filter((l: any) => l.status === 'submitted');
       const newExpenses: ProjectExpense[] = [];
+      const newOverheadExpenses: ProjectExpense[] = [];
       for (const liq of submitted) {
         let rows: any[] = [];
         try { rows = JSON.parse(liq.rows_json || '[]'); } catch (_) { continue; }
@@ -624,18 +675,10 @@ const ExpenseMonitoring: React.FC = () => {
 
         for (const row of rows) {
           const pid = row.projectId != null && row.projectId !== '' ? String(row.projectId) : '';
-          if (!pid) continue;
           const amt = Number(row.amount);
           if (!amt || amt <= 0) continue;
-
-          const project = allProjects.find((p) => String(p.id) === pid);
-          const projectName = row.projectName || project?.project_name || '—';
-
-          newExpenses.push({
+          const base = {
             id: `exp-liq-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            scope: 'project',
-            projectId: pid,
-            projectName,
             description: `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`,
             remarks: (row.remarks || '').trim() || undefined,
             amount: amt,
@@ -644,11 +687,20 @@ const ExpenseMonitoring: React.FC = () => {
             createdAt: new Date().toISOString(),
             sourceLiquidationId: liq.id,
             sourceLiquidationRowId: row.id,
-            sourceType: 'liquidation_sync',
+            sourceType: 'liquidation_sync' as const,
             ...(liq.employee_name ? { liquidationFiledBy: liq.employee_name } : {}),
             ...(liq.date_of_submission ? { liquidationFiledAt: liq.date_of_submission } : {}),
             ...(receiptByRowId.get(row.id) ? { receiptRef: receiptByRowId.get(row.id) } : {}),
-          });
+          };
+          if (pid) {
+            const project = allProjects.find((p) => String(p.id) === pid);
+            const projectName = row.projectName || project?.project_name || '—';
+            newExpenses.push({ ...base, scope: 'project', projectId: pid, projectName });
+          } else {
+            // No project assigned — this is an overhead cost (e.g. a software
+            // subscription liquidated without a project), not a dropped row.
+            newOverheadExpenses.push({ ...base, scope: 'overhead' });
+          }
         }
       }
 
@@ -663,6 +715,20 @@ const ExpenseMonitoring: React.FC = () => {
         const syncData = await syncRes.json().catch(() => ({ success: false }));
         if (syncData.success) {
           syncedCount = syncData.count ?? newExpenses.length;
+        } else {
+          syncFailed = true;
+        }
+      }
+      let overheadSyncedCount = 0;
+      if (newOverheadExpenses.length > 0) {
+        const overheadRes = await fetch(`${API_BASE}/api/overhead-expenses`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ expenses: newOverheadExpenses }),
+        });
+        const overheadData = await overheadRes.json().catch(() => ({ success: false }));
+        if (overheadData.success) {
+          overheadSyncedCount = overheadData.count ?? newOverheadExpenses.length;
         } else {
           syncFailed = true;
         }
@@ -684,15 +750,16 @@ const ExpenseMonitoring: React.FC = () => {
 
       if (syncFailed) {
         setSyncMessage({ type: 'error', text: 'Failed to save liquidation expenses.' });
-      } else if (syncedCount === 0 && backfilledCount === 0) {
+      } else if (syncedCount === 0 && overheadSyncedCount === 0 && backfilledCount === 0) {
         setSyncMessage({ type: 'info', text: 'No new liquidation expenses to sync. All submitted liquidations are already logged.' });
       } else {
         const parts = [];
-        if (syncedCount > 0) parts.push(`Synced ${syncedCount} liquidation expense(s)`);
+        if (syncedCount > 0) parts.push(`Synced ${syncedCount} project expense(s)`);
+        if (overheadSyncedCount > 0) parts.push(`${overheadSyncedCount} overhead expense(s) (no project assigned)`);
         if (backfilledCount > 0) parts.push(`linked ${backfilledCount} scanned receipt(s) to existing entries`);
         setSyncMessage({ type: 'success', text: `${parts.join('; ')}.` });
       }
-      if (syncedCount > 0 || backfilledCount > 0) await fetchExpenses();
+      if (syncedCount > 0 || overheadSyncedCount > 0 || backfilledCount > 0) await fetchExpenses();
     } catch (err) {
       setSyncMessage({ type: 'error', text: 'Error syncing liquidations.' });
     }
@@ -1058,13 +1125,82 @@ const ExpenseMonitoring: React.FC = () => {
     }
   };
 
-  // Phase 1: pick a photo, auto-detect its corners, and open the crop dialog.
+  const applyParsedReceipt = async (parsed: ParsedReceipt, receiptBase64: string, gen: number) => {
+    if (gen !== scanGenRef.current) return;
+    const amt = parsed.total ?? parsed.subtotal;
+    if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
+    if (parsed.date) setExpenseDate(parsed.date);
+    const scanCategoryList: readonly string[] = expenseScope === 'overhead' ? OVERHEAD_CATEGORIES : PROJECT_EXPENSE_CATEGORIES;
+    if (parsed.suggestedCategory && scanCategoryList.includes(parsed.suggestedCategory)) {
+      setExpenseCategory(parsed.suggestedCategory);
+    }
+    const desc = parsed.vendor || parsed.lineItems?.[0]?.description;
+    if (desc && !expenseDescription.trim()) setExpenseDescription(desc);
+    if (parsed.vendor) setExpenseSupplier(parsed.vendor);
+    if (parsed.invoiceNumber) setExpenseInvoiceNo(parsed.invoiceNumber);
+    if (parsed.invoiceType) {
+      const matched = INVOICE_TYPES.find((t) => t.toLowerCase() === parsed.invoiceType?.toLowerCase());
+      setExpenseInvoiceType(matched || '');
+    }
+    if (parsed.tax !== null && parsed.tax !== undefined) setExpenseVat(String(parsed.tax));
+    if (typeof parsed.deductible === 'boolean') setExpenseDeductible(parsed.deductible);
+    if (parsed.deductibleReason) setExpenseDeductibleReason(parsed.deductibleReason);
+    const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
+    const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
+    if (lowConf) {
+      setScanSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category. Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+    } else {
+      setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
+    }
+    // Duplicate-receipt check — best-effort, never blocks the scan flow.
+    const imageHash = await computeImageHash(receiptBase64);
+    if (gen !== scanGenRef.current) return;
+    setExpenseImageHash(imageHash || null);
+    try {
+      const matchesMap = await checkDuplicates([{
+        key: 'scan',
+        supplier: parsed.vendor || undefined,
+        invoiceNo: parsed.invoiceNumber || undefined,
+        amount: typeof amt === 'number' ? amt : undefined,
+        date: parsed.date || undefined,
+        imageHash: imageHash || undefined,
+      }]);
+      if (gen !== scanGenRef.current) return;
+      const matches: DuplicateMatch[] = matchesMap.get('scan') || [];
+      if (matches.length > 0) {
+        const warnings = matches.map(describeMatch);
+        setExpenseDuplicateWarnings(warnings);
+        setScanSnackbar({ open: true, severity: 'warning', message: `Possible duplicate receipt: ${warnings[0]}` });
+      }
+    } catch (err) {
+      console.warn('[ExpenseMonitoring] duplicate check failed:', err);
+    }
+  };
+
+  // Phase 1: PDFs parse directly; photos auto-detect their corners and open the crop dialog.
   const handleScanInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    scanGenRef.current += 1;
+    const selectionGen = scanGenRef.current;
+    const validationError = validateReceiptFile(file);
+    if (validationError) {
+      setScanSnackbar({ open: true, severity: 'error', message: validationError });
+      setIsScanning(false);
+      return;
+    }
     setIsScanning(true);
     try {
+      if (isPdfReceipt(file)) {
+        setExpenseImageHash(null);
+        setExpenseDuplicateWarnings([]);
+        pendingReceiptRef.current = file;
+        const receiptBase64 = await blobToBase64(file);
+        const parsed = await parseReceipt(receiptBase64, getReceiptParseMimeType(file));
+        await applyParsedReceipt(parsed, receiptBase64, selectionGen);
+        return;
+      }
       const safeFile = await convertHeicToJpeg(file);
       let detected = await detectReceiptQuad(safeFile);
       if (!detected) {
@@ -1078,11 +1214,14 @@ const ExpenseMonitoring: React.FC = () => {
       const quad: Quad = detected ?? [
         { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 }, { x: 0.88, y: 0.86 }, { x: 0.12, y: 0.86 },
       ];
+      if (selectionGen !== scanGenRef.current) return;
       setEdit(safeFile, quad);
     } catch (err) {
-      setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Could not process photo' });
+      if (selectionGen === scanGenRef.current) {
+        setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Could not process receipt' });
+      }
     } finally {
-      setIsScanning(false);
+      if (selectionGen === scanGenRef.current) setIsScanning(false);
     }
   };
 
@@ -1111,55 +1250,7 @@ const ExpenseMonitoring: React.FC = () => {
       pendingReceiptRef.current = croppedFile;
       const imageBase64 = await blobToBase64(flattened);
       const parsed = await parseReceipt(imageBase64, 'image/jpeg');
-      if (gen !== scanGenRef.current) return;
-      const amt = parsed.total ?? parsed.subtotal;
-      if (typeof amt === 'number' && amt > 0) setExpenseAmount(String(amt));
-      if (parsed.date) setExpenseDate(parsed.date);
-      const scanCategoryList: readonly string[] = expenseScope === 'overhead' ? OVERHEAD_CATEGORIES : PROJECT_EXPENSE_CATEGORIES;
-      if (parsed.suggestedCategory && scanCategoryList.includes(parsed.suggestedCategory)) {
-        setExpenseCategory(parsed.suggestedCategory);
-      }
-      const desc = parsed.vendor || parsed.lineItems?.[0]?.description;
-      if (desc && !expenseDescription.trim()) setExpenseDescription(desc);
-      if (parsed.vendor) setExpenseSupplier(parsed.vendor);
-      if (parsed.invoiceNumber) setExpenseInvoiceNo(parsed.invoiceNumber);
-      if (parsed.invoiceType) {
-        const matched = INVOICE_TYPES.find((t) => t.toLowerCase() === parsed.invoiceType?.toLowerCase());
-        setExpenseInvoiceType(matched || '');
-      }
-      if (parsed.tax !== null && parsed.tax !== undefined) setExpenseVat(String(parsed.tax));
-      if (typeof parsed.deductible === 'boolean') setExpenseDeductible(parsed.deductible);
-      if (parsed.deductibleReason) setExpenseDeductibleReason(parsed.deductibleReason);
-      const lowConf = typeof parsed.confidence === 'number' && parsed.confidence < 0.5;
-      const pct = typeof parsed.confidence === 'number' ? Math.round(parsed.confidence * 100) : null;
-      if (lowConf) {
-        setScanSnackbar({ open: true, severity: 'warning', message: `Low confidence${pct !== null ? ` (${pct}%)` : ''} — please verify amount, date & category. Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
-      } else {
-        setScanSnackbar({ open: true, severity: 'success', message: `Parsed: ${parsed.vendor || 'Unknown vendor'} (PHP ${Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})` });
-      }
-      // Duplicate-receipt check — best-effort, never blocks the scan flow.
-      const imageHash = await computeImageHash(imageBase64);
-      if (gen !== scanGenRef.current) return;
-      setExpenseImageHash(imageHash || null);
-      try {
-        const matchesMap = await checkDuplicates([{
-          key: 'scan',
-          supplier: parsed.vendor || undefined,
-          invoiceNo: parsed.invoiceNumber || undefined,
-          amount: typeof amt === 'number' ? amt : undefined,
-          date: parsed.date || undefined,
-          imageHash: imageHash || undefined,
-        }]);
-        if (gen !== scanGenRef.current) return;
-        const matches: DuplicateMatch[] = matchesMap.get('scan') || [];
-        if (matches.length > 0) {
-          const warnings = matches.map(describeMatch);
-          setExpenseDuplicateWarnings(warnings);
-          setScanSnackbar({ open: true, severity: 'warning', message: `Possible duplicate receipt: ${warnings[0]}` });
-        }
-      } catch (err) {
-        console.warn('[ExpenseMonitoring] duplicate check failed:', err);
-      }
+      await applyParsedReceipt(parsed, imageBase64, gen);
       setEdit(null, null);
     } catch (err) {
       setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Failed to parse receipt' });
@@ -1204,10 +1295,10 @@ const ExpenseMonitoring: React.FC = () => {
       const pendingFile = pendingReceiptRef.current;
       if (pendingFile) {
         try {
-          const compressed = await compressForUpload(pendingFile);
+          const compressed = isPdfReceipt(pendingFile) ? pendingFile : await compressForUpload(pendingFile);
           const contentBase64 = await blobToBase64(compressed);
           const year = String(new Date().getFullYear());
-          const filename = `SCAN-${Date.now()}.jpg`;
+          const filename = makeReceiptUploadFilename(pendingFile);
           const folderPath = expenseScope === 'project'
             ? `Project Receipts/${project?.project_no || pid}/${year}`
             : `00 Overhead Receipts/${year}`;
@@ -1355,6 +1446,21 @@ const ExpenseMonitoring: React.FC = () => {
       <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', mb: 1 }}>
         PO totals are read from browser storage.
       </Typography>
+
+      {(financeFocus.focusedKey || financeFocus.focusError) && (
+        <Alert
+          severity={financeFocus.focusError ? 'warning' : 'info'}
+          sx={{ mb: 2 }}
+          action={(
+            <Stack direction="row" spacing={0.5}>
+              {financeFocus.hasBackSource && <Button color="inherit" size="small" onClick={financeFocus.backToSource}>Back to source</Button>}
+              <Button color="inherit" size="small" onClick={financeFocus.clearFocus}>Clear focus</Button>
+            </Stack>
+          )}
+        >
+          {financeFocus.focusError || 'Filters and pagination were adjusted to show the exact expense.'}
+        </Alert>
+      )}
 
       {syncMessage && (
         <Box
@@ -1737,8 +1843,25 @@ const ExpenseMonitoring: React.FC = () => {
                       const project = expense.scope === 'project' ? allProjects.find((p) => String(p.id) === String(expense.projectId)) : undefined;
                       const projectNo = project?.project_no || String(project?.item_no ?? project?.id ?? '');
                       const poNumber = project?.po_number ?? '—';
+                      const origin = expenseOrigin(expense);
+                      const rowToken = financeFocusToken(origin);
+                      const linkedOrigins = linkedOriginsForExpense(expense);
+                      const focused = financeFocus.isFocused(origin);
                       return (
-                    <TableRow key={`${expense.scope}-${expense.id}`}>
+                    <TableRow
+                      key={`${expense.scope}-${expense.id}`}
+                      ref={(element: HTMLTableRowElement | null) => {
+                        if (element) financeRowRefs.current.set(rowToken, element);
+                        else financeRowRefs.current.delete(rowToken);
+                      }}
+                      aria-current={focused ? 'true' : undefined}
+                      sx={focused ? {
+                        bgcolor: 'rgba(44,90,160,0.14)',
+                        outline: '2px solid',
+                        outlineColor: 'primary.main',
+                        outlineOffset: '-2px',
+                      } : undefined}
+                    >
                       <TableCell>{expense.date}</TableCell>
                       <TableCell>
                         {expense.scope === 'overhead'
@@ -1799,11 +1922,25 @@ const ExpenseMonitoring: React.FC = () => {
                                 color="info"
                                 icon={<InvestorLinkIcon fontSize="small" />}
                                 label={expense.fundingSource.investor}
-                                onClick={() => navigate('/finance/investment-tracker')}
+                                onClick={() => {
+                                  const investmentOrigin = linkedOrigins.find((linked) => linked.type === 'investment');
+                                  if (investmentOrigin) navigate(financeFocusUrl(investmentOrigin, `${location.pathname}${location.search}`));
+                                }}
                                 sx={{ cursor: 'pointer' }}
                               />
                             </MuiTooltip>
                           )}
+                          {linkedOrigins.filter((linked) => linked.type !== 'investment').map((linked) => (
+                            <Chip
+                              key={financeFocusToken(linked)}
+                              size="small"
+                              variant="outlined"
+                              color={linked.type === 'liquidation' ? 'warning' : 'primary'}
+                              label={linked.type === 'liquidation' ? 'Open liquidation' : 'Open cash advance'}
+                              onClick={() => navigate(financeFocusUrl(linked, `${location.pathname}${location.search}`))}
+                              sx={{ cursor: 'pointer' }}
+                            />
+                          ))}
                         </Box>
                       </TableCell>
                       <TableCell padding="none" align="center" sx={{ whiteSpace: 'nowrap' }}>
@@ -1842,6 +1979,7 @@ const ExpenseMonitoring: React.FC = () => {
                             <DeleteIcon fontSize="small" />
                           </IconButton>
                         </Box>
+                        <MoneyTrailButton origin={origin} compact onResolved={() => { void fetchExpenses(); }} />
                       </TableCell>
                     </TableRow>
                   ); })
@@ -2083,7 +2221,7 @@ const ExpenseMonitoring: React.FC = () => {
         <input
           type="file"
           ref={scanInputRef}
-          accept="image/*"
+          accept={RECEIPT_FILE_ACCEPT}
           capture="environment"
           style={{ display: 'none' }}
           onChange={handleScanInputChange}

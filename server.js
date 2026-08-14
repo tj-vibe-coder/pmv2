@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { createProductHistoryRouter } = require('./server/calcsheetProductHistoryRouter');
 const { validateQuotationPurchaseTiming } = require('./server/calcsheetPurchaseTiming');
+const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -2228,17 +2229,28 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
     await caRef.update({ balance_remaining: FieldValue.increment(-caDelta), updated_at: now });
   }
 
-  // project_expenses re-sync: update/delete docs previously synced from this
-  // liquidation, and create docs only for rows that are new in the revision.
-  // Rows that were never synced (older filings predate the client-side sync)
-  // stay unsynced so applying a fix doesn't retroactively inject historical
-  // costs into the P&L.
+  // project_expenses / overhead_expenses re-sync: a row with a project goes to
+  // project_expenses, a row with an amount but no project goes to overhead_expenses
+  // (e.g. software subscriptions liquidated without a project). Existing synced
+  // docs are updated/deleted/moved to match the revision. Brand-new (never
+  // previously synced) PROJECT rows only sync if they're new in this revision —
+  // older filings that predate the sync feature stay unsynced as project costs so
+  // applying an unrelated fix doesn't retroactively inject historical project
+  // costs into the P&L. That conservatism doesn't apply to OVERHEAD: an
+  // unassigned row was always meant to be an overhead cost, so any row lacking a
+  // project auto-syncs to overhead_expenses on revision, old or new — this is
+  // exactly how a legacy liquidation missing its project assignment gets fixed.
   const liqDescription = (row) => liq.form_no
     ? `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`
     : ((row.particulars || '').trim() || 'Liquidation');
-  const expSnap = await db.collection('project_expenses').where('sourceLiquidationId', '==', liqId).get();
+  const [expSnap, ohSnap] = await Promise.all([
+    db.collection('project_expenses').where('sourceLiquidationId', '==', liqId).get(),
+    db.collection('overhead_expenses').where('sourceLiquidationId', '==', liqId).get(),
+  ]);
   const expByRowId = new Map();
   expSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) expByRowId.set(rid, d); });
+  const ohByRowId = new Map();
+  ohSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) ohByRowId.set(rid, d); });
   const oldRowIds = new Set(oldRows.map(r => r.id));
   const newById = new Map(newRows.map(r => [r.id, r]));
   const revisedFiledBy = (revision.employee_name ?? liq.employee_name) || null;
@@ -2266,31 +2278,74 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
       liquidationFiledAt: revisedFiledAt || FieldValue.delete(),
     });
   }
-  for (const row of newRows) {
-    if (oldRowIds.has(row.id) || expByRowId.has(row.id)) continue;
-    if (!row.projectId || !(Number(row.amount) > 0)) continue;
-    const doc = {
-      projectId: String(row.projectId),
-      projectName: (row.projectName || '').trim() || '—',
+  for (const [rowId, ohDoc] of ohByRowId) {
+    const row = newById.get(rowId);
+    if (!row || row.projectId || !(Number(row.amount) > 0)) { batch.delete(ohDoc.ref); continue; }
+    const receiptRef = receiptByRowId.get(rowId);
+    batch.update(ohDoc.ref, {
       description: liqDescription(row),
       amount: Number(row.amount) || 0,
-      date: row.date || new Date().toISOString().slice(0, 10),
+      date: row.date || ohDoc.data().date || null,
       category: (row.category || '').trim() || 'Others',
-      createdAt: new Date().toISOString(),
-      createdBy: revision.proposed_by || approver.id,
-      sourceType: 'liquidation_sync',
-      sourceLiquidationId: liqId,
-      sourceLiquidationRowId: row.id,
-    };
-    if (revisedFiledBy) doc.liquidationFiledBy = revisedFiledBy;
-    if (revisedFiledAt) doc.liquidationFiledAt = revisedFiledAt;
-    if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
-    if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
-    if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
-    if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+      receiptRef: receiptRef || FieldValue.delete(),
+      liquidationFiledBy: revisedFiledBy || FieldValue.delete(),
+      liquidationFiledAt: revisedFiledAt || FieldValue.delete(),
+    });
+  }
+  for (const row of newRows) {
+    const amt = Number(row.amount);
+    if (!(amt > 0)) continue;
     const receiptRef = receiptByRowId.get(row.id);
-    if (receiptRef) doc.receiptRef = receiptRef;
-    batch.set(db.collection('project_expenses').doc(), doc);
+    if (row.projectId) {
+      if (expByRowId.has(row.id)) continue; // already updated above
+      // Only a genuinely new-in-revision row, or one that just moved here from
+      // overhead (already counted once), may newly sync as a project cost.
+      if (oldRowIds.has(row.id) && !ohByRowId.has(row.id)) continue;
+      const doc = {
+        projectId: String(row.projectId),
+        projectName: (row.projectName || '').trim() || '—',
+        description: liqDescription(row),
+        amount: amt,
+        date: row.date || new Date().toISOString().slice(0, 10),
+        category: (row.category || '').trim() || 'Others',
+        createdAt: new Date().toISOString(),
+        createdBy: revision.proposed_by || approver.id,
+        sourceType: 'liquidation_sync',
+        sourceLiquidationId: liqId,
+        sourceLiquidationRowId: row.id,
+      };
+      if (revisedFiledBy) doc.liquidationFiledBy = revisedFiledBy;
+      if (revisedFiledAt) doc.liquidationFiledAt = revisedFiledAt;
+      if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
+      if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
+      if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
+      if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+      if (receiptRef) doc.receiptRef = receiptRef;
+      batch.set(db.collection('project_expenses').doc(), doc);
+    } else {
+      if (ohByRowId.has(row.id)) continue; // already updated above
+      // Unassigned rows always auto-sync to overhead, old or new — this is what
+      // fixes a legacy liquidation that predates the sync feature entirely.
+      const doc = {
+        description: liqDescription(row),
+        amount: amt,
+        date: row.date || new Date().toISOString().slice(0, 10),
+        category: (row.category || '').trim() || 'Others',
+        createdAt: new Date().toISOString(),
+        createdBy: revision.proposed_by || approver.id,
+        sourceType: 'liquidation_sync',
+        sourceLiquidationId: liqId,
+        sourceLiquidationRowId: row.id,
+      };
+      if (revisedFiledBy) doc.liquidationFiledBy = revisedFiledBy;
+      if (revisedFiledAt) doc.liquidationFiledAt = revisedFiledAt;
+      if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
+      if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
+      if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
+      if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+      if (receiptRef) doc.receiptRef = receiptRef;
+      batch.set(db.collection('overhead_expenses').doc(), doc);
+    }
   }
   await batch.commit();
 
@@ -3731,6 +3786,11 @@ app.delete('/api/calcsheet/projects/:id', async (req, res) => {
 app.use(
   '/api/calcsheet/product-history',
   createProductHistoryRouter({ db, requireActiveUser }),
+);
+
+app.use(
+  '/api/finance-trace',
+  createFinanceTraceRouter({ db, getCurrentUser, FieldValue }),
 );
 
 app.get('/api/calcsheet/quotations', async (req, res) => {
@@ -6194,8 +6254,30 @@ app.post('/api/overhead-expenses', async (req, res) => {
     const body = req.body;
     const now = new Date().toISOString();
     if (Array.isArray(body.expenses)) {
-      const toInsert = body.expenses.filter(e => Number(e.amount) > 0);
+      let toInsert = body.expenses.filter(e => Number(e.amount) > 0);
       if (toInsert.length === 0) return res.status(400).json({ success: false, error: 'No valid expenses in array' });
+      // Server-side dedup for liquidation-sourced rows, mirroring project-expenses —
+      // prevents duplicates when a liquidation is re-synced (e.g. re-proposing an edit).
+      const hasLiqRows = toInsert.some(e => e.sourceLiquidationId);
+      if (hasLiqRows) {
+        const liqKey = (e) => e.sourceLiquidationId && e.sourceLiquidationRowId ? `liq:${e.sourceLiquidationId}:${e.sourceLiquidationRowId}` : null;
+        const liqIds = [...new Set(toInsert.filter(e => e.sourceLiquidationId).map(e => String(e.sourceLiquidationId)))];
+        const existingKeys = new Set();
+        for (let i = 0; i < liqIds.length; i += 10) {
+          const chunkIds = liqIds.slice(i, i + 10);
+          const snap = await db.collection('overhead_expenses')
+            .where('sourceType', '==', 'liquidation_sync')
+            .where('sourceLiquidationId', 'in', chunkIds).get();
+          snap.docs.forEach(d => { const k = liqKey(d.data()); if (k) existingKeys.add(k); });
+        }
+        toInsert = toInsert.filter(e => {
+          const k = liqKey(e);
+          return !k || !existingKeys.has(k);
+        });
+        if (toInsert.length === 0) {
+          return res.status(200).json({ success: true, count: 0, expenses: [], message: 'All expenses already synced' });
+        }
+      }
       const inserted = [];
       for (let i = 0; i < toInsert.length; i += 499) {
         const chunk = toInsert.slice(i, i + 499);
@@ -6211,6 +6293,11 @@ app.post('/api/overhead-expenses', async (req, res) => {
             createdBy: user.id,
             sourceType: exp.sourceType || 'manual',
           };
+          if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
+          if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
+          if (exp.liquidationFiledBy) doc.liquidationFiledBy = String(exp.liquidationFiledBy);
+          if (exp.liquidationFiledAt) doc.liquidationFiledAt = String(exp.liquidationFiledAt);
+          if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
           if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
           if (exp.remarks) doc.remarks = String(exp.remarks);
           if (exp.supplier) doc.supplier = String(exp.supplier);
@@ -6233,6 +6320,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     const { description, remarks, amount, date, category, sourceType, receiptRef,
+            sourceLiquidationId, sourceLiquidationRowId, liquidationFiledBy, liquidationFiledAt, sourceCaId,
             supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
@@ -6244,6 +6332,11 @@ app.post('/api/overhead-expenses', async (req, res) => {
       createdBy: user.id,
       sourceType: sourceType || 'manual',
     };
+    if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
+    if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
+    if (liquidationFiledBy) doc.liquidationFiledBy = String(liquidationFiledBy);
+    if (liquidationFiledAt) doc.liquidationFiledAt = String(liquidationFiledAt);
+    if (sourceCaId) doc.sourceCaId = sourceCaId;
     if (receiptRef) doc.receiptRef = receiptRef;
     if (remarks) doc.remarks = String(remarks);
     if (supplier) doc.supplier = String(supplier);

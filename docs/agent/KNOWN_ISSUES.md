@@ -16,6 +16,14 @@ The seed script correctly refuses to run when `FIRESTORE_EMULATOR_HOST` is absen
 
 ## Build warnings
 
-- The current CRA main bundle is approximately 2.05 MB before further code-splitting work.
+- The current CRA main bundle is approximately 2.07 MB before further code-splitting work.
 - Browserslist data is stale and emits an update warning.
 - Node 24 emits an `fs.F_OK` deprecation warning; deployment targets Node 22.
+
+## Finance trace read cost
+
+The Finance Money Trail read endpoint currently derives the relationship graph by reading the six participating finance collections, then applies per-user visibility filtering before traversal and candidate scoring. This avoids a second persistent relationship graph and is correct for the current dataset, but collection growth may make each drawer open expensive. If usage or record counts increase materially, replace the broad reads with indexed reference lookups plus bounded candidate queries while preserving the same visibility checks and response contract.
+
+## ScanBatch review has nested interactive buttons
+
+The ScanBatch review accordion currently renders its delete `IconButton` inside MUI's button-based `AccordionSummary`. React reports an invalid nested-button warning in component tests. Existing save/delete behavior and the PDF scan tests pass, but the delete action should eventually be moved outside the summary button or restructured with valid keyboard-accessible markup.

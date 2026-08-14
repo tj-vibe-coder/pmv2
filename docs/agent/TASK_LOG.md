@@ -49,3 +49,83 @@ Meal allowance was always per-day. TJ set Kim to 15k/mo + 1k meal intending 16k 
 ### Checked
 - `npm test -- --watchAll=false --testPathPattern=payrollEngine.test` — 19/19 pass
 - `npx tsc --noEmit` — clean
+
+## 2026-08-14 — Finance Money Trail
+
+### Completed
+
+- Added a derived, read-only money trail across investments, project/overhead expenses, liquidation rows, cash advances, and reimbursements.
+- Added exact-record focus URLs that adjust filters and pagination, scroll to the target, retain a visible highlight, and provide Back to source/Clear focus actions.
+- Added deterministic possible-match review for amount differences down to centavos and up to ₱500, dates within 14 days, matching text, project, investor/supplier, invoice, receipt, and source references.
+- Kept possible matches visually and structurally separate from confirmed relationships; only investment-expense candidates are directly confirmable.
+- Added admin-only transactional resolution actions: confirm match, keep both separate, keep investment/delete expense with optional reclassification, and keep expense/delete investment.
+- Added reopening of confirmed investment-expense links through **Review or unlink**, covering the same separation/deletion actions without allowing duplicate confirmation.
+- Made **Keep both separate** durable so the reviewed pair is suppressed in future possible-match results from either record.
+- Protected liquidation-, PO-, payroll-, and CA-owned synced expenses from every resolver mutation and return the exact source link when correction must happen upstream.
+- Added append-only `finance_trace_audit` entries with actor, reason, request ID, pair, timestamp, and accurate before/after snapshots.
+- Hardened visibility so possible matches and graph traversal never expose another user's inaccessible manual finance records.
+- Rejected inactive accounts and scanner-scoped tokens, bounded resolver identifiers/reasons/categories/request IDs, and prevented mutation of unrelated or conflicting pairs.
+- Added packaging coverage so the Finance Functions deployment includes runtime trace modules but excludes tests.
+
+### Commits
+
+- `aabc516` — design Finance Money Trail
+- `9103adb` — plan Finance Money Trail implementation
+- `0d68a1b` through `1bae4bc` — trace contracts, API, resolver, drawer, exact-focus integrations, and module coverage
+- `b491197` — harden trace visibility, resolver safety, confirmed-link unlinking, audit snapshots, and staged focus
+- `5d6f955` — secure active-session and input boundaries, and persist reviewed pair separation
+
+### Verification
+
+- `node --test server/*.test.js` — 65/65 passed.
+- `npm test -- --watchAll=false` — 20 suites, 126/126 passed.
+- `npx tsc --noEmit` — passed.
+- `npm run build` — compiled successfully.
+- `git diff --check` — passed.
+- No production Firestore writes were made during implementation or verification.
+
+### Notes
+
+- Work is isolated on `feat/finance-money-trail`, separate from the AI receipt-assist branch, and is not merged or deployed.
+- Browser QA was not run because the available local startup path can initialize default users unless it is paired with a verified Firestore emulator dataset.
+- `npm ci` required a temporary cache because the user npm cache contains root-owned files; install completed without changing dependencies.
+
+## 2026-08-14 — Finance possible-match quality refinement
+
+### Completed
+
+- Required every possible match to include semantic identity through meaningful description/vendor overlap or an exact supplier, invoice, receipt, or source reference.
+- Kept amount, date, project, and investor as supporting evidence only, preventing unrelated Microsoft-versus-RFID/vest suggestions.
+- Made the 14-day window a hard rejection when both records have valid dates.
+- Preserved centavo and small-peso matching for spelling variants and strong references.
+
+### Verification
+
+- Terra worker observed two expected failing regression tests before implementation.
+- `node --test server/financeTrace.test.js` — 11/11 passed.
+- `node --test server/*.test.js` — 68/68 passed.
+- Live read-only API check for the ₱240.23 Microsoft record returned only the plausible February 26 Microsoft MSBILL candidate; Easytrip, Lalamove, reflective vest, and out-of-window candidates were absent.
+- No production finance records were changed.
+
+## 2026-08-14 — Desktop PDF receipt scanning
+
+### Completed
+
+- Added PDF selection to Expense Monitoring's **Scan One** and **Scan Multiple** desktop flows.
+- Defined the current behavior as one selected PDF per receipt/expense; multi-page PDFs are not split into separate items.
+- Sent PDFs directly to the existing Gemini receipt parser as `application/pdf` without opening the image cropper.
+- Preserved image auto-crop behavior and added mixed batch sequencing that crops only images while parsing PDFs in their original order.
+- Preserved PDF bytes and `.pdf` filenames for OneDrive uploads; image scans remain JPEG uploads.
+- Added a shared receipt-file policy with a 15 MB PDF limit, supported raster-image validation, generic-MIME extension fallback, and rejection of contradictory MIME types.
+- Kept rejected-file feedback visible through crop, parse, and review, and guarded scan results against stale overlapping selections.
+- Independent review findings were checked against the real helpers: raw-byte hashing already supports PDFs and `compressForUpload` already bypasses non-images; explicit PDF upload and thumbnail bypasses plus race/validation hardening were added.
+
+### Verification
+
+- Focused receipt policy and batch PDF tests passed, including PDF-only, mixed PDF-image-PDF, skipped-file feedback, size limits, MIME handling, and upload filename rules.
+- `npm test -- --watchAll=false` — 22 suites, 134/134 passed.
+- `npx tsc --noEmit` — passed.
+- `npm run build` — compiled successfully.
+- `git diff --check` — passed.
+- CUI preview started at `http://localhost:3001`; authenticated file-picker smoke was not completed because the preview was at login and credentials were intentionally not entered into tool logs.
+- No production Firestore writes or OneDrive uploads were made during verification.

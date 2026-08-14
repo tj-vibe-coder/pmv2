@@ -1,9 +1,16 @@
 # Project State
 
-Updated: 2026-07-27
+Updated: 2026-08-14
 
 ## Current status
 
+- Finance Money Trail is complete on branch `feat/finance-money-trail` and has not been merged or deployed.
+- Expense Monitoring's desktop **Scan One** and **Scan Multiple** flows now accept receipt PDFs; one PDF is treated as one receipt, bypasses image cropping, parses natively with Gemini, and uploads to OneDrive as `.pdf`. Mixed image/PDF batches crop only the images.
+- Investment Tracker, project/overhead expenses, liquidation rows, cash advances, and reimbursements now expose confirmed cross-record trails and exact-record deep links.
+- Possible duplicates use deterministic review signals (including centavo/small-peso differences), remain separate from confirmed links, and can only be resolved by admins.
+- Possible matches now require semantic description/vendor/reference identity; amount, date, project, and investor alone cannot create a suggestion, and dated records more than 14 days apart are rejected.
+- Confirmed investment-expense links can be reviewed again to unlink, keep one record, or reclassify a retained investment; source-owned synced expenses remain protected and redirect reviewers to their source.
+- Resolver mutations are transactional and write append-only `finance_trace_audit` records with actor, reason, request ID, and before/after snapshots.
 - Calcsheet quotation-history pricing is complete and committed through `3344577`.
 - Add Product keeps managed **Pricelists** separate from read-only **Quotation History**.
 - Historical product search, provenance display, expected-purchase-date handling, and contingency suggestions are implemented across the Express API and React UI.
@@ -12,6 +19,10 @@ Updated: 2026-07-27
 
 ## Verification
 
+- Finance trace server and packaging suite: 68/68 passing.
+- Frontend suite: 134/134 passing.
+- TypeScript and production build passing for the money-trail branch.
+- No production write tests or live Firestore mutations were used during verification.
 - Server product-history tests: 36/36 passing.
 - Frontend tests: 73/73 passing.
 - TypeScript and production build passing.
@@ -20,9 +31,12 @@ Updated: 2026-07-27
 
 ## Current blockers
 
-- None for this feature.
+- None for Finance Money Trail implementation.
 
 ## Next considerations
 
+- Review and merge `feat/finance-money-trail` independently from the AI receipt-assist work when requested.
+- Run a browser smoke against a safe Firestore emulator dataset before deployment; automated integration coverage and the production build are already green.
+- Run an authenticated browser smoke with a real single-page receipt PDF before deployment; the current CUI preview reached the login screen but no credential was entered into tool logs.
 - Deploy or merge according to the repository branch workflow when requested.
 - Consider improving the insufficient-history panel to show excluded evidence reasons; this is explanatory polish, not a correctness blocker.
