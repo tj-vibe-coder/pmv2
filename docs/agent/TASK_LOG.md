@@ -73,6 +73,7 @@ Meal allowance was always per-day. TJ set Kim to 15k/mo + 1k meal intending 16k 
 - `9103adb` — plan Finance Money Trail implementation
 - `0d68a1b` through `1bae4bc` — trace contracts, API, resolver, drawer, exact-focus integrations, and module coverage
 - `b491197` — harden trace visibility, resolver safety, confirmed-link unlinking, audit snapshots, and staged focus
+- `5d6f955` — secure active-session and input boundaries, and persist reviewed pair separation
 
 ### Verification
 
