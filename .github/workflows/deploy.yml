@@ -58,20 +58,23 @@ jobs:
           ONEDRIVE_INBOX_ROOT=02 Overhead/_Inbox
           EOF
 
+      - name: Write Firebase service account key
+        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > "$RUNNER_TEMP/firebase-sa.json"
+
       - name: Deploy to Firebase (all)
         if: ${{ github.event_name == 'push' || inputs.target == 'all' }}
         run: bash scripts/firebase-deploy.sh
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
 
       - name: Deploy to Firebase (hosting only)
         if: ${{ inputs.target == 'hosting' }}
         run: bash scripts/firebase-deploy.sh --only hosting
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
 
       - name: Deploy to Firebase (functions only)
         if: ${{ inputs.target == 'functions' }}
         run: bash scripts/firebase-deploy.sh --only functions
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
