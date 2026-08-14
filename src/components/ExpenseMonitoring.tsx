@@ -152,6 +152,8 @@ export interface ProjectExpense {
   tin?: string;
   fundingSource?: FundingSource;
   receiptRef?: { oneDriveId: string; webUrl: string; filename: string };
+  /** Income-tax-deductible business expense — AI-suggested on scan, editable by accounting. */
+  deductible?: boolean | null;
 }
 
 const loadExpenses = (): ProjectExpense[] => {
@@ -291,6 +293,7 @@ const ExpenseMonitoring: React.FC = () => {
   const [editExpense, setEditExpense] = useState<ProjectExpense | null>(null);
   const [editFields, setEditFields] = useState({ description: '', remarks: '', amount: '', date: '', category: '', supplier: '', invoiceNo: '', invoiceType: '', vat: '', tin: '' });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [savingDeductibleId, setSavingDeductibleId] = useState<string | null>(null);
   const [editError, setEditError] = useState('');
   // Move a row between overhead and a project (server-side copy+delete).
   const [moveExpense, setMoveExpense] = useState<ProjectExpense | null>(null);
@@ -882,6 +885,30 @@ const ExpenseMonitoring: React.FC = () => {
       setEditError('Failed to save changes. Check your connection.');
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  // Inline-edit the deductible flag directly from the table (accounting correction),
+  // mirroring the Tax Filer Ledger's same inline control.
+  const setExpenseDeductibleFlag = async (expense: ProjectExpense, value: boolean | null) => {
+    const endpoint = expense.scope === 'overhead' ? 'overhead-expenses' : 'project-expenses';
+    const prevExpenses = expenses;
+    setSavingDeductibleId(expense.id);
+    setExpenses((prev) => prev.map((e) => (e.id === expense.id && e.scope === expense.scope ? { ...e, deductible: value } : e)));
+    try {
+      const token = localStorage.getItem('netpacific_token');
+      const res = await fetch(`${API_BASE}/api/${endpoint}/${expense.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ deductible: value }),
+      });
+      const data = await res.json().catch(() => ({ success: false }));
+      if (!data.success) throw new Error(data.error || 'Update failed');
+    } catch {
+      setExpenses(prevExpenses); // revert
+      setScanSnackbar({ open: true, severity: 'error', message: 'Could not update the deductible flag.' });
+    } finally {
+      setSavingDeductibleId(null);
     }
   };
 
@@ -1822,6 +1849,7 @@ const ExpenseMonitoring: React.FC = () => {
                   <TableCell>{sortLabel('description', 'Description Part #')}</TableCell>
                   <TableCell>Remarks</TableCell>
                   <TableCell align="right">{sortLabel('amount', 'Amount', 'right')}</TableCell>
+                  <TableCell>Deductible</TableCell>
                   <TableCell>Receipt</TableCell>
                   <TableCell>Source</TableCell>
                   <TableCell padding="none" align="center" width={170}>Actions</TableCell>
@@ -1830,7 +1858,7 @@ const ExpenseMonitoring: React.FC = () => {
               <TableBody>
                 {tableRows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={11} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                    <TableCell colSpan={12} align="center" sx={{ py: 3, color: 'text.secondary' }}>
                       {selectedYear === 0
                         ? 'No expenses yet. Use the Add Expense button to add an expense.'
                         : `No expenses in ${selectedYear}. Use the Add Expense button to add an expense.`}
@@ -1881,6 +1909,27 @@ const ExpenseMonitoring: React.FC = () => {
                       </TableCell>
                       <TableCell>{expense.remarks || '—'}</TableCell>
                       <TableCell align="right">{formatCurrency(expense.amount)}</TableCell>
+                      <TableCell>
+                        <Select
+                          size="small"
+                          variant="standard"
+                          disableUnderline
+                          value={expense.deductible === true ? 'yes' : expense.deductible === false ? 'no' : 'unmarked'}
+                          disabled={savingDeductibleId === expense.id}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setExpenseDeductibleFlag(expense, v === 'yes' ? true : v === 'no' ? false : null);
+                          }}
+                          sx={{
+                            fontSize: '0.8rem',
+                            color: expense.deductible === true ? 'success.main' : expense.deductible === false ? 'error.main' : 'text.secondary',
+                          }}
+                        >
+                          <MenuItem value="unmarked">Unmarked</MenuItem>
+                          <MenuItem value="yes">Deductible</MenuItem>
+                          <MenuItem value="no">Non-deductible</MenuItem>
+                        </Select>
+                      </TableCell>
                       <TableCell>
                         {expense.receiptRef?.oneDriveId && thumbs[expense.receiptRef.oneDriveId] ? (
                           <Box
