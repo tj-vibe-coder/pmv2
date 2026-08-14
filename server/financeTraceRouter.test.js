@@ -33,6 +33,24 @@ class FakeDocumentReference {
       this,
     );
   }
+
+  async set(value, options = {}) {
+    if (!this.store[this.collectionName]) this.store[this.collectionName] = {};
+    const current = this.store[this.collectionName][this.id] || {};
+    this.store[this.collectionName][this.id] = options.merge
+      ? applyPatch(current, value)
+      : structuredClone(value);
+  }
+
+  async update(value) {
+    const current = this.store[this.collectionName]?.[this.id];
+    if (!current) throw new Error('document does not exist');
+    this.store[this.collectionName][this.id] = applyPatch(current, value);
+  }
+
+  async delete() {
+    delete this.store[this.collectionName]?.[this.id];
+  }
 }
 
 class FakeCollectionReference {
@@ -42,6 +60,11 @@ class FakeCollectionReference {
   }
 
   doc(id) {
+    if (!id) {
+      const next = (this.store.__nextId || 0) + 1;
+      this.store.__nextId = next;
+      id = `auto-${next}`;
+    }
     return new FakeDocumentReference(this.store, this.name, id);
   }
 
@@ -63,6 +86,38 @@ class FakeFirestore {
   collection(name) {
     return new FakeCollectionReference(this.store, name);
   }
+
+  async runTransaction(callback) {
+    const transaction = {
+      get: (ref) => ref.get(),
+      set: (ref, value, options) => ref.set(value, options),
+      update: (ref, value) => ref.update(value),
+      delete: (ref) => ref.delete(),
+      create: async (ref, value) => {
+        const existing = await ref.get();
+        if (existing.exists) throw new Error('document already exists');
+        return ref.set(value);
+      },
+    };
+    return callback(transaction);
+  }
+}
+
+function applyPatch(current, patch) {
+  const output = structuredClone(current);
+  for (const [path, value] of Object.entries(patch)) {
+    const parts = path.split('.');
+    let target = output;
+    while (parts.length > 1) {
+      const part = parts.shift();
+      if (!target[part] || typeof target[part] !== 'object') target[part] = {};
+      target = target[part];
+    }
+    const key = parts[0];
+    if (value && value.__delete) delete target[key];
+    else target[key] = structuredClone(value);
+  }
+  return output;
 }
 
 function seedData() {
@@ -106,14 +161,16 @@ function seedData() {
 async function createTestServer({ user, seed = seedData() } = {}) {
   const app = express();
   app.use(express.json());
+  const db = new FakeFirestore(seed);
   app.use('/api/finance-trace', createFinanceTraceRouter({
-    db: new FakeFirestore(seed),
+    db,
     getCurrentUser: async (req) => req.headers.authorization ? user : null,
     FieldValue: { delete: () => ({ __delete: true }) },
   }));
   const server = await new Promise((resolve) => {
     const instance = app.listen(0, () => resolve(instance));
   });
+  server.fakeDb = db;
   return server;
 }
 
@@ -188,6 +245,154 @@ test('GET hides another employee liquidation from a non-admin', async (t) => {
     '/api/finance-trace/liquidation/l1?rowId=r1',
   );
   assert.equal(response.status, 404);
+});
+
+function unlinkSeed() {
+  const seed = seedData();
+  delete seed.investments.i1.sourceExpenseId;
+  delete seed.investments.i1.sourceCollection;
+  seed.investments.i1.updated_at = '2026-03-16T00:00:00.000Z';
+  seed.project_expenses.e2.updatedAt = '2026-03-16T00:00:00.000Z';
+  return seed;
+}
+
+function resolutionBody(action, overrides = {}) {
+  return {
+    action,
+    investmentId: 'i1',
+    expenseId: 'e2',
+    expenseCollection: 'project_expenses',
+    reason: 'Reviewed duplicate bookkeeping records',
+    ...overrides,
+  };
+}
+
+test('POST resolve requires an admin or superadmin', async (t) => {
+  const server = await createTestServer({ user: { id: 'u1', role: 'user' }, seed: unlinkSeed() });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/resolve', true, {
+    method: 'POST', body: JSON.stringify(resolutionBody('confirm_match')),
+  });
+  assert.equal(response.status, 403);
+  assert.equal(response.body.code, 'ADMIN_REQUIRED');
+});
+
+test('confirm_match writes reciprocal links and one append-only audit row', async (t) => {
+  const server = await createTestServer({ user: { id: 'a1', role: 'admin', username: 'admin' }, seed: unlinkSeed() });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/resolve', true, {
+    method: 'POST', body: JSON.stringify(resolutionBody('confirm_match')),
+  });
+
+  assert.equal(response.status, 200);
+  const store = server.fakeDb.store;
+  assert.equal(store.investments.i1.linkedExpenseId, 'e2');
+  assert.equal(store.investments.i1.linkedExpenseCollection, 'project_expenses');
+  assert.deepEqual(store.project_expenses.e2.fundingSource, {
+    type: 'investor_outofpocket', investor: 'TJ Caballero', linkedInvestmentId: 'i1',
+  });
+  assert.equal(Object.keys(store.finance_trace_audit).length, 1);
+  const audit = Object.values(store.finance_trace_audit)[0];
+  assert.equal(audit.action, 'confirm_match');
+  assert.equal(audit.actor.id, 'a1');
+  assert.equal(audit.before.investment.id, 'i1');
+  assert.equal(audit.before.expense.id, 'e2');
+  assert.equal(audit.after.investment.linkedExpenseId, 'e2');
+  assert.equal(response.body.trace.originKey, 'investment:i1');
+});
+
+test('keep_both_separate clears links and retains both records with corporate funding', async (t) => {
+  const seed = unlinkSeed();
+  seed.investments.i1.linkedExpenseId = 'e2';
+  seed.investments.i1.linkedExpenseCollection = 'project_expenses';
+  seed.project_expenses.e2.fundingSource = {
+    type: 'investor_outofpocket', investor: 'TJ Caballero', linkedInvestmentId: 'i1',
+  };
+  const server = await createTestServer({ user: { id: 'a1', role: 'admin' }, seed });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/resolve', true, {
+    method: 'POST', body: JSON.stringify(resolutionBody('keep_both_separate')),
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(server.fakeDb.store.investments.i1.linkedExpenseId, undefined);
+  assert.deepEqual(server.fakeDb.store.project_expenses.e2.fundingSource, { type: 'corporate_bank' });
+});
+
+test('keep_investment_delete_expense reclassifies the investment and deletes an eligible expense', async (t) => {
+  const server = await createTestServer({ user: { id: 'a1', role: 'superadmin' }, seed: unlinkSeed() });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/resolve', true, {
+    method: 'POST',
+    body: JSON.stringify(resolutionBody('keep_investment_delete_expense', {
+      investmentCategory: 'Capital Contribution',
+    })),
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(server.fakeDb.store.project_expenses.e2, undefined);
+  assert.equal(server.fakeDb.store.investments.i1.category, 'Capital Contribution');
+  assert.equal(server.fakeDb.store.investments.i1.linkedExpenseId, undefined);
+  assert.equal(Object.values(server.fakeDb.store.finance_trace_audit)[0].after.expense.deleted, true);
+});
+
+test('keep_expense_delete_investment deletes the investment and retains a corporate expense', async (t) => {
+  const server = await createTestServer({ user: { id: 'a1', role: 'admin' }, seed: unlinkSeed() });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/resolve', true, {
+    method: 'POST', body: JSON.stringify(resolutionBody('keep_expense_delete_investment')),
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(server.fakeDb.store.investments.i1, undefined);
+  assert.deepEqual(server.fakeDb.store.project_expenses.e2.fundingSource, { type: 'corporate_bank' });
+  assert.equal(Object.values(server.fakeDb.store.finance_trace_audit)[0].after.investment.deleted, true);
+});
+
+test('resolver rejects stale records without writing an audit row', async (t) => {
+  const server = await createTestServer({ user: { id: 'a1', role: 'admin' }, seed: unlinkSeed() });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/resolve', true, {
+    method: 'POST',
+    body: JSON.stringify(resolutionBody('confirm_match', {
+      expectedInvestmentUpdatedAt: 'stale-version',
+    })),
+  });
+  assert.equal(response.status, 409);
+  assert.equal(response.body.code, 'TRACE_STALE');
+  assert.equal(server.fakeDb.store.finance_trace_audit, undefined);
+});
+
+test('resolver protects liquidation-synced expenses and points to the source', async (t) => {
+  const server = await createTestServer({ user: { id: 'a1', role: 'admin' } });
+  t.after(() => server.close());
+  const response = await request(server, '/api/finance-trace/resolve', true, {
+    method: 'POST',
+    body: JSON.stringify(resolutionBody('keep_investment_delete_expense', {
+      expenseId: 'e1',
+    })),
+  });
+  assert.equal(response.status, 422);
+  assert.equal(response.body.code, 'SOURCE_OWNED_EXPENSE');
+  assert.match(response.body.sourceFocusUrl, /liquidation-form\?focus=liquidation%3Al1%3Ar1/);
+  assert.ok(server.fakeDb.store.project_expenses.e1);
+  assert.equal(server.fakeDb.store.finance_trace_audit, undefined);
+});
+
+test('resolver never changes source-owned expenses through any resolution action', async (t) => {
+  for (const action of ['confirm_match', 'keep_both_separate', 'keep_expense_delete_investment']) {
+    const server = await createTestServer({ user: { id: 'a1', role: 'admin' } });
+    t.after(() => server.close());
+    const response = await request(server, '/api/finance-trace/resolve', true, {
+      method: 'POST',
+      body: JSON.stringify(resolutionBody(action, { expenseId: 'e1' })),
+    });
+    assert.equal(response.status, 422, action);
+    assert.equal(response.body.code, 'SOURCE_OWNED_EXPENSE', action);
+    assert.ok(server.fakeDb.store.project_expenses.e1, action);
+    assert.ok(server.fakeDb.store.investments.i1, action);
+    assert.equal(server.fakeDb.store.finance_trace_audit, undefined, action);
+  }
 });
 
 module.exports = { FakeFirestore, request, seedData };
