@@ -19,6 +19,7 @@ interface UseFinanceRowFocusOptions<T> {
   pageSize?: number;
   setPage?: (page: number) => void;
   revealRecord?: (record: T) => void;
+  indexForRecord?: (record: T) => number;
   rowRefs: MutableRefObject<Map<string, HTMLElement>>;
 }
 
@@ -39,6 +40,7 @@ export function useFinanceRowFocus<T>({
   pageSize,
   setPage,
   revealRecord,
+  indexForRecord,
   rowRefs,
 }: UseFinanceRowFocusOptions<T>): FinanceRowFocusResult {
   const location = useLocation();
@@ -60,10 +62,11 @@ export function useFinanceRowFocus<T>({
   useEffect(() => {
     if (!focusedRecord || !focusedKey || handledToken.current === focusedKey) return;
     revealRecord?.(focusedRecord);
-    const index = records.indexOf(focusedRecord);
+    const index = indexForRecord ? indexForRecord(focusedRecord) : records.indexOf(focusedRecord);
     if (setPage && pageSize && pageSize > 0 && index >= 0) {
       setPage(Math.floor(index / pageSize));
     }
+    if (setPage && pageSize && index < 0) return;
     handledToken.current = focusedKey;
     const frame = window.requestAnimationFrame(() => {
       rowRefs.current.get(focusedKey)?.scrollIntoView({
@@ -73,7 +76,7 @@ export function useFinanceRowFocus<T>({
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [focusedKey, focusedRecord, pageSize, records, revealRecord, rowRefs, setPage]);
+  }, [focusedKey, focusedRecord, indexForRecord, pageSize, records, revealRecord, rowRefs, setPage]);
 
   useEffect(() => {
     if (handledToken.current && handledToken.current !== focusedKey) {

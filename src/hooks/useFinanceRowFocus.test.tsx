@@ -15,12 +15,14 @@ function Harness({
   setPage,
   rowElement,
   loading = false,
+  indexForRecord,
 }: {
   records: Row[];
   revealRecord: (row: Row) => void;
   setPage: (page: number) => void;
   rowElement: HTMLElement;
   loading?: boolean;
+  indexForRecord?: (row: Row) => number;
 }) {
   const rowRefs = useRef(new Map<string, HTMLElement>());
   rowRefs.current.set('expense:project_expenses:e22', rowElement);
@@ -33,6 +35,7 @@ function Harness({
     pageSize: 10,
     setPage,
     revealRecord,
+    indexForRecord,
     rowRefs,
   });
   const location = useLocation();
@@ -138,4 +141,24 @@ test('reports malformed and missing focused records without navigating away', as
     </MemoryRouter>,
   );
   expect(screen.getByTestId('error')).toHaveTextContent('Finance record not found');
+});
+
+test('uses the page index from a page-specific filtered view', async () => {
+  const records = Array.from({ length: 25 }, (_, index) => ({ id: `e${index + 1}` }));
+  const setPage = jest.fn();
+  const rowElement = document.createElement('tr');
+  rowElement.scrollIntoView = jest.fn();
+  render(
+    <MemoryRouter initialEntries={['/?focus=expense%3Aproject_expenses%3Ae22']}>
+      <Harness
+        records={records}
+        revealRecord={jest.fn()}
+        setPage={setPage}
+        rowElement={rowElement}
+        indexForRecord={() => 7}
+      />
+    </MemoryRouter>,
+  );
+  expect(setPage).toHaveBeenCalledWith(0);
+  expect(setPage).not.toHaveBeenCalledWith(2);
 });

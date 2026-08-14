@@ -38,6 +38,7 @@ import {
   ToggleButton,
   Link,
   Tooltip as MuiTooltip,
+  Stack,
 } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import {
@@ -78,6 +79,10 @@ import ScanBatch from './ScanBatch';
 import ScanWithPhoneButton from './ScanWithPhoneButton';
 import { useAuth } from '../contexts/AuthContext';
 import { getDriveItemThumbnailUrl, fetchDriveItemBlob, deleteDriveItem, replaceDriveItemContent } from '../services/onedriveFolderService';
+import MoneyTrailButton from './finance/MoneyTrailButton';
+import { useFinanceRowFocus } from '../hooks/useFinanceRowFocus';
+import { financeFocusToken, financeFocusUrl } from '../utils/financeTraceFocus';
+import { expenseOrigin, linkedOriginsForExpense } from '../utils/expenseFinanceTrace';
 
 const EXPENSES_KEY = 'projectExpenses';
 
@@ -246,6 +251,7 @@ const ExpenseMonitoring: React.FC = () => {
   // Guards against a cancelled/retaken scan's in-flight duplicate check repopulating
   // state after a newer scan has already started (or been cleared).
   const scanGenRef = useRef(0);
+  const financeRowRefs = useRef(new Map<string, HTMLElement>());
 
   // Receipt crop step (mirrors ScanPage.tsx) before the AI parse.
   const [editUrl, setEditUrl] = useState<string | null>(null);
@@ -475,6 +481,33 @@ const ExpenseMonitoring: React.FC = () => {
   useEffect(() => {
     setPage(0);
   }, [selectedYear, selectedMonth, selectedQuarter, selectedProjectId, sortKey, sortDir]);
+
+  const revealFocusedExpense = useCallback((expense: ProjectExpense) => {
+    const year = Number(String(expense.date || '').slice(0, 4));
+    setSelectedYear(Number.isFinite(year) ? year : 0);
+    setSelectedMonth(0);
+    setSelectedQuarter(0);
+    setSelectedProjectId(
+      expense.scope === 'overhead'
+        ? OVERHEAD_SENTINEL
+        : String(expense.projectId || ALL_PROJECTS_SENTINEL),
+    );
+  }, []);
+
+  const focusedExpenseIndex = useCallback((expense: ProjectExpense) => (
+    tableRows.findIndex((row) => row.id === expense.id && row.scope === expense.scope)
+  ), [tableRows]);
+
+  const financeFocus = useFinanceRowFocus({
+    records: expenses,
+    originForRecord: expenseOrigin,
+    loading: expensesLoading,
+    pageSize: rowsPerPage,
+    setPage,
+    revealRecord: revealFocusedExpense,
+    indexForRecord: focusedExpenseIndex,
+    rowRefs: financeRowRefs,
+  });
 
   const handleSort = (key: typeof sortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -1356,6 +1389,21 @@ const ExpenseMonitoring: React.FC = () => {
         PO totals are read from browser storage.
       </Typography>
 
+      {(financeFocus.focusedKey || financeFocus.focusError) && (
+        <Alert
+          severity={financeFocus.focusError ? 'warning' : 'info'}
+          sx={{ mb: 2 }}
+          action={(
+            <Stack direction="row" spacing={0.5}>
+              {financeFocus.hasBackSource && <Button color="inherit" size="small" onClick={financeFocus.backToSource}>Back to source</Button>}
+              <Button color="inherit" size="small" onClick={financeFocus.clearFocus}>Clear focus</Button>
+            </Stack>
+          )}
+        >
+          {financeFocus.focusError || 'Filters and pagination were adjusted to show the exact expense.'}
+        </Alert>
+      )}
+
       {syncMessage && (
         <Box
           sx={{
@@ -1737,8 +1785,25 @@ const ExpenseMonitoring: React.FC = () => {
                       const project = expense.scope === 'project' ? allProjects.find((p) => String(p.id) === String(expense.projectId)) : undefined;
                       const projectNo = project?.project_no || String(project?.item_no ?? project?.id ?? '');
                       const poNumber = project?.po_number ?? '—';
+                      const origin = expenseOrigin(expense);
+                      const rowToken = financeFocusToken(origin);
+                      const linkedOrigins = linkedOriginsForExpense(expense);
+                      const focused = financeFocus.isFocused(origin);
                       return (
-                    <TableRow key={`${expense.scope}-${expense.id}`}>
+                    <TableRow
+                      key={`${expense.scope}-${expense.id}`}
+                      ref={(element: HTMLTableRowElement | null) => {
+                        if (element) financeRowRefs.current.set(rowToken, element);
+                        else financeRowRefs.current.delete(rowToken);
+                      }}
+                      aria-current={focused ? 'true' : undefined}
+                      sx={focused ? {
+                        bgcolor: 'rgba(44,90,160,0.14)',
+                        outline: '2px solid',
+                        outlineColor: 'primary.main',
+                        outlineOffset: '-2px',
+                      } : undefined}
+                    >
                       <TableCell>{expense.date}</TableCell>
                       <TableCell>
                         {expense.scope === 'overhead'
@@ -1799,11 +1864,25 @@ const ExpenseMonitoring: React.FC = () => {
                                 color="info"
                                 icon={<InvestorLinkIcon fontSize="small" />}
                                 label={expense.fundingSource.investor}
-                                onClick={() => navigate('/finance/investment-tracker')}
+                                onClick={() => {
+                                  const investmentOrigin = linkedOrigins.find((linked) => linked.type === 'investment');
+                                  if (investmentOrigin) navigate(financeFocusUrl(investmentOrigin, `${location.pathname}${location.search}`));
+                                }}
                                 sx={{ cursor: 'pointer' }}
                               />
                             </MuiTooltip>
                           )}
+                          {linkedOrigins.filter((linked) => linked.type !== 'investment').map((linked) => (
+                            <Chip
+                              key={financeFocusToken(linked)}
+                              size="small"
+                              variant="outlined"
+                              color={linked.type === 'liquidation' ? 'warning' : 'primary'}
+                              label={linked.type === 'liquidation' ? 'Open liquidation' : 'Open cash advance'}
+                              onClick={() => navigate(financeFocusUrl(linked, `${location.pathname}${location.search}`))}
+                              sx={{ cursor: 'pointer' }}
+                            />
+                          ))}
                         </Box>
                       </TableCell>
                       <TableCell padding="none" align="center" sx={{ whiteSpace: 'nowrap' }}>
@@ -1842,6 +1921,7 @@ const ExpenseMonitoring: React.FC = () => {
                             <DeleteIcon fontSize="small" />
                           </IconButton>
                         </Box>
+                        <MoneyTrailButton origin={origin} compact onResolved={() => { void fetchExpenses(); }} />
                       </TableCell>
                     </TableRow>
                   ); })
