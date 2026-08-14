@@ -1,17 +1,22 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Box, Grid, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, MenuItem, Alert, Chip, CircularProgress,
   Card, CardContent, Tooltip, Link, List, ListItemButton, ListItemText,
   Checkbox, FormControlLabel, InputAdornment,
+  Stack,
 } from '@mui/material';
 import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, ReceiptLong as ReceiptLongIcon, PostAdd as PostAddIcon, Link as LinkIcon, Search as SearchIcon } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { INVESTORS, PROJECT_EXPENSE_CATEGORIES, OVERHEAD_CATEGORIES } from '../data/financeCategories';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
+import MoneyTrailButton from './finance/MoneyTrailButton';
+import { useFinanceRowFocus } from '../hooks/useFinanceRowFocus';
+import { financeFocusToken, financeFocusUrl } from '../utils/financeTraceFocus';
+import { linkedOriginForInvestment } from '../utils/investmentFinanceTrace';
 
 const API_BASE = '/api';
 
@@ -107,22 +112,10 @@ function formatPHP(n: number) {
   return '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
-function expenseLinkTarget(inv: Investment): string | null {
-  const collection = inv.sourceCollection || inv.linkedExpenseCollection;
-  const projectId = inv.sourceExpenseProjectId ?? inv.linkedExpenseProjectId;
-  if (!collection) return null;
-  if (collection === 'project_expenses') {
-    return projectId ? `/finance/projects/${projectId}/expenses` : '/finance/expense-monitoring';
-  }
-  if (collection === 'cash_advances') {
-    return '/finance/expense-monitoring/ca-form';
-  }
-  return '/finance/overhead-expenses';
-}
-
 const InvestmentTrackerPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const token = localStorage.getItem('netpacific_token') || '';
 
   const [investments, setInvestments] = useState<Investment[]>([]);
@@ -169,6 +162,7 @@ const InvestmentTrackerPage: React.FC = () => {
   // Guards against a slower openLink(A) response repopulating candidates after openLink(B)
   // (or dialog close) has already superseded it.
   const linkGenRef = useRef(0);
+  const financeRowRefs = useRef(new Map<string, HTMLElement>());
 
   const authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
 
@@ -214,6 +208,13 @@ const InvestmentTrackerPage: React.FC = () => {
   const rows = investments.map((inv, idx) => {
     const runningTotal = investments.slice(0, idx + 1).reduce((s, i) => s + i.amount, 0);
     return { ...inv, runningTotal, balanceVsTarget: target - runningTotal };
+  });
+
+  const financeFocus = useFinanceRowFocus({
+    records: investments,
+    originForRecord: (investment) => ({ type: 'investment', id: investment.id }),
+    loading,
+    rowRefs: financeRowRefs,
   });
 
   const totalInvested = investments.reduce((s, i) => s + i.amount, 0);
@@ -447,6 +448,21 @@ const InvestmentTrackerPage: React.FC = () => {
 
       {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
 
+      {(financeFocus.focusedKey || financeFocus.focusError) && (
+        <Alert
+          severity={financeFocus.focusError ? 'warning' : 'info'}
+          sx={{ mb: 1.5 }}
+          action={(
+            <Stack direction="row" spacing={0.5}>
+              {financeFocus.hasBackSource && <Button color="inherit" size="small" onClick={financeFocus.backToSource}>Back to source</Button>}
+              <Button color="inherit" size="small" onClick={financeFocus.clearFocus}>Clear focus</Button>
+            </Stack>
+          )}
+        >
+          {financeFocus.focusError || 'Showing the exact investment from the money trail.'}
+        </Alert>
+      )}
+
       {actualSpending && (
         <Paper
           variant="outlined"
@@ -558,8 +574,25 @@ const InvestmentTrackerPage: React.FC = () => {
                   </TableCell>
                 </TableRow>
               )}
-              {rows.map(row => (
-                <TableRow key={row.id} hover sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
+              {rows.map(row => {
+                const origin = { type: 'investment' as const, id: row.id };
+                const rowToken = financeFocusToken(origin);
+                const linkedOrigin = linkedOriginForInvestment(row);
+                const focused = financeFocus.isFocused(origin);
+                return (
+                <TableRow
+                  key={row.id}
+                  ref={(element: HTMLTableRowElement | null) => {
+                    if (element) financeRowRefs.current.set(rowToken, element);
+                    else financeRowRefs.current.delete(rowToken);
+                  }}
+                  hover
+                  aria-current={focused ? 'true' : undefined}
+                  sx={{
+                    '&:nth-of-type(odd)': { backgroundColor: focused ? 'rgba(44,90,160,0.14)' : 'rgba(0,0,0,0.02)' },
+                    ...(focused ? { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px' } : {}),
+                  }}
+                >
                   <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
                     {row.date ? new Date(row.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
                   </TableCell>
@@ -575,13 +608,13 @@ const InvestmentTrackerPage: React.FC = () => {
                     />
                   </TableCell>
                   <TableCell sx={{ fontSize: '0.8rem', fontStyle: 'italic', color: 'text.secondary' }}>
-                    {expenseLinkTarget(row) ? (
+                    {linkedOrigin ? (
                       <Tooltip title={(row.sourceCollection || row.linkedExpenseCollection) === 'cash_advances' ? 'View linked cash advance' : 'View linked expense'}>
                         <Link
                           component="button"
                           type="button"
                           underline="hover"
-                          onClick={() => navigate(expenseLinkTarget(row) as string)}
+                          onClick={() => navigate(financeFocusUrl(linkedOrigin, `${location.pathname}${location.search}`))}
                           sx={{ fontSize: 'inherit', fontStyle: 'inherit', textAlign: 'left', display: 'inline-flex', alignItems: 'center', gap: 0.5 }}
                         >
                           <ReceiptLongIcon sx={{ fontSize: '0.9rem' }} />
@@ -595,14 +628,14 @@ const InvestmentTrackerPage: React.FC = () => {
                     {row.balanceVsTarget.toLocaleString()}
                   </TableCell>
                   <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                    {!expenseLinkTarget(row) && (
+                    {!linkedOrigin && (
                       <Tooltip title="Register as Expense">
                         <IconButton size="small" color="primary" onClick={() => openRegister(row)} sx={{ mr: 0.5 }}>
                           <PostAddIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
                     )}
-                    {!expenseLinkTarget(row) && (
+                    {!linkedOrigin && (
                       <Tooltip title="Link to Existing Expense">
                         <IconButton size="small" color="primary" onClick={() => openLink(row)} sx={{ mr: 0.5 }}>
                           <LinkIcon fontSize="small" />
@@ -615,9 +648,10 @@ const InvestmentTrackerPage: React.FC = () => {
                     <IconButton size="small" color="error" onClick={() => openDelete(row)}>
                       <DeleteIcon fontSize="small" />
                     </IconButton>
+                    <MoneyTrailButton origin={origin} compact onResolved={() => { void load(); }} />
                   </TableCell>
                 </TableRow>
-              ))}
+              );})}
               {rows.length > 0 && (
                 <TableRow sx={{ backgroundColor: NET_PACIFIC_COLORS.primary }}>
                   <TableCell colSpan={2} sx={{ color: 'white', fontWeight: 700, fontSize: '0.8rem' }}>TOTAL INVESTED TO DATE</TableCell>
