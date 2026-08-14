@@ -4,9 +4,9 @@
 
 Hands-free P1 added a real `/projects/:id` route that loads `ProjectMonitoringApp`. Opportunity and quotation citation routes were already real. Collections/progress still use the `sessionStorage.selectedProjectId` bridge onto `/dashboard` as a fallback.
 
-## AI Assist text chat and Live voice are different Gemini sessions
+## AI Assist text chat and Live voice are still two Gemini sessions after Live ends
 
-The drawer can show both channels as bubbles (Live transcription upserts into the same in-memory `messages[]`). Typed `POST /api/ai-assist/chat` still creates a **new** Flash-Lite chat every request and packs history as a “Prior conversation” string. Live tool results do not transfer. `send()` calls `stopVoice()`. The model may answer “this is a new conversation session” even when Rezcoat turns are on screen. There is also no `list_quotations_for_opportunity` tool, so “how many quotations are inside this opportunity” cannot be grounded.
+While Live is on, typed lines go into the Live session (`sendClientContent`, turn complete) and do not call `stopVoice()`. After the mic is stopped, typed `POST /api/ai-assist/chat` is still a new Flash-Lite chat. It now packs conversation text plus a capped `priorToolResults` list from this in-memory session. History is still not persisted across reload or logout.
 
 ## Continuity / iPhone-as-mic drops if the Live session stops the MediaStream
 

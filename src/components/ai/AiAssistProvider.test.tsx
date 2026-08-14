@@ -59,10 +59,7 @@ it('starts closed — the drawer must never auto-open on mount, only via the lau
   expect(screen.getByTestId('open').textContent).toBe('false');
 });
 
-it('stops an active voice session when the user sends a typed message', async () => {
-  sendAiChatMock.mockResolvedValue({
-    ok: true, requestId: 'r1', answer: 'ok', citations: [], followUps: [], notice: 'n',
-  });
+function mockLiveSession(session: Record<string, unknown> = {}) {
   (liveSession.getUserMedia as jest.Mock).mockResolvedValue({ getTracks: () => [] });
   (liveSession.createCaptureContext as jest.Mock).mockReturnValue({
     sampleRate: 48000,
@@ -75,11 +72,19 @@ it('stops an active voice session when the user sends a typed message', async ()
     close: async () => {},
   });
   const close = jest.fn();
+  const sendClientContent = jest.fn();
   (liveSession.connectSession as jest.Mock).mockResolvedValue({
     sendRealtimeInputPcm: () => {},
     sendToolResponse: () => {},
+    sendClientContent,
     close,
+    ...session,
   });
+  return { close, sendClientContent };
+}
+
+it('keeps Live alive and sends a typed line into the live session', async () => {
+  const { close, sendClientContent } = mockLiveSession();
 
   function TypedSend(): React.ReactElement {
     const ai = useAiAssist();
@@ -99,8 +104,57 @@ it('stops an active voice session when the user sends a typed message', async ()
   fireEvent.click(screen.getByText('start-voice'));
   await waitFor(() => expect(liveSession.connectSession).toHaveBeenCalled());
   fireEvent.click(screen.getByText('typed-send'));
-  await waitFor(() => expect(close).toHaveBeenCalled());
+  await waitFor(() => expect(sendClientContent).toHaveBeenCalledWith({
+    turns: [{ role: 'user', parts: [{ text: 'i mean rezcoat' }] }],
+    turnComplete: true,
+  }));
+  expect(close).not.toHaveBeenCalled();
+  expect(sendAiChatMock).not.toHaveBeenCalled();
+});
+
+it('packs Live tool results into the next typed chat after Live ends', async () => {
+  mockLiveSession();
+  let handlers: { onToolCall: (call: { name: string; args: Record<string, unknown>; id: string }) => Promise<void> } | undefined;
+  (liveSession.connectSession as jest.Mock).mockImplementation(async (nextHandlers) => {
+    handlers = nextHandlers;
+    return { sendRealtimeInputPcm: () => {}, sendToolResponse: () => {}, sendClientContent: () => {}, close: () => {} };
+  });
+  (liveSession.executeLiveToolCall as jest.Mock).mockResolvedValue({
+    result: { action: 'navigate', route: '/sales/calcsheet/projects/opp1', label: 'Rezcoat' },
+    sources: [],
+  });
+  sendAiChatMock.mockResolvedValue({
+    ok: true, requestId: 'r1', answer: 'Two quotations.', citations: [], followUps: [], notice: 'n',
+  });
+
+  function TypedSend(): React.ReactElement {
+    const ai = useAiAssist();
+    return (
+      <div>
+        <button onClick={() => { void ai.startVoice(); }}>start-voice</button>
+        <button onClick={() => { ai.stopVoice(); }}>stop-voice</button>
+        <button onClick={() => { void ai.send('how many quotations?', null); }}>typed-send</button>
+      </div>
+    );
+  }
+
+  render(
+    <AiAssistProvider enabled>
+      <TypedSend />
+    </AiAssistProvider>,
+  );
+  fireEvent.click(screen.getByText('start-voice'));
+  await waitFor(() => expect(handlers).toBeDefined());
+  await act(async () => {
+    await handlers!.onToolCall({ name: 'navigate_to_record', args: { search: 'rezcoat' }, id: 'c1' });
+  });
+  fireEvent.click(screen.getByText('stop-voice'));
+  fireEvent.click(screen.getByText('typed-send'));
   await waitFor(() => expect(sendAiChatMock).toHaveBeenCalled());
+  const prior = sendAiChatMock.mock.calls[0][3];
+  expect(prior).toEqual([
+    { name: 'navigate_to_record', data: { action: 'navigate', route: '/sales/calcsheet/projects/opp1', label: 'Rezcoat' } },
+  ]);
 });
 
 it('sends a message and appends the assistant answer with citations', async () => {

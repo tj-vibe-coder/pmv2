@@ -26,4 +26,5 @@ it('mounts the launcher once and shows Now viewing for the current route', () =>
   expect(screen.getByText('page body')).toBeInTheDocument();
   fireEvent.click(screen.getByLabelText(/open ioct assist/i));
   expect(screen.getByText(/now viewing opportunity opp1/i)).toBeInTheDocument();
+  expect(screen.getByText('page body').parentElement).toHaveStyle({ paddingRight: '420px' });
 });

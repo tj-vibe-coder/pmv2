@@ -5,9 +5,9 @@ const { createToolRegistry } = require('./tools');
 test('registry exposes exactly the approved read-only tools', () => {
   const registry = createToolRegistry({ db: {} });
   assert.deepEqual([...registry.keys()].sort(), [
-    'get_expense_summary', 'get_portfolio_summary', 'get_project_snapshot',
-    'get_quotation_summary', 'list_quotations_for_opportunity', 'navigate_to_record',
-    'search_projects', 'search_sales_opportunities'
+    'get_expense_summary', 'get_opportunity_snapshot', 'get_portfolio_summary',
+    'get_project_snapshot', 'get_quotation_summary', 'list_quotations_for_opportunity',
+    'navigate_to_record', 'search_clients', 'search_projects', 'search_sales_opportunities'
   ]);
 });
 
@@ -181,4 +181,86 @@ test('list_quotations_for_opportunity returns only that opportunity\'s quotes wi
   assert.equal(result.data[0].id, 'q1');
   assert.ok(!('components' in result.data[0]));
   assert.equal(result.sources[0].route, '/sales/calcsheet/quotations/q1');
+});
+
+test('get_opportunity_snapshot returns allowlisted fields and company identity only', async () => {
+  const registry = createToolRegistry({
+    db: namedCollections({
+      calcsheet_projects: {
+        doc: (id) => ({
+          get: async () => ({
+            exists: true,
+            id,
+            data: () => ({
+              name: 'Rez-Coat Line', code: 'PCS2601', status: 'sent', customerId: 'c1',
+              notes: 'internal', password_hash: 'secret',
+            }),
+          }),
+        }),
+      },
+      clients: {
+        doc: (id) => ({
+          get: async () => ({
+            exists: true,
+            id,
+            data: () => ({
+              name: 'Rezcoat Inc', code: 'RZC',
+              contacts: [{ name: 'Jane Doe', email: 'jane@example.com', phone: '0917' }],
+              address: 'secret street',
+            }),
+          }),
+        }),
+      },
+    }),
+    now: () => new Date('2026-08-13T00:00:00.000Z'),
+  });
+  const result = await registry.get('get_opportunity_snapshot').execute({ opportunityId: 'opp1' });
+  assert.equal(result.data.name, 'Rez-Coat Line');
+  assert.deepEqual(result.data.customer, { id: 'c1', name: 'Rezcoat Inc', code: 'RZC' });
+  assert.ok(!('contacts' in result.data.customer));
+  assert.ok(!('password_hash' in result.data));
+  assert.ok(!('notes' in result.data));
+  assert.equal(result.sources[0].route, '/sales/calcsheet/projects/opp1');
+});
+
+test('get_opportunity_snapshot returns null when the opportunity is missing', async () => {
+  const registry = createToolRegistry({
+    db: namedCollections({
+      calcsheet_projects: {
+        doc: () => ({ get: async () => ({ exists: false }) }),
+      },
+    }),
+  });
+  const result = await registry.get('get_opportunity_snapshot').execute({ opportunityId: 'missing' });
+  assert.equal(result.data, null);
+  assert.deepEqual(result.sources, []);
+});
+
+test('search_clients matches name or code and never returns contacts', async () => {
+  const registry = createToolRegistry({
+    db: namedCollections({
+      clients: {
+        get: async () => ({
+          docs: [
+            {
+              id: 'c1',
+              data: () => ({
+                name: 'Rez-Coat Industries', code: 'RZC',
+                contacts: [{ email: 'a@b.com', phone: '123' }],
+                address: 'hidden',
+              }),
+            },
+            { id: 'c2', data: () => ({ name: 'Other Co', code: 'OTH' }) },
+          ],
+        }),
+      },
+    }),
+    now: () => new Date('2026-08-13T00:00:00.000Z'),
+  });
+  const result = await registry.get('search_clients').execute({ search: 'rezcoat' });
+  assert.equal(result.data.length, 1);
+  assert.deepEqual(result.data[0], { id: 'c1', name: 'Rez-Coat Industries', code: 'RZC' });
+  assert.ok(!('contacts' in result.data[0]));
+  assert.ok(!('address' in result.data[0]));
+  assert.equal(result.sources[0].route, '/sales/clients');
 });

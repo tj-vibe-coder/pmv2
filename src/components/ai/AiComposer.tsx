@@ -23,7 +23,7 @@ export default function AiComposer({ onSend, disabled, liveMode = false }: AiCom
         multiline
         minRows={2}
         disabled={disabled}
-        label={liveMode ? 'Live mode — speak, or click the mic to finish' : 'Ask IOCT Assist'}
+        label={liveMode ? 'Speak or type — Live stays on' : 'Ask IOCT Assist'}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {

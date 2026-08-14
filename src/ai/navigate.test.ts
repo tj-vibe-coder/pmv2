@@ -6,6 +6,8 @@ it('allows record and list routes used by Assist citations', () => {
   expect(resolveAiNavigatePath('/sales/calcsheet/quotations/q1')).toBe('/sales/calcsheet/quotations/q1');
   expect(resolveAiNavigatePath('/finance/projects/p1/expenses')).toBe('/finance/projects/p1/expenses');
   expect(resolveAiNavigatePath('/dashboard')).toBe('/dashboard');
+  expect(resolveAiNavigatePath('/sales/clients')).toBe('/sales/clients');
+  expect(resolveAiNavigatePath('/clients')).toBe('/sales/clients');
 });
 
 it('maps the legacy /projects list citation to /dashboard', () => {

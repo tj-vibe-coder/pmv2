@@ -42,6 +42,11 @@ export interface AiPageContext {
   quotationId: string | null;
 }
 
+export interface AiPriorToolResult {
+  name: string;
+  data: unknown;
+}
+
 export interface AiLiveTokenResponse {
   ok: true;
   token: string;

@@ -113,6 +113,7 @@ export function createLiveClient(deps: LiveClientDeps) {
   let userTranscript = '';
   let assistantTranscript = '';
   let lastMicLevelAt = 0;
+  let pendingUserTexts: string[] = [];
 
   function setPhase(next: LivePhase) {
     phase = next;
@@ -236,6 +237,7 @@ export function createLiveClient(deps: LiveClientDeps) {
     }
     session = newSession;
     nextPlayTime = playbackContext.currentTime;
+    flushPendingUserTexts();
 
     node.onFrame = (frame) => {
       if (myOperation !== operationId || !session) return;
@@ -324,6 +326,7 @@ export function createLiveClient(deps: LiveClientDeps) {
     if (assistantTranscript) emitTranscript('assistant', assistantTranscript, true);
     resetTranscripts();
     emitMicLevel(0, true);
+    pendingUserTexts = [];
     setPhase(nextPhase);
   }
 
@@ -331,13 +334,34 @@ export function createLiveClient(deps: LiveClientDeps) {
     return phase;
   }
 
-  function sendPageContext(text: string): void {
-    if (!session || !text) return;
-    session.sendClientContent?.({
+  function sendClientTurn(text: string, turnComplete: boolean): void {
+    session?.sendClientContent?.({
       turns: [{ role: 'user', parts: [{ text }] }],
-      turnComplete: false,
+      turnComplete,
     });
   }
 
-  return { start, stop, getPhase, sendPageContext };
+  function flushPendingUserTexts(): void {
+    if (!session || pendingUserTexts.length === 0) return;
+    const queued = pendingUserTexts;
+    pendingUserTexts = [];
+    for (const text of queued) sendClientTurn(text, true);
+  }
+
+  function sendPageContext(text: string): void {
+    if (!session || !text) return;
+    sendClientTurn(text, false);
+  }
+
+  function sendUserText(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (!session) {
+      pendingUserTexts.push(trimmed);
+      return;
+    }
+    sendClientTurn(trimmed, true);
+  }
+
+  return { start, stop, getPhase, sendPageContext, sendUserText };
 }

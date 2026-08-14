@@ -6,6 +6,18 @@ test('rejects oversized and extra chat fields', () => {
   assert.throws(() => validateChatRequest({ messages: [{ role: 'user', text: 'x'.repeat(4001) }], extra: true }));
 });
 
+test('accepts priorToolResults and rejects extra keys or a raw route', () => {
+  const result = validateChatRequest({
+    messages: [{ role: 'user', text: 'how many quotations?' }],
+    priorToolResults: [{ name: 'navigate_to_record', data: { action: 'navigate', id: 'opp1' } }],
+  });
+  assert.equal(result.priorToolResults[0].name, 'navigate_to_record');
+  assert.throws(() => validateChatRequest({
+    messages: [{ role: 'user', text: 'x' }],
+    priorToolResults: [{ name: 'navigate_to_record', data: {}, route: '/settings' }],
+  }));
+});
+
 test('accepts a well-formed chat request', () => {
   const result = validateChatRequest({ messages: [{ role: 'user', text: 'hello' }], pageContext: { route: '/projects', projectId: null } });
   assert.equal(result.messages[0].text, 'hello');
@@ -30,6 +42,14 @@ test('accepts navigate_to_record and list_quotations_for_opportunity inputs', ()
   assert.equal(nav.kind, 'opportunity');
   const list = validateToolInput('list_quotations_for_opportunity', { opportunityId: 'opp1' });
   assert.equal(list.opportunityId, 'opp1');
+});
+
+test('accepts get_opportunity_snapshot and search_clients and rejects extra client fields', () => {
+  const snap = validateToolInput('get_opportunity_snapshot', { opportunityId: 'opp1' });
+  assert.equal(snap.opportunityId, 'opp1');
+  const clients = validateToolInput('search_clients', { search: 'rezcoat' });
+  assert.equal(clients.search, 'rezcoat');
+  assert.throws(() => validateToolInput('search_clients', { search: 'x', includeContacts: true }));
 });
 
 test('rejects too many messages and oversized total', () => {

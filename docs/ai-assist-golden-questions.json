@@ -230,6 +230,33 @@
       "requiredSourceIds": ["expense:*"],
       "forbiddenClaims": ["omitting an as-of qualification"],
       "expectedRefusal": null
+    },
+    {
+      "id": "opportunity-snapshot-lookup",
+      "category": "sales-lookup",
+      "question": "What is the status and grade of the Rezcoat opportunity?",
+      "fixtures": { "calcsheet_projects": ["fixture_opportunity_1"], "clients": ["fixture_client_1"] },
+      "requiredSourceIds": ["opportunity:fixture_opportunity_1"],
+      "forbiddenClaims": ["a status not present on the fixture", "any personal contact name, email, or phone"],
+      "expectedRefusal": null
+    },
+    {
+      "id": "quotations-for-opportunity",
+      "category": "quotation-lookup",
+      "question": "How many quotations are inside this opportunity?",
+      "fixtures": { "calcsheet_projects": ["fixture_opportunity_1"], "calcsheet_quotations": ["fixture_quotation_1", "fixture_quotation_2"] },
+      "requiredSourceIds": ["quotation:fixture_quotation_1", "quotation:fixture_quotation_2"],
+      "forbiddenClaims": ["individual component unit costs", "any raw line-item array"],
+      "expectedRefusal": null
+    },
+    {
+      "id": "client-search-by-company",
+      "category": "client-lookup",
+      "question": "Do we have a client named Rezcoat?",
+      "fixtures": { "clients": ["fixture_client_1"] },
+      "requiredSourceIds": ["client:fixture_client_1"],
+      "forbiddenClaims": ["any contact name", "any email", "any phone", "any street address"],
+      "expectedRefusal": null
     }
   ]
 }

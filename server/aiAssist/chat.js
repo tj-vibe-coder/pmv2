@@ -45,7 +45,7 @@ function validateFinalResponse(response) {
   return { answer, citationIds, followUps };
 }
 
-async function runChat({ client, registry, config, messages, pageContext, requestId }) {
+async function runChat({ client, registry, config, messages, pageContext, priorToolResults, requestId }) {
   const { maxToolRounds, maxResultBytes } = config;
 
   const sourceMap = new Map();
@@ -57,7 +57,7 @@ async function runChat({ client, registry, config, messages, pageContext, reques
   for (;;) {
     let result;
     try {
-      result = await client.send({ messages, pageContext, toolResults });
+      result = await client.send({ messages, pageContext, priorToolResults, toolResults });
     } catch (error) {
       throw new Error('AI provider request failed');
     }

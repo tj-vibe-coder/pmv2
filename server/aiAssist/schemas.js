@@ -46,18 +46,27 @@ const TOOL_ARG_SHAPES = {
   list_quotations_for_opportunity: {
     opportunityId: { type: 'string', required: true },
   },
+  get_opportunity_snapshot: {
+    opportunityId: { type: 'string', required: true },
+  },
+  search_clients: {
+    search: { type: 'string', required: true },
+  },
 };
 
 const MAX_MESSAGES = 12;
 const MAX_MESSAGE_CHARS = 4000;
 const MAX_CONVERSATION_CHARS = 16000;
+const MAX_PRIOR_TOOLS = 8;
+const MAX_PRIOR_TOOL_NAME = 80;
+const MAX_PRIOR_TOOL_JSON = 12000;
 
 function validateChatRequest(body) {
   if (!isPlainObject(body)) {
     throw new Error('Chat request body must be a plain object');
   }
 
-  const allowedTopKeys = new Set(['messages', 'pageContext']);
+  const allowedTopKeys = new Set(['messages', 'pageContext', 'priorToolResults']);
   for (const key of Object.keys(body)) {
     if (!allowedTopKeys.has(key)) {
       throw new Error(`Unexpected top-level field "${key}" in chat request`);
@@ -122,7 +131,41 @@ function validateChatRequest(body) {
     };
   }
 
-  return { messages, pageContext };
+  let priorToolResults = [];
+  if (body.priorToolResults !== undefined) {
+    if (!Array.isArray(body.priorToolResults) || body.priorToolResults.length > MAX_PRIOR_TOOLS) {
+      throw new Error(`"priorToolResults" must be an array of at most ${MAX_PRIOR_TOOLS} items`);
+    }
+    let totalJson = 0;
+    priorToolResults = body.priorToolResults.map((item, index) => {
+      if (!isPlainObject(item)) {
+        throw new Error(`priorToolResults[${index}] must be a plain object`);
+      }
+      const keys = Object.keys(item);
+      if (keys.length !== 2 || !('name' in item) || !('data' in item)) {
+        throw new Error(`priorToolResults[${index}] must contain exactly "name" and "data"`);
+      }
+      if (typeof item.name !== 'string' || item.name.length < 1 || item.name.length > MAX_PRIOR_TOOL_NAME) {
+        throw new Error(`priorToolResults[${index}].name must be a string of 1-${MAX_PRIOR_TOOL_NAME} characters`);
+      }
+      if (!isPlainObject(item.data) && !Array.isArray(item.data)) {
+        throw new Error(`priorToolResults[${index}].data must be a plain object or array`);
+      }
+      let serialized;
+      try {
+        serialized = JSON.stringify(item.data);
+      } catch {
+        throw new Error(`priorToolResults[${index}].data must be JSON-serializable`);
+      }
+      totalJson += serialized.length;
+      if (totalJson > MAX_PRIOR_TOOL_JSON) {
+        throw new Error(`priorToolResults JSON exceeds ${MAX_PRIOR_TOOL_JSON} characters`);
+      }
+      return { name: item.name, data: item.data };
+    });
+  }
+
+  return { messages, pageContext, priorToolResults };
 }
 
 function validateToolInput(toolName, args) {

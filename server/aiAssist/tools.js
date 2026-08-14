@@ -5,12 +5,14 @@ const {
   opportunityProjection,
   quotationProjection,
   expenseProjection,
+  clientProjection,
 } = require('./access');
 
 const PROJECT_COLLECTION = 'projects';
 const OPPORTUNITY_COLLECTION = 'calcsheet_projects';
 const QUOTATION_COLLECTION = 'calcsheet_quotations';
 const EXPENSE_COLLECTION = 'project_expenses';
+const CLIENT_COLLECTION = 'clients';
 
 const MAX_LIST_RESULTS = 10;
 const MAX_GROUPED_ROWS = 20;
@@ -18,6 +20,7 @@ const MAX_GROUPED_ROWS = 20;
 const PROJECT_ROUTE_PREFIX = '/projects/';
 const OPPORTUNITY_ROUTE_PREFIX = '/sales/calcsheet/projects/';
 const QUOTATION_ROUTE_PREFIX = '/sales/calcsheet/quotations/';
+const CLIENT_ROUTE = '/sales/clients';
 
 function round2(value) {
   return Math.round(value * 100) / 100;
@@ -147,6 +150,28 @@ const TOOL_DECLARATIONS = {
         opportunityId: { type: 'string', description: 'The calcsheet opportunity / project document ID.' },
       },
       required: ['opportunityId'],
+    },
+  },
+  get_opportunity_snapshot: {
+    name: 'get_opportunity_snapshot',
+    description: 'Get one Calcsheet opportunity by ID with allowlisted fields and the linked company name/code when present. Never returns personal contact fields.',
+    parameters: {
+      type: 'object',
+      properties: {
+        opportunityId: { type: 'string', description: 'The calcsheet opportunity / project document ID.' },
+      },
+      required: ['opportunityId'],
+    },
+  },
+  search_clients: {
+    name: 'search_clients',
+    description: 'Search companies by name or 3-letter code only. Returns up to 10 companies. Never returns contacts, phones, emails, or addresses.',
+    parameters: {
+      type: 'object',
+      properties: {
+        search: { type: 'string', description: 'Case-insensitive substring against company name or code.' },
+      },
+      required: ['search'],
     },
   },
 };
@@ -393,6 +418,48 @@ async function listQuotationsForOpportunity(db, args, asOf) {
   };
 }
 
+async function loadClientIdentity(db, clientId) {
+  if (clientId === undefined || clientId === null || clientId === '') return null;
+  const snap = await db.collection(CLIENT_COLLECTION).doc(String(clientId)).get();
+  if (!snap.exists) return null;
+  return clientProjection(docDataWithId(snap));
+}
+
+async function getOpportunitySnapshot(db, args, asOf) {
+  const snap = await db.collection(OPPORTUNITY_COLLECTION).doc(String(args.opportunityId)).get();
+  if (!snap.exists) {
+    return { data: null, sources: [], asOf };
+  }
+  const record = docDataWithId(snap);
+  const data = {
+    ...opportunityProjection(record),
+    customer: await loadClientIdentity(db, record.customerId),
+  };
+  return {
+    data,
+    sources: [sourceFor(snap.id, data.name || data.code || snap.id, OPPORTUNITY_ROUTE_PREFIX + snap.id, asOf)],
+    asOf,
+  };
+}
+
+async function searchClients(db, args, asOf) {
+  const needle = String(args.search || '').trim();
+  if (!needle) {
+    return { data: [], sources: [], asOf };
+  }
+  const snap = await db.collection(CLIENT_COLLECTION).get();
+  let rows = snap.docs.map(docDataWithId).filter((row) =>
+    textMatches(row.name, needle) || textMatches(row.code, needle),
+  );
+  rows.sort(compareByUpdatedAtDesc);
+  rows = rows.slice(0, MAX_LIST_RESULTS);
+  return {
+    data: rows.map((row) => clientProjection(row)),
+    sources: rows.map((row) => sourceFor(row.id, row.name || row.code || row.id, CLIENT_ROUTE, asOf)),
+    asOf,
+  };
+}
+
 async function collectQuotationCandidates(db, search, asOf) {
   const snap = await db.collection(QUOTATION_COLLECTION).get();
   const rows = snap.docs.map(docDataWithId);
@@ -501,6 +568,10 @@ function createToolRegistry({ db, now = () => new Date() }) {
             return navigateToRecord(db, args, asOf);
           case 'list_quotations_for_opportunity':
             return listQuotationsForOpportunity(db, args, asOf);
+          case 'get_opportunity_snapshot':
+            return getOpportunitySnapshot(db, args, asOf);
+          case 'search_clients':
+            return searchClients(db, args, asOf);
           default:
             throw new Error(`Unknown tool: ${toolName}`);
         }

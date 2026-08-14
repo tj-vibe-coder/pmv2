@@ -27,6 +27,11 @@ const EXPENSE_FIELDS = [
   'id', 'projectId', 'description', 'amount', 'date', 'category', 'sourceType', 'createdAt'
 ];
 
+// Company identity only — never contacts, phones, emails, or addresses.
+const CLIENT_FIELDS = [
+  'id', 'code', 'name'
+];
+
 // Returns a new object containing only the keys in `fields` that exist as
 // own-enumerable properties on `record`. Inherited keys are never copied.
 function pick(record, fields) {
@@ -71,6 +76,10 @@ function expenseProjection(record) {
   return pick(record, EXPENSE_FIELDS);
 }
 
+function clientProjection(record) {
+  return pick(record, CLIENT_FIELDS);
+}
+
 module.exports = {
   authorizeAiUser,
   pick,
@@ -78,8 +87,10 @@ module.exports = {
   opportunityProjection,
   quotationProjection,
   expenseProjection,
+  clientProjection,
   PROJECT_FIELDS,
   OPPORTUNITY_FIELDS,
   QUOTATION_FIELDS,
   EXPENSE_FIELDS,
+  CLIENT_FIELDS,
 };

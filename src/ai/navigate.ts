@@ -17,6 +17,8 @@ const ALLOWED_PATTERNS = [
   /^\/sales\/calcsheet\/projects\/?$/,
   /^\/sales\/calcsheet\/projects\/[^/]+\/?$/,
   /^\/sales\/calcsheet\/quotations\/[^/]+\/?$/,
+  /^\/sales\/clients\/?$/,
+  /^\/clients\/?$/,
   /^\/finance\/projects\/[^/]+\/expenses\/?$/,
   /^\/expense-monitoring\/?$/,
   /^\/finance\/expense-monitoring\/?$/,
@@ -38,6 +40,7 @@ export function resolveAiNavigatePath(route: string): string | null {
     return null;
   }
   if (path === '/projects' || path === '/projects/') return '/dashboard';
+  if (path === '/clients' || path === '/clients/') return '/sales/clients';
   if (!ALLOWED_PATTERNS.some((pattern) => pattern.test(path))) return null;
   return path;
 }

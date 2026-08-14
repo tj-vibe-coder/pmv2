@@ -235,6 +235,22 @@ it('a tool call while connected calls onExecuteTool and sends the result back th
   expect(getSession()!.sendToolResponse).toHaveBeenCalledWith('call-1', 'search_projects', { ok: true });
 });
 
+it('sendUserText completes a turn so Live answers, and queues until connected', async () => {
+  const { deps, getSession } = makeDeps();
+  const client = createLiveClient(deps as any);
+  client.sendUserText('queued before connect');
+  await client.start();
+  expect(getSession()!.sendClientContent).toHaveBeenCalledWith({
+    turns: [{ role: 'user', parts: [{ text: 'queued before connect' }] }],
+    turnComplete: true,
+  });
+  client.sendUserText('how many quotations?');
+  expect(getSession()!.sendClientContent).toHaveBeenLastCalledWith({
+    turns: [{ role: 'user', parts: [{ text: 'how many quotations?' }] }],
+    turnComplete: true,
+  });
+});
+
 it('sendPageContext writes an incomplete turn so Live does not start speaking', async () => {
   const { deps, getSession } = makeDeps();
   const client = createLiveClient(deps as any);

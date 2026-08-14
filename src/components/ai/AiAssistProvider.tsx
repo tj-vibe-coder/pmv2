@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect, ReactNode } from 'react';
-import type { AiCitation, AiMessage, AiPageContext } from '../../types/AiAssist';
+import type { AiCitation, AiMessage, AiPageContext, AiPriorToolResult } from '../../types/AiAssist';
 import { sendAiChat, AiAssistError } from '../../services/aiAssistService';
 import { createLiveClient, LivePhase, LiveTranscriptEvent, mergeTranscript } from '../../ai/liveClient';
 import * as liveSession from '../../ai/liveSession';
@@ -77,6 +77,17 @@ function navigationRouteFromToolResult(name: string, result: unknown): string | 
   return resolveAiNavigatePath(value.route);
 }
 
+function isLiveActive(phase: LivePhase): boolean {
+  return phase !== 'idle' && phase !== 'error';
+}
+
+const MAX_PRIOR_TOOLS = 8;
+
+function rememberToolResult(list: AiPriorToolResult[], name: string, result: unknown): AiPriorToolResult[] {
+  const data = (result && typeof result === 'object') ? result : { value: result };
+  return [...list, { name, data }].slice(-MAX_PRIOR_TOOLS);
+}
+
 export function AiAssistProvider({
   children,
   enabled,
@@ -95,8 +106,11 @@ export function AiAssistProvider({
   const pendingVoiceCitationsRef = useRef<AiCitation[]>([]);
   const pageContextRef = useRef<AiPageContext | null>(pageContext);
   const onNavigateRouteRef = useRef(onNavigateRoute);
+  const livePhaseRef = useRef(livePhase);
+  const priorToolResultsRef = useRef<AiPriorToolResult[]>([]);
   pageContextRef.current = pageContext;
   onNavigateRouteRef.current = onNavigateRoute;
+  livePhaseRef.current = livePhase;
 
   const applyVoiceTranscript = useCallback((event: LiveTranscriptEvent) => {
     setMessages((prev) => {
@@ -159,11 +173,13 @@ export function AiAssistProvider({
             ...pendingVoiceCitationsRef.current,
             ...asCitations(sources),
           ];
+          priorToolResultsRef.current = rememberToolResult(priorToolResultsRef.current, name, result);
           const dest = navigationRouteFromToolResult(name, result);
           if (dest) onNavigateRouteRef.current?.(dest);
           return result;
         },
         onPhaseChange: (phase) => {
+          livePhaseRef.current = phase;
           setLivePhase(phase);
           if (phase === 'idle' || phase === 'error') setMicLevel(0);
         },
@@ -206,6 +222,7 @@ export function AiAssistProvider({
     voiceUserIdRef.current = null;
     voiceAssistantIdRef.current = null;
     pendingVoiceCitationsRef.current = [];
+    priorToolResultsRef.current = [];
   }, [abortActive]);
 
   useEffect(() => {
@@ -231,7 +248,12 @@ export function AiAssistProvider({
     abortRef.current = controller;
     setIsLoading(true);
     try {
-      const answer = await sendAiChat(toHistory(historyMessages), pageContext, controller.signal);
+      const answer = await sendAiChat(
+        toHistory(historyMessages),
+        pageContext,
+        controller.signal,
+        priorToolResultsRef.current,
+      );
       setMessages((prev) => [
         ...prev,
         { id: nextId(), role: 'assistant', text: answer.answer, citations: answer.citations, notice: answer.notice },
@@ -254,13 +276,19 @@ export function AiAssistProvider({
 
   const send = useCallback(async (text: string, pageContext: AiPageContext | null) => {
     const trimmed = text.trim();
-    if (!trimmed || isLoading) return;
-    stopVoice();
+    if (!trimmed) return;
+    if (isLiveActive(livePhaseRef.current)) {
+      const userMessage: AiMessage = { id: nextId(), role: 'user', text: trimmed };
+      setMessages((prev) => [...prev, userMessage]);
+      getLiveClient().sendUserText(trimmed);
+      return;
+    }
+    if (isLoading) return;
     const userMessage: AiMessage = { id: nextId(), role: 'user', text: trimmed };
     const nextMessages = [...messages, userMessage];
     setMessages(nextMessages);
     await performSend(nextMessages, pageContext);
-  }, [isLoading, messages, performSend, stopVoice]);
+  }, [getLiveClient, isLoading, messages, performSend]);
 
   const stop = useCallback(() => {
     abortActive();

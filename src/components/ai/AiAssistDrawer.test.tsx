@@ -25,9 +25,14 @@ jest.mock('../../services/aiAssistService', () => ({
 }));
 
 const sendAiChatMock = sendAiChat as jest.Mock;
+const originalMatchMedia = window.matchMedia;
 
 beforeEach(() => {
   sendAiChatMock.mockReset();
+});
+
+afterEach(() => {
+  window.matchMedia = originalMatchMedia;
 });
 
 // The drawer must stay closed (aria-hidden) until the launcher opens it — see
@@ -103,6 +108,31 @@ it('offers a click-to-toggle live voice control', () => {
   expect(screen.getByLabelText(/start live voice/i)).toBeInTheDocument();
 });
 
+it('keeps the composer enabled while Live is on', async () => {
+  const liveSession = require('../../ai/liveSession');
+  liveSession.getUserMedia.mockResolvedValue({ getTracks: () => [] });
+  liveSession.createCaptureContext.mockReturnValue({
+    sampleRate: 48000,
+    createCaptureNode: () => ({ onFrame: null, disconnect: () => {} }),
+    close: async () => {},
+  });
+  liveSession.createPlaybackContext.mockReturnValue({
+    currentTime: 0,
+    createSourceFromPcm16: () => ({ onended: null, start: () => {}, stop: () => {} }),
+    close: async () => {},
+  });
+  liveSession.connectSession.mockResolvedValue({
+    sendRealtimeInputPcm: () => {},
+    sendToolResponse: () => {},
+    sendClientContent: () => {},
+    close: () => {},
+  });
+  renderDrawer();
+  fireEvent.click(screen.getByLabelText(/start live voice/i));
+  await waitFor(() => expect(screen.getByLabelText(/speak or type/i)).toBeInTheDocument());
+  expect(screen.getByRole('textbox')).not.toBeDisabled();
+});
+
 it('renders route-aware suggested question chips for /projects', () => {
   renderDrawer();
   expect(screen.getByText(/largest.*balance|balance/i)).toBeInTheDocument();
@@ -135,6 +165,28 @@ it('shows a Now viewing chip and forwards citation navigation', async () => {
   await waitFor(() => expect(screen.getByText('Rezcoat')).toBeInTheDocument());
   fireEvent.click(screen.getByText('Rezcoat'));
   expect(onNavigateSource).toHaveBeenCalledWith('/sales/calcsheet/projects/opp1');
+});
+
+function mockViewport(isMobile: boolean): void {
+  window.matchMedia = jest.fn().mockImplementation((query: string) => ({
+    matches: isMobile && /max-width:\s*599/.test(query),
+    media: query,
+    onchange: null,
+    addListener: jest.fn(),
+    removeListener: jest.fn(),
+    addEventListener: jest.fn(),
+    removeEventListener: jest.fn(),
+    dispatchEvent: jest.fn(),
+  }));
+}
+
+it('opens a bottom sheet on a phone-sized viewport instead of a full-screen dialog', () => {
+  mockViewport(true);
+  renderDrawer();
+  expect(document.querySelector('.MuiDrawer-anchorBottom')).toBeTruthy();
+  expect(document.querySelector('.MuiDialog-root')).toBeNull();
+  expect(screen.getByLabelText('IOCT Assist')).toBeInTheDocument();
+  mockViewport(false);
 });
 
 it('shows a disabled-feature message instead of a composer when AI Assist is off, without calling the API', () => {

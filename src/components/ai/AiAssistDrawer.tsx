@@ -3,11 +3,11 @@ import {
   Box,
   Button,
   Chip,
-  Dialog,
   Divider,
   Drawer,
   IconButton,
   Stack,
+  SwipeableDrawer,
   Typography,
   useMediaQuery,
 } from '@mui/material';
@@ -20,6 +20,8 @@ import { useAiAssist } from './AiAssistProvider';
 import AiComposer from './AiComposer';
 import AiLiveStatus from './AiLiveStatus';
 import AiMessageList from './AiMessageList';
+
+export const AI_ASSIST_DESKTOP_WIDTH_PX = 420;
 
 interface AiAssistDrawerProps {
   pageContext: AiPageContext | null;
@@ -39,7 +41,7 @@ export default function AiAssistDrawer({
   enabled = true,
   onNavigateSource = noOp,
 }: AiAssistDrawerProps): React.ReactElement {
-  const { isOpen, close, messages, isLoading, send, stop, retry, clear, livePhase, micLevel, startVoice, stopVoice } = useAiAssist();
+  const { isOpen, open, close, messages, isLoading, send, stop, retry, clear, livePhase, micLevel, startVoice, stopVoice } = useAiAssist();
   const isVoiceActive = livePhase !== 'idle' && livePhase !== 'error';
 
   // Click-to-toggle. Press-and-hold used to stop on pointerup/leave, which
@@ -67,8 +69,13 @@ export default function AiAssistDrawer({
 
   const content = (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      {isMobile && (
+        <Box aria-hidden sx={{ display: 'flex', justifyContent: 'center', pt: 1 }}>
+          <Box sx={{ bgcolor: 'grey.400', borderRadius: 2, height: 4, width: 36 }} />
+        </Box>
+      )}
       <Stack alignItems="center" direction="row" justifyContent="space-between" sx={{ px: 2, py: 1.5 }}>
-        <Stack alignItems="center" direction="row" spacing={1}>
+        <Stack alignItems="center" direction="row" flexWrap="wrap" spacing={1} useFlexGap>
           <Typography component="h2" variant="h6">IOCT Assist</Typography>
           <Chip label="Read only" size="small" />
           {viewing ? <Chip label={`Now viewing ${viewing}`} size="small" variant="outlined" /> : null}
@@ -116,7 +123,7 @@ export default function AiAssistDrawer({
             </Stack>
           </Stack>
           <AiComposer
-            disabled={isLoading || isVoiceActive}
+            disabled={isLoading && !isVoiceActive}
             liveMode={isVoiceActive}
             onSend={(text) => send(text, pageContext)}
           />
@@ -127,19 +134,52 @@ export default function AiAssistDrawer({
 
   if (isMobile) {
     return (
-      <Dialog fullScreen keepMounted onClose={close} open={isOpen}>
+      <SwipeableDrawer
+        anchor="bottom"
+        disableDiscovery
+        disableSwipeToOpen
+        keepMounted
+        onClose={close}
+        onOpen={open}
+        open={isOpen}
+        ModalProps={{
+          keepMounted: true,
+          hideBackdrop: true,
+          disableScrollLock: true,
+          disableEnforceFocus: true,
+          disableAutoFocus: true,
+        }}
+        PaperProps={{
+          'aria-label': 'IOCT Assist',
+          role: 'dialog',
+          sx: {
+            borderTopLeftRadius: 12,
+            borderTopRightRadius: 12,
+            boxShadow: 8,
+            height: 'min(56dvh, 560px)',
+            maxHeight: '56vh',
+            pb: 'env(safe-area-inset-bottom)',
+          },
+        }}
+      >
         {content}
-      </Dialog>
+      </SwipeableDrawer>
     );
   }
 
   return (
     <Drawer
       anchor="right"
-      ModalProps={{ keepMounted: true }}
-      PaperProps={{ sx: { width: { xs: '100%', sm: 420 } } }}
       open={isOpen}
-      onClose={close}
+      variant="persistent"
+      PaperProps={{
+        'aria-label': 'IOCT Assist',
+        sx: {
+          borderLeft: 1,
+          borderColor: 'divider',
+          width: AI_ASSIST_DESKTOP_WIDTH_PX,
+        },
+      }}
     >
       {content}
     </Drawer>

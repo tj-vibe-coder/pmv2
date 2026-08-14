@@ -1,5 +1,17 @@
 # Task Log
 
+## 2026-08-14 — Hands-free P2: opportunity snapshot and company search
+
+Added `get_opportunity_snapshot` (allowlisted opportunity fields plus linked company id/code/name) and `search_clients` (company name/code only — no contacts, phones, emails, or addresses). Citation chips for clients go to `/sales/clients`. Added three golden-set cases; the set is still unrun against live/emulator data. Invoices and work-schedule tools stay unnamed.
+
+## 2026-08-14 — Hands-free P1.1: see the page on a phone
+
+Replaced the mobile full-screen Assist dialog with a bottom sheet (~56vh, no backdrop, swipe to close) so the record stays visible above it. Desktop Assist is now a persistent dock: the page gets 420px right padding and the drawer no longer modal-blocks the record.
+
+## 2026-08-14 — Hands-free P0: typed lines stay on Live
+
+While a Live session is up, Send no longer stops the mic. The typed line goes into Gemini Live as a completed turn. After Live ends, Flash-Lite chat includes a capped `priorToolResults` payload from this memory-only session so follow-ups like “how many quotations?” still see the last navigate/search. Composer stays enabled during Live. History is still not persisted.
+
 ## 2026-08-14 — Hands-free P1: page follows Assist
 
 Implemented the parked P1 slice on `rj/dev` after merging `origin/main` (Work Schedule Gantt). Assist now lives above per-route `AppLayout`, so Live is not remounted on navigation. Citation chips and `navigate_to_record` use an allowlisted navigator. `/projects/:id` is a real route. `pageContext` carries project/opportunity/quotation ids and is sent into an open Live session as an untrusted now-viewing note. Added `list_quotations_for_opportunity`. Assist stays read-only.

@@ -42,6 +42,31 @@ it('includes the bearer token and the request body on a successful call', async 
   );
 });
 
+it('includes priorToolResults on the chat request when provided', async () => {
+  fetchMock.mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      requestId: 'r1',
+      answer: 'hello',
+      citations: [],
+      followUps: [],
+      notice: 'n',
+    }),
+  });
+  await sendAiChat(
+    [{ role: 'user', text: 'how many?' }],
+    { route: '/dashboard', projectId: null, opportunityId: null, quotationId: null },
+    undefined,
+    [{ name: 'navigate_to_record', data: { action: 'navigate', id: 'opp1' } }],
+  );
+  const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+  expect(body.priorToolResults).toEqual([
+    { name: 'navigate_to_record', data: { action: 'navigate', id: 'opp1' } },
+  ]);
+});
+
 it('propagates an AbortSignal to fetch', async () => {
   fetchMock.mockResolvedValue({
     ok: true,

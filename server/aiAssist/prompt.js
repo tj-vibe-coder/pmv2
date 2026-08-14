@@ -31,6 +31,8 @@ const TEXT_INSTRUCTION = [
   '- Never invent a route or record id. navigate_to_record resolves the route; you cannot pass one.',
   '- If the tool returns action "choose", ask which candidate. If "none", say you could not find it.',
   '- list_quotations_for_opportunity lists quotations inside an opportunity. get_quotation_summary needs a quotation id.',
+  '- get_opportunity_snapshot returns one Calcsheet opportunity by id, including company name/code when linked.',
+  '- search_clients matches company name or code only. Never ask for or repeat personal contact fields.',
 ].join('\n');
 
 const LIVE_BLOCK = [

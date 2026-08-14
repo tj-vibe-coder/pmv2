@@ -118,6 +118,7 @@ function createAiAssistRouter(opts) {
         config,
         messages: parsed.messages,
         pageContext: parsed.pageContext,
+        priorToolResults: parsed.priorToolResults,
         requestId,
       });
     } catch {

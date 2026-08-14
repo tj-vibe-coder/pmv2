@@ -1,5 +1,5 @@
 import { API_BASE } from '../config/api';
-import type { AiAnswer, AiMessage, AiNavigateTo, AiPageContext, AiLiveTokenResponse } from '../types/AiAssist';
+import type { AiAnswer, AiMessage, AiNavigateTo, AiPageContext, AiPriorToolResult, AiLiveTokenResponse } from '../types/AiAssist';
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
@@ -20,6 +20,7 @@ export async function sendAiChat(
   messages: Pick<AiMessage, 'role' | 'text'>[],
   pageContext: AiPageContext | null,
   signal?: AbortSignal,
+  priorToolResults?: AiPriorToolResult[],
 ): Promise<AiAnswer> {
   const res = await fetch(`${API_BASE}/api/ai-assist/chat`, {
     method: 'POST',
@@ -27,7 +28,11 @@ export async function sendAiChat(
       'Content-Type': 'application/json',
       ...authHeaders(),
     },
-    body: JSON.stringify({ messages, pageContext }),
+    body: JSON.stringify({
+      messages,
+      pageContext,
+      ...(priorToolResults && priorToolResults.length > 0 ? { priorToolResults } : {}),
+    }),
     signal,
   });
 
