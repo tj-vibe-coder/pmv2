@@ -16,7 +16,7 @@
 - Modify: `server/financeTrace.js`
 - Test: `server/financeTrace.test.js`
 
-- [ ] **Step 1: Write failing regression tests**
+- [x] **Step 1: Write failing regression tests**
 
 Add tests proving that Microsoft versus Easytrip/reflective-vest records are excluded even when amount, date, and project are close; a Microsoft record more than 14 days away is excluded even with matching words and amount; and a near-centavo Microsoft spelling variation remains included.
 
@@ -52,13 +52,13 @@ test('rankCandidates rejects matching descriptions outside the 14 day window', (
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run: `node --test server/financeTrace.test.js`
 
 Expected: the new false-positive tests fail because amount/date/project can currently satisfy the signal threshold and dates outside 14 days do not reject a candidate.
 
-- [ ] **Step 3: Implement the minimal semantic and date gates**
+- [x] **Step 3: Implement the minimal semantic and date gates**
 
 In `rankCandidates`, reject a candidate when `dayDistance > 14`. Track whether description overlap or an exact supplier, invoice, receipt, or source-reference match exists. Require that semantic flag in addition to the existing `signals >= 2` rule. Do not treat project or investor as semantic identity.
 
@@ -75,7 +75,7 @@ const semanticLabels = new Set(['supplier', 'invoice', 'receipt', 'source refere
 if (signals < 2 || !hasSemanticIdentity) return [];
 ```
 
-- [ ] **Step 4: Run focused and full server verification**
+- [x] **Step 4: Run focused and full server verification**
 
 Run:
 
@@ -86,7 +86,7 @@ node --test server/*.test.js
 
 Expected: all tests pass, including the existing centavo-match and stable-cap tests.
 
-- [ ] **Step 5: Update project memory and commit**
+- [x] **Step 5: Update project memory and commit**
 
 Record the refined matching contract and verification in `docs/agent/TASK_LOG.md` and `docs/agent/PROJECT_STATE.md`.
 
@@ -100,11 +100,10 @@ git commit -m "fix: reduce finance trace false positives"
 **Files:**
 - No source changes expected.
 
-- [ ] **Step 1: Restart the feature development server**
+- [x] **Step 1: Restart the feature development server**
 
 Stop and restart `npm start` from `/Users/reuelrivera/Vibecode Projects/IOCT pmv2-money-trail` so the backend loads the changed matcher.
 
-- [ ] **Step 2: Verify the live Microsoft trail**
+- [x] **Step 2: Verify the live Microsoft trail**
 
 Open the Microsoft Money Trail and confirm Easytrip RFID, Lalamove, reflective vest, and any matching-description record more than 14 days away are absent. Confirm plausible Microsoft records inside 14 days remain visible with evidence.
-

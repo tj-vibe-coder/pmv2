@@ -333,6 +333,7 @@ function rankCandidates(origin, candidates) {
     const evidence = [];
     let score = 0;
     let signals = 0;
+    let hasSemanticIdentity = false;
 
     if (originValues.amount !== undefined && values.amount !== undefined) {
       const differenceCents = Math.abs(
@@ -347,6 +348,7 @@ function rankCandidates(origin, candidates) {
     }
 
     const dayDistance = daysBetween(originValues.date, values.date);
+    if (dayDistance !== null && dayDistance > 14) return [];
     if (dayDistance !== null && dayDistance <= 14) {
       evidence.push(`date within ${dayDistance} ${dayDistance === 1 ? 'day' : 'days'}`);
       score += Math.max(6, 20 - dayDistance);
@@ -358,8 +360,10 @@ function rankCandidates(origin, candidates) {
       evidence.push(`matching words: ${words.slice(0, 4).join(', ')}`);
       score += Math.min(20, words.length * 5);
       signals += 1;
+      hasSemanticIdentity = true;
     }
 
+    const semanticLabels = new Set(['supplier', 'invoice', 'receipt', 'source reference']);
     const exactSignals = [
       ['project', originValues.projectId, values.projectId, 14],
       ['investor', originValues.investor, values.investor, 12],
@@ -373,10 +377,11 @@ function rankCandidates(origin, candidates) {
         evidence.push(`same ${label}`);
         score += points;
         signals += 1;
+        if (semanticLabels.has(label)) hasSemanticIdentity = true;
       }
     }
 
-    if (signals < 2) return [];
+    if (signals < 2 || !hasSemanticIdentity) return [];
     const isInvestmentExpense = new Set([origin.type, candidate.type]).has('investment')
       && new Set([origin.type, candidate.type]).has('expense');
     return [{

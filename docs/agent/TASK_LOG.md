@@ -89,3 +89,20 @@ Meal allowance was always per-day. TJ set Kim to 15k/mo + 1k meal intending 16k 
 - Work is isolated on `feat/finance-money-trail`, separate from the AI receipt-assist branch, and is not merged or deployed.
 - Browser QA was not run because the available local startup path can initialize default users unless it is paired with a verified Firestore emulator dataset.
 - `npm ci` required a temporary cache because the user npm cache contains root-owned files; install completed without changing dependencies.
+
+## 2026-08-14 — Finance possible-match quality refinement
+
+### Completed
+
+- Required every possible match to include semantic identity through meaningful description/vendor overlap or an exact supplier, invoice, receipt, or source reference.
+- Kept amount, date, project, and investor as supporting evidence only, preventing unrelated Microsoft-versus-RFID/vest suggestions.
+- Made the 14-day window a hard rejection when both records have valid dates.
+- Preserved centavo and small-peso matching for spelling variants and strong references.
+
+### Verification
+
+- Terra worker observed two expected failing regression tests before implementation.
+- `node --test server/financeTrace.test.js` — 11/11 passed.
+- `node --test server/*.test.js` — 68/68 passed.
+- Live read-only API check for the ₱240.23 Microsoft record returned only the plausible February 26 Microsoft MSBILL candidate; Easytrip, Lalamove, reflective vest, and out-of-window candidates were absent.
+- No production finance records were changed.

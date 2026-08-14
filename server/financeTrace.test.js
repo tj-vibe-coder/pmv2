@@ -171,6 +171,80 @@ test('rankCandidates catches centavo and small peso differences using independen
   assert.ok(result[0].evidence.some((e) => e.startsWith('matching words:')));
 });
 
+test('rankCandidates requires semantic identity beyond amount, date, and project', () => {
+  const origin = {
+    type: 'investment', id: 'microsoft', data: {
+      date: '2026-02-14', amount: 240.23,
+      description: 'MICROSOFT MSBILL.INFO SGP', projectId: 'p1',
+    },
+  };
+  const result = rankCandidates(origin, [
+    {
+      type: 'expense', collection: 'project_expenses', id: 'easytrip', data: {
+        date: '2026-02-12', amount: 212, description: 'Easytrip RFID load - For Cebu', projectId: 'p1',
+      },
+    },
+    {
+      type: 'expense', collection: 'project_expenses', id: 'vest', data: {
+        date: '2026-02-06', amount: 198, description: 'Reflective vest, 2pcs', projectId: 'p1',
+      },
+    },
+  ]);
+
+  assert.deepEqual(result, []);
+});
+
+test('rankCandidates rejects matching descriptions outside the 14 day window', () => {
+  const origin = {
+    type: 'investment', id: 'i1', data: {
+      date: '2026-02-10', amount: 5807, description: 'Cebu Pacific MNL to Ceb',
+    },
+  };
+  const result = rankCandidates(origin, [{
+    type: 'expense', collection: 'project_expenses', id: 'march-flight', data: {
+      date: '2026-03-19', amount: 5810, description: 'Cebu Pacific MNL to Ceb',
+    },
+  }]);
+
+  assert.deepEqual(result, []);
+});
+
+test('rankCandidates accepts exact supplier, invoice, receipt, or source-reference identity as semantic evidence', () => {
+  const origin = {
+    type: 'investment', id: 'i1', data: {
+      amount: 1000, description: 'Microsoft service subscription', supplier: 'Microsoft',
+      invoiceNo: 'INV-001', receiptRef: { oneDriveId: 'receipt-001' }, sourceExpenseId: 'source-001',
+    },
+  };
+  const result = rankCandidates(origin, [
+    {
+      type: 'expense', collection: 'project_expenses', id: 'supplier', data: {
+        amount: 1000, description: 'Unrelated item', supplier: 'Microsoft',
+      },
+    },
+    {
+      type: 'expense', collection: 'project_expenses', id: 'invoice', data: {
+        amount: 1000, description: 'Unrelated item', invoiceNo: 'INV-001',
+      },
+    },
+    {
+      type: 'expense', collection: 'project_expenses', id: 'receipt', data: {
+        amount: 1000, description: 'Unrelated item', receiptRef: { oneDriveId: 'receipt-001' },
+      },
+    },
+    {
+      type: 'expense', collection: 'project_expenses', id: 'source-reference', data: {
+        amount: 1000, description: 'Unrelated item', sourceExpenseId: 'source-001',
+      },
+    },
+  ]);
+
+  assert.deepEqual(
+    result.map((candidate) => candidate.node.id).sort(),
+    ['invoice', 'receipt', 'source-reference', 'supplier'],
+  );
+});
+
 test('rankCandidates caps stable score ordering and excludes confirmed nodes', () => {
   const origin = {
     type: 'expense', collection: 'project_expenses', id: 'e1', data: {

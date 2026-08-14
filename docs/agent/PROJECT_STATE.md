@@ -7,6 +7,7 @@ Updated: 2026-08-14
 - Finance Money Trail is complete on branch `feat/finance-money-trail` and has not been merged or deployed.
 - Investment Tracker, project/overhead expenses, liquidation rows, cash advances, and reimbursements now expose confirmed cross-record trails and exact-record deep links.
 - Possible duplicates use deterministic review signals (including centavo/small-peso differences), remain separate from confirmed links, and can only be resolved by admins.
+- Possible matches now require semantic description/vendor/reference identity; amount, date, project, and investor alone cannot create a suggestion, and dated records more than 14 days apart are rejected.
 - Confirmed investment-expense links can be reviewed again to unlink, keep one record, or reclassify a retained investment; source-owned synced expenses remain protected and redirect reviewers to their source.
 - Resolver mutations are transactional and write append-only `finance_trace_audit` records with actor, reason, request ID, and before/after snapshots.
 - Calcsheet quotation-history pricing is complete and committed through `3344577`.
@@ -17,7 +18,7 @@ Updated: 2026-08-14
 
 ## Verification
 
-- Finance trace server and packaging suite: 65/65 passing.
+- Finance trace server and packaging suite: 68/68 passing.
 - Frontend suite: 126/126 passing.
 - TypeScript and production build passing for the money-trail branch.
 - No production write tests or live Firestore mutations were used during verification.
