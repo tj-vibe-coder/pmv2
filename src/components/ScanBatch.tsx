@@ -13,6 +13,13 @@ import { convertHeicToJpeg, makeThumb } from '../utils/receipts/imageUtils';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import { detectReceiptQuad } from '../utils/receipts/autoCrop';
 import { compressForUpload, blobToBase64 } from '../utils/receipts/imageCompress';
+import {
+  getReceiptParseMimeType,
+  isCroppableReceiptFile,
+  makeReceiptUploadFilename,
+  RECEIPT_FILE_ACCEPT,
+  validateReceiptFile,
+} from '../utils/receipts/receiptFile';
 import { parseReceipt } from '../services/receiptParseService';
 import {
   checkDuplicates,
@@ -156,6 +163,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   const [cropBusy, setCropBusy] = useState(false);
   const [parsedCount, setParsedCount] = useState(0);
   const [tooManyWarn, setTooManyWarn] = useState(false);
+  const [selectionWarning, setSelectionWarning] = useState('');
   const [saving, setSaving] = useState(false);
   const [finalSavedCount, setFinalSavedCount] = useState(0);
   const [snack, setSnack] = useState<{
@@ -167,6 +175,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   // Guards against a double-tap re-entering save before the `saving` state has
   // re-rendered the disabled button (the state read inside the handler is stale).
   const savingRef = useRef(false);
+  const processGenRef = useRef(0);
 
   useEffect(() => () => {
     if (activeUrlRef.current) URL.revokeObjectURL(activeUrlRef.current);
@@ -212,15 +221,25 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
 
   const processFiles = async (files: File[]) => {
     if (!files.length) return;
+    processGenRef.current += 1;
+    const processGen = processGenRef.current;
+    const classified = files.map((file) => ({ file, error: validateReceiptFile(file) }));
+    const validFiles = classified.filter(({ error }) => error === null).map(({ file }) => file);
+    const rejectedFiles = classified.filter(({ error }) => error !== null);
+    setSelectionWarning(rejectedFiles.length > 0
+      ? `${rejectedFiles.length} file${rejectedFiles.length === 1 ? ' was' : 's were'} skipped. Receipt files must be images or PDFs, and PDFs must be 15 MB or smaller.`
+      : '');
+    if (!validFiles.length) return;
     // Gemini's rate limit is 15 requests/minute; cap the batch at 10 to leave a buffer
     // (parsing runs at concurrency 3, so 10 items comfortably stays under the limit).
-    const tooMany = files.length > 10;
+    const tooMany = validFiles.length > 10;
     setTooManyWarn(tooMany);
-    const sliced = tooMany ? files.slice(0, 10) : files;
+    const sliced = tooMany ? validFiles.slice(0, 10) : validFiles;
     try {
       // convertHeicToJpeg already swallows its own errors and returns the original
       // file on failure, but guard the whole batch so one bad file can't strand the UI.
       const converted = await mapWithConcurrency(sliced, 3, (f) => convertHeicToJpeg(f));
+      if (processGen !== processGenRef.current) return;
       const newItems: BatchItem[] = converted.map((f, i) => ({
         id: `bi-${Date.now()}-${i}`,
         rawFile: f,
@@ -228,11 +247,16 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
         isSaved: false,
       }));
       setItems(newItems);
-      setCropIndex(0);
-      setStage(BatchStage.cropping);
-      await loadCropForFile(newItems[0].rawFile);
+      const firstCropIndex = newItems.findIndex((item) => isCroppableReceiptFile(item.rawFile));
+      if (firstCropIndex === -1) {
+        await startParsing(newItems, processGen);
+      } else {
+        setCropIndex(firstCropIndex);
+        setStage(BatchStage.cropping);
+        await loadCropForFile(newItems[firstCropIndex].rawFile);
+      }
     } catch (err) {
-      setSnack({ open: true, severity: 'error', msg: err instanceof Error ? err.message : 'Could not load the selected photos.' });
+      setSelectionWarning(err instanceof Error ? err.message : 'Could not load the selected receipt files.');
     }
   };
 
@@ -242,14 +266,16 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
     void processFiles(files);
   };
 
-  const startParsing = async (itemList: BatchItem[]) => {
+  const startParsing = async (itemList: BatchItem[], processGen = processGenRef.current) => {
+    if (processGen !== processGenRef.current) return;
     setStage(BatchStage.parsing);
     setParsedCount(0);
     const parsed = await mapWithConcurrency(itemList, 3, async (item) => {
       try {
         const blob = item.croppedBlob ?? item.rawFile;
         const b64 = await blobToBase64(blob);
-        const pr = await parseReceipt(b64, 'image/jpeg');
+        const mimeType = item.croppedBlob ? 'image/jpeg' : getReceiptParseMimeType(item.rawFile);
+        const pr = await parseReceipt(b64, mimeType);
         const imageHash = await computeImageHash(b64);
         const amt = pr.total ?? pr.subtotal;
         const sugCat = pr.suggestedCategory ?? '';
@@ -268,10 +294,10 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
           lowConf: typeof pr.confidence === 'number' && pr.confidence < 0.5,
           projectId: item.fields.projectId,
         };
-        setParsedCount((c) => c + 1);
+        if (processGen === processGenRef.current) setParsedCount((c) => c + 1);
         return { ...item, fields, imageHash };
       } catch (err) {
-        setParsedCount((c) => c + 1);
+        if (processGen === processGenRef.current) setParsedCount((c) => c + 1);
         return { ...item, parseError: err instanceof Error ? err.message : 'Parse failed' };
       }
     });
@@ -305,6 +331,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
       console.warn('[ScanBatch] duplicate check failed:', err);
     }
 
+    if (processGen !== processGenRef.current) return;
     setItems(withDuplicates);
     setStage(BatchStage.review);
   };
@@ -319,8 +346,8 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
       revokeCurrentUrl();
       const updated = items.map((it, i) => i === cropIndex ? { ...it, croppedBlob: cropped } : it);
       setItems(updated);
-      const next = cropIndex + 1;
-      if (next >= updated.length) {
+      const next = updated.findIndex((it, index) => index > cropIndex && isCroppableReceiptFile(it.rawFile));
+      if (next === -1) {
         await startParsing(updated);
       } else {
         setCropIndex(next);
@@ -351,7 +378,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
     revokeCurrentUrl();
     try {
       const withCrops = await mapWithConcurrency(items, 3, async (item) => {
-        if (item.croppedBlob) return item;
+        if (item.croppedBlob || !isCroppableReceiptFile(item.rawFile)) return item;
         try {
           return { ...item, croppedBlob: await perspectiveCropToBlob(item.rawFile, DEFAULT_QUAD) };
         } catch { return item; }
@@ -387,10 +414,12 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
       return { ...item, saveError: 'No project selected for this receipt.' };
     }
     try {
-      const compressed = await compressForUpload(item.croppedBlob ?? item.rawFile);
+      const compressed = isCroppableReceiptFile(item.rawFile)
+        ? await compressForUpload(item.croppedBlob ?? item.rawFile)
+        : item.rawFile;
       const contentBase64 = await blobToBase64(compressed);
       const year = String(new Date().getFullYear());
-      const filename = `SCAN-${Date.now()}-${idx}.jpg`;
+      const filename = makeReceiptUploadFilename(item.rawFile, Date.now(), idx);
 
       if (deliverToDesktop) {
         if (!pairingToken || !scanContext?.folderPath) {
@@ -403,7 +432,9 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
         const d = await r.json().catch(() => ({ ok: false })) as { ok: boolean; id?: string; webUrl?: string };
         if (!d.ok || !d.id || !d.webUrl) return { ...item, saveError: 'Could not upload to OneDrive.' };
 
-        const thumb = await makeThumb(item.croppedBlob ?? item.rawFile);
+        const thumb = isCroppableReceiptFile(item.rawFile)
+          ? await makeThumb(item.croppedBlob ?? item.rawFile)
+          : '';
         const f = item.fields;
         const jobRes = await fetch(`${API_BASE}/api/scan-jobs/${pairingToken}/result`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -497,7 +528,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
 
   const resetToSelect = () => {
     revokeCurrentUrl();
-    setItems([]); setCropIndex(0); setParsedCount(0); setTooManyWarn(false); setFinalSavedCount(0);
+    setItems([]); setCropIndex(0); setParsedCount(0); setTooManyWarn(false); setSelectionWarning(''); setFinalSavedCount(0);
     setStage(BatchStage.select);
   };
 
@@ -505,17 +536,18 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   if (stage === BatchStage.select) {
     return (
       <Box>
-        {tooManyWarn && <Alert severity="warning" sx={{ mb: 2 }}>Only the first 10 photos were selected (batch limit, to stay within the AI parser's rate limit).</Alert>}
+        {tooManyWarn && <Alert severity="warning" sx={{ mb: 2 }}>Only the first 10 receipt files were selected (batch limit, to stay within the AI parser's rate limit).</Alert>}
+        {selectionWarning && <Alert severity="warning" sx={{ mb: 2 }}>{selectionWarning}</Alert>}
         <Button variant="contained" size="large" fullWidth startIcon={<CameraAltIcon />}
           onClick={() => setCameraOpen(true)} sx={{ py: 1.5, mb: 2 }}>
           Take Photos
         </Button>
         <Button variant="outlined" size="large" fullWidth startIcon={<PhotoLibraryIcon />}
           onClick={() => fileInputRef.current?.click()} sx={{ py: 1.5, mb: 2 }}>
-          Choose from Library
+          Choose Photos or PDFs
         </Button>
         <Button variant="outlined" fullWidth onClick={onCancel}>Cancel</Button>
-        <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handleFileChange} />
+        <input ref={fileInputRef} type="file" accept={RECEIPT_FILE_ACCEPT} multiple style={{ display: 'none' }} onChange={handleFileChange} />
         {cameraOpen && (
           <LiveCameraCapture
             onDone={(files) => { setCameraOpen(false); void processFiles(files); }}
@@ -529,11 +561,14 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
 
   // ── cropping ─────────────────────────────────────────────────────────────────
   if (stage === BatchStage.cropping) {
+    const croppableItems = items.filter((item) => isCroppableReceiptFile(item.rawFile));
+    const cropPosition = Math.max(0, croppableItems.findIndex((item) => item.id === items[cropIndex]?.id)) + 1;
     return (
       <Box>
+        {selectionWarning && <Alert severity="warning" sx={{ mb: 2 }}>{selectionWarning}</Alert>}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-          <Typography variant="body2" color="text.secondary">Crop {cropIndex + 1} of {items.length}</Typography>
-          <Button size="small" onClick={handleSkipCropping} disabled={cropBusy}>Skip cropping (use full photos)</Button>
+          <Typography variant="body2" color="text.secondary">Crop {cropPosition} of {croppableItems.length}</Typography>
+          <Button size="small" onClick={handleSkipCropping} disabled={cropBusy}>Skip cropping (use full images)</Button>
         </Box>
         {cropUrl ? (
           <ReceiptCropper imageUrl={cropUrl} initialQuad={cropQuad} busy={cropBusy} onConfirm={handleCropConfirm} onRetake={handleRetake} />
@@ -549,6 +584,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
     const pct = items.length > 0 ? Math.round((parsedCount / items.length) * 100) : 0;
     return (
       <Box sx={{ py: 4 }}>
+        {selectionWarning && <Alert severity="warning" sx={{ mb: 2 }}>{selectionWarning}</Alert>}
         <Typography variant="body1" sx={{ mb: 2, textAlign: 'center' }}>
           Reading receipt {Math.min(parsedCount + 1, items.length)} of {items.length}…
         </Typography>
@@ -587,6 +623,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   return (
     <Box>
       <Box sx={{ mb: 2 }}>
+        {selectionWarning && <Alert severity="warning" sx={{ mb: 2 }}>{selectionWarning}</Alert>}
         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
           {visibleItems.length} receipt{visibleItems.length !== 1 ? 's' : ''} — Total ₱{totalAmt.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
         </Typography>

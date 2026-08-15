@@ -28,8 +28,8 @@ import {
   Tooltip,
   Checkbox,
 } from '@mui/material';
-import { useLocation } from 'react-router-dom';
-import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, Edit as EditIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, WarningAmber as WarningAmberIcon } from '@mui/icons-material';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, Edit as EditIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, UploadFile as UploadFileIcon, WarningAmber as WarningAmberIcon } from '@mui/icons-material';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import {
@@ -48,11 +48,24 @@ import { Project } from '../types/Project';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
 import ScanToPhoneDialog, { type DeliveredReceipt } from './ScanToPhoneDialog';
-import ScanBatch, { type LiquidationScanItem } from './ScanBatch';
+import ScanBatch, { type LiquidationScanItem, type BatchItemFields } from './ScanBatch';
+import ReceiptCropper from './ReceiptCropper';
 import ReceiptViewer from './ReceiptViewer';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 import { LIQUIDATION_CATEGORIES } from '../data/financeCategories';
 import { blobToBase64 } from '../utils/receipts/imageCompress';
+import { detectReceiptQuad } from '../utils/receipts/autoCrop';
+import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
+import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
+import {
+  getReceiptParseMimeType,
+  isPdfReceipt,
+  RECEIPT_FILE_ACCEPT,
+  validateReceiptFile,
+} from '../utils/receipts/receiptFile';
+import MoneyTrailButton from './finance/MoneyTrailButton';
+import { financeFocusToken, financeFocusUrl, parseFinanceFocus } from '../utils/financeTraceFocus';
+import { liquidationRowOrigin } from '../utils/financeModuleOrigins';
 import {
   checkDuplicates,
   computeImageHash,
@@ -215,6 +228,9 @@ const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
   invoiceNo: '',
 });
 
+// Rows with a project sync to project_expenses (COGS); rows with an amount but no
+// project (e.g. software subscriptions liquidated without a project) auto-sync to
+// overhead_expenses instead of being silently dropped from the P&L.
 async function addLiquidationRowsToProjectExpenses(
   rows: LiquidationRow[],
   liquidationId?: string,
@@ -224,22 +240,19 @@ async function addLiquidationRowsToProjectExpenses(
 ): Promise<void> {
   try {
     const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
-    const toAdd = rows.filter((r) => {
-      const pid = r.projectId;
-      const amt = Number(r.amount);
-      return pid !== '' && pid !== null && pid !== undefined && amt > 0;
-    });
-    if (toAdd.length === 0) return;
+    const eligible = rows.filter((r) => Number(r.amount) > 0);
+    if (eligible.length === 0) return;
+    const hasProject = (r: LiquidationRow) => r.projectId !== '' && r.projectId !== null && r.projectId !== undefined;
+    const projectRows = eligible.filter(hasProject);
+    const overheadRows = eligible.filter((r) => !hasProject(r));
     // First successfully-uploaded receipt per row (a row can have several; the
     // expense's receiptRef is singular so this is the best-effort pick).
     const receiptByRowId = new Map<string, ReceiptAttachment>();
     (receipts || []).forEach((rec) => {
       if (rec.oneDriveId && rec.webUrl && !receiptByRowId.has(rec.rowId)) receiptByRowId.set(rec.rowId, rec);
     });
-    const expenses = toAdd.map((r) => {
+    const baseExpense = (r: LiquidationRow): Record<string, unknown> => {
       const expense: Record<string, unknown> = {
-        projectId: r.projectId,
-        projectName: (r.projectName || '').trim() || '—',
         description: formNo
           ? `Liquidation ${formNo}: ${(r.particulars || '').trim() || 'Liquidation'}`
           : (r.particulars || '').trim() || 'Liquidation',
@@ -262,15 +275,29 @@ async function addLiquidationRowsToProjectExpenses(
       if ((r.deductibleReason || '').trim()) expense.deductibleReason = (r.deductibleReason || '').trim();
       if ((r.remarks || '').trim()) expense.remarks = (r.remarks || '').trim();
       return expense;
-    });
-    await fetch(`${API_BASE}/api/project-expenses`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ expenses }),
-    });
+    };
+    const authHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+    await Promise.all([
+      projectRows.length === 0 ? Promise.resolve() : fetch(`${API_BASE}/api/project-expenses`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          expenses: projectRows.map((r) => ({
+            ...baseExpense(r),
+            projectId: r.projectId,
+            projectName: (r.projectName || '').trim() || '—',
+          })),
+        }),
+      }),
+      overheadRows.length === 0 ? Promise.resolve() : fetch(`${API_BASE}/api/overhead-expenses`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ expenses: overheadRows.map((r) => baseExpense(r)) }),
+      }),
+    ]);
   } catch (err) {
     console.warn('[LiquidationFormPage] expense sync failed:', err);
   }
@@ -307,6 +334,15 @@ export default function LiquidationFormPage() {
   const [scanSnackbar, setScanSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
   const [scanDialog, setScanDialog] = useState<{ open: boolean; rowId: string | null }>({ open: false, rowId: null });
   const [scanBatchOpen, setScanBatchOpen] = useState(false);
+  // Desktop "Scan One" — local file picker (image or PDF), mirrors Expense Monitoring's
+  // Scan One: PDFs parse directly (no crop), photos auto-detect corners and open the
+  // crop dialog first. Reuses handleScanBatchItem to create the row + attach the receipt.
+  const scanOneInputRef = useRef<HTMLInputElement>(null);
+  const scanOneGenRef = useRef(0);
+  const [isScanningOne, setIsScanningOne] = useState(false);
+  const [scanOneEditBlob, setScanOneEditBlob] = useState<Blob | null>(null);
+  const [scanOneEditUrl, setScanOneEditUrl] = useState<string | null>(null);
+  const [scanOneEditQuad, setScanOneEditQuad] = useState<Quad | null>(null);
   const receiptsFolderRef = useRef<{ key: string; driveId: string; folderId: string } | null>(null);
   const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken, login: oneDriveLogin } = useOneDriveAuth();
   const [saving, setSaving] = useState(false);
@@ -316,11 +352,20 @@ export default function LiquidationFormPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const financeRowRefs = useRef(new Map<string, HTMLElement>());
+  const [financeFocusError, setFinanceFocusError] = useState('');
+  const [financeFocusLoading, setFinanceFocusLoading] = useState(false);
 
   const canDeleteLiquidation = draftId !== null || loadedOptionValue.startsWith('submitted:');
   const liquidationToDeleteId = draftId ?? (loadedOptionValue.startsWith('submitted:') ? loadedOptionValue.split(':')[1] : null);
   const isAdmin = user?.role === 'superadmin' || user?.role === 'admin';
   const location = useLocation();
+  const navigate = useNavigate();
+  const rawFinanceFocus = new URLSearchParams(location.search).get('focus') || '';
+  const focusedFinanceOrigin = parseFinanceFocus(rawFinanceFocus);
+  const loadedLiquidationId = loadedOptionValue.includes(':')
+    ? loadedOptionValue.slice(loadedOptionValue.indexOf(':') + 1)
+    : '';
 
   const handleSort = (key: 'date' | 'amount') => {
     setSortConfig((prev) => {
@@ -553,6 +598,115 @@ export default function LiquidationFormPage() {
     return true;
   };
 
+  const setScanOneEdit = (blob: Blob | null, quad: Quad | null) => {
+    setScanOneEditUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return blob ? URL.createObjectURL(blob) : null; });
+    setScanOneEditBlob(blob);
+    setScanOneEditQuad(quad);
+  };
+  useEffect(() => () => { if (scanOneEditUrl) URL.revokeObjectURL(scanOneEditUrl); }, [scanOneEditUrl]);
+
+  // Parses a single scanned receipt (PDF or cropped photo) and hands it to
+  // handleScanBatchItem, which creates the new row and attaches the file.
+  const parseAndAddScanOneRow = async (rawFile: File, croppedBlob: Blob | undefined, gen: number) => {
+    const blobForParse = croppedBlob ?? rawFile;
+    const mimeType = croppedBlob ? 'image/jpeg' : getReceiptParseMimeType(rawFile);
+    const base64 = await blobToBase64(blobForParse);
+    const parsed = await parseReceipt(base64, mimeType);
+    if (gen !== scanOneGenRef.current) return;
+    const imageHash = mimeType.startsWith('image/') ? await computeImageHash(base64).catch(() => undefined) : undefined;
+    const amt = parsed.total ?? parsed.subtotal;
+    const sugCat = parsed.suggestedCategory ?? '';
+    const fields: BatchItemFields = {
+      amount: typeof amt === 'number' ? String(amt) : '',
+      date: parsed.date || '',
+      category: (LIQUIDATION_CATEGORIES as readonly string[]).includes(sugCat) ? sugCat : '',
+      description: parsed.description || parsed.lineItems?.[0]?.description || parsed.vendor || '',
+      supplier: parsed.vendor || '',
+      invoiceNumber: parsed.invoiceNumber || '',
+      invoiceType: parsed.invoiceType || '',
+      vat: typeof parsed.tax === 'number' && parsed.tax > 0 ? String(parsed.tax) : '',
+      deductible: typeof parsed.deductible === 'boolean' ? parsed.deductible : null,
+      deductibleReason: parsed.deductibleReason || null,
+      customerIssues: parsed.customerValidation?.issues ?? [],
+      lowConf: typeof parsed.confidence === 'number' && parsed.confidence < 0.5,
+      projectId: '',
+    };
+    await handleScanBatchItem({ rawFile, croppedBlob, fields, imageHash });
+    const amtLabel = Number(amt ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 });
+    setScanSnackbar({
+      open: true,
+      severity: fields.lowConf ? 'warning' : 'success',
+      message: fields.lowConf
+        ? `Added row (low confidence — please verify): ${parsed.vendor || 'Unknown vendor'} (₱${amtLabel})`
+        : `Added row: ${parsed.vendor || 'Unknown vendor'} (₱${amtLabel})`,
+    });
+  };
+
+  // Desktop Scan One: PDFs parse directly (no crop); photos auto-detect corners
+  // and open the crop dialog first — mirrors ExpenseMonitoring's handleScanInputChange.
+  const handleScanOneFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    scanOneGenRef.current += 1;
+    const gen = scanOneGenRef.current;
+    const validationError = validateReceiptFile(file);
+    if (validationError) {
+      setScanSnackbar({ open: true, severity: 'error', message: validationError });
+      return;
+    }
+    setIsScanningOne(true);
+    try {
+      if (isPdfReceipt(file)) {
+        await parseAndAddScanOneRow(file, undefined, gen);
+        return;
+      }
+      const safeFile = await convertHeicToJpeg(file);
+      let detected = await detectReceiptQuad(safeFile);
+      if (!detected) {
+        try {
+          const imageBase64 = await blobToBase64(safeFile);
+          detected = await detectCropFromServer(imageBase64, safeFile.type || 'image/jpeg');
+        } catch { /* best-effort — fall through to the default quad */ }
+      }
+      const quad: Quad = detected ?? [
+        { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 }, { x: 0.88, y: 0.86 }, { x: 0.12, y: 0.86 },
+      ];
+      if (gen !== scanOneGenRef.current) return;
+      setScanOneEdit(safeFile, quad);
+    } catch (err) {
+      if (gen === scanOneGenRef.current) {
+        setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Could not process receipt' });
+      }
+    } finally {
+      if (gen === scanOneGenRef.current) setIsScanningOne(false);
+    }
+  };
+
+  const retakeScanOne = () => {
+    setScanOneEdit(null, null);
+    scanOneInputRef.current?.click();
+  };
+
+  const confirmScanOneCrop = async (quad: Quad) => {
+    if (!scanOneEditBlob) return;
+    scanOneGenRef.current += 1;
+    const gen = scanOneGenRef.current;
+    setIsScanningOne(true);
+    try {
+      const flattened = await perspectiveCropToBlob(scanOneEditBlob, quad);
+      const rawFile = scanOneEditBlob instanceof File
+        ? scanOneEditBlob
+        : new File([scanOneEditBlob], `receipt-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      await parseAndAddScanOneRow(rawFile, flattened, gen);
+      setScanOneEdit(null, null);
+    } catch (err) {
+      setScanSnackbar({ open: true, severity: 'error', message: err instanceof Error ? err.message : 'Failed to parse receipt' });
+    } finally {
+      setIsScanningOne(false);
+    }
+  };
+
   const removeReceipt = (id: string) => setReceipts((prev) => prev.filter((r) => r.id !== id));
 
   // In-app viewer (with rotate) instead of always jumping out to OneDrive.
@@ -771,11 +925,11 @@ export default function LiquidationFormPage() {
     }
   };
 
-  const loadDraft = async (id: string, isSubmitted = false) => {
-    if (!token) return;
+  const loadDraft = async (id: string, isSubmitted = false): Promise<LiquidationRow[] | null> => {
+    if (!token) return null;
     const res = await fetch(`${API_BASE}/api/liquidations/${id}`, { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json().catch(() => ({}));
-    if (!data.success || !data.liquidation) return;
+    if (!data.success || !data.liquidation) return null;
     const l = data.liquidation;
     const serverStatus = String(l.status ?? '').toLowerCase().trim();
     const submitted =
@@ -890,6 +1044,54 @@ export default function LiquidationFormPage() {
       setPendingRevision(null);
     }
     setSubmitSuccess(null);
+    return loadedRows;
+  };
+
+  useEffect(() => {
+    if (!token || focusedFinanceOrigin?.type !== 'liquidation') return;
+    let cancelled = false;
+    setFinanceFocusLoading(true);
+    setFinanceFocusError('');
+    loadDraft(focusedFinanceOrigin.id, false)
+      .then((loadedRows) => {
+        if (cancelled) return;
+        if (!loadedRows) {
+          setFinanceFocusError('Liquidation could not be loaded or is not visible to this account.');
+          return;
+        }
+        if (focusedFinanceOrigin.rowId === '__form__') return;
+        if (!loadedRows.some((row) => row.id === focusedFinanceOrigin.rowId)) {
+          setFinanceFocusError('The liquidation was loaded, but the linked itemized row no longer exists.');
+          return;
+        }
+        window.requestAnimationFrame(() => {
+          financeRowRefs.current.get(financeFocusToken(focusedFinanceOrigin))?.scrollIntoView({
+            behavior: 'smooth', block: 'center', inline: 'nearest',
+          });
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setFinanceFocusError('Failed to load the linked liquidation.');
+      })
+      .finally(() => {
+        if (!cancelled) setFinanceFocusLoading(false);
+      });
+    return () => { cancelled = true; };
+    // loadDraft intentionally reads the latest form setters; the stable URL token is
+    // the trigger, avoiding reloads on every row edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawFinanceFocus, token]);
+
+  const clearFinanceFocus = () => {
+    const params = new URLSearchParams(location.search);
+    params.delete('focus');
+    params.delete('from');
+    navigate({ pathname: location.pathname, search: params.toString() ? `?${params.toString()}` : '' }, { replace: true });
+  };
+
+  const backToFinanceSource = () => {
+    const from = new URLSearchParams(location.search).get('from');
+    if (from) navigate(from);
   };
 
   // Admin: flip the reimbursement status of the loaded no-CA liquidation.
@@ -1657,6 +1859,15 @@ export default function LiquidationFormPage() {
           </Button>
           <Button
             variant="outlined"
+            startIcon={isScanningOne ? <CircularProgress size={18} /> : <UploadFileIcon />}
+            onClick={() => scanOneInputRef.current?.click()}
+            disabled={isViewingSubmitted || isScanningOne}
+            sx={{ borderColor: theme.primary, color: theme.primary, '&:hover': { borderColor: theme.secondary, color: theme.secondary } }}
+          >
+            Scan One
+          </Button>
+          <Button
+            variant="outlined"
             startIcon={<PhotoLibraryIcon />}
             onClick={() => setScanBatchOpen(true)}
             disabled={isViewingSubmitted}
@@ -1664,6 +1875,13 @@ export default function LiquidationFormPage() {
           >
             Scan Multiple
           </Button>
+          <input
+            type="file"
+            ref={scanOneInputRef}
+            accept={RECEIPT_FILE_ACCEPT}
+            style={{ display: 'none' }}
+            onChange={handleScanOneFileChange}
+          />
           <Button
             variant="outlined"
             startIcon={<ImportIcon />}
@@ -1691,6 +1909,52 @@ export default function LiquidationFormPage() {
           </Button>
         </Box>
       </Box>
+      {(rawFinanceFocus || financeFocusError) && (
+        <Alert
+          severity={financeFocusError ? 'warning' : 'info'}
+          sx={{ mb: 2 }}
+          action={(
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              {new URLSearchParams(location.search).get('from') && (
+                <Button color="inherit" size="small" onClick={backToFinanceSource}>Back to source</Button>
+              )}
+              <Button color="inherit" size="small" onClick={clearFinanceFocus}>Clear focus</Button>
+            </Box>
+          )}
+        >
+          {financeFocusLoading
+            ? 'Loading the exact liquidation item…'
+            : financeFocusError || 'Showing the exact liquidation item from the money trail.'}
+        </Alert>
+      )}
+      {loadedLiquidationId && (caId || loadedReimb) && (
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+          {caId && (
+            <Chip
+              label="Open linked cash advance"
+              color="primary"
+              variant="outlined"
+              onClick={() => navigate(financeFocusUrl(
+                { type: 'cash_advance', id: caId },
+                `${location.pathname}${location.search}`,
+              ))}
+              sx={{ cursor: 'pointer' }}
+            />
+          )}
+          {loadedReimb && (
+            <Chip
+              label="Open linked reimbursement"
+              color="info"
+              variant="outlined"
+              onClick={() => navigate(financeFocusUrl(
+                { type: 'reimbursement', id: loadedReimb.id },
+                `${location.pathname}${location.search}`,
+              ))}
+              sx={{ cursor: 'pointer' }}
+            />
+          )}
+        </Box>
+      )}
       {submitSuccess && (
         <Typography variant="body2" sx={{ mb: 2, color: submitSuccess.startsWith('Liquidation submitted') ? 'success.main' : submitSuccess.startsWith('Draft saved') ? 'info.main' : 'error.main' }}>
           {submitSuccess}
@@ -2038,8 +2302,33 @@ export default function LiquidationFormPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                sortedRows.map((row, index) => (
-                  <TableRow key={row.id} hover sx={{ '&:hover .delete-btn': { opacity: 1 } }}>
+                sortedRows.map((row, index) => {
+                  const origin = loadedLiquidationId ? liquidationRowOrigin(loadedLiquidationId, row) : null;
+                  const rowToken = origin ? financeFocusToken(origin) : '';
+                  const focused = Boolean(
+                    origin
+                    && focusedFinanceOrigin?.type === 'liquidation'
+                    && focusedFinanceOrigin.id === loadedLiquidationId
+                    && focusedFinanceOrigin.rowId === row.id,
+                  );
+                  return (
+                  <TableRow
+                    key={row.id}
+                    ref={(element: HTMLTableRowElement | null) => {
+                      if (!rowToken) return;
+                      if (element) financeRowRefs.current.set(rowToken, element);
+                      else financeRowRefs.current.delete(rowToken);
+                    }}
+                    hover
+                    aria-current={focused ? 'true' : undefined}
+                    sx={{
+                      '&:hover .delete-btn': { opacity: 1 },
+                      ...(focused ? {
+                        bgcolor: 'rgba(44,90,160,0.14)',
+                        outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px',
+                      } : {}),
+                    }}
+                  >
                     <TableCell sx={{ color: 'text.secondary' }}>{index + 1}</TableCell>
                     <TableCell>
                       <TextField
@@ -2239,9 +2528,12 @@ export default function LiquidationFormPage() {
                       >
                         <DeleteIcon fontSize="small" />
                       </IconButton>
+                      {origin && (
+                        <MoneyTrailButton origin={origin} compact />
+                      )}
                     </TableCell>
                   </TableRow>
-                ))
+                );})
               )}
             </TableBody>
           </Table>
@@ -2383,6 +2675,22 @@ export default function LiquidationFormPage() {
           setActiveScanJob({ pairingToken, received: 0 });
         }}
       />
+      {/* Crop step between photo pick and AI parse for Scan One (auto-detected corners,
+          adjustable). PDFs never reach this dialog — they parse directly. */}
+      <Dialog open={!!scanOneEditUrl} onClose={() => {}} maxWidth="xs" fullWidth>
+        <DialogTitle>Adjust Receipt Crop</DialogTitle>
+        <DialogContent>
+          {scanOneEditUrl && scanOneEditQuad && (
+            <ReceiptCropper
+              imageUrl={scanOneEditUrl}
+              initialQuad={scanOneEditQuad}
+              busy={isScanningOne}
+              onConfirm={confirmScanOneCrop}
+              onRetake={retakeScanOne}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
       <Dialog open={scanBatchOpen} onClose={() => setScanBatchOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Scan Multiple Receipts</DialogTitle>
         <DialogContent>
