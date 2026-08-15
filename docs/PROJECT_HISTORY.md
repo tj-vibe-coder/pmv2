@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-08-15 — Assist P3 propose-then-confirm + P4 always-on
+
+Local `rj/dev` only. `propose_opportunity_update` creates a user-bound in-memory draft; `POST /api/ai-assist/proposals/:id/confirm` is the only write (one allowlisted field + `updatedAt`). `won`/`lost` blocked. Live stays up after mic start, reconnects once without dropping the MediaStream, expires at 10 minutes. Flag still local `.env` only.
+
+---
+
 ## Calcsheet — phases completed
 
 **Phase 0 — Schema + calc-engine foundation.** Extended `Quotation` with `formulaVersion`, `importedFrom`, `legacyTotalsSnapshot`, `generalReqContingencyMode`. Added `Project.ongoing`. `computeTotals(q)` short-circuits to snapshot when legacy. `duplicateQuotation` resets formula to current. Editor: yellow Legacy banner + locked inputs + "Duplicate to revise" CTA.

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const express = require('express');
 const { createAiAssistRouter } = require('./router');
+const { createProposalStore, proposeOpportunityUpdate } = require('./proposals');
 
 function startServer(opts) {
   const app = express();
@@ -208,6 +209,7 @@ test('successful chat returns 200 with the documented envelope and writes a meta
     assert.equal(body.answer, 'Hello answer.');
     assert.ok(typeof body.requestId === 'string' && body.requestId.length > 0);
     assert.ok(typeof body.notice === 'string' && body.notice.length > 0);
+    assert.equal(body.proposal, null);
 
     assert.equal(calls.length, 1);
     const record = JSON.stringify(calls[0]);
@@ -456,6 +458,149 @@ test('a live session issued for one user cannot be used by a different authentic
       body: JSON.stringify({ liveSessionId, args: {} }),
     });
     assert.equal(toolRes.status, 403);
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /proposals/:id/confirm returns 401 without user', async () => {
+  const { server, base } = await startServer({
+    db: emptyDb,
+    getCurrentUser: async () => null,
+    config: baseConfig(),
+    createChatClient: () => { throw new Error('must not be called'); },
+  });
+  try {
+    const res = await fetch(base + '/proposals/p1/confirm', { method: 'POST' });
+    assert.equal(res.status, 401);
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /proposals/:id/confirm returns 403 when proposal owned by another user', async () => {
+  const proposalStore = createProposalStore();
+  const proposalUser = { id: 'u-owner', username: 'RJR' };
+  const requestingUser = { id: 'u-other', username: 'TJC' };
+  let current = { id: 'opp1', name: 'Rezcoat', status: 'draft' };
+  const fakeDb = {
+    collection: () => ({
+      doc: () => ({
+        get: async () => ({ id: 'opp1', exists: true, data: () => ({ ...current }) }),
+        update: async (patch) => { current = { ...current, ...patch }; },
+      }),
+    }),
+  };
+  const proposal = await proposeOpportunityUpdate({
+    db: fakeDb,
+    store: proposalStore,
+    user: proposalUser,
+    args: { opportunityId: 'opp1', field: 'status', value: 'for_review' },
+    asOf: '2026-08-15T00:00:00.000Z',
+  });
+
+  const { server, base } = await startServer({
+    db: fakeDb,
+    proposalStore,
+    getCurrentUser: async () => requestingUser,
+    config: baseConfig(),
+    createChatClient: () => { throw new Error('must not be called'); },
+  });
+  try {
+    const res = await fetch(base + `/proposals/${proposal.data.proposalId}/confirm`, { method: 'POST' });
+    assert.equal(res.status, 403);
+    const body = await res.json();
+    assert.equal(body.error, 'not_allowlisted');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /proposals/:id/confirm 200 applies update and returns applied:true', async () => {
+  const proposalStore = createProposalStore();
+  const user = { id: 'u1', username: 'RJR' };
+  const updates = [];
+  let current = { id: 'opp1', name: 'Rezcoat', opportunityGrade: 'B' };
+  const fakeDb = {
+    collection: () => ({
+      doc: () => ({
+        get: async () => ({ id: 'opp1', exists: true, data: () => ({ ...current }) }),
+        update: async (patch) => {
+          updates.push(patch);
+          current = { ...current, ...patch };
+        },
+      }),
+    }),
+  };
+  const proposal = await proposeOpportunityUpdate({
+    db: fakeDb,
+    store: proposalStore,
+    user,
+    args: { opportunityId: 'opp1', field: 'opportunityGrade', value: 'A' },
+    asOf: '2026-08-15T00:00:00.000Z',
+  });
+
+  const { server, base } = await startServer({
+    db: fakeDb,
+    proposalStore,
+    getCurrentUser: async () => user,
+    config: baseConfig(),
+    createChatClient: () => { throw new Error('must not be called'); },
+  });
+  try {
+    const res = await fetch(base + `/proposals/${proposal.data.proposalId}/confirm`, { method: 'POST' });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.applied, true);
+    assert.equal(body.field, 'opportunityGrade');
+    assert.equal(body.proposedValue, 'A');
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].opportunityGrade, 'A');
+    assert.ok(updates[0].updatedAt);
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /proposals/:id/reject 200 then confirm 404', async () => {
+  const proposalStore = createProposalStore();
+  const user = { id: 'u1', username: 'RJR' };
+  const updates = [];
+  let current = { id: 'opp1', name: 'Rezcoat', notes: 'old' };
+  const fakeDb = {
+    collection: () => ({
+      doc: () => ({
+        get: async () => ({ id: 'opp1', exists: true, data: () => ({ ...current }) }),
+        update: async (patch) => { updates.push(patch); },
+      }),
+    }),
+  };
+  const proposal = await proposeOpportunityUpdate({
+    db: fakeDb,
+    store: proposalStore,
+    user,
+    args: { opportunityId: 'opp1', field: 'notes', value: 'new' },
+    asOf: '2026-08-15T00:00:00.000Z',
+  });
+
+  const { server, base } = await startServer({
+    db: fakeDb,
+    proposalStore,
+    getCurrentUser: async () => user,
+    config: baseConfig(),
+    createChatClient: () => { throw new Error('must not be called'); },
+  });
+  try {
+    const rejectRes = await fetch(base + `/proposals/${proposal.data.proposalId}/reject`, { method: 'POST' });
+    assert.equal(rejectRes.status, 200);
+    const rejectBody = await rejectRes.json();
+    assert.equal(rejectBody.ok, true);
+    assert.equal(rejectBody.rejected, true);
+    assert.equal(updates.length, 0);
+
+    const confirmRes = await fetch(base + `/proposals/${proposal.data.proposalId}/confirm`, { method: 'POST' });
+    assert.equal(confirmRes.status, 404);
   } finally {
     server.close();
   }

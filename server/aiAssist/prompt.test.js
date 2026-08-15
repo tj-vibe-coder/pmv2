@@ -5,6 +5,8 @@ const { buildTextSystemInstruction, buildLiveSystemInstruction } = require('./pr
 test('text system instruction contains the required safety phrases', () => {
   const text = buildTextSystemInstruction({ promptVersion: 'ioct-readonly-v1' });
   assert.ok(text.includes('read-only'));
+  assert.ok(text.includes('propose_opportunity_update'));
+  assert.ok(text.includes('applied: true'));
   assert.ok(text.includes('untrusted data'));
   assert.ok(text.includes('Never guess'));
   assert.ok(text.includes('Never manufacture a citation'));

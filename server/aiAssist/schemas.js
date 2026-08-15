@@ -52,6 +52,12 @@ const TOOL_ARG_SHAPES = {
   search_clients: {
     search: { type: 'string', required: true },
   },
+  propose_opportunity_update: {
+    opportunityId: { type: 'string', required: true },
+    field: { type: 'enum', values: ['status', 'opportunityGrade', 'notes'] },
+    value: { type: 'string', required: true },
+    reason: { type: 'string' },
+  },
 };
 
 const MAX_MESSAGES = 12;

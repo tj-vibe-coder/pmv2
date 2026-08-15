@@ -12,7 +12,7 @@ const PROJECT_FIELDS = [
 ];
 
 const OPPORTUNITY_FIELDS = [
-  'id', 'code', 'name', 'location', 'date', 'status', 'ongoing',
+  'id', 'code', 'name', 'notes', 'location', 'date', 'status', 'ongoing',
   'opportunityGrade', 'mainProjectStatus', 'mainProjectProgressPercent',
   'mainProjectNo', 'createdAt', 'updatedAt'
 ];

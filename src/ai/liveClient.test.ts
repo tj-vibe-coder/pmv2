@@ -1,4 +1,11 @@
-import { createLiveClient, LivePhase, mergeTranscript } from './liveClient';
+import {
+  createLiveClient,
+  LivePhase,
+  mergeTranscript,
+  isSpokenStop,
+  isSpokenConfirm,
+  isSpokenReject,
+} from './liveClient';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -76,14 +83,15 @@ function makeDeps(overrides: Partial<Parameters<typeof createLiveClient>[0]> = {
     createCaptureContext: jest.fn(() => captureContext),
     createPlaybackContext: jest.fn(() => playbackContext),
     connectSession: jest.fn(async () => {
-      session = {
+      const s = {
         closed: false,
         sendRealtimeInputPcm: jest.fn(),
         sendToolResponse: jest.fn(),
         sendClientContent: jest.fn(),
-        close: () => { session!.closed = true; },
+        close: () => { s.closed = true; },
       };
-      return session;
+      session = s;
+      return s;
     }),
     onExecuteTool: jest.fn(async () => ({ ok: true })),
     onPhaseChange: (p: LivePhase) => phases.push(p),
@@ -264,3 +272,201 @@ it('sendPageContext writes an incomplete turn so Live does not start speaking', 
     turnComplete: false,
   });
 });
+
+it('session.close() during reconnect does not treat the close as a second drop', async () => {
+  let firstHandlers: { onClose: () => void } | undefined;
+  const { deps, stream } = makeDeps({
+    connectSession: jest.fn(async (handlers) => {
+      if (!firstHandlers) firstHandlers = handlers;
+      const session = {
+        closed: false,
+        sendRealtimeInputPcm: jest.fn(),
+        sendToolResponse: jest.fn(),
+        sendClientContent: jest.fn(),
+        close() {
+          session.closed = true;
+          handlers.onClose();
+        },
+      };
+      return session;
+    }),
+  });
+  const client = createLiveClient(deps as any);
+  await client.start();
+  firstHandlers!.onClose();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(client.getPhase()).toBe('listening');
+  expect(deps.connectSession).toHaveBeenCalledTimes(2);
+  expect(stream._stopped).toEqual([]);
+});
+
+it('onClose after start reconnects once, phase goes reconnecting then listening, getUserMedia called once, connectSession called twice, stream not stopped', async () => {
+  const { deps, phases, stream } = makeDeps();
+  const client = createLiveClient(deps as any);
+  await client.start();
+  expect(phases).toEqual(['connecting', 'listening']);
+  expect(deps.connectSession).toHaveBeenCalledTimes(1);
+
+  const handlers = (deps.connectSession as jest.Mock).mock.calls[0][0];
+  handlers.onClose();
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(phases).toEqual(['connecting', 'listening', 'reconnecting', 'listening']);
+  expect(client.getPhase()).toBe('listening');
+  expect(deps.getUserMedia).toHaveBeenCalledTimes(1);
+  expect(deps.connectSession).toHaveBeenCalledTimes(2);
+  expect(stream._stopped).toEqual([]);
+});
+
+it('onClose after successful reconnect goes to error and releases stream', async () => {
+  const { deps, stream } = makeDeps();
+  const client = createLiveClient(deps as any);
+  await client.start();
+
+  const firstHandlers = (deps.connectSession as jest.Mock).mock.calls[0][0];
+  firstHandlers.onClose();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(deps.connectSession).toHaveBeenCalledTimes(2);
+  expect(client.getPhase()).toBe('listening');
+
+  const secondHandlers = (deps.connectSession as jest.Mock).mock.calls[1][0];
+  secondHandlers.onClose();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(client.getPhase()).toBe('error');
+  expect(stream._stopped).toEqual([true]);
+});
+
+it('stop() during reconnecting does not leave a live session (connectSession resolve after stop is ignored / closed)', async () => {
+  const reconnectGate = deferred<any>();
+  let connectCount = 0;
+  let secondSession: any = null;
+  const { deps, stream } = makeDeps({
+    connectSession: jest.fn(async () => {
+      connectCount += 1;
+      if (connectCount === 1) {
+        return {
+          closed: false,
+          sendRealtimeInputPcm: jest.fn(),
+          sendToolResponse: jest.fn(),
+          sendClientContent: jest.fn(),
+          close: jest.fn(),
+        };
+      }
+      secondSession = {
+        closed: false,
+        sendRealtimeInputPcm: jest.fn(),
+        sendToolResponse: jest.fn(),
+        sendClientContent: jest.fn(),
+        close: jest.fn(() => {
+          secondSession.closed = true;
+        }),
+      };
+      await reconnectGate.promise;
+      return secondSession;
+    }),
+  });
+
+  const client = createLiveClient(deps as any);
+  await client.start();
+
+  const firstHandlers = (deps.connectSession as jest.Mock).mock.calls[0][0];
+  firstHandlers.onClose();
+  await Promise.resolve();
+  expect(client.getPhase()).toBe('reconnecting');
+
+  client.stop();
+  expect(client.getPhase()).toBe('idle');
+
+  reconnectGate.resolve(secondSession);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(secondSession.closed).toBe(true);
+  expect(client.getPhase()).toBe('idle');
+  expect(stream._stopped).toEqual([true]);
+});
+
+it('maxSessionMs stops to idle and calls onSessionExpired after duration', async () => {
+  jest.useFakeTimers();
+  try {
+    const onSessionExpired = jest.fn();
+    const { deps } = makeDeps({
+      maxSessionMs: 20,
+      onSessionExpired,
+    });
+    const client = createLiveClient(deps as any);
+    await client.start();
+    expect(client.getPhase()).toBe('listening');
+    expect(onSessionExpired).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(25);
+
+    expect(client.getPhase()).toBe('idle');
+    expect(onSessionExpired).toHaveBeenCalledTimes(1);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+describe('spoken intent helpers', () => {
+  it.each([
+    ['stop listening', true],
+    ["that's all", true],
+    ['thats all', true],
+    ['stop assist', true],
+    ['end voice', true],
+    ['cancel voice', true],
+    ['Stop Listening, please', true],
+    ["That's all for now", true],
+    ['yes', false],
+    ['no', false],
+    ['apply that', false],
+    ['', false],
+  ])('isSpokenStop("%s") -> %s', (text, expected) => {
+    expect(isSpokenStop(text)).toBe(expected);
+  });
+
+  it.each([
+    ['apply that', true],
+    ['apply that change', true],
+    ['yes apply', true],
+    ['confirm change', true],
+    ['save that', true],
+    ['Yes, apply that change!', true],
+    ['Please save that.', true],
+    ['yes', false],
+    ['no', false],
+    ['stop listening', false],
+    ['reject that', false],
+    ['', false],
+  ])('isSpokenConfirm("%s") -> %s', (text, expected) => {
+    expect(isSpokenConfirm(text)).toBe(expected);
+  });
+
+  it.each([
+    ["don't apply", true],
+    ['dont apply', true],
+    ['do not apply', true],
+    ['reject that', true],
+    ['cancel that change', true],
+    ['never mind', true],
+    ['nevermind', true],
+    ["Don't apply this", true],
+    ['Never mind, thank you', true],
+    ['yes', false],
+    ['no', false],
+    ['apply that', false],
+    ['stop listening', false],
+    ['', false],
+  ])('isSpokenReject("%s") -> %s', (text, expected) => {
+    expect(isSpokenReject(text)).toBe(expected);
+  });
+});
+

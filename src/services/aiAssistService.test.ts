@@ -2,7 +2,7 @@ jest.mock('../config/api', () => ({
   API_BASE: 'http://lan-host:3001',
 }));
 
-import { sendAiChat, requestLiveToken, executeLiveTool, AiAssistError } from './aiAssistService';
+import { sendAiChat, requestLiveToken, executeLiveTool, confirmAiProposal, rejectAiProposal, AiAssistError } from './aiAssistService';
 
 const fetchMock = jest.fn();
 global.fetch = fetchMock as unknown as typeof fetch;
@@ -138,6 +138,68 @@ it('requestLiveToken requires a liveSessionId and executeLiveTool sends it', asy
       method: 'POST',
       body: JSON.stringify({ args: { search: 'plant' }, liveSessionId: 'sess-1' }),
     }),
+  );
+});
+
+it('parses a chat proposal when present', async () => {
+  fetchMock.mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      requestId: 'r1',
+      answer: 'draft ready',
+      citations: [],
+      followUps: [],
+      notice: 'n',
+      proposal: {
+        proposalId: 'p1',
+        kind: 'opportunity',
+        recordId: 'opp1',
+        label: 'Rezcoat',
+        field: 'opportunityGrade',
+        currentValue: 'B',
+        proposedValue: 'A',
+        reason: 'stronger signal',
+        expiresAt: '2026-08-15T00:10:00.000Z',
+      },
+    }),
+  });
+  const result = await sendAiChat([{ role: 'user', text: 'grade A' }], null);
+  expect(result.proposal).toMatchObject({ proposalId: 'p1', field: 'opportunityGrade', proposedValue: 'A' });
+});
+
+it('confirmAiProposal posts the confirm route and rejectAiProposal posts reject', async () => {
+  fetchMock.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      applied: true,
+      proposalId: 'p1',
+      kind: 'opportunity',
+      recordId: 'opp1',
+      label: 'Rezcoat',
+      field: 'status',
+      currentValue: 'sent',
+      proposedValue: 'for_review',
+    }),
+  });
+  await expect(confirmAiProposal('p1')).resolves.toMatchObject({ applied: true, proposalId: 'p1' });
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    'http://lan-host:3001/api/ai-assist/proposals/p1/confirm',
+    expect.objectContaining({ method: 'POST' }),
+  );
+
+  fetchMock.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, rejected: true, proposalId: 'p1' }),
+  });
+  await expect(rejectAiProposal('p1')).resolves.toEqual({ rejected: true, proposalId: 'p1' });
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    'http://lan-host:3001/api/ai-assist/proposals/p1/reject',
+    expect.objectContaining({ method: 'POST' }),
   );
 });
 

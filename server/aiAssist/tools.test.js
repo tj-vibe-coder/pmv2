@@ -7,7 +7,7 @@ test('registry exposes exactly the approved read-only tools', () => {
   assert.deepEqual([...registry.keys()].sort(), [
     'get_expense_summary', 'get_opportunity_snapshot', 'get_portfolio_summary',
     'get_project_snapshot', 'get_quotation_summary', 'list_quotations_for_opportunity',
-    'navigate_to_record', 'search_clients', 'search_projects', 'search_sales_opportunities'
+    'navigate_to_record', 'propose_opportunity_update', 'search_clients', 'search_projects', 'search_sales_opportunities'
   ]);
 });
 
@@ -219,7 +219,7 @@ test('get_opportunity_snapshot returns allowlisted fields and company identity o
   assert.deepEqual(result.data.customer, { id: 'c1', name: 'Rezcoat Inc', code: 'RZC' });
   assert.ok(!('contacts' in result.data.customer));
   assert.ok(!('password_hash' in result.data));
-  assert.ok(!('notes' in result.data));
+  assert.equal(result.data.notes, 'internal');
   assert.equal(result.sources[0].route, '/sales/calcsheet/projects/opp1');
 });
 
@@ -263,4 +263,36 @@ test('search_clients matches name or code and never returns contacts', async () 
   assert.ok(!('contacts' in result.data[0]));
   assert.ok(!('address' in result.data[0]));
   assert.equal(result.sources[0].route, '/sales/clients');
+});
+
+test('propose_opportunity_update returns propose_unavailable when store or user missing', async () => {
+  const registry = createToolRegistry({ db: {} });
+  const result = await registry.get('propose_opportunity_update').execute({ opportunityId: 'opp1', field: 'notes', value: 'hello' });
+  assert.equal(result.data.applied, false);
+  assert.equal(result.data.error, 'propose_unavailable');
+  assert.deepEqual(result.sources, []);
+});
+
+test('propose_opportunity_update returns error code on invalid input when handled by proposal logic', async () => {
+  const fakeDb = {
+    collection: () => ({
+      doc: () => ({
+        get: async () => ({ id: 'opp1', exists: true, data: () => ({ status: 'draft' }) }),
+      }),
+    }),
+  };
+  const { createProposalStore } = require('./proposals');
+  const proposalStore = createProposalStore();
+  const registry = createToolRegistry({
+    db: fakeDb,
+    user: { id: 'u1', username: 'RJR' },
+    proposalStore,
+  });
+  const result = await registry.get('propose_opportunity_update').execute({
+    opportunityId: 'opp1',
+    field: 'status',
+    value: 'won',
+  });
+  assert.equal(result.data.applied, false);
+  assert.equal(result.data.error, 'field_not_allowed');
 });

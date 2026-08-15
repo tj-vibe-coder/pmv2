@@ -15,6 +15,8 @@ jest.mock('../../ai/liveSession', () => ({
 
 jest.mock('../../services/aiAssistService', () => ({
   sendAiChat: jest.fn(),
+  confirmAiProposal: jest.fn(),
+  rejectAiProposal: jest.fn(),
   AiAssistError: class AiAssistError extends Error {
     status: number;
     constructor(message: string, status: number) {
@@ -48,6 +50,36 @@ function renderDrawer(enabled = true) {
   fireEvent.click(screen.getByLabelText(/open ioct assist/i));
   return result;
 }
+
+it('shows a pending draft card with Apply and Discard', async () => {
+  sendAiChatMock.mockResolvedValue({
+    ok: true,
+    requestId: 'r1',
+    answer: 'Draft ready.',
+    citations: [],
+    followUps: [],
+    notice: 'n',
+    proposal: {
+      proposalId: 'p1',
+      kind: 'opportunity',
+      recordId: 'opp1',
+      label: 'Rezcoat',
+      field: 'opportunityGrade',
+      currentValue: 'B',
+      proposedValue: 'A',
+      reason: 'stronger signal',
+    },
+  });
+  renderDrawer();
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'make it grade A' } });
+  fireEvent.click(screen.getByRole('button', { name: /send/i }));
+  await waitFor(() => {
+    expect(screen.getByLabelText(/pending assist draft/i)).toBeInTheDocument();
+  });
+  expect(screen.getByRole('button', { name: /apply/i })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /discard/i })).toBeInTheDocument();
+  expect(screen.getByText(/B → A/)).toBeInTheDocument();
+});
 
 it('shows a "Read only" badge and a persistent AI-disclaimer when a message exists', async () => {
   sendAiChatMock.mockResolvedValue({

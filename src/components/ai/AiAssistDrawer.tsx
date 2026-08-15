@@ -20,6 +20,7 @@ import { useAiAssist } from './AiAssistProvider';
 import AiComposer from './AiComposer';
 import AiLiveStatus from './AiLiveStatus';
 import AiMessageList from './AiMessageList';
+import AiProposalCard from './AiProposalCard';
 
 export const AI_ASSIST_DESKTOP_WIDTH_PX = 420;
 
@@ -41,7 +42,11 @@ export default function AiAssistDrawer({
   enabled = true,
   onNavigateSource = noOp,
 }: AiAssistDrawerProps): React.ReactElement {
-  const { isOpen, open, close, messages, isLoading, send, stop, retry, clear, livePhase, micLevel, startVoice, stopVoice } = useAiAssist();
+  const {
+    isOpen, open, close, messages, isLoading, send, stop, retry, clear,
+    livePhase, micLevel, startVoice, stopVoice,
+    pendingProposal, proposalBusy, confirmProposal, rejectProposal,
+  } = useAiAssist();
   const isVoiceActive = livePhase !== 'idle' && livePhase !== 'error';
 
   // Click-to-toggle. Press-and-hold used to stop on pointerup/leave, which
@@ -79,7 +84,7 @@ export default function AiAssistDrawer({
           <Typography component="h2" variant="h6">IOCT Assist</Typography>
           <Chip label="Read only" size="small" />
           {viewing ? <Chip label={`Now viewing ${viewing}`} size="small" variant="outlined" /> : null}
-          {isVoiceActive && <Chip color="primary" label="Live" size="small" />}
+          {isVoiceActive && <Chip color="primary" label="Always on" size="small" />}
         </Stack>
         <IconButton aria-label="Close IOCT Assist" onClick={close}>
           <CloseIcon />
@@ -99,6 +104,14 @@ export default function AiAssistDrawer({
               </Stack>
             )}
             <AiLiveStatus micLevel={micLevel} phase={livePhase} />
+            {pendingProposal ? (
+              <AiProposalCard
+                busy={proposalBusy}
+                onConfirm={() => { void confirmProposal(); }}
+                onReject={() => { void rejectProposal(); }}
+                proposal={pendingProposal}
+              />
+            ) : null}
             <AiMessageList messages={messages} onNavigateSource={onNavigateSource} />
             {lastMessage?.role === 'error' && (
               <Button onClick={() => retry(pageContext)} sx={{ mt: 1 }}>Retry</Button>

@@ -4,6 +4,14 @@
 
 Hands-free P1 added a real `/projects/:id` route that loads `ProjectMonitoringApp`. Opportunity and quotation citation routes were already real. Collections/progress still use the `sessionStorage.selectedProjectId` bridge onto `/dashboard` as a fallback.
 
+## AI Assist proposals are process-local
+
+Drafts from `propose_opportunity_update` live in the Express process (`createProposalStore`, 10-minute TTL). A Cloud Functions instance recycle or a second instance will 404 a confirm. Fine for local RJR/TJC; not a multi-instance store.
+
+## Assist cannot set opportunity status to won or lost
+
+Those transitions run OneDrive promotion and main-project sync in `quotationStore.updateProject`. Assist confirm writes one Firestore field only, so won/lost stay blocked at propose time.
+
 ## AI Assist text chat and Live voice are still two Gemini sessions after Live ends
 
 While Live is on, typed lines go into the Live session (`sendClientContent`, turn complete) and do not call `stopVoice()`. After the mic is stopped, typed `POST /api/ai-assist/chat` is still a new Flash-Lite chat. It now packs conversation text plus a capped `priorToolResults` list from this in-memory session. History is still not persisted across reload or logout.

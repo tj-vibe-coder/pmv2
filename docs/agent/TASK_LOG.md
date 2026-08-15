@@ -1,5 +1,32 @@
 # Task Log
 
+## 2026-08-15 — Merged origin/main into rj/dev
+
+Merged finance money-trail + follow-ups (PRs #68/#69, tip `2375a36`) into `rj/dev` as `2a73e60`. Conflicts in `server.js` (kept both Assist and finance-trace requires) and `docs/agent/PROJECT_STATE.md` (combined). Incoming diff was not a stale-clone rollback — Assist deletions in `git diff HEAD origin/main` were “main does not have Assist yet.” P3/P4 remain uncommitted on top. Post-merge: Assist + finance-trace node tests 118/118, `tsc --noEmit` clean after a liveClient test `this.closed` fix.
+
+CUI preview stayed on `/login` (RJR signed in in another window). G0 mic/propose walkthrough not completed in this session.
+
+## 2026-08-15 — Hands-free P3 propose-then-confirm and P4 always-on
+
+Implemented P3/P4 on `rj/dev` with Kabayan (Antigravity Gemini 3.7 Flash) for server wiring and liveClient. Orchestrator owns the proposal store and UI confirm path.
+
+P3: in-memory `proposalStore`; `propose_opportunity_update` never writes; confirm/reject routes are user-bound; allowlisted fields only (`status` without won/lost, `opportunityGrade`, `notes`); UI draft card; typed/spoken “apply that change” / “don’t apply”. P4: stay listening after each turn, one reconnect that does not drop the mic, 10-minute expiry, Always-on chip, spoken stop phrases.
+
+### Verification
+
+- `node --test server/aiAssist/*.test.js` 86/86
+- Jest liveClient/service/provider/drawer/liveStatus 89/89 (then liveClient 55/55 after reconnect-guard fix)
+- `npx tsc --noEmit` clean; `ai-assist:sync` + `ai-assist:check` clean
+- Not runtime-verified in the browser this session. Production flag stays off.
+
+## 2026-08-14 — TJ Medical for Manpower investment/expense unlink
+
+Cleaned the production ₱4,000 `Medical for Manpower` record dated 2026-02-27. Retained TJ Caballero's investment (`94Ax6mMPvcqQKftRL7yZ`), reclassified it from `Project Expense` to `Capital Contribution`, and removed its expense-link fields; deleted the redundant manual `project_expenses` document (`y8UDFEXGlD3L5zZEJsAU`). `LQ26-003-RPP` has no `ca_id` in Firestore, but its six independently linked medical liquidation rows already total ₱6,636. Post-change verification found no remaining forward or backward references between the retained investment and the deleted expense.
+
+## 2026-08-14 — Production Microsoft expense/investment duplicate cleanup
+
+Removed the duplicate Microsoft charge dated 2026-03-14 for ₱494.27 from both `overhead_expenses` and `investments`. Retained the expense categorized as `Communication & Utilities` (`bcHQ7VDVmk5rXep7HcK9`) and its linked investment (`CaYBZ3fAWo04aiGqgqfK`); deleted the `Others` expense (`Heam98P2JtzsGH95QAbG`) and its linked investment (`yPpEXQqZk1nEuf5Tnr1n`) in one guarded Firestore transaction. Post-delete verification confirmed the retained pair remains mutually linked and is the only Microsoft G146867865 record in each collection.
+
 ## 2026-08-14 — Hands-free P2: opportunity snapshot and company search
 
 Added `get_opportunity_snapshot` (allowlisted opportunity fields plus linked company id/code/name) and `search_clients` (company name/code only — no contacts, phones, emails, or addresses). Citation chips for clients go to `/sales/clients`. Added three golden-set cases; the set is still unrun against live/emulator data. Invoices and work-schedule tools stay unnamed.

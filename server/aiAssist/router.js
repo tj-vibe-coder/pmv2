@@ -10,6 +10,7 @@ const { runChat } = require('./chat');
 const { buildAuditRecord, recordAudit: defaultRecordAudit } = require('./audit');
 const { issueLiveToken: defaultIssueLiveToken } = require('./liveToken');
 const { buildLiveSystemInstruction } = require('./prompt');
+const { createProposalStore, confirmOpportunityProposal, rejectOpportunityProposal } = require('./proposals');
 
 const MAX_LIVE_TOOL_CALLS_PER_SESSION = 8;
 
@@ -17,6 +18,7 @@ function createAiAssistRouter(opts) {
   const { db, getCurrentUser, config, createChatClient } = opts;
   const recordAuditFn = opts.recordAudit || defaultRecordAudit;
   const issueLiveTokenFn = opts.issueLiveToken || defaultIssueLiveToken;
+  const proposalStore = opts.proposalStore || createProposalStore();
   const rateLimit = Object.assign({ windowMs: 600000, maxRequests: 20 }, opts.rateLimit);
   const liveRateLimit = Object.assign({ windowMs: 60000, maxRequests: 3 }, opts.liveRateLimit);
 
@@ -110,7 +112,7 @@ function createAiAssistRouter(opts) {
 
     let result;
     try {
-      const registry = createToolRegistry({ db });
+      const registry = createToolRegistry({ db, user, proposalStore });
       const client = createChatClient(config);
       result = await runChat({
         client,
@@ -136,6 +138,7 @@ function createAiAssistRouter(opts) {
       followUps: result.followUps,
       notice: result.notice,
       navigateTo: result.navigateTo || null,
+      proposal: result.proposal || null,
     });
   });
 
@@ -163,7 +166,7 @@ function createAiAssistRouter(opts) {
       if (session.expiresAt < now) liveSessions.delete(id);
     }
 
-    const registry = createToolRegistry({ db });
+    const registry = createToolRegistry({ db, user, proposalStore });
     const toolDeclarations = [...registry.values()].map((tool) => tool.declaration);
 
     let result;
@@ -237,7 +240,7 @@ function createAiAssistRouter(opts) {
       return;
     }
 
-    const registry = createToolRegistry({ db });
+    const registry = createToolRegistry({ db, user, proposalStore });
     const tool = registry.get(req.params.name);
     if (!tool) {
       res.status(404).json({ ok: false, error: 'unknown_tool' });
@@ -255,6 +258,32 @@ function createAiAssistRouter(opts) {
     }
 
     res.status(200).json({ ok: true, result: toolResult.data, sources: toolResult.sources });
+  });
+
+  router.post('/proposals/:id/confirm', async (req, res) => {
+    const user = await resolveAuthorizedUser(req, res);
+    if (!user) return;
+    if (!checkRateLimit(user.username)) {
+      res.status(429).json({ ok: false, error: 'rate_limited' });
+      return;
+    }
+    const result = await confirmOpportunityProposal({ db, store: proposalStore, user, proposalId: req.params.id });
+    if (!result.ok) {
+      res.status(result.status).json({ ok: false, error: result.error });
+      return;
+    }
+    res.status(200).json({ ok: true, ...result.data });
+  });
+
+  router.post('/proposals/:id/reject', async (req, res) => {
+    const user = await resolveAuthorizedUser(req, res);
+    if (!user) return;
+    const result = rejectOpportunityProposal({ store: proposalStore, user, proposalId: req.params.id });
+    if (!result.ok) {
+      res.status(result.status).json({ ok: false, error: result.error });
+      return;
+    }
+    res.status(200).json({ ok: true, ...result.data });
   });
 
   return router;

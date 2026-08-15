@@ -1,7 +1,7 @@
 import React from 'react';
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { AiAssistProvider, useAiAssist } from './AiAssistProvider';
-import { sendAiChat } from '../../services/aiAssistService';
+import { sendAiChat, confirmAiProposal } from '../../services/aiAssistService';
 import * as liveSession from '../../ai/liveSession';
 
 jest.mock('../../ai/liveSession', () => ({
@@ -14,6 +14,8 @@ jest.mock('../../ai/liveSession', () => ({
 
 jest.mock('../../services/aiAssistService', () => ({
   sendAiChat: jest.fn(),
+  confirmAiProposal: jest.fn(),
+  rejectAiProposal: jest.fn(),
   AiAssistError: class AiAssistError extends Error {
     status: number;
     constructor(message: string, status: number) {
@@ -38,6 +40,8 @@ function Harness({ enabled }: { enabled: boolean }): React.ReactElement {
       <button onClick={() => ai.retry(null)}>retry</button>
       <button onClick={() => ai.clear()}>clear</button>
       <button onClick={() => { void ai.startVoice(); }}>start-voice</button>
+      <button onClick={() => { void ai.send('apply that change', null); }}>send-apply</button>
+      <div data-testid="proposal">{ai.pendingProposal ? ai.pendingProposal.proposalId : ''}</div>
     </div>
   );
 }
@@ -363,6 +367,47 @@ it('applies navigateTo from a typed chat answer', async () => {
   );
   fireEvent.click(screen.getByText('send'));
   await waitFor(() => expect(onNavigateRoute).toHaveBeenCalledWith('/projects/p1'));
+});
+
+it('typed apply that change confirms a pending proposal without another chat call', async () => {
+  const confirmMock = confirmAiProposal as jest.Mock;
+  confirmMock.mockResolvedValue({
+    applied: true,
+    proposalId: 'p1',
+    kind: 'opportunity',
+    recordId: 'opp1',
+    label: 'Rezcoat',
+    field: 'opportunityGrade',
+    currentValue: 'B',
+    proposedValue: 'A',
+    reason: '',
+  });
+  sendAiChatMock.mockResolvedValue({
+    ok: true,
+    requestId: 'r1',
+    answer: 'Draft ready.',
+    citations: [],
+    followUps: [],
+    notice: 'n',
+    proposal: {
+      proposalId: 'p1',
+      kind: 'opportunity',
+      recordId: 'opp1',
+      label: 'Rezcoat',
+      field: 'opportunityGrade',
+      currentValue: 'B',
+      proposedValue: 'A',
+      reason: '',
+    },
+  });
+  renderHarness();
+  fireEvent.click(screen.getByText('send'));
+  await waitFor(() => expect(screen.getByTestId('proposal').textContent).toBe('p1'));
+  sendAiChatMock.mockClear();
+  fireEvent.click(screen.getByText('send-apply'));
+  await waitFor(() => expect(confirmMock).toHaveBeenCalledWith('p1'));
+  expect(sendAiChatMock).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByTestId('proposal').textContent).toBe(''));
 });
 
 it('disabling the feature (e.g. logout) clears history and closes the drawer', async () => {

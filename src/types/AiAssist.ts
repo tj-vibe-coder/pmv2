@@ -10,6 +10,18 @@ export interface AiNavigateTo {
   label: string;
 }
 
+export interface AiProposal {
+  proposalId: string;
+  kind: string;
+  recordId: string;
+  label: string;
+  field: string;
+  currentValue: unknown;
+  proposedValue: unknown;
+  reason: string;
+  expiresAt?: string;
+}
+
 export interface AiAnswer {
   ok: true;
   requestId: string;
@@ -18,6 +30,7 @@ export interface AiAnswer {
   followUps: string[];
   notice: string;
   navigateTo?: AiNavigateTo | null;
+  proposal?: AiProposal | null;
 }
 
 export type AiMessage =
@@ -61,4 +74,22 @@ export interface AiHealthResponse {
   enabled: boolean;
   chatModel: string;
   liveModel: string;
+}
+
+export function parseAiProposal(value: unknown): AiProposal | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.proposalId !== 'string' || !record.proposalId) return null;
+  if (typeof record.field !== 'string' || !record.field) return null;
+  return {
+    proposalId: record.proposalId,
+    kind: typeof record.kind === 'string' ? record.kind : 'opportunity',
+    recordId: typeof record.recordId === 'string' ? record.recordId : '',
+    label: typeof record.label === 'string' ? record.label : '',
+    field: record.field,
+    currentValue: record.currentValue ?? null,
+    proposedValue: record.proposedValue ?? null,
+    reason: typeof record.reason === 'string' ? record.reason : '',
+    expiresAt: typeof record.expiresAt === 'string' ? record.expiresAt : undefined,
+  };
 }

@@ -84,6 +84,61 @@ export function mergeTranscript(previous: string, incoming: string): string {
   return previous + incoming;
 }
 
+const SPOKEN_STOP_PHRASES = [
+  'stop listening',
+  "that's all",
+  'thats all',
+  'stop assist',
+  'end voice',
+  'cancel voice',
+];
+
+const SPOKEN_CONFIRM_PHRASES = [
+  'apply that',
+  'apply that change',
+  'yes apply',
+  'confirm change',
+  'save that',
+];
+
+const SPOKEN_REJECT_PHRASES = [
+  "don't apply",
+  'dont apply',
+  'do not apply',
+  'reject that',
+  'cancel that change',
+  'never mind',
+  'nevermind',
+];
+
+function cleanSpoken(text: string): string {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/[^a-z0-9' ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function isSpokenStop(text: string): boolean {
+  const cleaned = cleanSpoken(text);
+  if (!cleaned) return false;
+  return SPOKEN_STOP_PHRASES.some((phrase) => cleaned.includes(phrase));
+}
+
+export function isSpokenConfirm(text: string): boolean {
+  const cleaned = cleanSpoken(text);
+  if (!cleaned) return false;
+  return SPOKEN_CONFIRM_PHRASES.some((phrase) => cleaned.includes(phrase));
+}
+
+export function isSpokenReject(text: string): boolean {
+  const cleaned = cleanSpoken(text);
+  if (!cleaned) return false;
+  return SPOKEN_REJECT_PHRASES.some((phrase) => cleaned.includes(phrase));
+}
+
 export interface LiveClientDeps {
   getUserMedia(): Promise<MediaStreamLike>;
   createCaptureContext(): CaptureContextLike;
@@ -98,10 +153,16 @@ export interface LiveClientDeps {
   onPhaseChange(phase: LivePhase): void;
   onTranscript?(event: LiveTranscriptEvent): void;
   onMicLevel?(level: number): void;
+  maxSessionMs?: number;
+  onSessionExpired?: () => void;
 }
 
 export function createLiveClient(deps: LiveClientDeps) {
   let operationId = 0;
+  let userStopped = false;
+  let reconnectsUsed = 0;
+  let reconnecting = false;
+  let sessionTimer: ReturnType<typeof setTimeout> | null = null;
   let mediaStream: MediaStreamLike | null = null;
   let captureContext: CaptureContextLike | null = null;
   let captureNode: CaptureNodeLike | null = null;
@@ -170,7 +231,101 @@ export function createLiveClient(deps: LiveClientDeps) {
     activeSources = [];
   }
 
+  function attachCapture(myOperation: number) {
+    if (!captureNode || !captureContext) return;
+    const capture = captureContext;
+    captureNode.onFrame = (frame) => {
+      if (myOperation !== operationId || !session) return;
+      emitMicLevel(rmsLevel(frame));
+      const downsampled = downsampleMono(frame, capture.sampleRate, CAPTURE_SAMPLE_RATE);
+      const base64 = arrayBufferToBase64(float32ToPcm16Le(downsampled));
+      session.sendRealtimeInputPcm(base64);
+    };
+  }
+
+  function createSessionHandlers(myOperation: number) {
+    return {
+      onServerContent: (content: LiveServerContentEvent) => handleServerContent(myOperation, content),
+      onToolCall: (call: { name: string; args: Record<string, unknown>; id: string }) => handleToolCall(myOperation, call),
+      onClose: () => {
+        if (myOperation !== operationId) return;
+        if (reconnecting) return;
+        if (!userStopped) {
+          void attemptReconnect(myOperation);
+        } else {
+          setPhase('idle');
+        }
+      },
+      onError: () => {
+        if (myOperation === operationId) setPhase('error');
+      },
+    };
+  }
+
+  async function attemptReconnect(myOperation: number): Promise<void> {
+    if (myOperation !== operationId || userStopped) return;
+    if (reconnectsUsed >= 1) {
+      stop('error');
+      return;
+    }
+    reconnectsUsed += 1;
+    reconnecting = true;
+    setPhase('reconnecting');
+
+    session?.close();
+    session = null;
+    if (captureNode) {
+      captureNode.onFrame = null;
+    }
+
+    let newSession: LiveSessionLike;
+    try {
+      newSession = await deps.connectSession(createSessionHandlers(myOperation));
+    } catch {
+      reconnecting = false;
+      if (myOperation === operationId && !userStopped) {
+        stop('error');
+      }
+      return;
+    }
+
+    if (myOperation !== operationId || userStopped) {
+      reconnecting = false;
+      newSession.close();
+      return;
+    }
+
+    session = newSession;
+    reconnecting = false;
+    if (playbackContext) {
+      nextPlayTime = playbackContext.currentTime;
+    }
+    attachCapture(myOperation);
+    flushPendingUserTexts();
+    setPhase('listening');
+  }
+
+  function armSessionTimer() {
+    if (sessionTimer) {
+      clearTimeout(sessionTimer);
+      sessionTimer = null;
+    }
+    const maxMs = deps.maxSessionMs ?? 600000;
+    if (maxMs > 0 && maxMs !== Infinity) {
+      sessionTimer = setTimeout(() => {
+        stop('idle');
+        deps.onSessionExpired?.();
+      }, maxMs);
+    }
+  }
+
   async function start(): Promise<void> {
+    userStopped = false;
+    reconnectsUsed = 0;
+    if (sessionTimer) {
+      clearTimeout(sessionTimer);
+      sessionTimer = null;
+    }
     operationId += 1;
     const myOperation = operationId;
     resetTranscripts();
@@ -211,20 +366,12 @@ export function createLiveClient(deps: LiveClientDeps) {
 
     let newSession: LiveSessionLike;
     try {
-      newSession = await deps.connectSession({
-        onServerContent: (content) => handleServerContent(myOperation, content),
-        onToolCall: (call) => handleToolCall(myOperation, call),
-        onClose: () => {
-          if (myOperation === operationId) setPhase('idle');
-        },
-        onError: () => {
-          if (myOperation === operationId) setPhase('error');
-        },
-      });
+      newSession = await deps.connectSession(createSessionHandlers(myOperation));
     } catch {
       if (myOperation === operationId) {
         node.disconnect();
         await capture.close();
+        releaseStream(stream);
         setPhase('error');
       }
       return;
@@ -233,21 +380,16 @@ export function createLiveClient(deps: LiveClientDeps) {
       newSession.close();
       node.disconnect();
       await capture.close();
+      releaseStream(stream);
       return;
     }
     session = newSession;
     nextPlayTime = playbackContext.currentTime;
     flushPendingUserTexts();
-
-    node.onFrame = (frame) => {
-      if (myOperation !== operationId || !session) return;
-      emitMicLevel(rmsLevel(frame));
-      const downsampled = downsampleMono(frame, capture.sampleRate, CAPTURE_SAMPLE_RATE);
-      const base64 = arrayBufferToBase64(float32ToPcm16Le(downsampled));
-      session.sendRealtimeInputPcm(base64);
-    };
+    attachCapture(myOperation);
 
     setPhase('listening');
+    armSessionTimer();
   }
 
   function handleServerContent(
@@ -311,6 +453,12 @@ export function createLiveClient(deps: LiveClientDeps) {
   }
 
   function stop(nextPhase: LivePhase = 'idle'): void {
+    userStopped = true;
+    reconnecting = false;
+    if (sessionTimer) {
+      clearTimeout(sessionTimer);
+      sessionTimer = null;
+    }
     operationId += 1; // invalidates any in-flight start()
     stopAllSources();
     session?.close();

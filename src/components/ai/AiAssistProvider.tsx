@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect, ReactNode } from 'react';
-import type { AiCitation, AiMessage, AiPageContext, AiPriorToolResult } from '../../types/AiAssist';
-import { sendAiChat, AiAssistError } from '../../services/aiAssistService';
-import { createLiveClient, LivePhase, LiveTranscriptEvent, mergeTranscript } from '../../ai/liveClient';
+import type { AiCitation, AiMessage, AiPageContext, AiPriorToolResult, AiProposal } from '../../types/AiAssist';
+import { parseAiProposal } from '../../types/AiAssist';
+import { sendAiChat, confirmAiProposal, rejectAiProposal, AiAssistError } from '../../services/aiAssistService';
+import { createLiveClient, LivePhase, LiveTranscriptEvent, mergeTranscript, isSpokenStop, isSpokenConfirm, isSpokenReject } from '../../ai/liveClient';
 import * as liveSession from '../../ai/liveSession';
 import { formatPageContextNote } from '../../ai/pageContext';
 import { resolveAiNavigatePath } from '../../ai/navigate';
@@ -38,6 +39,10 @@ interface AiAssistContextType {
   startVoice: () => Promise<void>;
   stopVoice: () => void;
   sendPageContext: (pageContext: AiPageContext | null) => void;
+  pendingProposal: AiProposal | null;
+  proposalBusy: boolean;
+  confirmProposal: () => Promise<void>;
+  rejectProposal: () => Promise<void>;
 }
 
 const AiAssistContext = createContext<AiAssistContextType | undefined>(undefined);
@@ -99,6 +104,8 @@ export function AiAssistProvider({
   const [isLoading, setIsLoading] = useState(false);
   const [livePhase, setLivePhase] = useState<LivePhase>('idle');
   const [micLevel, setMicLevel] = useState(0);
+  const [pendingProposal, setPendingProposal] = useState<AiProposal | null>(null);
+  const [proposalBusy, setProposalBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const liveClientRef = useRef<ReturnType<typeof createLiveClient> | null>(null);
   const voiceUserIdRef = useRef<string | null>(null);
@@ -108,6 +115,8 @@ export function AiAssistProvider({
   const onNavigateRouteRef = useRef(onNavigateRoute);
   const livePhaseRef = useRef(livePhase);
   const priorToolResultsRef = useRef<AiPriorToolResult[]>([]);
+  const pendingProposalRef = useRef<AiProposal | null>(null);
+  const spokenCommandRef = useRef<(text: string) => void>(() => {});
   pageContextRef.current = pageContext;
   onNavigateRouteRef.current = onNavigateRoute;
   livePhaseRef.current = livePhase;
@@ -176,6 +185,11 @@ export function AiAssistProvider({
           priorToolResultsRef.current = rememberToolResult(priorToolResultsRef.current, name, result);
           const dest = navigationRouteFromToolResult(name, result);
           if (dest) onNavigateRouteRef.current?.(dest);
+          const drafted = parseAiProposal(result);
+          if (drafted) {
+            pendingProposalRef.current = drafted;
+            setPendingProposal(drafted);
+          }
           return result;
         },
         onPhaseChange: (phase) => {
@@ -183,8 +197,20 @@ export function AiAssistProvider({
           setLivePhase(phase);
           if (phase === 'idle' || phase === 'error') setMicLevel(0);
         },
-        onTranscript: applyVoiceTranscript,
+        onTranscript: (event) => {
+          applyVoiceTranscript(event);
+          if (event.role === 'user' && event.done) {
+            spokenCommandRef.current(event.text);
+          }
+        },
         onMicLevel: setMicLevel,
+        onSessionExpired: () => {
+          setMessages((prev) => [...prev, {
+            id: nextId(),
+            role: 'error',
+            text: 'Voice session timed out after 10 minutes. Tap the mic to start again.',
+          }]);
+        },
       });
     }
     return liveClientRef.current;
@@ -219,11 +245,75 @@ export function AiAssistProvider({
     abortActive();
     setMessages([]);
     setIsLoading(false);
+    setPendingProposal(null);
+    pendingProposalRef.current = null;
+    setProposalBusy(false);
     voiceUserIdRef.current = null;
     voiceAssistantIdRef.current = null;
     pendingVoiceCitationsRef.current = [];
     priorToolResultsRef.current = [];
   }, [abortActive]);
+
+  const confirmProposal = useCallback(async () => {
+    const draft = pendingProposalRef.current;
+    if (!draft || proposalBusy) return;
+    setProposalBusy(true);
+    try {
+      await confirmAiProposal(draft.proposalId);
+      pendingProposalRef.current = null;
+      setPendingProposal(null);
+      setMessages((prev) => [...prev, {
+        id: nextId(),
+        role: 'assistant',
+        text: `Applied ${draft.field} on ${draft.label || 'the opportunity'}.`,
+        citations: [],
+        notice: VOICE_NOTICE,
+      }]);
+    } catch (error) {
+      const message = error instanceof AiAssistError ? error.message : 'Could not apply that draft.';
+      setMessages((prev) => [...prev, { id: nextId(), role: 'error', text: message }]);
+    } finally {
+      setProposalBusy(false);
+    }
+  }, [proposalBusy]);
+
+  const rejectProposal = useCallback(async () => {
+    const draft = pendingProposalRef.current;
+    if (!draft || proposalBusy) return;
+    setProposalBusy(true);
+    try {
+      await rejectAiProposal(draft.proposalId);
+    } catch {
+      // Discard locally even if the server draft already expired.
+    }
+    pendingProposalRef.current = null;
+    setPendingProposal(null);
+    setProposalBusy(false);
+    setMessages((prev) => [...prev, {
+      id: nextId(),
+      role: 'assistant',
+      text: 'Draft discarded. Nothing was saved.',
+      citations: [],
+      notice: VOICE_NOTICE,
+    }]);
+  }, [proposalBusy]);
+
+  const handleSpokenCommand = useCallback((text: string) => {
+    if (isSpokenStop(text)) {
+      stopVoice();
+      return true;
+    }
+    if (pendingProposalRef.current && isSpokenConfirm(text)) {
+      void confirmProposal();
+      return true;
+    }
+    if (pendingProposalRef.current && isSpokenReject(text)) {
+      void rejectProposal();
+      return true;
+    }
+    return false;
+  }, [confirmProposal, rejectProposal, stopVoice]);
+  spokenCommandRef.current = handleSpokenCommand;
 
   useEffect(() => {
     // Chat history is memory-only in v1 and never persisted — dropping it
@@ -262,6 +352,10 @@ export function AiAssistProvider({
         const dest = resolveAiNavigatePath(answer.navigateTo.route);
         if (dest) onNavigateRouteRef.current?.(dest);
       }
+      if (answer.proposal) {
+        pendingProposalRef.current = answer.proposal;
+        setPendingProposal(answer.proposal);
+      }
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof AiAssistError ? error.message : 'Something went wrong. Please try again.';
@@ -277,6 +371,11 @@ export function AiAssistProvider({
   const send = useCallback(async (text: string, pageContext: AiPageContext | null) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+    if (handleSpokenCommand(trimmed)) {
+      const userMessage: AiMessage = { id: nextId(), role: 'user', text: trimmed };
+      setMessages((prev) => [...prev, userMessage]);
+      return;
+    }
     if (isLiveActive(livePhaseRef.current)) {
       const userMessage: AiMessage = { id: nextId(), role: 'user', text: trimmed };
       setMessages((prev) => [...prev, userMessage]);
@@ -288,7 +387,7 @@ export function AiAssistProvider({
     const nextMessages = [...messages, userMessage];
     setMessages(nextMessages);
     await performSend(nextMessages, pageContext);
-  }, [getLiveClient, isLoading, messages, performSend]);
+  }, [getLiveClient, handleSpokenCommand, isLoading, messages, performSend]);
 
   const stop = useCallback(() => {
     abortActive();
@@ -322,6 +421,10 @@ export function AiAssistProvider({
     startVoice,
     stopVoice,
     sendPageContext,
+    pendingProposal,
+    proposalBusy,
+    confirmProposal,
+    rejectProposal,
   };
 
   return <AiAssistContext.Provider value={value}>{children}</AiAssistContext.Provider>;

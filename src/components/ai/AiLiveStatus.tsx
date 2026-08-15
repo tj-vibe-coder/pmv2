@@ -57,7 +57,7 @@ export default function AiLiveStatus({ phase, micLevel }: AiLiveStatusProps): Re
               width: 8,
             }}
           />
-          <Chip color="primary" label="Live" size="small" />
+          <Chip color="primary" label="Always on" size="small" />
           <Typography variant="body2">{PHASE_LABEL[phase]}</Typography>
         </Stack>
         <Box

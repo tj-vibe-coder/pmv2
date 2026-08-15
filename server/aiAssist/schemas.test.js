@@ -66,3 +66,16 @@ test('accepts a valid search_projects tool input', () => {
   const args = validateToolInput('search_projects', { search: 'plant', year: 2026, status: 'sent' });
   assert.equal(args.search, 'plant');
 });
+
+test('validates propose_opportunity_update input and rejects invalid field enum', () => {
+  assert.throws(() => validateToolInput('propose_opportunity_update', { opportunityId: 'x', field: 'won', value: 'yes' }));
+  const valid = validateToolInput('propose_opportunity_update', {
+    opportunityId: 'opp1',
+    field: 'opportunityGrade',
+    value: 'A',
+    reason: 'good margin',
+  });
+  assert.equal(valid.opportunityId, 'opp1');
+  assert.equal(valid.field, 'opportunityGrade');
+  assert.equal(valid.value, 'A');
+});

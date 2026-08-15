@@ -9,7 +9,7 @@ it('renders nothing when voice is idle', () => {
 
 it('shows a Live badge, phase label, and mic level while listening', () => {
   render(<AiLiveStatus micLevel={0.5} phase="listening" />);
-  expect(screen.getByText('Live')).toBeInTheDocument();
+  expect(screen.getByText('Always on')).toBeInTheDocument();
   expect(screen.getByText('Listening')).toBeInTheDocument();
   expect(screen.getByLabelText(/microphone level 50 percent/i)).toBeInTheDocument();
 });

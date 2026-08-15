@@ -33,6 +33,7 @@ test('happy path: one tool round then final answer, citations restricted to exec
   assert.deepEqual(result.citations.map((c) => c.id), ['project:p1']);
   assert.ok(typeof result.notice === 'string' && result.notice.length > 0);
   assert.equal(result.navigateTo, null);
+  assert.equal(result.proposal, null);
 });
 
 test('surfaces a unique navigate_to_record match as navigateTo', async () => {
@@ -126,4 +127,56 @@ test('enforces the serialized tool-result byte budget', async () => {
   await assert.rejects(() =>
     runChat({ client, registry, config, messages: [{ role: 'user', text: 'q' }], pageContext: null, requestId: 'r7' }),
   );
+});
+
+test('surfaces propose_opportunity_update proposal on chat result', async () => {
+  const registry = makeRegistry({
+    propose_opportunity_update: {
+      data: {
+        proposalId: 'prop-123',
+        kind: 'opportunity',
+        recordId: 'opp1',
+        label: 'Rezcoat',
+        field: 'opportunityGrade',
+        currentValue: 'B',
+        proposedValue: 'A',
+        reason: 'stronger margin',
+        expiresAt: '2026-08-15T01:00:00.000Z',
+      },
+      sources: [{ id: 'opp1', label: 'Rezcoat', route: '/sales/calcsheet/projects/opp1', asOf: 'x' }],
+    },
+  });
+  let call = 0;
+  const client = {
+    send: async () => {
+      call += 1;
+      if (call === 1) {
+        return {
+          functionCalls: [{
+            name: 'propose_opportunity_update',
+            args: { opportunityId: 'opp1', field: 'opportunityGrade', value: 'A', reason: 'stronger margin' },
+          }],
+        };
+      }
+      return {
+        finalResponse: {
+          answer: 'I proposed updating opportunity grade to A. Please confirm.',
+          citationIds: ['opp1'],
+          followUps: ['Apply that change'],
+        },
+      };
+    },
+  };
+  const result = await runChat({
+    client,
+    registry,
+    config: { maxToolRounds: 4, maxResultBytes: 60000 },
+    messages: [{ role: 'user', text: 'change grade to A' }],
+    pageContext: null,
+    requestId: 'r-prop',
+  });
+  assert.equal(result.proposal.proposalId, 'prop-123');
+  assert.equal(result.proposal.recordId, 'opp1');
+  assert.equal(result.proposal.field, 'opportunityGrade');
+  assert.equal(result.proposal.proposedValue, 'A');
 });

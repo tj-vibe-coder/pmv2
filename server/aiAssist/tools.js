@@ -7,6 +7,7 @@ const {
   expenseProjection,
   clientProjection,
 } = require('./access');
+const { proposeOpportunityUpdate } = require('./proposals');
 
 const PROJECT_COLLECTION = 'projects';
 const OPPORTUNITY_COLLECTION = 'calcsheet_projects';
@@ -172,6 +173,20 @@ const TOOL_DECLARATIONS = {
         search: { type: 'string', description: 'Case-insensitive substring against company name or code.' },
       },
       required: ['search'],
+    },
+  },
+  propose_opportunity_update: {
+    name: 'propose_opportunity_update',
+    description: 'Propose a draft change to one Calcsheet opportunity field. Does not save. User must confirm. Allowed fields: status (draft|for_review|sent|inactive only — never won or lost), opportunityGrade (A|B|C), notes. Never invent a record id.',
+    parameters: {
+      type: 'object',
+      properties: {
+        opportunityId: { type: 'string', description: 'The calcsheet opportunity document ID.' },
+        field: { type: 'string', description: 'The field to update: status, opportunityGrade, or notes.' },
+        value: { type: 'string', description: 'The proposed new value.' },
+        reason: { type: 'string', description: 'Optional explanation for the proposed change.' },
+      },
+      required: ['opportunityId', 'field', 'value'],
     },
   },
 };
@@ -544,7 +559,7 @@ async function navigateToRecord(db, args, asOf) {
   };
 }
 
-function createToolRegistry({ db, now = () => new Date() }) {
+function createToolRegistry({ db, now = () => new Date(), user = null, proposalStore = null }) {
   const tools = new Map();
   for (const toolName of Object.keys(TOOL_DECLARATIONS)) {
     tools.set(toolName, {
@@ -572,6 +587,20 @@ function createToolRegistry({ db, now = () => new Date() }) {
             return getOpportunitySnapshot(db, args, asOf);
           case 'search_clients':
             return searchClients(db, args, asOf);
+          case 'propose_opportunity_update': {
+            if (!proposalStore || !user) {
+              return { data: { applied: false, error: 'propose_unavailable' }, sources: [], asOf };
+            }
+            try {
+              return await proposeOpportunityUpdate({ db, store: proposalStore, user, args, asOf });
+            } catch (err) {
+              const code = err && err.code;
+              if (code === 'field_not_allowed' || code === 'invalid_value' || code === 'unauthenticated') {
+                return { data: { applied: false, error: code }, sources: [], asOf };
+              }
+              throw err;
+            }
+          }
           default:
             throw new Error(`Unknown tool: ${toolName}`);
         }

@@ -53,6 +53,7 @@ async function runChat({ client, registry, config, messages, pageContext, priorT
   let toolRounds = 0;
   let totalResultBytes = 0;
   let navigateTo = null;
+  let proposal = null;
 
   for (;;) {
     let result;
@@ -73,6 +74,7 @@ async function runChat({ client, registry, config, messages, pageContext, priorT
         followUps: finalResponse.followUps,
         notice: 'AI-generated summary from IOCT records. Verify before making decisions.',
         navigateTo,
+        proposal,
       };
     }
 
@@ -103,6 +105,19 @@ async function runChat({ client, registry, config, messages, pageContext, priorT
           };
         } else if (call.name === 'navigate_to_record') {
           navigateTo = null;
+        }
+        if (call.name === 'propose_opportunity_update' && toolResult.data && toolResult.data.proposalId) {
+          proposal = {
+            proposalId: toolResult.data.proposalId,
+            kind: toolResult.data.kind || 'opportunity',
+            recordId: toolResult.data.recordId,
+            label: toolResult.data.label || '',
+            field: toolResult.data.field,
+            currentValue: toolResult.data.currentValue,
+            proposedValue: toolResult.data.proposedValue,
+            reason: toolResult.data.reason || '',
+            expiresAt: toolResult.data.expiresAt,
+          };
         }
         toolResults.push({ name: call.name, data: toolResult.data });
       }

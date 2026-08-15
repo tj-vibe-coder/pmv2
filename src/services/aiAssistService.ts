@@ -1,5 +1,6 @@
 import { API_BASE } from '../config/api';
-import type { AiAnswer, AiMessage, AiNavigateTo, AiPageContext, AiPriorToolResult, AiLiveTokenResponse } from '../types/AiAssist';
+import type { AiAnswer, AiMessage, AiNavigateTo, AiPageContext, AiPriorToolResult, AiLiveTokenResponse, AiProposal } from '../types/AiAssist';
+import { parseAiProposal } from '../types/AiAssist';
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
@@ -70,7 +71,76 @@ export async function sendAiChat(
     }
     answer.navigateTo = { route: nav.route, label: nav.label };
   }
+  if (parsed.proposal != null) {
+    const proposal = parseAiProposal(parsed.proposal);
+    if (!proposal) {
+      throw new AiAssistError('The assistant returned an unexpected response.', res.status);
+    }
+    answer.proposal = proposal;
+  } else {
+    answer.proposal = null;
+  }
   return answer;
+}
+
+export async function confirmAiProposal(proposalId: string, signal?: AbortSignal): Promise<AiProposal & { applied: boolean }> {
+  return postProposalAction(proposalId, 'confirm', signal);
+}
+
+export async function rejectAiProposal(proposalId: string, signal?: AbortSignal): Promise<{ rejected: boolean; proposalId: string }> {
+  const res = await fetch(`${API_BASE}/api/ai-assist/proposals/${encodeURIComponent(proposalId)}/reject`, {
+    method: 'POST',
+    headers: { ...authHeaders() },
+    signal,
+  });
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    throw new AiAssistError('Could not discard that draft.', res.status);
+  }
+  const parsed = body as { ok?: boolean; rejected?: boolean; proposalId?: string; error?: string };
+  if (!res.ok || !parsed.ok) {
+    throw new AiAssistError(proposalActionMessage(res.status), res.status);
+  }
+  return { rejected: true, proposalId };
+}
+
+async function postProposalAction(
+  proposalId: string,
+  action: 'confirm',
+  signal?: AbortSignal,
+): Promise<AiProposal & { applied: boolean }> {
+  const res = await fetch(`${API_BASE}/api/ai-assist/proposals/${encodeURIComponent(proposalId)}/${action}`, {
+    method: 'POST',
+    headers: { ...authHeaders() },
+    signal,
+  });
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    throw new AiAssistError('Could not apply that draft.', res.status);
+  }
+  const parsed = body as { ok?: boolean; applied?: boolean } & Record<string, unknown>;
+  if (!res.ok || !parsed.ok) {
+    throw new AiAssistError(proposalActionMessage(res.status), res.status);
+  }
+  const proposal = parseAiProposal({ ...parsed, proposalId: parsed.proposalId || proposalId });
+  if (!proposal) {
+    throw new AiAssistError('The assistant returned an unexpected response.', res.status);
+  }
+  return { ...proposal, applied: parsed.applied === true };
+}
+
+function proposalActionMessage(status: number): string {
+  if (status === 401) return 'Sign in to use IOCT Assist.';
+  if (status === 403) return 'IOCT Assist is not available for this account.';
+  if (status === 404) return 'That draft expired or was already handled.';
+  if (status === 409) return 'The record changed. Ask Assist to propose again.';
+  if (status === 429) return 'Too many requests — please wait a moment.';
+  if (status === 503) return 'IOCT Assist is not enabled yet.';
+  return 'Could not apply that draft.';
 }
 
 export async function requestLiveToken(signal?: AbortSignal): Promise<AiLiveTokenResponse> {
