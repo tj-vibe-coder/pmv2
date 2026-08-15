@@ -6,6 +6,7 @@ test('AI Assist is disabled unless explicitly enabled', () => {
   const config = loadAiAssistConfig({});
   assert.equal(config.enabled, false);
   assert.deepEqual(config.allowedUsers, ['RJR', 'TJC']);
+  assert.equal(config.chatProvider, 'gemini');
   assert.equal(config.chatModel, 'gemini-3.5-flash-lite');
   assert.equal(config.liveModel, 'gemini-3.1-flash-live-preview');
 });

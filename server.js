@@ -9,7 +9,7 @@ const { loadAiAssistConfig } = require('./server/aiAssist/config');
 const { createAiAssistRouter } = require('./server/aiAssist/router');
 const { createToolRegistry: createAiAssistToolRegistry } = require('./server/aiAssist/tools');
 const { buildTextSystemInstruction } = require('./server/aiAssist/prompt');
-const { createGeminiChatClient } = require('./server/aiAssist/geminiClient');
+const { createAssistChatClient } = require('./server/aiAssist/providers');
 const { GoogleGenAI: AiAssistGoogleGenAI } = require('@google/genai');
 const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
 
@@ -6617,9 +6617,9 @@ app.use('/api/ai-assist', createAiAssistRouter({
   createChatClient: (config) => {
     const registry = createAiAssistToolRegistry({ db });
     const toolDeclarations = [...registry.values()].map((tool) => tool.declaration);
-    return createGeminiChatClient({
+    return createAssistChatClient({
+      config,
       apiKey: process.env.GEMINI_API_KEY,
-      model: config.chatModel,
       systemInstruction: buildTextSystemInstruction(config),
       toolDeclarations,
     });

@@ -4,7 +4,7 @@ Updated: 2026-08-15
 
 ## Current status
 
-- AI Assist: implemented on `rj/dev` through hands-free P4 (P3/P4 still uncommitted WIP). Not on `main`, not deployed. `AI_ASSIST_ENABLED` is `true` only in the local gitignored `.env`.
+- AI Assist: implemented on `rj/dev` through P5 (HTTP operator, MCP adapter, Gemini-only provider factory). Not on `main`, not deployed. `AI_ASSIST_ENABLED` is `true` only in the local gitignored `.env`.
 - **Hands-free P3**: `propose_opportunity_update` drafts status (`draft`/`for_review`/`sent`/`inactive` only), `opportunityGrade`, or `notes`. The model never writes. Apply is `POST /api/ai-assist/proposals/:id/confirm` (button or spoken “apply that change”). `won`/`lost` stay blocked. Proposals are in-memory, 10-minute TTL, user-bound.
 - **Hands-free P4**: after the mic is clicked, Live stays listening, one bounded reconnect keeps the MediaStream, 10-minute cap, Always-on chip, spoken “stop listening”.
 - **Hands-free P0–P2** remain: page follows Assist, typed Send stays on Live, phone sheet + desktop dock, read tools including `get_opportunity_snapshot` and `search_clients`. History still memory-only.
@@ -34,8 +34,8 @@ Updated: 2026-08-15
 
 ## Next considerations
 
-- Finish the RJR browser pass for P3/P4, then commit P3/P4 when asked. Golden set (30 cases) still unrun.
-- P5 external LLM/MCP stays later (G2 auth hardening first).
+- P5 HTTP catalog/execute, MCP adapter, and Gemini-only `createAssistChatClient` factory are committed on `rj/dev`. Deploy.yml writes Assist env with `AI_ASSIST_ENABLED=false`. Golden set still unrun.
+- RJR browser pass for P3/P4 still needed. Auth hardening remains the production gate.
 - Finance money-trail is on `main` and now in local `rj/dev`; Assist is still not on `main`.
 - Deploy or merge according to the repository branch workflow when requested.
 - Consider improving the insufficient-history panel to show excluded evidence reasons; this is explanatory polish, not a correctness blocker.

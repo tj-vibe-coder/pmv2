@@ -1,5 +1,32 @@
 # Task Log
 
+## 2026-08-15 — P5 in-app provider factory + deploy env (flag off)
+
+Chat now goes through `createAssistChatClient`. `AI_ASSIST_CHAT_PROVIDER` allowlists `gemini` only; anything else is `invalid` and fails closed. Health and the drawer chip report provider + model. `.github/workflows/deploy.yml` writes Assist config into `functions/.env` with `AI_ASSIST_ENABLED=false` so production stays off. `GEMINI_API_KEY` is unchanged; `GEMINI_MODEL` remains the receipt-scan model.
+
+### Verification
+
+- `node --test server/aiAssist/*.test.js` 104/104
+- `tsc --noEmit` clean
+- Jest service/drawer suites green
+
+## 2026-08-15 — P5 thin MCP adapter
+
+Added a stdio MCP adapter that only calls `GET /api/ai-assist/operator/catalog` and `POST /api/ai-assist/operator/execute`. No new npm dependency. Run with `npm run ai-assist:mcp` after setting `IOCT_ASSIST_TOKEN` (and optional `IOCT_ASSIST_API_BASE`). HTTP remains the source of truth; MCP does not talk to Firestore. Confirm is still not an MCP/model tool.
+
+### Verification
+
+- `node --test server/aiAssist/*.test.js` 101/101
+
+## 2026-08-15 — P5 operator HTTP catalog + execute
+
+Exposed the existing allowlisted Assist tools as a model-agnostic HTTP contract so an external LLM/CLI can call them without a Gemini Live session. `GET /api/ai-assist/operator/catalog` returns declarations only. `POST /api/ai-assist/operator/execute` validates `{ name, args }`, reuses `createToolRegistry`, and never opens the rest of the PMv2 API. Propose still does not write; confirm stays on `/proposals/:id/confirm`. Same RJR/TJC + feature-flag gate as chat. Thin MCP adapter not built.
+
+### Verification
+
+- `node --test server/aiAssist/*.test.js` 94/94
+- `ai-assist:sync` / `ai-assist:check` clean
+
 ## 2026-08-15 — Merged origin/main into rj/dev
 
 Merged finance money-trail + follow-ups (PRs #68/#69, tip `2375a36`) into `rj/dev` as `2a73e60`. Conflicts in `server.js` (kept both Assist and finance-trace requires) and `docs/agent/PROJECT_STATE.md` (combined). Incoming diff was not a stale-clone rollback — Assist deletions in `git diff HEAD origin/main` were “main does not have Assist yet.” P3/P4 remain uncommitted on top. Post-merge: Assist + finance-trace node tests 118/118, `tsc --noEmit` clean after a liveClient test `this.closed` fix.

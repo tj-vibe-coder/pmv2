@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { validateChatRequest, validateToolInput } = require('./schemas');
+const { validateChatRequest, validateToolInput, validateOperatorExecuteRequest } = require('./schemas');
 
 test('rejects oversized and extra chat fields', () => {
   assert.throws(() => validateChatRequest({ messages: [{ role: 'user', text: 'x'.repeat(4001) }], extra: true }));
@@ -78,4 +78,22 @@ test('validates propose_opportunity_update input and rejects invalid field enum'
   assert.equal(valid.opportunityId, 'opp1');
   assert.equal(valid.field, 'opportunityGrade');
   assert.equal(valid.value, 'A');
+});
+
+test('operator execute accepts name+args and rejects extra keys or unknown tools', () => {
+  const parsed = validateOperatorExecuteRequest({
+    name: 'search_projects',
+    args: { search: 'rezcoat' },
+  });
+  assert.equal(parsed.name, 'search_projects');
+  assert.equal(parsed.args.search, 'rezcoat');
+  assert.throws(
+    () => validateOperatorExecuteRequest({ name: 'search_projects', args: {}, route: '/settings' }),
+  );
+  try {
+    validateOperatorExecuteRequest({ name: 'delete_project', args: {} });
+    assert.fail('expected unknown tool');
+  } catch (err) {
+    assert.equal(err.code, 'unknown_tool');
+  }
 });

@@ -2,7 +2,7 @@ jest.mock('../config/api', () => ({
   API_BASE: 'http://lan-host:3001',
 }));
 
-import { sendAiChat, requestLiveToken, executeLiveTool, confirmAiProposal, rejectAiProposal, AiAssistError } from './aiAssistService';
+import { sendAiChat, requestLiveToken, executeLiveTool, confirmAiProposal, rejectAiProposal, fetchAiHealth, AiAssistError } from './aiAssistService';
 
 const fetchMock = jest.fn();
 global.fetch = fetchMock as unknown as typeof fetch;
@@ -138,6 +138,25 @@ it('requestLiveToken requires a liveSessionId and executeLiveTool sends it', asy
       method: 'POST',
       body: JSON.stringify({ args: { search: 'plant' }, liveSessionId: 'sess-1' }),
     }),
+  );
+});
+
+it('fetchAiHealth reads provider and models without exposing keys', async () => {
+  fetchMock.mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      enabled: true,
+      chatProvider: 'gemini',
+      chatModel: 'gemini-3.5-flash-lite',
+      liveModel: 'gemini-3.1-flash-live-preview',
+    }),
+  });
+  await expect(fetchAiHealth()).resolves.toMatchObject({ chatProvider: 'gemini' });
+  expect(fetchMock).toHaveBeenCalledWith(
+    'http://lan-host:3001/api/ai-assist/health',
+    expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token' }) }),
   );
 });
 

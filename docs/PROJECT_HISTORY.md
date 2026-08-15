@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-08-15 — Assist provider factory + deploy env (still off)
+
+`createAssistChatClient` is the swap point. Only `gemini` is registered. Deploy writes `AI_ASSIST_ENABLED=false`, chat/live model names, and `AI_ASSIST_CHAT_PROVIDER=gemini` next to the existing `GEMINI_API_KEY`. Receipt-scan `GEMINI_MODEL` is untouched.
+
+## 2026-08-15 — Assist P5 thin MCP adapter
+
+`scripts/ai-assist-mcp.js` + `server/aiAssist/mcpAdapter.js` speak MCP over stdio and only call the operator HTTP catalog/execute routes. No MCP SDK. Token via `IOCT_ASSIST_TOKEN`. Confirm is still not a model/MCP tool.
+
+## 2026-08-15 — Assist P5 operator HTTP (catalog + execute)
+
+`GET /api/ai-assist/operator/catalog` and `POST /api/ai-assist/operator/execute` expose the same allowlisted tools to an external client. Same RJR/TJC + flag gate. MCP adapter and provider swap not built. Flag still local `.env` only.
+
 ## 2026-08-15 — Assist P3 propose-then-confirm + P4 always-on
 
 Local `rj/dev` only. `propose_opportunity_update` creates a user-bound in-memory draft; `POST /api/ai-assist/proposals/:id/confirm` is the only write (one allowlisted field + `updatedAt`). `won`/`lost` blocked. Live stays up after mic start, reconnects once without dropping the MediaStream, expires at 10 minutes. Flag still local `.env` only.

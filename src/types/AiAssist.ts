@@ -72,6 +72,7 @@ export interface AiLiveTokenResponse {
 export interface AiHealthResponse {
   ok: true;
   enabled: boolean;
+  chatProvider: string;
   chatModel: string;
   liveModel: string;
 }

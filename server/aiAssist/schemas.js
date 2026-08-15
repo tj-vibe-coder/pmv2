@@ -177,7 +177,9 @@ function validateChatRequest(body) {
 function validateToolInput(toolName, args) {
   const shape = TOOL_ARG_SHAPES[toolName];
   if (!shape) {
-    throw new Error(`Unknown tool: ${toolName}`);
+    const error = new Error(`Unknown tool: ${toolName}`);
+    error.code = 'unknown_tool';
+    throw error;
   }
 
   if (args === undefined || args === null) {
@@ -219,4 +221,24 @@ function validateToolInput(toolName, args) {
   return normalized;
 }
 
-module.exports = { validateChatRequest, validateToolInput };
+function validateOperatorExecuteRequest(body) {
+  if (!isPlainObject(body)) {
+    throw new Error('Operator execute body must be a plain object');
+  }
+  const allowed = new Set(['name', 'args']);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) {
+      throw new Error(`Unexpected top-level field "${key}" in operator execute`);
+    }
+  }
+  if (typeof body.name !== 'string' || body.name.length < 1 || body.name.length > MAX_PRIOR_TOOL_NAME) {
+    throw new Error('Operator execute requires a tool name');
+  }
+  if (body.args !== undefined && !isPlainObject(body.args)) {
+    throw new Error('Operator execute args must be a plain object');
+  }
+  const args = validateToolInput(body.name, body.args || {});
+  return { name: body.name, args };
+}
+
+module.exports = { validateChatRequest, validateToolInput, validateOperatorExecuteRequest };

@@ -74,6 +74,7 @@
     "test:product-history": "node --test server/calcsheetProductHistory.test.js server/calcsheetContingency.test.js server/calcsheetProductHistoryRouter.test.js server/calcsheetPurchaseTiming.test.js",
     "ai-assist:sync": "node scripts/sync-ai-assist.mjs",
     "ai-assist:check": "node scripts/sync-ai-assist.mjs --check",
+    "ai-assist:mcp": "node scripts/ai-assist-mcp.js",
     "test:ai-assist": "node --test server/aiAssist/*.test.js scripts/sync-ai-assist.test.mjs",
     "eject": "react-scripts eject"
   },

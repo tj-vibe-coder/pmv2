@@ -24,6 +24,7 @@ function baseConfig(overrides) {
       enabled: true,
       allowedUsers: ['RJR', 'TJC'],
       promptVersion: 'ioct-readonly-v1',
+      chatProvider: 'gemini',
       chatModel: 'gemini-3.5-flash-lite',
       liveModel: 'gemini-2.5-flash-native-audio-preview-12-2025',
       maxToolRounds: 4,
@@ -260,6 +261,7 @@ test('GET /health requires authorization and never exposes key material', async 
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.enabled, true);
+    assert.equal(body.chatProvider, 'gemini');
     assert.equal(body.chatModel, 'gemini-3.5-flash-lite');
     const text = JSON.stringify(body).toLowerCase();
     assert.ok(!text.includes('apikey') && !text.includes('api_key') && !text.includes('gemini_api_key'));
@@ -601,6 +603,115 @@ test('POST /proposals/:id/reject 200 then confirm 404', async () => {
 
     const confirmRes = await fetch(base + `/proposals/${proposal.data.proposalId}/confirm`, { method: 'POST' });
     assert.equal(confirmRes.status, 404);
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /operator/catalog requires auth and returns declarations only', async () => {
+  const { server, base } = await startServer({
+    db: emptyDb,
+    getCurrentUser: async () => ({ id: 'u1', username: 'RJR' }),
+    config: baseConfig(),
+    createChatClient: () => { throw new Error('must not be called'); },
+  });
+  try {
+    const res = await fetch(base + '/operator/catalog');
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.ok(Array.isArray(body.tools));
+    assert.ok(body.tools.some((tool) => tool.name === 'search_projects'));
+    assert.ok(body.tools.every((tool) => !('execute' in tool)));
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /operator/catalog returns 401 without user', async () => {
+  const { server, base } = await startServer({
+    db: emptyDb,
+    getCurrentUser: async () => null,
+    config: baseConfig(),
+    createChatClient: () => { throw new Error('must not be called'); },
+  });
+  try {
+    const res = await fetch(base + '/operator/catalog');
+    assert.equal(res.status, 401);
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /operator/execute 403 for a non-allowlisted user', async () => {
+  const { server, base } = await startServer({
+    db: emptyDb,
+    getCurrentUser: async () => ({ id: 'u9', username: 'admin' }),
+    config: baseConfig(),
+    createChatClient: () => { throw new Error('must not be called'); },
+  });
+  try {
+    const res = await fetch(base + '/operator/execute', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'search_projects', args: {} }),
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /operator/execute 404s unknown tools and 400s extra keys', async () => {
+  const { server, base } = await startServer({
+    db: emptyDb,
+    getCurrentUser: async () => ({ id: 'u1', username: 'RJR' }),
+    config: baseConfig(),
+    createChatClient: () => { throw new Error('must not be called'); },
+  });
+  try {
+    const unknown = await fetch(base + '/operator/execute', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'delete_project', args: {} }),
+    });
+    assert.equal(unknown.status, 404);
+    const extra = await fetch(base + '/operator/execute', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'search_projects', args: {}, route: '/settings' }),
+    });
+    assert.equal(extra.status, 400);
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /operator/execute runs an allowlisted tool without a live session', async () => {
+  const fakeDb = {
+    collection: (name) => {
+      assert.equal(name, 'projects');
+      return { get: async () => ({ docs: [] }) };
+    },
+  };
+  const { server, base } = await startServer({
+    db: fakeDb,
+    getCurrentUser: async () => ({ id: 'u1', username: 'RJR' }),
+    config: baseConfig(),
+    createChatClient: () => { throw new Error('must not be called'); },
+  });
+  try {
+    const res = await fetch(base + '/operator/execute', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'search_projects', args: { search: 'none' } }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.name, 'search_projects');
+    assert.deepEqual(body.result, []);
+    assert.deepEqual(body.sources, []);
   } finally {
     server.close();
   }

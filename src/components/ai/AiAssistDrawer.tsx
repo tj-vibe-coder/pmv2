@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Box,
   Button,
@@ -14,8 +14,9 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import MicIcon from '@mui/icons-material/Mic';
 import { useTheme } from '@mui/material/styles';
-import type { AiPageContext } from '../../types/AiAssist';
+import type { AiHealthResponse, AiPageContext } from '../../types/AiAssist';
 import { describeAiPage } from '../../ai/pageContext';
+import { fetchAiHealth } from '../../services/aiAssistService';
 import { useAiAssist } from './AiAssistProvider';
 import AiComposer from './AiComposer';
 import AiLiveStatus from './AiLiveStatus';
@@ -48,6 +49,20 @@ export default function AiAssistDrawer({
     pendingProposal, proposalBusy, confirmProposal, rejectProposal,
   } = useAiAssist();
   const isVoiceActive = livePhase !== 'idle' && livePhase !== 'error';
+  const [health, setHealth] = useState<AiHealthResponse | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || !enabled) return;
+    let cancelled = false;
+    fetchAiHealth()
+      .then((next) => {
+        if (!cancelled) setHealth(next);
+      })
+      .catch(() => {
+        if (!cancelled) setHealth(null);
+      });
+    return () => { cancelled = true; };
+  }, [isOpen, enabled]);
 
   // Click-to-toggle. Press-and-hold used to stop on pointerup/leave, which
   // called MediaStreamTrack.stop() and tore down Continuity / iPhone-as-mic
@@ -83,6 +98,9 @@ export default function AiAssistDrawer({
         <Stack alignItems="center" direction="row" flexWrap="wrap" spacing={1} useFlexGap>
           <Typography component="h2" variant="h6">IOCT Assist</Typography>
           <Chip label="Read only" size="small" />
+          {health ? (
+            <Chip label={`${health.chatProvider} · ${health.chatModel}`} size="small" variant="outlined" />
+          ) : null}
           {viewing ? <Chip label={`Now viewing ${viewing}`} size="small" variant="outlined" /> : null}
           {isVoiceActive && <Chip color="primary" label="Always on" size="small" />}
         </Stack>

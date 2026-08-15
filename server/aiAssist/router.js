@@ -4,8 +4,9 @@ const { randomUUID } = require('node:crypto');
 const express = require('express');
 
 const { authorizeAiUser } = require('./access');
-const { validateChatRequest, validateToolInput } = require('./schemas');
+const { validateChatRequest, validateToolInput, validateOperatorExecuteRequest } = require('./schemas');
 const { createToolRegistry } = require('./tools');
+const { listOperatorCatalog, executeOperatorTool } = require('./operator');
 const { runChat } = require('./chat');
 const { buildAuditRecord, recordAudit: defaultRecordAudit } = require('./audit');
 const { issueLiveToken: defaultIssueLiveToken } = require('./liveToken');
@@ -147,7 +148,13 @@ function createAiAssistRouter(opts) {
     if (!user) {
       return;
     }
-    res.status(200).json({ ok: true, enabled: config.enabled, chatModel: config.chatModel, liveModel: config.liveModel });
+    res.status(200).json({
+      ok: true,
+      enabled: config.enabled,
+      chatProvider: config.chatProvider,
+      chatModel: config.chatModel,
+      liveModel: config.liveModel,
+    });
   });
 
   router.post('/live-token', async (req, res) => {
@@ -273,6 +280,66 @@ function createAiAssistRouter(opts) {
       return;
     }
     res.status(200).json({ ok: true, ...result.data });
+  });
+
+  router.get('/operator/catalog', async (req, res) => {
+    const user = await resolveAuthorizedUser(req, res);
+    if (!user) return;
+    const registry = createToolRegistry({ db, user, proposalStore });
+    res.status(200).json({
+      ok: true,
+      tools: listOperatorCatalog(registry),
+    });
+  });
+
+  router.post('/operator/execute', async (req, res) => {
+    const user = await resolveAuthorizedUser(req, res);
+    if (!user) return;
+    if (!checkRateLimit(user.username)) {
+      res.status(429).json({ ok: false, error: 'rate_limited' });
+      return;
+    }
+
+    let parsed;
+    try {
+      parsed = validateOperatorExecuteRequest(req.body);
+    } catch (err) {
+      if (err && err.code === 'unknown_tool') {
+        res.status(404).json({ ok: false, error: 'unknown_tool' });
+        return;
+      }
+      res.status(400).json({ ok: false, error: 'invalid_request' });
+      return;
+    }
+
+    const registry = createToolRegistry({ db, user, proposalStore });
+    let executed;
+    try {
+      executed = await executeOperatorTool({
+        registry,
+        name: parsed.name,
+        args: parsed.args,
+        maxResultBytes: config.maxResultBytes,
+      });
+    } catch (err) {
+      if (err && err.code === 'unknown_tool') {
+        res.status(404).json({ ok: false, error: 'unknown_tool' });
+        return;
+      }
+      if (err && err.code === 'result_too_large') {
+        res.status(400).json({ ok: false, error: 'invalid_request' });
+        return;
+      }
+      res.status(502).json({ ok: false, error: 'tool_error' });
+      return;
+    }
+
+    res.status(200).json({
+      ok: true,
+      name: executed.name,
+      result: executed.data,
+      sources: executed.sources,
+    });
   });
 
   router.post('/proposals/:id/reject', async (req, res) => {

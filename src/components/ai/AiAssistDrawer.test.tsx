@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import AiAssistDrawer from './AiAssistDrawer';
 import AiAssistLauncher from './AiAssistLauncher';
 import { AiAssistProvider } from './AiAssistProvider';
-import { sendAiChat } from '../../services/aiAssistService';
+import { sendAiChat, fetchAiHealth } from '../../services/aiAssistService';
 
 jest.mock('../../ai/liveSession', () => ({
   getUserMedia: jest.fn(),
@@ -17,6 +17,7 @@ jest.mock('../../services/aiAssistService', () => ({
   sendAiChat: jest.fn(),
   confirmAiProposal: jest.fn(),
   rejectAiProposal: jest.fn(),
+  fetchAiHealth: jest.fn(),
   AiAssistError: class AiAssistError extends Error {
     status: number;
     constructor(message: string, status: number) {
@@ -27,10 +28,13 @@ jest.mock('../../services/aiAssistService', () => ({
 }));
 
 const sendAiChatMock = sendAiChat as jest.Mock;
+const fetchAiHealthMock = fetchAiHealth as jest.Mock;
 const originalMatchMedia = window.matchMedia;
 
 beforeEach(() => {
   sendAiChatMock.mockReset();
+  fetchAiHealthMock.mockReset();
+  fetchAiHealthMock.mockReturnValue(new Promise(() => {}));
 });
 
 afterEach(() => {
@@ -82,12 +86,22 @@ it('shows a pending draft card with Apply and Discard', async () => {
 });
 
 it('shows a "Read only" badge and a persistent AI-disclaimer when a message exists', async () => {
+  fetchAiHealthMock.mockResolvedValue({
+    ok: true,
+    enabled: true,
+    chatProvider: 'gemini',
+    chatModel: 'gemini-3.5-flash-lite',
+    liveModel: 'gemini-3.1-flash-live-preview',
+  });
   sendAiChatMock.mockResolvedValue({
     ok: true, requestId: 'r1', answer: 'Answer.', citations: [], followUps: [],
     notice: 'AI-generated summary from IOCT records. Verify before making decisions.',
   });
   renderDrawer();
   expect(screen.getByText(/read only/i)).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.getByText(/gemini · gemini-3.5-flash-lite/i)).toBeInTheDocument();
+  });
 
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'balance?' } });
   fireEvent.click(screen.getByRole('button', { name: /send/i }));

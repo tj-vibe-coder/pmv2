@@ -1,5 +1,5 @@
 import { API_BASE } from '../config/api';
-import type { AiAnswer, AiMessage, AiNavigateTo, AiPageContext, AiPriorToolResult, AiLiveTokenResponse, AiProposal } from '../types/AiAssist';
+import type { AiAnswer, AiMessage, AiNavigateTo, AiPageContext, AiPriorToolResult, AiLiveTokenResponse, AiProposal, AiHealthResponse } from '../types/AiAssist';
 import { parseAiProposal } from '../types/AiAssist';
 
 function authHeaders(): Record<string, string> {
@@ -141,6 +141,35 @@ function proposalActionMessage(status: number): string {
   if (status === 429) return 'Too many requests — please wait a moment.';
   if (status === 503) return 'IOCT Assist is not enabled yet.';
   return 'Could not apply that draft.';
+}
+
+export async function fetchAiHealth(signal?: AbortSignal): Promise<AiHealthResponse> {
+  const res = await fetch(`${API_BASE}/api/ai-assist/health`, {
+    headers: { ...authHeaders() },
+    signal,
+  });
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    throw new AiAssistError('IOCT Assist is unavailable right now.', res.status);
+  }
+  const parsed = body as Partial<AiHealthResponse>;
+  if (
+    !res.ok
+    || !parsed.ok
+    || typeof parsed.chatModel !== 'string'
+    || typeof parsed.liveModel !== 'string'
+  ) {
+    throw new AiAssistError('IOCT Assist is unavailable right now.', res.status);
+  }
+  return {
+    ok: true,
+    enabled: parsed.enabled === true,
+    chatProvider: typeof parsed.chatProvider === 'string' ? parsed.chatProvider : 'gemini',
+    chatModel: parsed.chatModel,
+    liveModel: parsed.liveModel,
+  };
 }
 
 export async function requestLiveToken(signal?: AbortSignal): Promise<AiLiveTokenResponse> {

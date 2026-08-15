@@ -4,6 +4,10 @@
 
 Hands-free P1 added a real `/projects/:id` route that loads `ProjectMonitoringApp`. Opportunity and quotation citation routes were already real. Collections/progress still use the `sessionStorage.selectedProjectId` bridge onto `/dashboard` as a fallback.
 
+## Assist operator HTTP uses the same forgeable token as chat
+
+`GET /api/ai-assist/operator/catalog` and `POST /api/ai-assist/operator/execute` reuse `authorizeAiUser`. The stdio MCP adapter (`npm run ai-assist:mcp`) only forwards those two routes with `IOCT_ASSIST_TOKEN`. They do not open the rest of the PMv2 API, but they inherit the custom base64-token risk. Leave the flag local-only until auth is hardened.
+
 ## AI Assist proposals are process-local
 
 Drafts from `propose_opportunity_update` live in the Express process (`createProposalStore`, 10-minute TTL). A Cloud Functions instance recycle or a second instance will 404 a confirm. Fine for local RJR/TJC; not a multi-instance store.
