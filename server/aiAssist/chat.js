@@ -79,6 +79,9 @@ async function runChat({ client, registry, config, messages, pageContext, priorT
     }
 
     if (result && result.functionCalls) {
+      if (process.env.AI_ASSIST_TRACE === 'true') {
+        console.error(`[ai-assist:trace] round=${toolRounds} calls=${JSON.stringify(result.functionCalls)}`);
+      }
       if (toolRounds >= maxToolRounds) {
         throw new Error('Tool round budget exceeded');
       }
@@ -87,8 +90,26 @@ async function runChat({ client, registry, config, messages, pageContext, priorT
         if (!tool) {
           throw new Error('Unknown tool: ' + call.name);
         }
-        const validatedArgs = validateToolInput(call.name, call.args);
-        const toolResult = await tool.execute(validatedArgs);
+        // Bad arguments from the model (e.g. an invented enum value) are
+        // recoverable: feed the validation message back as the tool's
+        // result so the model can retry with valid arguments instead of
+        // the whole chat turn failing with a fatal error. A failure inside
+        // tool.execute() itself (Firestore, etc.) is NOT caught here and
+        // stays fatal — retrying with different arguments wouldn't help,
+        // and silently absorbing it would hide real infra failures.
+        let toolResult;
+        let validatedArgs;
+        try {
+          validatedArgs = validateToolInput(call.name, call.args);
+        } catch (err) {
+          toolResult = {
+            data: { error: 'invalid_arguments', message: err && err.message ? err.message : 'Invalid arguments.' },
+            sources: [],
+          };
+        }
+        if (toolResult === undefined) {
+          toolResult = await tool.execute(validatedArgs);
+        }
         totalResultBytes += JSON.stringify(toolResult.data).length;
         if (totalResultBytes > maxResultBytes) {
           throw new Error('Tool result byte budget exceeded');

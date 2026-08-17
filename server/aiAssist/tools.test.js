@@ -143,6 +143,31 @@ test('navigate_to_record returns choose when two records match', async () => {
   assert.ok(!result.data.candidates.some((item) => item.route.startsWith('/settings')));
 });
 
+test('navigate_to_record resolves a named app page like "Sales Dashboard" without touching Firestore', async () => {
+  const registry = createToolRegistry({
+    db: {
+      collection: () => { throw new Error('page navigation must not query Firestore'); },
+    },
+  });
+  const result = await registry.get('navigate_to_record').execute({ search: 'Sales Dashboard', kind: 'page' });
+  assert.equal(result.data.action, 'navigate');
+  assert.equal(result.data.kind, 'page');
+  assert.equal(result.data.route, '/sales');
+});
+
+test('navigate_to_record finds a page via kind=any alongside record search', async () => {
+  const registry = createToolRegistry({
+    db: namedCollections({
+      projects: { get: async () => ({ docs: [] }) },
+      calcsheet_projects: { get: async () => ({ docs: [] }) },
+      calcsheet_quotations: { get: async () => ({ docs: [] }) },
+    }),
+  });
+  const result = await registry.get('navigate_to_record').execute({ search: 'Finance Home' });
+  assert.equal(result.data.action, 'navigate');
+  assert.equal(result.data.route, '/finance');
+});
+
 test('navigate_to_record returns none when nothing matches', async () => {
   const registry = createToolRegistry({
     db: namedCollections({

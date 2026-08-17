@@ -40,6 +40,8 @@ test('rejects a route argument on navigate_to_record', () => {
 test('accepts navigate_to_record and list_quotations_for_opportunity inputs', () => {
   const nav = validateToolInput('navigate_to_record', { search: 'rezcoat', kind: 'opportunity' });
   assert.equal(nav.kind, 'opportunity');
+  const page = validateToolInput('navigate_to_record', { search: 'Sales Dashboard', kind: 'page' });
+  assert.equal(page.kind, 'page');
   const list = validateToolInput('list_quotations_for_opportunity', { opportunityId: 'opp1' });
   assert.equal(list.opportunityId, 'opp1');
 });

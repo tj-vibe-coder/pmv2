@@ -23,6 +23,58 @@ const OPPORTUNITY_ROUTE_PREFIX = '/sales/calcsheet/projects/';
 const QUOTATION_ROUTE_PREFIX = '/sales/calcsheet/quotations/';
 const CLIENT_ROUTE = '/sales/clients';
 
+// Static index of named app pages (as opposed to data records) mirrored by
+// hand from src/App.tsx's route list — kept here, not derived from the
+// router, to stay a one-way dependency like TOOL_DECLARATIONS below. Only
+// parameterless, directly-navigable pages are listed (no /projects/:id-style
+// detail routes — those go through project/opportunity/quotation search
+// instead). Where a page is mounted at more than one path (e.g. Expense
+// Monitoring under both / and /finance/), only the canonical route is
+// listed; both mounts render the same component against the same data.
+const PAGE_INDEX = [
+  { label: 'Dashboard', route: '/dashboard', keywords: ['projects dashboard', 'project monitoring', 'home'] },
+  { label: 'Location Analysis', route: '/location-analysis', keywords: ['project map', 'project locations'] },
+  { label: 'Expense Monitoring', route: '/finance/expense-monitoring', keywords: ['expenses', 'recent expenses'] },
+  { label: 'Liquidation Form', route: '/employee/liquidation-form', keywords: ['liquidate', 'file liquidation'] },
+  { label: 'Cash Advance Form', route: '/employee/ca-form', keywords: ['ca form', 'cash advance', 'file ca'] },
+  { label: 'Direct Labor', route: '/finance/expense-monitoring/direct-labor', keywords: ['direct labor cost'] },
+  { label: 'Clients', route: '/sales/clients', keywords: ['companies', 'customers'] },
+  { label: 'Material Request', route: '/material-request', keywords: ['mrf', 'material request form', 'orders'] },
+  { label: 'Delivery Receipt', route: '/delivery', keywords: ['delivery', 'deliveries'] },
+  { label: 'Suppliers', route: '/suppliers', keywords: ['vendors'] },
+  { label: 'Purchase Order', route: '/purchase-order', keywords: ['po', 'purchase orders'] },
+  { label: 'Estimates', route: '/estimates', keywords: [] },
+  { label: 'Reports', route: '/reports', keywords: ['project reports'] },
+  { label: 'Progress Report', route: '/reports/progress', keywords: [] },
+  { label: 'Service Reports', route: '/reports/service', keywords: ['service report list'] },
+  { label: 'Certificate of Completion', route: '/reports/completion', keywords: ['coc'] },
+  { label: 'Report Attachments', route: '/reports/attachments', keywords: [] },
+  { label: 'Utilities', route: '/utilities', keywords: [] },
+  { label: 'EHS Safety Documents', route: '/utilities/ehs', keywords: ['safety certificate', 'safety manual', 'osh program'] },
+  { label: 'ID Generator', route: '/utilities/id-generator', keywords: [] },
+  { label: 'Acknowledgement Receipt', route: '/utilities/acknowledgement-receipt', keywords: [] },
+  { label: 'User Approvals', route: '/user-approvals', keywords: ['pending users', 'approve users'] },
+  { label: 'User Management', route: '/settings/users', keywords: ['users', 'settings', 'accounts'] },
+  { label: 'Finance Home', route: '/finance', keywords: ['finance dashboard'] },
+  { label: 'Collections', route: '/finance/collections', keywords: [] },
+  { label: 'Investment Tracker', route: '/finance/investment-tracker', keywords: ['founder funding'] },
+  { label: 'Payroll', route: '/finance/payroll', keywords: ['payroll dashboard'] },
+  { label: 'Reimbursements', route: '/finance/reimbursements', keywords: [] },
+  { label: 'Overhead Expenses', route: '/finance/overhead-expenses', keywords: [] },
+  { label: 'Company P&L', route: '/finance/pnl', keywords: ['profit and loss', 'income statement'] },
+  { label: 'Tax Ledger', route: '/finance/tax-ledger', keywords: ['tax filer', 'ewt'] },
+  { label: 'Sales Dashboard', route: '/sales', keywords: ['sales home', 'sales workspace'] },
+  { label: 'Calcsheet Projects', route: '/sales/calcsheet/projects', keywords: ['quotations', 'proposals', 'calcsheet'] },
+  { label: 'Import Legacy Quotations', route: '/sales/calcsheet/import-legacy', keywords: [] },
+  { label: 'Calcsheet Presets', route: '/sales/calcsheet/presets', keywords: ['labor rate presets'] },
+  { label: 'Pricelists', route: '/sales/pricelists', keywords: [] },
+  { label: 'Employee Portal', route: '/employee', keywords: ['employee home'] },
+  { label: 'Daily Time Record', route: '/employee/dtr', keywords: ['dtr', 'attendance'] },
+  { label: 'Submit Service Report', route: '/employee/service-report', keywords: [] },
+  { label: 'Payslips', route: '/employee/payslips', keywords: [] },
+  { label: 'Clock In/Out', route: '/employee/clock', keywords: ['time clock'] },
+];
+
 function round2(value) {
   return Math.round(value * 100) / 100;
 }
@@ -56,13 +108,13 @@ function docDataWithId(doc) {
 const TOOL_DECLARATIONS = {
   search_projects: {
     name: 'search_projects',
-    description: 'Search operational project records (filter by status, year, search text, client, or category). Returns up to 10 projects with only allowlisted fields.',
+    description: 'Search operational project records (filter by status, year, search text, client, or category). Returns up to 10 projects with only allowlisted fields. "Open" or "active" projects are not one status value — call without a status filter and treat won, lost, and inactive as closed when reasoning over the results; do not call this once per status value.',
     parameters: {
       type: 'object',
       properties: {
         search: { type: 'string', description: 'Case-insensitive substring against project name, account name, or OVP number.' },
         year: { type: 'integer', description: 'Match projects from this year.' },
-        status: { type: 'string', description: 'Match projects by status.' },
+        status: { type: 'string', enum: ['draft', 'for_review', 'sent', 'won', 'lost', 'inactive'], description: 'Match projects by status.' },
         client: { type: 'string', description: 'Substring against the account/client name.' },
         category: { type: 'string', description: 'Exact match against the project category.' },
       },
@@ -86,14 +138,14 @@ const TOOL_DECLARATIONS = {
     parameters: {
       type: 'object',
       properties: {
-        groupBy: { type: 'string', description: 'Group key: status, year, or category. Defaults to status.' },
+        groupBy: { type: 'string', enum: ['status', 'year', 'category'], description: 'Group key: status, year, or category. Defaults to status.' },
       },
       required: [],
     },
   },
   search_sales_opportunities: {
     name: 'search_sales_opportunities',
-    description: 'Search sales opportunities in the calcsheet pipeline (filter by search text, year, status, client, or grade). Returns up to 10 opportunities with only allowlisted fields.',
+    description: 'Search sales opportunities in the calcsheet pipeline (filter by search text, year, status, client, or grade). Returns up to 10 opportunities with only allowlisted fields. "Open" or "active" opportunities are not one status value — call without a status filter and treat won, lost, and inactive as closed when reasoning over the results; do not call this once per status value.',
     parameters: {
       type: 'object',
       properties: {
@@ -101,7 +153,7 @@ const TOOL_DECLARATIONS = {
         year: { type: 'integer', description: 'Match opportunities whose date falls in this year.' },
         status: { type: 'string', description: 'Match opportunities by pipeline status.' },
         client: { type: 'string', description: 'Substring against the opportunity name or code (client name is a foreign key, not stored on the record).' },
-        grade: { type: 'string', description: 'Match opportunities by opportunity grade (A, B, or C).' },
+        grade: { type: 'string', enum: ['A', 'B', 'C'], description: 'Match opportunities by opportunity grade (A, B, or C).' },
       },
       required: [],
     },
@@ -132,12 +184,12 @@ const TOOL_DECLARATIONS = {
   },
   navigate_to_record: {
     name: 'navigate_to_record',
-    description: 'Resolve a spoken or typed name to an allowlisted PMv2 page. Returns action navigate (one match), choose (several), or none. Never accepts a route — the server picks the path.',
+    description: 'Resolve a spoken or typed name to an allowlisted PMv2 destination — either a named app page (Dashboard, Sales Dashboard, Finance Home, Expense Monitoring, Payroll, Company P&L, Calcsheet Projects, Clients, etc.) or a data record (project, opportunity, quotation). Returns action navigate (one match), choose (several), or none. Never accepts a route — the server picks the path.',
     parameters: {
       type: 'object',
       properties: {
-        search: { type: 'string', description: 'Name, code, or id the user said (for example Rezcoat or PCS2602005).' },
-        kind: { type: 'string', description: 'project, opportunity, quotation, or any. proposal means opportunity.' },
+        search: { type: 'string', description: 'Name the user said (for example Rezcoat, PCS2602005, Sales Dashboard, or Finance Home).' },
+        kind: { type: 'string', enum: ['page', 'project', 'opportunity', 'quotation', 'any'], description: 'page for a named app page/dashboard, project/opportunity/quotation for a data record, or any. proposal means opportunity.' },
       },
       required: ['search'],
     },
@@ -182,7 +234,7 @@ const TOOL_DECLARATIONS = {
       type: 'object',
       properties: {
         opportunityId: { type: 'string', description: 'The calcsheet opportunity document ID.' },
-        field: { type: 'string', description: 'The field to update: status, opportunityGrade, or notes.' },
+        field: { type: 'string', enum: ['status', 'opportunityGrade', 'notes'], description: 'The field to update: status, opportunityGrade, or notes.' },
         value: { type: 'string', description: 'The proposed new value.' },
         reason: { type: 'string', description: 'Optional explanation for the proposed change.' },
       },
@@ -499,11 +551,20 @@ async function collectQuotationCandidates(db, search, asOf) {
   return merged.slice(0, MAX_LIST_RESULTS);
 }
 
+function searchPages(search) {
+  return PAGE_INDEX
+    .filter((page) => textMatches(page.label, search) || page.keywords.some((kw) => textMatches(kw, search)))
+    .map((page) => ({ kind: 'page', id: page.route, label: page.label, route: page.route }));
+}
+
 async function navigateToRecord(db, args, asOf) {
   const search = String(args.search || '').trim();
   const kind = args.kind || 'any';
   const candidates = [];
 
+  if (kind === 'page' || kind === 'any') {
+    candidates.push(...searchPages(search));
+  }
   if (kind === 'project' || kind === 'any') {
     const projects = await searchProjects(db, { search }, asOf);
     for (let i = 0; i < projects.data.length; i += 1) {
