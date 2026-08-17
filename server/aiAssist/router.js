@@ -123,7 +123,11 @@ function createAiAssistRouter(opts) {
         priorToolResults: parsed.priorToolResults,
         requestId,
       });
-    } catch {
+    } catch (err) {
+      // Server-side only: never send the raw provider error to the client
+      // (may contain request/config detail), but a swallowed error with no
+      // trace at all makes provider-side failures undiagnosable.
+      console.error(`[ai-assist:chat] requestId=${requestId} provider_error:`, err && err.message ? err.message : err);
       await writeAudit({ requestId, user, channel: 'text', action: 'chat', outcome: 'error', latencyMs: Date.now() - startedAt });
       res.status(502).json({ ok: false, error: 'provider_error', requestId });
       return;
