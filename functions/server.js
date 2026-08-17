@@ -9,8 +9,9 @@ const { loadAiAssistConfig } = require('./server/aiAssist/config');
 const { createAiAssistRouter } = require('./server/aiAssist/router');
 const { createToolRegistry: createAiAssistToolRegistry } = require('./server/aiAssist/tools');
 const { buildTextSystemInstruction } = require('./server/aiAssist/prompt');
-const { createGeminiChatClient } = require('./server/aiAssist/geminiClient');
+const { createAssistChatClient } = require('./server/aiAssist/providers');
 const { GoogleGenAI: AiAssistGoogleGenAI } = require('@google/genai');
+const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -119,14 +120,33 @@ function primaryClientContact(client) {
   return contacts.find((c) => c.isPrimary) || contacts[0] || null;
 }
 
+// Login sessions live in `auth_sessions`, doc id = the bearer token itself: a
+// crypto-random 256-bit value the server generates (see mintAuthSession) and
+// can look up but never has to decode. This replaces an earlier scheme where
+// the token was an unsigned base64(userId:username:timestamp) string that
+// anyone who learned/guessed a user's Firestore doc id could forge by hand,
+// with no expiry ever enforced. See docs/agent/PROJECT_STATE.md 2026-08-17.
+const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days, absolute
+
+async function mintAuthSession(userId, username) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await db.collection('auth_sessions').doc(token).set({
+    userId,
+    username,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + AUTH_SESSION_TTL_MS,
+  });
+  return token;
+}
+
 // Helper: get current user from Bearer token
 async function getCurrentUser(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.substring(7);
   try {
-    // Scanner (QR-paired) sessions use 'scan_'-prefixed tokens. Standard base64
-    // login tokens never contain '_', so this prefix is unambiguous.
+    // Scanner (QR-paired) sessions use 'scan_'-prefixed tokens; everything
+    // else is a login session minted by mintAuthSession.
     if (token.startsWith('scan_')) {
       const sessSnap = await db.collection('scanner_sessions').doc(token).get();
       if (!sessSnap.exists) return null;
@@ -136,10 +156,11 @@ async function getCurrentUser(req) {
       if (!su.exists) return null;
       return { id: su.id, ...su.data(), scannerScope: true };
     }
-    const decoded = Buffer.from(token, 'base64').toString();
-    const [userId] = decoded.split(':');
-    if (!userId) return null;
-    const userDoc = await db.collection('users').doc(userId).get();
+    const sessSnap = await db.collection('auth_sessions').doc(token).get();
+    if (!sessSnap.exists) return null;
+    const sess = sessSnap.data();
+    if (!sess || Date.now() > sess.expiresAt) return null;
+    const userDoc = await db.collection('users').doc(sess.userId).get();
     if (!userDoc.exists) return null;
     return { id: userDoc.id, ...userDoc.data() };
   } catch (e) {
@@ -282,12 +303,30 @@ app.post('/api/auth/login', async (req, res) => {
     const user = userDoc.data();
     const approved = user.approved === 1 || user.approved === true;
     if (!approved && user.role !== 'superadmin') return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
-    const token = Buffer.from(`${userDoc.id}:${user.username}:${Date.now()}`).toString('base64');
+    const token = await mintAuthSession(userDoc.id, user.username);
     res.json({ success: true, user: userResponse(userDoc.id, user), token });
   } catch (err) {
     console.error('Database error during login:', err);
     res.json({ success: false, error: 'Database error' });
   }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    // Best-effort revocation: not scanner-scoped (those expire on their own
+    // short TTL), never let a delete failure block the client from logging
+    // out locally.
+    if (!token.startsWith('scan_')) {
+      try {
+        await db.collection('auth_sessions').doc(token).delete();
+      } catch (e) {
+        console.error('Error revoking session on logout:', e.message);
+      }
+    }
+  }
+  res.json({ success: true });
 });
 
 app.post('/api/auth/register', async (req, res) => {
@@ -1445,16 +1484,21 @@ app.post('/api/project-expenses/backfill-liquidation-receipts', async (req, res)
 });
 
 // Superadmin-only: reclassify a manually-entered / receipt-scanned project expense as an
-// employee out-of-pocket claim instead of a company-paid one. Creates a submitted liquidation
-// for the chosen employee (optionally against one of their approved CAs) and removes the
-// original project_expense in one batch, so the cost is never counted twice.
+// employee out-of-pocket claim instead of a company-paid one. By default creates a new
+// submitted liquidation for the chosen employee (optionally against one of their approved
+// CAs); passing targetLiquidationId instead appends the row to one of that employee's
+// existing DRAFT liquidations (submitted ones go through the revision-approval flow, not
+// this endpoint, since they've already affected CA balance/reimbursement tracking). Either
+// way the original project_expense/overhead_expense is removed in the same batch, so the
+// cost is never counted twice, and the expense's attached receipt (if any) carries over
+// onto the new row instead of being silently dropped.
 // Shared by project_expenses and overhead_expenses — an overhead receipt an
 // employee paid out-of-pocket is just as promotable as a project one.
 const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
-  const { userId, caId } = req.body || {};
+  const { userId, caId, targetLiquidationId } = req.body || {};
   if (!userId) return res.status(400).json({ success: false, error: 'userId is required' });
   try {
     const expenseRef = db.collection(collectionName).doc(req.params.id);
@@ -1468,55 +1512,129 @@ const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
     if (!targetUserSnap.exists) return res.status(404).json({ success: false, error: 'Employee not found' });
     const targetUser = targetUserSnap.data();
 
-    let caRef = null;
-    if (caId) {
-      caRef = db.collection('cash_advances').doc(String(caId));
-      const caSnap = await caRef.get();
-      if (!caSnap.exists || caSnap.data().user_id !== String(userId) || caSnap.data().status !== 'approved') {
-        return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance for this employee' });
-      }
-      const bal = parseFloat(caSnap.data().balance_remaining) || 0;
-      if ((Number(expense.amount) || 0) > bal) {
-        return res.status(400).json({ success: false, error: `Expense (₱${Number(expense.amount).toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
-      }
-    }
-
-    // Same LQ<YY><###>-<INITIALS> numbering scheme as /api/liquidations/next-form-no.
-    const formNo = await nextLiquidationFormNo(targetUser);
-
     const now = Math.floor(Date.now() / 1000);
     const nowIso = new Date().toISOString();
-    const liquidationRef = db.collection('liquidations').doc();
-    const rows = [{ category: expense.category || 'Others', description: expense.description || '', amount: Number(expense.amount) || 0 }];
+    const rowId = `row-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const newRow = {
+      id: rowId,
+      date: expense.date || nowIso.slice(0, 10),
+      category: expense.category || 'Others',
+      projectId: '',
+      projectName: '',
+      projectNo: '',
+      particulars: expense.description || '',
+      amount: Number(expense.amount) || 0,
+      remarks: expense.remarks || '',
+      deductible: typeof expense.deductible === 'boolean' ? expense.deductible : true,
+      deductibleReason: expense.deductibleReason || null,
+      supplier: expense.supplier || '',
+      invoiceNo: expense.invoiceNo || '',
+      customerInfoIssues: [],
+    };
+    const newReceipts = (expense.receiptRef && (expense.receiptRef.oneDriveId || expense.receiptRef.webUrl))
+      ? [{
+          id: `rcpt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          rowId,
+          filename: expense.receiptRef.filename || 'receipt',
+          oneDriveId: expense.receiptRef.oneDriveId || null,
+          webUrl: expense.receiptRef.webUrl || null,
+        }]
+      : [];
 
     const batch = db.batch();
-    batch.set(liquidationRef, {
-      user_id: String(userId),
-      form_no: formNo,
-      date_of_submission: nowIso.slice(0, 10),
-      employee_name: targetUser.full_name || targetUser.username || null,
-      employee_number: null,
-      rows_json: JSON.stringify(rows),
-      receipts_json: '[]',
-      total_amount: Number(expense.amount) || 0,
-      ca_id: caId || null,
-      status: 'submitted',
-      reimbursement_status: caId ? null : 'pending',
-      reimbursed_at: null,
-      reimbursed_by: null,
-      promotedFromExpenseId: req.params.id,
-      created_at: now,
-      updated_at: now,
-    });
-    if (caRef) {
-      batch.update(caRef, { balance_remaining: FieldValue.increment(-(Number(expense.amount) || 0)), updated_at: now });
-    }
-    batch.delete(expenseRef);
-    // Clean up any linked out-of-pocket investment row — the expense is no longer company-paid.
-    batch.delete(db.collection('investments').doc(`expense_sync_${req.params.id}`));
-    await batch.commit();
+    let liquidationId, formNo;
+    // Set when the append went through applyLiquidationRevision (submitted target) —
+    // that call already committed its own writes, so the expense/investment cleanup
+    // below needs a second, separate commit instead of joining the batch above.
+    let revisionAlreadyApplied = false;
 
-    res.json({ success: true, liquidationId: liquidationRef.id, formNo });
+    if (targetLiquidationId) {
+      const targetRef = db.collection('liquidations').doc(String(targetLiquidationId));
+      const targetSnap = await targetRef.get();
+      if (!targetSnap.exists) return res.status(404).json({ success: false, error: 'Target liquidation not found' });
+      const target = targetSnap.data();
+      if (target.user_id !== String(userId)) return res.status(400).json({ success: false, error: 'Target liquidation does not belong to this employee' });
+      if (target.status !== 'draft' && target.status !== 'submitted') {
+        return res.status(400).json({ success: false, error: 'Target liquidation must be a draft or a submitted liquidation' });
+      }
+      const existingRows = parseLiqRows(target.rows_json);
+      const existingReceipts = parseLiqRows(target.receipts_json);
+      const updatedRows = [...existingRows, newRow];
+      const updatedTotal = updatedRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+      if (target.status === 'draft') {
+        batch.update(targetRef, {
+          rows_json: JSON.stringify(updatedRows),
+          receipts_json: JSON.stringify([...existingReceipts, ...newReceipts]),
+          total_amount: updatedTotal,
+          updated_at: now,
+        });
+      } else {
+        // Submitted liquidations go through the same revision machinery as
+        // "Edit (applies immediately)" so CA balance / reimbursement / the
+        // project_expenses-or-overhead_expenses sync all stay consistent.
+        const revision = {
+          rows_json: JSON.stringify(updatedRows),
+          receipts_json: JSON.stringify([...existingReceipts, ...newReceipts]),
+          total_amount: updatedTotal,
+          employee_name: target.employee_name ?? null,
+          date_of_submission: target.date_of_submission ?? null,
+          note: `Promoted expense (${collectionName}/${req.params.id}) added as a new row`,
+          proposed_by: user.id,
+          proposed_by_name: user.full_name || user.username || null,
+          proposed_at: now,
+        };
+        await applyLiquidationRevision(targetRef.id, target, revision, user);
+        revisionAlreadyApplied = true;
+      }
+      liquidationId = targetRef.id;
+      formNo = target.form_no;
+    } else {
+      let caRef = null;
+      if (caId) {
+        caRef = db.collection('cash_advances').doc(String(caId));
+        const caSnap = await caRef.get();
+        if (!caSnap.exists || caSnap.data().user_id !== String(userId) || caSnap.data().status !== 'approved') {
+          return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance for this employee' });
+        }
+        const bal = parseFloat(caSnap.data().balance_remaining) || 0;
+        if ((Number(expense.amount) || 0) > bal) {
+          return res.status(400).json({ success: false, error: `Expense (₱${Number(expense.amount).toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+        }
+      }
+      // Same LQ<YY><###>-<INITIALS> numbering scheme as /api/liquidations/next-form-no.
+      formNo = await nextLiquidationFormNo(targetUser);
+      const liquidationRef = db.collection('liquidations').doc();
+      batch.set(liquidationRef, {
+        user_id: String(userId),
+        form_no: formNo,
+        date_of_submission: nowIso.slice(0, 10),
+        employee_name: targetUser.full_name || targetUser.username || null,
+        employee_number: null,
+        rows_json: JSON.stringify([newRow]),
+        receipts_json: JSON.stringify(newReceipts),
+        total_amount: Number(expense.amount) || 0,
+        ca_id: caId || null,
+        status: 'submitted',
+        reimbursement_status: caId ? null : 'pending',
+        reimbursed_at: null,
+        reimbursed_by: null,
+        promotedFromExpenseId: req.params.id,
+        created_at: now,
+        updated_at: now,
+      });
+      if (caRef) {
+        batch.update(caRef, { balance_remaining: FieldValue.increment(-(Number(expense.amount) || 0)), updated_at: now });
+      }
+      liquidationId = liquidationRef.id;
+    }
+
+    const cleanupBatch = revisionAlreadyApplied ? db.batch() : batch;
+    cleanupBatch.delete(expenseRef);
+    // Clean up any linked out-of-pocket investment row — the expense is no longer company-paid.
+    cleanupBatch.delete(db.collection('investments').doc(`expense_sync_${req.params.id}`));
+    await cleanupBatch.commit();
+
+    res.json({ success: true, liquidationId, formNo });
   } catch (err) {
     console.error(`Error promoting ${collectionName} row to liquidation:`, err);
     res.status(500).json({ success: false, error: 'Database error' });
@@ -2234,17 +2352,28 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
     await caRef.update({ balance_remaining: FieldValue.increment(-caDelta), updated_at: now });
   }
 
-  // project_expenses re-sync: update/delete docs previously synced from this
-  // liquidation, and create docs only for rows that are new in the revision.
-  // Rows that were never synced (older filings predate the client-side sync)
-  // stay unsynced so applying a fix doesn't retroactively inject historical
-  // costs into the P&L.
+  // project_expenses / overhead_expenses re-sync: a row with a project goes to
+  // project_expenses, a row with an amount but no project goes to overhead_expenses
+  // (e.g. software subscriptions liquidated without a project). Existing synced
+  // docs are updated/deleted/moved to match the revision. Brand-new (never
+  // previously synced) PROJECT rows only sync if they're new in this revision —
+  // older filings that predate the sync feature stay unsynced as project costs so
+  // applying an unrelated fix doesn't retroactively inject historical project
+  // costs into the P&L. That conservatism doesn't apply to OVERHEAD: an
+  // unassigned row was always meant to be an overhead cost, so any row lacking a
+  // project auto-syncs to overhead_expenses on revision, old or new — this is
+  // exactly how a legacy liquidation missing its project assignment gets fixed.
   const liqDescription = (row) => liq.form_no
     ? `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`
     : ((row.particulars || '').trim() || 'Liquidation');
-  const expSnap = await db.collection('project_expenses').where('sourceLiquidationId', '==', liqId).get();
+  const [expSnap, ohSnap] = await Promise.all([
+    db.collection('project_expenses').where('sourceLiquidationId', '==', liqId).get(),
+    db.collection('overhead_expenses').where('sourceLiquidationId', '==', liqId).get(),
+  ]);
   const expByRowId = new Map();
   expSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) expByRowId.set(rid, d); });
+  const ohByRowId = new Map();
+  ohSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) ohByRowId.set(rid, d); });
   const oldRowIds = new Set(oldRows.map(r => r.id));
   const newById = new Map(newRows.map(r => [r.id, r]));
   const revisedFiledBy = (revision.employee_name ?? liq.employee_name) || null;
@@ -2272,31 +2401,74 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
       liquidationFiledAt: revisedFiledAt || FieldValue.delete(),
     });
   }
-  for (const row of newRows) {
-    if (oldRowIds.has(row.id) || expByRowId.has(row.id)) continue;
-    if (!row.projectId || !(Number(row.amount) > 0)) continue;
-    const doc = {
-      projectId: String(row.projectId),
-      projectName: (row.projectName || '').trim() || '—',
+  for (const [rowId, ohDoc] of ohByRowId) {
+    const row = newById.get(rowId);
+    if (!row || row.projectId || !(Number(row.amount) > 0)) { batch.delete(ohDoc.ref); continue; }
+    const receiptRef = receiptByRowId.get(rowId);
+    batch.update(ohDoc.ref, {
       description: liqDescription(row),
       amount: Number(row.amount) || 0,
-      date: row.date || new Date().toISOString().slice(0, 10),
+      date: row.date || ohDoc.data().date || null,
       category: (row.category || '').trim() || 'Others',
-      createdAt: new Date().toISOString(),
-      createdBy: revision.proposed_by || approver.id,
-      sourceType: 'liquidation_sync',
-      sourceLiquidationId: liqId,
-      sourceLiquidationRowId: row.id,
-    };
-    if (revisedFiledBy) doc.liquidationFiledBy = revisedFiledBy;
-    if (revisedFiledAt) doc.liquidationFiledAt = revisedFiledAt;
-    if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
-    if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
-    if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
-    if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+      receiptRef: receiptRef || FieldValue.delete(),
+      liquidationFiledBy: revisedFiledBy || FieldValue.delete(),
+      liquidationFiledAt: revisedFiledAt || FieldValue.delete(),
+    });
+  }
+  for (const row of newRows) {
+    const amt = Number(row.amount);
+    if (!(amt > 0)) continue;
     const receiptRef = receiptByRowId.get(row.id);
-    if (receiptRef) doc.receiptRef = receiptRef;
-    batch.set(db.collection('project_expenses').doc(), doc);
+    if (row.projectId) {
+      if (expByRowId.has(row.id)) continue; // already updated above
+      // Only a genuinely new-in-revision row, or one that just moved here from
+      // overhead (already counted once), may newly sync as a project cost.
+      if (oldRowIds.has(row.id) && !ohByRowId.has(row.id)) continue;
+      const doc = {
+        projectId: String(row.projectId),
+        projectName: (row.projectName || '').trim() || '—',
+        description: liqDescription(row),
+        amount: amt,
+        date: row.date || new Date().toISOString().slice(0, 10),
+        category: (row.category || '').trim() || 'Others',
+        createdAt: new Date().toISOString(),
+        createdBy: revision.proposed_by || approver.id,
+        sourceType: 'liquidation_sync',
+        sourceLiquidationId: liqId,
+        sourceLiquidationRowId: row.id,
+      };
+      if (revisedFiledBy) doc.liquidationFiledBy = revisedFiledBy;
+      if (revisedFiledAt) doc.liquidationFiledAt = revisedFiledAt;
+      if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
+      if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
+      if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
+      if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+      if (receiptRef) doc.receiptRef = receiptRef;
+      batch.set(db.collection('project_expenses').doc(), doc);
+    } else {
+      if (ohByRowId.has(row.id)) continue; // already updated above
+      // Unassigned rows always auto-sync to overhead, old or new — this is what
+      // fixes a legacy liquidation that predates the sync feature entirely.
+      const doc = {
+        description: liqDescription(row),
+        amount: amt,
+        date: row.date || new Date().toISOString().slice(0, 10),
+        category: (row.category || '').trim() || 'Others',
+        createdAt: new Date().toISOString(),
+        createdBy: revision.proposed_by || approver.id,
+        sourceType: 'liquidation_sync',
+        sourceLiquidationId: liqId,
+        sourceLiquidationRowId: row.id,
+      };
+      if (revisedFiledBy) doc.liquidationFiledBy = revisedFiledBy;
+      if (revisedFiledAt) doc.liquidationFiledAt = revisedFiledAt;
+      if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
+      if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
+      if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
+      if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+      if (receiptRef) doc.receiptRef = receiptRef;
+      batch.set(db.collection('overhead_expenses').doc(), doc);
+    }
   }
   await batch.commit();
 
@@ -3739,6 +3911,11 @@ app.use(
   createProductHistoryRouter({ db, requireActiveUser }),
 );
 
+app.use(
+  '/api/finance-trace',
+  createFinanceTraceRouter({ db, getCurrentUser, FieldValue }),
+);
+
 app.get('/api/calcsheet/quotations', async (req, res) => {
   try {
     const { projectId } = req.query;
@@ -3937,6 +4114,78 @@ app.delete('/api/calcsheet/presets/:id', async (req, res) => {
     await db.collection('calcsheet_presets').doc(req.params.id).delete();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete preset' }); }
+});
+
+// ── Project work schedule (Gantt) tasks ───────────────────────────────────────
+// Equality-only filter on projectId, sorted in memory — no composite index
+// needed (see project_expenses above for why that matters on this repo's
+// deploy pipeline: an index create 409 aborts firestore+functions+hosting).
+app.get('/api/schedule-tasks', async (req, res) => {
+  try {
+    const { projectId } = req.query;
+    if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
+    const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
+    const tasks = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+    tasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.startDate || '').localeCompare(String(b.startDate || '')));
+    res.json({ success: true, tasks });
+  } catch (err) {
+    console.error('Error fetching schedule tasks:', err);
+    res.status(500).json({ success: false, error: 'Failed to get schedule tasks' });
+  }
+});
+
+app.post('/api/schedule-tasks', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { projectId, name, startDate, endDate } = req.body || {};
+    if (!projectId || !name || !startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'projectId, name, startDate, endDate are required' });
+    }
+    const { id: _ignored, ...body } = req.body;
+    const data = stripUndefinedFields({
+      ...body,
+      progressPct: Number(body.progressPct) || 0,
+      order: Number(body.order) || 0,
+      isMilestone: !!body.isMilestone,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const ref = await db.collection('calcsheet_schedule_tasks').add(data);
+    res.json({ success: true, task: { ...data, id: ref.id } });
+  } catch (err) {
+    console.error('Error creating schedule task:', err);
+    res.status(500).json({ success: false, error: 'Failed to create schedule task' });
+  }
+});
+
+app.put('/api/schedule-tasks/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { id: _ignored, ...body } = req.body || {};
+    const data = stripUndefinedFields({ ...body, updatedAt: new Date().toISOString() });
+    const ref = db.collection('calcsheet_schedule_tasks').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Schedule task not found' });
+    await ref.update(data);
+    res.json({ success: true, task: { ...doc.data(), ...data, id: ref.id } });
+  } catch (err) {
+    console.error('Error updating schedule task:', err);
+    res.status(500).json({ success: false, error: 'Failed to update schedule task' });
+  }
+});
+
+app.delete('/api/schedule-tasks/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    await db.collection('calcsheet_schedule_tasks').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting schedule task:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete schedule task' });
+  }
 });
 
 // ── Calcsheet settings (default job titles, etc.) ────────────────────────────
@@ -6128,8 +6377,30 @@ app.post('/api/overhead-expenses', async (req, res) => {
     const body = req.body;
     const now = new Date().toISOString();
     if (Array.isArray(body.expenses)) {
-      const toInsert = body.expenses.filter(e => Number(e.amount) > 0);
+      let toInsert = body.expenses.filter(e => Number(e.amount) > 0);
       if (toInsert.length === 0) return res.status(400).json({ success: false, error: 'No valid expenses in array' });
+      // Server-side dedup for liquidation-sourced rows, mirroring project-expenses —
+      // prevents duplicates when a liquidation is re-synced (e.g. re-proposing an edit).
+      const hasLiqRows = toInsert.some(e => e.sourceLiquidationId);
+      if (hasLiqRows) {
+        const liqKey = (e) => e.sourceLiquidationId && e.sourceLiquidationRowId ? `liq:${e.sourceLiquidationId}:${e.sourceLiquidationRowId}` : null;
+        const liqIds = [...new Set(toInsert.filter(e => e.sourceLiquidationId).map(e => String(e.sourceLiquidationId)))];
+        const existingKeys = new Set();
+        for (let i = 0; i < liqIds.length; i += 10) {
+          const chunkIds = liqIds.slice(i, i + 10);
+          const snap = await db.collection('overhead_expenses')
+            .where('sourceType', '==', 'liquidation_sync')
+            .where('sourceLiquidationId', 'in', chunkIds).get();
+          snap.docs.forEach(d => { const k = liqKey(d.data()); if (k) existingKeys.add(k); });
+        }
+        toInsert = toInsert.filter(e => {
+          const k = liqKey(e);
+          return !k || !existingKeys.has(k);
+        });
+        if (toInsert.length === 0) {
+          return res.status(200).json({ success: true, count: 0, expenses: [], message: 'All expenses already synced' });
+        }
+      }
       const inserted = [];
       for (let i = 0; i < toInsert.length; i += 499) {
         const chunk = toInsert.slice(i, i + 499);
@@ -6145,6 +6416,11 @@ app.post('/api/overhead-expenses', async (req, res) => {
             createdBy: user.id,
             sourceType: exp.sourceType || 'manual',
           };
+          if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
+          if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
+          if (exp.liquidationFiledBy) doc.liquidationFiledBy = String(exp.liquidationFiledBy);
+          if (exp.liquidationFiledAt) doc.liquidationFiledAt = String(exp.liquidationFiledAt);
+          if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
           if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
           if (exp.remarks) doc.remarks = String(exp.remarks);
           if (exp.supplier) doc.supplier = String(exp.supplier);
@@ -6167,6 +6443,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     const { description, remarks, amount, date, category, sourceType, receiptRef,
+            sourceLiquidationId, sourceLiquidationRowId, liquidationFiledBy, liquidationFiledAt, sourceCaId,
             supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
@@ -6178,6 +6455,11 @@ app.post('/api/overhead-expenses', async (req, res) => {
       createdBy: user.id,
       sourceType: sourceType || 'manual',
     };
+    if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
+    if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
+    if (liquidationFiledBy) doc.liquidationFiledBy = String(liquidationFiledBy);
+    if (liquidationFiledAt) doc.liquidationFiledAt = String(liquidationFiledAt);
+    if (sourceCaId) doc.sourceCaId = sourceCaId;
     if (receiptRef) doc.receiptRef = receiptRef;
     if (remarks) doc.remarks = String(remarks);
     if (supplier) doc.supplier = String(supplier);
@@ -6373,9 +6655,9 @@ app.use('/api/ai-assist', createAiAssistRouter({
   createChatClient: (config) => {
     const registry = createAiAssistToolRegistry({ db });
     const toolDeclarations = [...registry.values()].map((tool) => tool.declaration);
-    return createGeminiChatClient({
+    return createAssistChatClient({
+      config,
       apiKey: process.env.GEMINI_API_KEY,
-      model: config.chatModel,
       systemInstruction: buildTextSystemInstruction(config),
       toolDeclarations,
     });
