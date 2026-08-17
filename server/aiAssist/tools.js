@@ -56,13 +56,13 @@ function docDataWithId(doc) {
 const TOOL_DECLARATIONS = {
   search_projects: {
     name: 'search_projects',
-    description: 'Search operational project records (filter by status, year, search text, client, or category). Returns up to 10 projects with only allowlisted fields.',
+    description: 'Search operational project records (filter by status, year, search text, client, or category). Returns up to 10 projects with only allowlisted fields. "Open" or "active" projects are not one status value — call without a status filter and treat won, lost, and inactive as closed when reasoning over the results; do not call this once per status value.',
     parameters: {
       type: 'object',
       properties: {
         search: { type: 'string', description: 'Case-insensitive substring against project name, account name, or OVP number.' },
         year: { type: 'integer', description: 'Match projects from this year.' },
-        status: { type: 'string', description: 'Match projects by status.' },
+        status: { type: 'string', enum: ['draft', 'for_review', 'sent', 'won', 'lost', 'inactive'], description: 'Match projects by status.' },
         client: { type: 'string', description: 'Substring against the account/client name.' },
         category: { type: 'string', description: 'Exact match against the project category.' },
       },
@@ -86,14 +86,14 @@ const TOOL_DECLARATIONS = {
     parameters: {
       type: 'object',
       properties: {
-        groupBy: { type: 'string', description: 'Group key: status, year, or category. Defaults to status.' },
+        groupBy: { type: 'string', enum: ['status', 'year', 'category'], description: 'Group key: status, year, or category. Defaults to status.' },
       },
       required: [],
     },
   },
   search_sales_opportunities: {
     name: 'search_sales_opportunities',
-    description: 'Search sales opportunities in the calcsheet pipeline (filter by search text, year, status, client, or grade). Returns up to 10 opportunities with only allowlisted fields.',
+    description: 'Search sales opportunities in the calcsheet pipeline (filter by search text, year, status, client, or grade). Returns up to 10 opportunities with only allowlisted fields. "Open" or "active" opportunities are not one status value — call without a status filter and treat won, lost, and inactive as closed when reasoning over the results; do not call this once per status value.',
     parameters: {
       type: 'object',
       properties: {
@@ -101,7 +101,7 @@ const TOOL_DECLARATIONS = {
         year: { type: 'integer', description: 'Match opportunities whose date falls in this year.' },
         status: { type: 'string', description: 'Match opportunities by pipeline status.' },
         client: { type: 'string', description: 'Substring against the opportunity name or code (client name is a foreign key, not stored on the record).' },
-        grade: { type: 'string', description: 'Match opportunities by opportunity grade (A, B, or C).' },
+        grade: { type: 'string', enum: ['A', 'B', 'C'], description: 'Match opportunities by opportunity grade (A, B, or C).' },
       },
       required: [],
     },
@@ -137,7 +137,7 @@ const TOOL_DECLARATIONS = {
       type: 'object',
       properties: {
         search: { type: 'string', description: 'Name, code, or id the user said (for example Rezcoat or PCS2602005).' },
-        kind: { type: 'string', description: 'project, opportunity, quotation, or any. proposal means opportunity.' },
+        kind: { type: 'string', enum: ['project', 'opportunity', 'quotation', 'any'], description: 'project, opportunity, quotation, or any. proposal means opportunity.' },
       },
       required: ['search'],
     },
@@ -182,7 +182,7 @@ const TOOL_DECLARATIONS = {
       type: 'object',
       properties: {
         opportunityId: { type: 'string', description: 'The calcsheet opportunity document ID.' },
-        field: { type: 'string', description: 'The field to update: status, opportunityGrade, or notes.' },
+        field: { type: 'string', enum: ['status', 'opportunityGrade', 'notes'], description: 'The field to update: status, opportunityGrade, or notes.' },
         value: { type: 'string', description: 'The proposed new value.' },
         reason: { type: 'string', description: 'Optional explanation for the proposed change.' },
       },

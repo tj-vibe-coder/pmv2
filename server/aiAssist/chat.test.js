@@ -71,6 +71,50 @@ test('rejects a tool call for an unregistered tool name', async () => {
   );
 });
 
+test('invalid tool arguments from the model are fed back as a recoverable result, not a fatal error', async () => {
+  const registry = makeRegistry({
+    search_projects: {
+      data: [{ id: 'p1' }],
+      sources: [{ id: 'project:p1', label: 'P1', route: '/projects/p1', asOf: 'x' }],
+      asOf: 'x',
+    },
+  });
+  let call = 0;
+  const seenMessages = [];
+  const client = {
+    send: async (state) => {
+      call += 1;
+      seenMessages.push(state.toolResults);
+      if (call === 1) {
+        // The model invents a status value outside the real enum — this is
+        // exactly what happened in production against live Gemini traffic.
+        return { functionCalls: [{ name: 'search_projects', args: { status: 'open' } }] };
+      }
+      return { finalResponse: { answer: 'Retried with valid arguments.', citationIds: [], followUps: [] } };
+    },
+  };
+  const config = { maxToolRounds: 4, maxResultBytes: 60000 };
+  const result = await runChat({ client, registry, config, messages: [{ role: 'user', text: 'q' }], pageContext: null, requestId: 'r-invalid-args' });
+  assert.equal(result.answer, 'Retried with valid arguments.');
+  // The chat loop did not throw; the model instead got a tool result
+  // describing the invalid_arguments error, visible on the second send().
+  assert.equal(seenMessages[1][0].name, 'search_projects');
+  assert.equal(seenMessages[1][0].data.error, 'invalid_arguments');
+  assert.match(seenMessages[1][0].data.message, /status/);
+});
+
+test('a genuine tool.execute() failure (e.g. Firestore) still fails the whole turn, unlike an argument-validation error', async () => {
+  const registry = new Map([['search_projects', {
+    declaration: { name: 'search_projects' },
+    execute: async () => { throw new Error('Firestore unavailable'); },
+  }]]);
+  const client = { send: async () => ({ functionCalls: [{ name: 'search_projects', args: {} }] }) };
+  const config = { maxToolRounds: 4, maxResultBytes: 60000 };
+  await assert.rejects(() =>
+    runChat({ client, registry, config, messages: [{ role: 'user', text: 'q' }], pageContext: null, requestId: 'r-infra-fail' }),
+  );
+});
+
 test('enforces the tool round budget', async () => {
   const registry = makeRegistry({ search_projects: { data: [], sources: [], asOf: 'x' } });
   const client = { send: async () => ({ functionCalls: [{ name: 'search_projects', args: {} }] }) };
