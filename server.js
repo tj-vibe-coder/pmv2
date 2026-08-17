@@ -5,6 +5,12 @@ const path = require('path');
 const crypto = require('crypto');
 const { createProductHistoryRouter } = require('./server/calcsheetProductHistoryRouter');
 const { validateQuotationPurchaseTiming } = require('./server/calcsheetPurchaseTiming');
+const { loadAiAssistConfig } = require('./server/aiAssist/config');
+const { createAiAssistRouter } = require('./server/aiAssist/router');
+const { createToolRegistry: createAiAssistToolRegistry } = require('./server/aiAssist/tools');
+const { buildTextSystemInstruction } = require('./server/aiAssist/prompt');
+const { createAssistChatClient } = require('./server/aiAssist/providers');
+const { GoogleGenAI: AiAssistGoogleGenAI } = require('@google/genai');
 const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
 
 const app = express();
@@ -114,14 +120,33 @@ function primaryClientContact(client) {
   return contacts.find((c) => c.isPrimary) || contacts[0] || null;
 }
 
+// Login sessions live in `auth_sessions`, doc id = the bearer token itself: a
+// crypto-random 256-bit value the server generates (see mintAuthSession) and
+// can look up but never has to decode. This replaces an earlier scheme where
+// the token was an unsigned base64(userId:username:timestamp) string that
+// anyone who learned/guessed a user's Firestore doc id could forge by hand,
+// with no expiry ever enforced. See docs/agent/PROJECT_STATE.md 2026-08-17.
+const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days, absolute
+
+async function mintAuthSession(userId, username) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await db.collection('auth_sessions').doc(token).set({
+    userId,
+    username,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + AUTH_SESSION_TTL_MS,
+  });
+  return token;
+}
+
 // Helper: get current user from Bearer token
 async function getCurrentUser(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.substring(7);
   try {
-    // Scanner (QR-paired) sessions use 'scan_'-prefixed tokens. Standard base64
-    // login tokens never contain '_', so this prefix is unambiguous.
+    // Scanner (QR-paired) sessions use 'scan_'-prefixed tokens; everything
+    // else is a login session minted by mintAuthSession.
     if (token.startsWith('scan_')) {
       const sessSnap = await db.collection('scanner_sessions').doc(token).get();
       if (!sessSnap.exists) return null;
@@ -131,10 +156,11 @@ async function getCurrentUser(req) {
       if (!su.exists) return null;
       return { id: su.id, ...su.data(), scannerScope: true };
     }
-    const decoded = Buffer.from(token, 'base64').toString();
-    const [userId] = decoded.split(':');
-    if (!userId) return null;
-    const userDoc = await db.collection('users').doc(userId).get();
+    const sessSnap = await db.collection('auth_sessions').doc(token).get();
+    if (!sessSnap.exists) return null;
+    const sess = sessSnap.data();
+    if (!sess || Date.now() > sess.expiresAt) return null;
+    const userDoc = await db.collection('users').doc(sess.userId).get();
     if (!userDoc.exists) return null;
     return { id: userDoc.id, ...userDoc.data() };
   } catch (e) {
@@ -277,12 +303,30 @@ app.post('/api/auth/login', async (req, res) => {
     const user = userDoc.data();
     const approved = user.approved === 1 || user.approved === true;
     if (!approved && user.role !== 'superadmin') return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
-    const token = Buffer.from(`${userDoc.id}:${user.username}:${Date.now()}`).toString('base64');
+    const token = await mintAuthSession(userDoc.id, user.username);
     res.json({ success: true, user: userResponse(userDoc.id, user), token });
   } catch (err) {
     console.error('Database error during login:', err);
     res.json({ success: false, error: 'Database error' });
   }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    // Best-effort revocation: not scanner-scoped (those expire on their own
+    // short TTL), never let a delete failure block the client from logging
+    // out locally.
+    if (!token.startsWith('scan_')) {
+      try {
+        await db.collection('auth_sessions').doc(token).delete();
+      } catch (e) {
+        console.error('Error revoking session on logout:', e.message);
+      }
+    }
+  }
+  res.json({ success: true });
 });
 
 app.post('/api/auth/register', async (req, res) => {
@@ -6601,6 +6645,27 @@ app.post('/api/project-expenses/:id/convert-to-overhead', async (req, res) => {
   }
 });
 // ========== END OVERHEAD EXPENSES ==========
+
+// ========== AI ASSIST (read-only chat/voice, RJR/TJC only, off by default) ==========
+const aiAssistConfig = loadAiAssistConfig(process.env);
+app.use('/api/ai-assist', createAiAssistRouter({
+  db,
+  getCurrentUser,
+  config: aiAssistConfig,
+  createChatClient: (config) => {
+    const registry = createAiAssistToolRegistry({ db });
+    const toolDeclarations = [...registry.values()].map((tool) => tool.declaration);
+    return createAssistChatClient({
+      config,
+      apiKey: process.env.GEMINI_API_KEY,
+      systemInstruction: buildTextSystemInstruction(config),
+      toolDeclarations,
+    });
+  },
+  createLiveClient: (apiKey) => new AiAssistGoogleGenAI({ apiKey }),
+  geminiApiKey: process.env.GEMINI_API_KEY,
+}));
+// ========== END AI ASSIST ==========
 
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {

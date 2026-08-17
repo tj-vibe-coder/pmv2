@@ -5,6 +5,7 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { Box } from '@mui/material';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
+import AiAssistHost from './components/ai/AiAssistHost';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
@@ -211,7 +212,6 @@ const LastPageTracker: React.FC = () => {
 // the Dashboard when nothing is saved yet (first visit, or after logout).
 const RootRedirect: React.FC = () => <Navigate to={getLastPage() ?? '/dashboard'} replace />;
 
-// Main App Layout component
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   return (
@@ -241,11 +241,24 @@ function App() {
         <CssBaseline />
         <Router>
           <LastPageTracker />
+          <AiAssistHost>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/scan" element={<ScanPage />} />
             <Route
               path="/dashboard"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <ProjectMonitoringApp />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/projects/:projectId"
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
@@ -844,6 +857,7 @@ function App() {
               }
             />
           </Routes>
+          </AiAssistHost>
         </Router>
       </ThemeProvider>
       </OneDriveAuthProvider>

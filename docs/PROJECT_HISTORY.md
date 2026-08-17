@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-08-15 — Assist provider factory + deploy env (still off)
+
+`createAssistChatClient` is the swap point. Only `gemini` is registered. Deploy writes `AI_ASSIST_ENABLED=false`, chat/live model names, and `AI_ASSIST_CHAT_PROVIDER=gemini` next to the existing `GEMINI_API_KEY`. Receipt-scan `GEMINI_MODEL` is untouched.
+
+## 2026-08-15 — Assist P5 thin MCP adapter
+
+`scripts/ai-assist-mcp.js` + `server/aiAssist/mcpAdapter.js` speak MCP over stdio and only call the operator HTTP catalog/execute routes. No MCP SDK. Token via `IOCT_ASSIST_TOKEN`. Confirm is still not a model/MCP tool.
+
+## 2026-08-15 — Assist P5 operator HTTP (catalog + execute)
+
+`GET /api/ai-assist/operator/catalog` and `POST /api/ai-assist/operator/execute` expose the same allowlisted tools to an external client. Same RJR/TJC + flag gate. MCP adapter and provider swap not built. Flag still local `.env` only.
+
+## 2026-08-15 — Assist P3 propose-then-confirm + P4 always-on
+
+Local `rj/dev` only. `propose_opportunity_update` creates a user-bound in-memory draft; `POST /api/ai-assist/proposals/:id/confirm` is the only write (one allowlisted field + `updatedAt`). `won`/`lost` blocked. Live stays up after mic start, reconnects once without dropping the MediaStream, expires at 10 minutes. Flag still local `.env` only.
+
+---
+
 ## Calcsheet — phases completed
 
 **Phase 0 — Schema + calc-engine foundation.** Extended `Quotation` with `formulaVersion`, `importedFrom`, `legacyTotalsSnapshot`, `generalReqContingencyMode`. Added `Project.ongoing`. `computeTotals(q)` short-circuits to snapshot when legacy. `duplicateQuotation` resets formula to current. Editor: yellow Legacy banner + locked inputs + "Duplicate to revise" CTA.
@@ -24,6 +42,10 @@
 
 ### Recent additions (post-Phase 4)
 
+- **IOCT Assist hands-free P2 (2026-08-14, `rj/dev`):** `get_opportunity_snapshot` (allowlisted opportunity + linked company id/code/name) and `search_clients` (company name/code only; no contacts). Invoices/work-schedule still unnamed. Three golden cases added, set unrun.
+- **IOCT Assist hands-free P1.1 (2026-08-14, `rj/dev`):** mobile Assist is a bottom sheet (~56vh, no backdrop) so the record stays visible; desktop Assist is a persistent 420px dock that pads the page instead of covering it.
+- **IOCT Assist hands-free P0 (2026-08-14, `rj/dev`):** typed Send during Live goes into the Live session and does not stop the mic. After Live ends, Flash-Lite chat receives capped `priorToolResults` from this memory-only session. Composer stays enabled while Live is on.
+- **IOCT Assist hands-free P1 (2026-08-14, `rj/dev`, `288cda4`):** page follows Assist. `AiAssistHost` mounts the provider once above the router so Live survives navigation. Allowlisted `navigate_to_record` + citation chips. Real `/projects/:id` route. `pageContext` now includes opportunity/quotation ids and is sent into Live as an untrusted now-viewing note. Added `list_quotations_for_opportunity`. Assist stays read-only.
 - **Sort + filter** on `/calcsheet/projects`: search box (fuzzy across code/name/location/customer/partner), Status/Customer/Year/Formula dropdowns, Ongoing-only toggle, sortable columns, History icon when project has legacy quotations, "X of Y" count + Clear button.
 - **Per-project legacy import** on `CalcsheetProjectDetail.tsx`: one "Import legacy" button accepts `.xlsx` or `.pdf` (auto-routed by extension). Store action `importQuotation(q)` POSTs to `/api/calcsheet/quotations`. xlsx dialog shows IOCT/ACTI cards with editable revision (auto-bumped), recipient picker (auto-matched), and **Include VAT** switch (live total updates). PDF dialog is a form with detected fields (kind from letterhead, refCode, date, recipient, section subtotals A/B/C, VAT mode, grand total, terms) — all editable.
 - **PDF snapshot parser** (`src/utils/calcsheet/legacyPdfImport.ts`): lazy-loads `pdfjs-dist/legacy/build/pdf.mjs`. Extracts header, recipient block, section subtotals A/B/C (Summary anchor first, treats `-` as zero), grand total, VAT mode. Sanity-tested on `PCS2602004-ACT-00.pdf` (₱256,158 grand total + A 16,758 / B 0 / C 239,400 ✓).

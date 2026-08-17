@@ -118,10 +118,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const logout = () => {
+    const savedToken = localStorage.getItem('netpacific_token');
     setUser(null);
     localStorage.removeItem('netpacific_user');
     localStorage.removeItem('netpacific_token');
     clearLastPage();
+    if (savedToken) {
+      // Best-effort server-side session revocation. Never awaited/blocking —
+      // the user is already logged out locally regardless of outcome.
+      fetch(`${API_BASE}/api/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${savedToken}` },
+      }).catch(() => {
+        // Ignore — the session will also expire on its own TTL.
+      });
+    }
   };
 
   const value: AuthContextType = {

@@ -50,6 +50,11 @@ jobs:
           cat > functions/.env <<'EOF'
           GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL=gemini-3.1-flash-lite
+          GEMINI_CHAT_MODEL=gemini-3.5-flash-lite
+          GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
+          AI_ASSIST_ENABLED=false
+          AI_ASSIST_ALLOWED_USERS=RJR,TJC
+          AI_ASSIST_CHAT_PROVIDER=gemini
           ONEDRIVE_CLIENT_ID=${{ secrets.REACT_APP_ONEDRIVE_CLIENT_ID }}
           ONEDRIVE_TENANT_ID=${{ secrets.REACT_APP_ONEDRIVE_TENANT_ID }}
           ONEDRIVE_CLIENT_SECRET=${{ secrets.ONEDRIVE_CLIENT_SECRET }}
@@ -58,20 +63,23 @@ jobs:
           ONEDRIVE_INBOX_ROOT=02 Overhead/_Inbox
           EOF
 
+      - name: Write Firebase service account key
+        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > "$RUNNER_TEMP/firebase-sa.json"
+
       - name: Deploy to Firebase (all)
         if: ${{ github.event_name == 'push' || inputs.target == 'all' }}
         run: bash scripts/firebase-deploy.sh
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
 
       - name: Deploy to Firebase (hosting only)
         if: ${{ inputs.target == 'hosting' }}
         run: bash scripts/firebase-deploy.sh --only hosting
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
 
       - name: Deploy to Firebase (functions only)
         if: ${{ inputs.target == 'functions' }}
         run: bash scripts/firebase-deploy.sh --only functions
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
