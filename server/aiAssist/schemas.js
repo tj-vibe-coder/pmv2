@@ -41,7 +41,7 @@ const TOOL_ARG_SHAPES = {
   },
   navigate_to_record: {
     search: { type: 'string', required: true },
-    kind: { type: 'enum', values: ['project', 'opportunity', 'quotation', 'any'] },
+    kind: { type: 'enum', values: ['page', 'project', 'opportunity', 'quotation', 'any'] },
   },
   list_quotations_for_opportunity: {
     opportunityId: { type: 'string', required: true },

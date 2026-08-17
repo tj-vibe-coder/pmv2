@@ -23,6 +23,58 @@ const OPPORTUNITY_ROUTE_PREFIX = '/sales/calcsheet/projects/';
 const QUOTATION_ROUTE_PREFIX = '/sales/calcsheet/quotations/';
 const CLIENT_ROUTE = '/sales/clients';
 
+// Static index of named app pages (as opposed to data records) mirrored by
+// hand from src/App.tsx's route list — kept here, not derived from the
+// router, to stay a one-way dependency like TOOL_DECLARATIONS below. Only
+// parameterless, directly-navigable pages are listed (no /projects/:id-style
+// detail routes — those go through project/opportunity/quotation search
+// instead). Where a page is mounted at more than one path (e.g. Expense
+// Monitoring under both / and /finance/), only the canonical route is
+// listed; both mounts render the same component against the same data.
+const PAGE_INDEX = [
+  { label: 'Dashboard', route: '/dashboard', keywords: ['projects dashboard', 'project monitoring', 'home'] },
+  { label: 'Location Analysis', route: '/location-analysis', keywords: ['project map', 'project locations'] },
+  { label: 'Expense Monitoring', route: '/finance/expense-monitoring', keywords: ['expenses', 'recent expenses'] },
+  { label: 'Liquidation Form', route: '/employee/liquidation-form', keywords: ['liquidate', 'file liquidation'] },
+  { label: 'Cash Advance Form', route: '/employee/ca-form', keywords: ['ca form', 'cash advance', 'file ca'] },
+  { label: 'Direct Labor', route: '/finance/expense-monitoring/direct-labor', keywords: ['direct labor cost'] },
+  { label: 'Clients', route: '/sales/clients', keywords: ['companies', 'customers'] },
+  { label: 'Material Request', route: '/material-request', keywords: ['mrf', 'material request form', 'orders'] },
+  { label: 'Delivery Receipt', route: '/delivery', keywords: ['delivery', 'deliveries'] },
+  { label: 'Suppliers', route: '/suppliers', keywords: ['vendors'] },
+  { label: 'Purchase Order', route: '/purchase-order', keywords: ['po', 'purchase orders'] },
+  { label: 'Estimates', route: '/estimates', keywords: [] },
+  { label: 'Reports', route: '/reports', keywords: ['project reports'] },
+  { label: 'Progress Report', route: '/reports/progress', keywords: [] },
+  { label: 'Service Reports', route: '/reports/service', keywords: ['service report list'] },
+  { label: 'Certificate of Completion', route: '/reports/completion', keywords: ['coc'] },
+  { label: 'Report Attachments', route: '/reports/attachments', keywords: [] },
+  { label: 'Utilities', route: '/utilities', keywords: [] },
+  { label: 'EHS Safety Documents', route: '/utilities/ehs', keywords: ['safety certificate', 'safety manual', 'osh program'] },
+  { label: 'ID Generator', route: '/utilities/id-generator', keywords: [] },
+  { label: 'Acknowledgement Receipt', route: '/utilities/acknowledgement-receipt', keywords: [] },
+  { label: 'User Approvals', route: '/user-approvals', keywords: ['pending users', 'approve users'] },
+  { label: 'User Management', route: '/settings/users', keywords: ['users', 'settings', 'accounts'] },
+  { label: 'Finance Home', route: '/finance', keywords: ['finance dashboard'] },
+  { label: 'Collections', route: '/finance/collections', keywords: [] },
+  { label: 'Investment Tracker', route: '/finance/investment-tracker', keywords: ['founder funding'] },
+  { label: 'Payroll', route: '/finance/payroll', keywords: ['payroll dashboard'] },
+  { label: 'Reimbursements', route: '/finance/reimbursements', keywords: [] },
+  { label: 'Overhead Expenses', route: '/finance/overhead-expenses', keywords: [] },
+  { label: 'Company P&L', route: '/finance/pnl', keywords: ['profit and loss', 'income statement'] },
+  { label: 'Tax Ledger', route: '/finance/tax-ledger', keywords: ['tax filer', 'ewt'] },
+  { label: 'Sales Dashboard', route: '/sales', keywords: ['sales home', 'sales workspace'] },
+  { label: 'Calcsheet Projects', route: '/sales/calcsheet/projects', keywords: ['quotations', 'proposals', 'calcsheet'] },
+  { label: 'Import Legacy Quotations', route: '/sales/calcsheet/import-legacy', keywords: [] },
+  { label: 'Calcsheet Presets', route: '/sales/calcsheet/presets', keywords: ['labor rate presets'] },
+  { label: 'Pricelists', route: '/sales/pricelists', keywords: [] },
+  { label: 'Employee Portal', route: '/employee', keywords: ['employee home'] },
+  { label: 'Daily Time Record', route: '/employee/dtr', keywords: ['dtr', 'attendance'] },
+  { label: 'Submit Service Report', route: '/employee/service-report', keywords: [] },
+  { label: 'Payslips', route: '/employee/payslips', keywords: [] },
+  { label: 'Clock In/Out', route: '/employee/clock', keywords: ['time clock'] },
+];
+
 function round2(value) {
   return Math.round(value * 100) / 100;
 }
@@ -132,12 +184,12 @@ const TOOL_DECLARATIONS = {
   },
   navigate_to_record: {
     name: 'navigate_to_record',
-    description: 'Resolve a spoken or typed name to an allowlisted PMv2 page. Returns action navigate (one match), choose (several), or none. Never accepts a route — the server picks the path.',
+    description: 'Resolve a spoken or typed name to an allowlisted PMv2 destination — either a named app page (Dashboard, Sales Dashboard, Finance Home, Expense Monitoring, Payroll, Company P&L, Calcsheet Projects, Clients, etc.) or a data record (project, opportunity, quotation). Returns action navigate (one match), choose (several), or none. Never accepts a route — the server picks the path.',
     parameters: {
       type: 'object',
       properties: {
-        search: { type: 'string', description: 'Name, code, or id the user said (for example Rezcoat or PCS2602005).' },
-        kind: { type: 'string', enum: ['project', 'opportunity', 'quotation', 'any'], description: 'project, opportunity, quotation, or any. proposal means opportunity.' },
+        search: { type: 'string', description: 'Name the user said (for example Rezcoat, PCS2602005, Sales Dashboard, or Finance Home).' },
+        kind: { type: 'string', enum: ['page', 'project', 'opportunity', 'quotation', 'any'], description: 'page for a named app page/dashboard, project/opportunity/quotation for a data record, or any. proposal means opportunity.' },
       },
       required: ['search'],
     },
@@ -499,11 +551,20 @@ async function collectQuotationCandidates(db, search, asOf) {
   return merged.slice(0, MAX_LIST_RESULTS);
 }
 
+function searchPages(search) {
+  return PAGE_INDEX
+    .filter((page) => textMatches(page.label, search) || page.keywords.some((kw) => textMatches(kw, search)))
+    .map((page) => ({ kind: 'page', id: page.route, label: page.label, route: page.route }));
+}
+
 async function navigateToRecord(db, args, asOf) {
   const search = String(args.search || '').trim();
   const kind = args.kind || 'any';
   const candidates = [];
 
+  if (kind === 'page' || kind === 'any') {
+    candidates.push(...searchPages(search));
+  }
   if (kind === 'project' || kind === 'any') {
     const projects = await searchProjects(db, { search }, asOf);
     for (let i = 0; i < projects.data.length; i += 1) {
