@@ -13,29 +13,52 @@ function sanitizeUsage(usage) {
   return Object.keys(sanitized).length ? sanitized : null;
 }
 
+// Only a few short, non-sensitive identifiers are ever allowed into `detail`
+// — a tool name, a proposal id, a target record id, a proposed field name.
+// Never prompt/answer text, never proposed values, never contact/PII data.
+const DETAIL_KEYS = ['toolName', 'proposalId', 'recordId', 'field'];
+const MAX_DETAIL_VALUE_LENGTH = 200;
+
+function sanitizeDetail(detail) {
+  if (!detail || typeof detail !== 'object') return null;
+  const sanitized = {};
+  for (const key of DETAIL_KEYS) {
+    const value = detail[key];
+    if (typeof value === 'string' && value && value.length <= MAX_DETAIL_VALUE_LENGTH) {
+      sanitized[key] = value;
+    }
+  }
+  return Object.keys(sanitized).length ? sanitized : null;
+}
+
 // Builds a metadata-only audit record. The record deliberately contains NO
-// prompt text, answer text, tool args/results, or auth material — only the
-// fields listed below. Re-derives every field itself (never spreads an
-// upstream object) so a caller cannot smuggle extra keys through.
-function buildAuditRecord({ requestId, user, channel, config, toolNames, outcome, latencyMs, usage }) {
+// prompt text, answer text, tool args/results, proposed values, or auth
+// material — only the fields listed below. Re-derives every field itself
+// (never spreads an upstream object) so a caller cannot smuggle extra keys
+// through. `action` identifies which AI Assist endpoint produced the record
+// (defaults to 'chat' for the original text-chat call site); `detail` is an
+// optional, tightly-allowlisted set of ids (see sanitizeDetail).
+function buildAuditRecord({ requestId, user, channel, config, toolNames, outcome, latencyMs, usage, action = 'chat', detail = null }) {
   return {
     requestId: String(requestId),
     userId: String(user.id),
     username: String(user.username),
     channel: channel === 'voice' ? 'voice' : 'text',
+    action: typeof action === 'string' && action ? action : 'chat',
     promptVersion: String(config.promptVersion),
     model: String(channel === 'voice' ? config.liveModel : config.chatModel),
     toolNames: [...new Set(Array.isArray(toolNames) ? toolNames.filter((name) => typeof name === 'string') : [])],
     outcome: outcome === 'success' ? 'success' : 'error',
     latencyMs: Number.isFinite(latencyMs) ? latencyMs : null,
     usage: sanitizeUsage(usage),
+    detail: sanitizeDetail(detail),
     createdAt: new Date().toISOString(),
   };
 }
 
 const AUDIT_RECORD_KEYS = [
-  'requestId', 'userId', 'username', 'channel', 'promptVersion', 'model',
-  'toolNames', 'outcome', 'latencyMs', 'usage', 'createdAt',
+  'requestId', 'userId', 'username', 'channel', 'action', 'promptVersion', 'model',
+  'toolNames', 'outcome', 'latencyMs', 'usage', 'detail', 'createdAt',
 ];
 
 // Re-projects an already-built record (as produced by buildAuditRecord) onto
@@ -47,6 +70,7 @@ function sanitizeBuiltRecord(record) {
     if (key in record) sanitized[key] = record[key];
   }
   sanitized.usage = sanitizeUsage(sanitized.usage);
+  sanitized.detail = sanitizeDetail(sanitized.detail);
   return sanitized;
 }
 

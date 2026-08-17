@@ -34,3 +34,10 @@ test('authorizeAiUser rejects when username is missing/null', () => {
   assert.equal(authorizeAiUser(null, config).status, 401);
   assert.equal(authorizeAiUser({}, config).status, 401);
 });
+
+test('authorizeAiUser rejects scanner-scoped sessions even for allowlisted users', () => {
+  const config = { enabled: true, allowedUsers: ['RJR', 'TJC'] };
+  const result = authorizeAiUser({ username: 'RJR', scannerScope: true }, config);
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 403);
+});

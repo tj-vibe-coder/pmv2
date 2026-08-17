@@ -54,6 +54,9 @@ function authorizeAiUser(user, config) {
   if (!user || !user.username) {
     return { ok: false, status: 401, error: 'unauthenticated' };
   }
+  if (user.scannerScope) {
+    return { ok: false, status: 403, error: 'not_allowlisted' };
+  }
   if (!config.allowedUsers.includes(String(user.username).toUpperCase())) {
     return { ok: false, status: 403, error: 'not_allowlisted' };
   }

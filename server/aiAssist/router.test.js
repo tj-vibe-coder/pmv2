@@ -358,10 +358,12 @@ test('POST /tools/:name executes an allowlisted tool through a valid live sessio
     data: () => ({ project_name: 'Plant Upgrade', project_status: 'sent', updated_at: '2026-08-13T00:00:00.000Z' }),
   }];
   const projectsDb = { collection: () => ({ get: async () => ({ docs: projectDocs }) }) };
+  const { calls, recordAudit } = auditSpy();
   const { server, base } = await startServer({
     db: projectsDb,
     getCurrentUser: async () => ({ id: 'u1', username: 'RJR' }),
     config: baseConfig(),
+    recordAudit,
     createChatClient: () => { throw new Error('must not be called'); },
     createLiveClient: fakeLiveClient,
     geminiApiKey: 'k',
@@ -381,6 +383,12 @@ test('POST /tools/:name executes an allowlisted tool through a valid live sessio
     assert.ok(Array.isArray(body.result));
     assert.ok(Array.isArray(body.sources));
     assert.equal(body.result[0].project_name, 'Plant Upgrade');
+    const toolAudit = calls.find((c) => c.action === 'live_tool_call');
+    assert.ok(toolAudit);
+    assert.equal(toolAudit.channel, 'voice');
+    assert.equal(toolAudit.outcome, 'success');
+    assert.deepEqual(toolAudit.toolNames, ['search_projects']);
+    assert.equal(toolAudit.detail.toolName, 'search_projects');
   } finally {
     server.close();
   }
@@ -533,6 +541,10 @@ test('POST /proposals/:id/confirm 200 applies update and returns applied:true', 
         },
       }),
     }),
+    runTransaction: async (fn) => fn({
+      get: (docRef) => docRef.get(),
+      update: (docRef, patch) => { docRef.update(patch); },
+    }),
   };
   const proposal = await proposeOpportunityUpdate({
     db: fakeDb,
@@ -542,11 +554,13 @@ test('POST /proposals/:id/confirm 200 applies update and returns applied:true', 
     asOf: '2026-08-15T00:00:00.000Z',
   });
 
+  const { calls, recordAudit } = auditSpy();
   const { server, base } = await startServer({
     db: fakeDb,
     proposalStore,
     getCurrentUser: async () => user,
     config: baseConfig(),
+    recordAudit,
     createChatClient: () => { throw new Error('must not be called'); },
   });
   try {
@@ -559,6 +573,11 @@ test('POST /proposals/:id/confirm 200 applies update and returns applied:true', 
     assert.equal(body.proposedValue, 'A');
     assert.equal(updates.length, 1);
     assert.equal(updates[0].opportunityGrade, 'A');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].action, 'proposal_confirm');
+    assert.equal(calls[0].outcome, 'success');
+    assert.equal(calls[0].detail.recordId, 'opp1');
+    assert.equal(calls[0].detail.field, 'opportunityGrade');
     assert.ok(updates[0].updatedAt);
   } finally {
     server.close();
@@ -663,10 +682,12 @@ test('POST /operator/execute 403 for a non-allowlisted user', async () => {
 });
 
 test('POST /operator/execute 404s unknown tools and 400s extra keys', async () => {
+  const { calls, recordAudit } = auditSpy();
   const { server, base } = await startServer({
     db: emptyDb,
     getCurrentUser: async () => ({ id: 'u1', username: 'RJR' }),
     config: baseConfig(),
+    recordAudit,
     createChatClient: () => { throw new Error('must not be called'); },
   });
   try {
@@ -682,6 +703,9 @@ test('POST /operator/execute 404s unknown tools and 400s extra keys', async () =
       body: JSON.stringify({ name: 'search_projects', args: {}, route: '/settings' }),
     });
     assert.equal(extra.status, 400);
+    const probeAudit = calls.find((c) => c.action === 'operator_execute' && c.outcome === 'error');
+    assert.ok(probeAudit, 'an unknown-tool probe should still be audited');
+    assert.deepEqual(probeAudit.toolNames, ['delete_project']);
   } finally {
     server.close();
   }
@@ -694,10 +718,12 @@ test('POST /operator/execute runs an allowlisted tool without a live session', a
       return { get: async () => ({ docs: [] }) };
     },
   };
+  const { calls, recordAudit } = auditSpy();
   const { server, base } = await startServer({
     db: fakeDb,
     getCurrentUser: async () => ({ id: 'u1', username: 'RJR' }),
     config: baseConfig(),
+    recordAudit,
     createChatClient: () => { throw new Error('must not be called'); },
   });
   try {
@@ -712,6 +738,10 @@ test('POST /operator/execute runs an allowlisted tool without a live session', a
     assert.equal(body.name, 'search_projects');
     assert.deepEqual(body.result, []);
     assert.deepEqual(body.sources, []);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].action, 'operator_execute');
+    assert.equal(calls[0].outcome, 'success');
+    assert.deepEqual(calls[0].toolNames, ['search_projects']);
   } finally {
     server.close();
   }

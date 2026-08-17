@@ -11,26 +11,27 @@ const {
 
 function fakeOpportunityDb(record, { onUpdate } = {}) {
   let current = { ...record };
+  const ref = (id) => ({
+    get: async () => ({ id, exists: true, data: () => ({ ...current }) }),
+    update: async (patch) => {
+      if (onUpdate) onUpdate(patch);
+      current = { ...current, ...patch };
+    },
+  });
   return {
     collection: (name) => {
       assert.equal(name, 'calcsheet_projects');
       return {
         doc: (id) => {
           assert.equal(id, record.id);
-          return {
-            get: async () => ({
-              id,
-              exists: true,
-              data: () => ({ ...current }),
-            }),
-            update: async (patch) => {
-              if (onUpdate) onUpdate(patch);
-              current = { ...current, ...patch };
-            },
-          };
+          return ref(id);
         },
       };
     },
+    runTransaction: async (fn) => fn({
+      get: (docRef) => docRef.get(),
+      update: (docRef, patch) => { docRef.update(patch); },
+    }),
   };
 }
 
@@ -87,6 +88,42 @@ test('confirm applies only the one allowlisted field for the proposing user', as
   assert.equal(updates[0].status, 'for_review');
   assert.equal(Object.prototype.hasOwnProperty.call(updates[0], 'opportunityGrade'), false);
   assert.ok(updates[0].updatedAt);
+});
+
+test('confirm reads and writes inside a single Firestore transaction', async () => {
+  let txCalls = 0;
+  let current = { ...record };
+  const ref = {
+    get: async () => ({ id: record.id, exists: true, data: () => ({ ...current }) }),
+    update: async (patch) => { current = { ...current, ...patch }; },
+  };
+  const db = {
+    collection: () => ({ doc: () => ref }),
+    runTransaction: async (fn) => {
+      txCalls += 1;
+      return fn({
+        get: (docRef) => docRef.get(),
+        update: (docRef, patch) => { docRef.update(patch); },
+      });
+    },
+  };
+  const store = createProposalStore({ now: () => 1_000 });
+  const proposed = await proposeOpportunityUpdate({
+    db,
+    store,
+    user,
+    args: { opportunityId: 'opp1', field: 'notes', value: 'via transaction' },
+    asOf: 't',
+  });
+  const confirmed = await confirmOpportunityProposal({
+    db,
+    store,
+    user,
+    proposalId: proposed.data.proposalId,
+  });
+  assert.equal(confirmed.ok, true);
+  assert.equal(txCalls, 1);
+  assert.equal(current.notes, 'via transaction');
 });
 
 test('wrong user cannot confirm or reject another user proposal', async () => {
@@ -179,6 +216,10 @@ test('stale current value is a 409 and does not write', async () => {
         },
       }),
     }),
+    runTransaction: async (fn) => fn({
+      get: (docRef) => docRef.get(),
+      update: (docRef, patch) => { docRef.update(patch); },
+    }),
   };
   const store = createProposalStore({ now: () => 1_000 });
   const proposed = await proposeOpportunityUpdate({
@@ -223,5 +264,24 @@ test('won and lost statuses are blocked at propose time', async () => {
     }),
     (err) => err.code === 'field_not_allowed',
   );
+  assert.equal(updates.length, 0);
+});
+
+test('inherited Object.prototype property names are not allowlisted fields', async () => {
+  const updates = [];
+  const db = fakeOpportunityDb(record, { onUpdate: (p) => updates.push(p) });
+  const store = createProposalStore({ now: () => 1_000 });
+  for (const field of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+    await assert.rejects(
+      () => proposeOpportunityUpdate({
+        db,
+        store,
+        user,
+        args: { opportunityId: 'opp1', field, value: 'anything' },
+        asOf: 't',
+      }),
+      (err) => err.code === 'field_not_allowed',
+    );
+  }
   assert.equal(updates.length, 0);
 });

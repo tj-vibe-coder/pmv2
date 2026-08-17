@@ -50,6 +50,27 @@ function createAiAssistRouter(opts) {
     return checkLimit(requestTimestamps, rateLimit, String(username).toUpperCase());
   }
 
+  // Shared, bounded, failure-swallowing audit write for every AI Assist
+  // endpoint below — never hangs and never alters the user-facing response.
+  function writeAudit({ requestId = randomUUID(), user, channel, action, toolNames = [], detail = null, outcome, latencyMs, usage = null }) {
+    const record = buildAuditRecord({
+      requestId,
+      user,
+      channel,
+      config,
+      toolNames,
+      action,
+      detail,
+      outcome,
+      latencyMs,
+      usage,
+    });
+    return Promise.race([
+      recordAuditFn({ db, ...record }),
+      new Promise((resolve) => setTimeout(resolve, AUDIT_TIMEOUT_MS)),
+    ]).catch(() => {});
+  }
+
   async function resolveAuthorizedUser(req, res) {
     try {
       const user = await getCurrentUser(req);
@@ -89,28 +110,6 @@ function createAiAssistRouter(opts) {
     const requestId = randomUUID();
     const startedAt = Date.now();
 
-    // Build the audit record ourselves (metadata only — no prompt/answer/tool
-    // content, no auth material) so both the default writer and any override
-    // receive the record object directly, e.g. for assertions or forwarding.
-    // Bounded + failure-swallowing: an audit write (default or injected) must
-    // never hang or alter the user-facing response.
-    const writeAudit = ({ outcome, latencyMs, usage = null }) => {
-      const record = buildAuditRecord({
-        requestId,
-        user,
-        channel: 'text',
-        config,
-        toolNames: [],
-        outcome,
-        latencyMs,
-        usage,
-      });
-      return Promise.race([
-        recordAuditFn({ db, ...record }),
-        new Promise((resolve) => setTimeout(resolve, AUDIT_TIMEOUT_MS)),
-      ]).catch(() => {});
-    };
-
     let result;
     try {
       const registry = createToolRegistry({ db, user, proposalStore });
@@ -125,12 +124,12 @@ function createAiAssistRouter(opts) {
         requestId,
       });
     } catch {
-      await writeAudit({ outcome: 'error', latencyMs: Date.now() - startedAt });
+      await writeAudit({ requestId, user, channel: 'text', action: 'chat', outcome: 'error', latencyMs: Date.now() - startedAt });
       res.status(502).json({ ok: false, error: 'provider_error', requestId });
       return;
     }
 
-    await writeAudit({ outcome: 'success', latencyMs: Date.now() - startedAt });
+    await writeAudit({ requestId, user, channel: 'text', action: 'chat', outcome: 'success', latencyMs: Date.now() - startedAt });
     res.status(200).json({
       ok: true,
       requestId,
@@ -256,14 +255,23 @@ function createAiAssistRouter(opts) {
 
     session.toolCallCount += 1;
 
+    const startedAt = Date.now();
     let toolResult;
     try {
       toolResult = await tool.execute(validatedArgs);
     } catch {
+      await writeAudit({
+        user, channel: 'voice', action: 'live_tool_call', toolNames: [req.params.name],
+        detail: { toolName: req.params.name }, outcome: 'error', latencyMs: Date.now() - startedAt,
+      });
       res.status(502).json({ ok: false, error: 'tool_error' });
       return;
     }
 
+    await writeAudit({
+      user, channel: 'voice', action: 'live_tool_call', toolNames: [req.params.name],
+      detail: { toolName: req.params.name }, outcome: 'success', latencyMs: Date.now() - startedAt,
+    });
     res.status(200).json({ ok: true, result: toolResult.data, sources: toolResult.sources });
   });
 
@@ -274,7 +282,18 @@ function createAiAssistRouter(opts) {
       res.status(429).json({ ok: false, error: 'rate_limited' });
       return;
     }
+    const startedAt = Date.now();
     const result = await confirmOpportunityProposal({ db, store: proposalStore, user, proposalId: req.params.id });
+    await writeAudit({
+      user, channel: 'text', action: 'proposal_confirm',
+      detail: {
+        proposalId: req.params.id,
+        recordId: result.data && typeof result.data.recordId === 'string' ? result.data.recordId : undefined,
+        field: result.data && typeof result.data.field === 'string' ? result.data.field : undefined,
+      },
+      outcome: result.ok ? 'success' : 'error',
+      latencyMs: Date.now() - startedAt,
+    });
     if (!result.ok) {
       res.status(result.status).json({ ok: false, error: result.error });
       return;
@@ -305,6 +324,11 @@ function createAiAssistRouter(opts) {
       parsed = validateOperatorExecuteRequest(req.body);
     } catch (err) {
       if (err && err.code === 'unknown_tool') {
+        const attempted = typeof (req.body && req.body.name) === 'string' ? req.body.name : undefined;
+        await writeAudit({
+          user, channel: 'text', action: 'operator_execute', toolNames: attempted ? [attempted] : [],
+          detail: attempted ? { toolName: attempted } : null, outcome: 'error', latencyMs: 0,
+        });
         res.status(404).json({ ok: false, error: 'unknown_tool' });
         return;
       }
@@ -313,6 +337,7 @@ function createAiAssistRouter(opts) {
     }
 
     const registry = createToolRegistry({ db, user, proposalStore });
+    const startedAt = Date.now();
     let executed;
     try {
       executed = await executeOperatorTool({
@@ -322,6 +347,10 @@ function createAiAssistRouter(opts) {
         maxResultBytes: config.maxResultBytes,
       });
     } catch (err) {
+      await writeAudit({
+        user, channel: 'text', action: 'operator_execute', toolNames: [parsed.name],
+        detail: { toolName: parsed.name }, outcome: 'error', latencyMs: Date.now() - startedAt,
+      });
       if (err && err.code === 'unknown_tool') {
         res.status(404).json({ ok: false, error: 'unknown_tool' });
         return;
@@ -334,6 +363,10 @@ function createAiAssistRouter(opts) {
       return;
     }
 
+    await writeAudit({
+      user, channel: 'text', action: 'operator_execute', toolNames: [parsed.name],
+      detail: { toolName: parsed.name }, outcome: 'success', latencyMs: Date.now() - startedAt,
+    });
     res.status(200).json({
       ok: true,
       name: executed.name,
@@ -345,7 +378,14 @@ function createAiAssistRouter(opts) {
   router.post('/proposals/:id/reject', async (req, res) => {
     const user = await resolveAuthorizedUser(req, res);
     if (!user) return;
+    const startedAt = Date.now();
     const result = rejectOpportunityProposal({ store: proposalStore, user, proposalId: req.params.id });
+    await writeAudit({
+      user, channel: 'text', action: 'proposal_reject',
+      detail: { proposalId: req.params.id },
+      outcome: result.ok ? 'success' : 'error',
+      latencyMs: Date.now() - startedAt,
+    });
     if (!result.ok) {
       res.status(result.status).json({ ok: false, error: result.error });
       return;

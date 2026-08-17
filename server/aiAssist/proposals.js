@@ -39,12 +39,12 @@ function currentFieldValue(record, field) {
 }
 
 function normalizeProposedValue(field, raw) {
-  const spec = PROPOSABLE_FIELDS[field];
-  if (!spec) {
+  if (!Object.prototype.hasOwnProperty.call(PROPOSABLE_FIELDS, field)) {
     const error = new Error('field_not_allowed');
     error.code = 'field_not_allowed';
     throw error;
   }
+  const spec = PROPOSABLE_FIELDS[field];
   if (spec.type === 'enum') {
     if (typeof raw !== 'string' || !spec.values.includes(raw)) {
       const error = new Error('invalid_value');
@@ -139,7 +139,7 @@ async function proposeOpportunityUpdate({ db, store, user, args, asOf }) {
     error.code = 'invalid_value';
     throw error;
   }
-  if (typeof args.field !== 'string' || !(args.field in PROPOSABLE_FIELDS)) {
+  if (typeof args.field !== 'string' || !Object.prototype.hasOwnProperty.call(PROPOSABLE_FIELDS, args.field)) {
     const error = new Error('field_not_allowed');
     error.code = 'field_not_allowed';
     throw error;
@@ -210,28 +210,49 @@ function assertOwnedProposal(store, user, proposalId) {
   return { ok: true, proposal };
 }
 
+// Runs the read-compare-write as a single Firestore transaction so a
+// concurrent confirm or an unrelated write landing between the read and the
+// write can't silently race past the staleness check (TOCTOU).
 async function confirmOpportunityProposal({ db, store, user, proposalId }) {
   const auth = assertOwnedProposal(store, user, proposalId);
   if (!auth.ok) return auth;
 
   const proposal = auth.proposal;
   const ref = db.collection(OPPORTUNITY_COLLECTION).doc(proposal.recordId);
-  const snap = await ref.get();
-  if (!snap.exists) {
-    store.take(proposal.id);
-    return { ok: false, status: 404, error: 'not_found' };
-  }
-  const record = snap.data() || {};
-  const liveValue = currentFieldValue({ ...record, id: snap.id }, proposal.field);
-  if (liveValue !== proposal.currentValue) {
-    return { ok: false, status: 409, error: 'stale_proposal' };
+
+  let outcome;
+  try {
+    outcome = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) {
+        return { ok: false, status: 404, error: 'not_found' };
+      }
+      const record = snap.data() || {};
+      const liveValue = currentFieldValue({ ...record, id: snap.id }, proposal.field);
+      if (liveValue !== proposal.currentValue) {
+        return { ok: false, status: 409, error: 'stale_proposal' };
+      }
+      tx.update(ref, {
+        [proposal.field]: proposal.proposedValue,
+        updatedAt: new Date().toISOString(),
+      });
+      return { ok: true, status: 200 };
+    });
+  } catch {
+    return { ok: false, status: 502, error: 'write_failed' };
   }
 
-  const update = {
-    [proposal.field]: proposal.proposedValue,
-    updatedAt: new Date().toISOString(),
-  };
-  await ref.update(update);
+  // Same retain-vs-discard split as before the transaction: a 404 means the
+  // record is gone, so the proposal can never apply — discard it. A 409
+  // (stale) is left in the store so the caller can inspect/retry against the
+  // fresh value before it expires on its own TTL.
+  if (!outcome.ok) {
+    if (outcome.status === 404) {
+      store.take(proposal.id);
+    }
+    return outcome;
+  }
+
   store.take(proposal.id);
   return {
     ok: true,
