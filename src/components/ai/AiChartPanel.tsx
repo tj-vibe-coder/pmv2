@@ -56,7 +56,7 @@ interface AiChartPanelProps {
   chart: AiChart | null;
 }
 
-export default function AiChartPanel({ chart }: AiChartPanelProps): React.ReactElement | null {
+function AiChartPanel({ chart }: AiChartPanelProps): React.ReactElement | null {
   const [showTable, setShowTable] = useState(false);
   const field = chart ? CHART_FIELD_BY_TOOL[chart.tool] : undefined;
 
@@ -148,7 +148,7 @@ export default function AiChartPanel({ chart }: AiChartPanelProps): React.ReactE
                 }}
                 formatter={(value: number) => [dataService.formatCurrency(value), field.valueLabel]}
               />
-              <Bar dataKey="value" radius={[0, 3, 3, 0]} name={field.valueLabel}>
+              <Bar dataKey="value" radius={[0, 3, 3, 0]} name={field.valueLabel} isAnimationActive={false}>
                 {rows.map((row) => (
                   <Cell key={row.group} fill={colorByGroup.get(row.group) || NET_PACIFIC_COLORS.primary} />
                 ))}
@@ -160,3 +160,16 @@ export default function AiChartPanel({ chart }: AiChartPanelProps): React.ReactE
     </Paper>
   );
 }
+
+function arePropsEqual(prev: AiChartPanelProps, next: AiChartPanelProps): boolean {
+  if (prev.chart === next.chart) return true;
+  if (!prev.chart || !next.chart) return false;
+  return (
+    prev.chart.tool === next.chart.tool
+    && prev.chart.title === next.chart.title
+    && prev.chart.type === next.chart.type
+    && prev.chart.data === next.chart.data
+  );
+}
+
+export default React.memo(AiChartPanel, arePropsEqual);

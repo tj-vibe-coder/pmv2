@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect, ReactNode } from 'react';
-import type { AiCitation, AiMessage, AiPageContext, AiPriorToolResult, AiProposal } from '../../types/AiAssist';
+import type { AiChart, AiCitation, AiMessage, AiPageContext, AiPriorToolResult, AiProposal } from '../../types/AiAssist';
 import { parseAiProposal } from '../../types/AiAssist';
 import { sendAiChat, confirmAiProposal, rejectAiProposal, AiAssistError } from '../../services/aiAssistService';
 import { createLiveClient, LivePhase, LiveTranscriptEvent, mergeTranscript, isSpokenStop, isSpokenConfirm, isSpokenReject } from '../../ai/liveClient';
@@ -83,6 +83,27 @@ function navigationRouteFromToolResult(name: string, result: unknown): string | 
   return resolveAiNavigatePath(value.route);
 }
 
+function chartFromToolResult(name: string, result: unknown): AiChart | null {
+  if (!Array.isArray(result) || result.length === 0) return null;
+  if (name === 'get_portfolio_summary') {
+    return {
+      type: 'bar',
+      title: 'Portfolio balance by status',
+      tool: name,
+      data: result as Record<string, unknown>[],
+    };
+  }
+  if (name === 'get_expense_summary') {
+    return {
+      type: 'bar',
+      title: 'Expense summary by category',
+      tool: name,
+      data: result as Record<string, unknown>[],
+    };
+  }
+  return null;
+}
+
 function isLiveActive(phase: LivePhase): boolean {
   return phase !== 'idle' && phase !== 'error';
 }
@@ -112,6 +133,7 @@ export function AiAssistProvider({
   const voiceUserIdRef = useRef<string | null>(null);
   const voiceAssistantIdRef = useRef<string | null>(null);
   const pendingVoiceCitationsRef = useRef<AiCitation[]>([]);
+  const pendingVoiceChartRef = useRef<AiChart | null>(null);
   const pageContextRef = useRef<AiPageContext | null>(pageContext);
   const onNavigateRouteRef = useRef(onNavigateRoute);
   const livePhaseRef = useRef(livePhase);
@@ -124,42 +146,52 @@ export function AiAssistProvider({
 
   const applyVoiceTranscript = useCallback((event: LiveTranscriptEvent) => {
     setMessages((prev) => {
-      const lastSameRole = [...prev].reverse().find((message) => message.role === event.role);
-      const sameUtterance = lastSameRole
-        && (lastSameRole.text === event.text
-          || lastSameRole.text.startsWith(event.text)
-          || event.text.startsWith(lastSameRole.text));
-
-      if (sameUtterance && lastSameRole) {
-        const merged = mergeTranscript(lastSameRole.text, event.text);
-        if (lastSameRole.role === 'assistant') {
-          const citations = pendingVoiceCitationsRef.current;
-          if (event.done) pendingVoiceCitationsRef.current = [];
-          if (merged === lastSameRole.text && citations.length === 0) return prev;
-          return prev.map((message) => (
-            message.id === lastSameRole.id
-              ? { ...lastSameRole, text: merged, citations: citations.length ? citations : lastSameRole.citations }
-              : message
-          ));
-        }
-        if (merged === lastSameRole.text) return prev;
-        return prev.map((message) => (
-          message.id === lastSameRole.id ? { ...lastSameRole, text: merged } : message
-        ));
-      }
-
       if (event.role === 'user') {
         voiceAssistantIdRef.current = null;
+        pendingVoiceChartRef.current = null;
+        pendingVoiceCitationsRef.current = [];
+
+        const lastSameRole = [...prev].reverse().find((message) => message.role === 'user');
+        const sameUtterance = lastSameRole
+          && (lastSameRole.text === event.text
+            || lastSameRole.text.startsWith(event.text)
+            || event.text.startsWith(lastSameRole.text));
+
+        if (sameUtterance && lastSameRole) {
+          const merged = mergeTranscript(lastSameRole.text, event.text);
+          if (merged === lastSameRole.text) return prev;
+          return prev.map((message) => (
+            message.id === lastSameRole.id ? { ...lastSameRole, text: merged } : message
+          ));
+        }
+
         const id = nextId();
         voiceUserIdRef.current = id;
         return [...prev, { id, role: 'user', text: event.text }];
       }
 
+      const citations = pendingVoiceCitationsRef.current;
+      const chart = pendingVoiceChartRef.current;
+
+      const lastMsg = prev[prev.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant') {
+        const merged = mergeTranscript(lastMsg.text, event.text);
+        if (merged === lastMsg.text && citations.length === 0 && !chart) return prev;
+        return prev.map((message, idx) => (
+          idx === prev.length - 1
+            ? {
+                ...lastMsg,
+                text: merged,
+                citations: citations.length ? citations : lastMsg.citations,
+                chart: chart || lastMsg.chart,
+              }
+            : message
+        ));
+      }
+
       voiceUserIdRef.current = null;
       const id = nextId();
       voiceAssistantIdRef.current = id;
-      const citations = pendingVoiceCitationsRef.current;
-      if (event.done) pendingVoiceCitationsRef.current = [];
       return [...prev, {
         id,
         role: 'assistant',
@@ -167,7 +199,7 @@ export function AiAssistProvider({
         citations,
         notice: VOICE_NOTICE,
         followUps: [],
-        chart: null,
+        chart: chart || null,
       }];
     });
   }, []);
@@ -192,6 +224,16 @@ export function AiAssistProvider({
           if (drafted) {
             pendingProposalRef.current = drafted;
             setPendingProposal(drafted);
+          }
+          const chart = chartFromToolResult(name, result);
+          if (chart) {
+            pendingVoiceChartRef.current = chart;
+            if (voiceAssistantIdRef.current) {
+              const targetId = voiceAssistantIdRef.current;
+              setMessages((prev) =>
+                prev.map((msg) => (msg.id === targetId ? { ...msg, chart } : msg))
+              );
+            }
           }
           return result;
         },
@@ -254,6 +296,7 @@ export function AiAssistProvider({
     voiceUserIdRef.current = null;
     voiceAssistantIdRef.current = null;
     pendingVoiceCitationsRef.current = [];
+    pendingVoiceChartRef.current = null;
     priorToolResultsRef.current = [];
   }, [abortActive]);
 

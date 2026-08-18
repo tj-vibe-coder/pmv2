@@ -26,6 +26,7 @@ import UtilitiesPage from './components/UtilitiesPage';
 import EHSPage from './components/EHSPage';
 import IDGeneratorPage from './components/IDGeneratorPage';
 import AcknowledgementReceiptPage from './components/AcknowledgementReceiptPage';
+import SystemBackupsPage from './components/SystemBackupsPage';
 import DirectLaborPage from './components/DirectLaborPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
 import UsersPage from './components/UsersPage';
@@ -152,6 +153,15 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 const SuperadminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
   if (user?.role !== 'superadmin') {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <>{children}</>;
+};
+
+// Admin & Superadmin route: redirect to dashboard if neither admin nor superadmin
+const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
+  if (user?.role !== 'superadmin' && user?.role !== 'admin') {
     return <Navigate to="/dashboard" replace />;
   }
   return <>{children}</>;
@@ -404,6 +414,7 @@ function App() {
               <Route path="ehs/:tab?" element={<EHSPage />} />
               <Route path="id-generator" element={<IDGeneratorPage />} />
               <Route path="acknowledgement-receipt" element={<AcknowledgementReceiptPage />} />
+              <Route path="backups" element={<AdminRoute><SystemBackupsPage /></AdminRoute>} />
             </Route>
             <Route path="/id-generator" element={<Navigate to="/utilities/id-generator" replace />} />
             <Route 

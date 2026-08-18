@@ -1,10 +1,11 @@
 # Project State
 
-Updated: 2026-08-15
+Updated: 2026-08-18
 
 ## Current status
 
-- AI Assist: implemented on `rj/dev` through P5 (HTTP operator, MCP adapter, Gemini-only provider factory). Not on `main`, not deployed. `AI_ASSIST_ENABLED` is `true` only in the local gitignored `.env`.
+- **System Backups & OneDrive Sync**: Implemented full database backup suite under Utilities (`/utilities/backups`). Dumps all Firestore root and subcollections recursively, generates SHA-256 integrity checksums and manifests, and automatically synchronizes backups to corporate OneDrive (`00 System/Backups/YYYY-MM-DD_HH-MM-SS/`) via Microsoft Graph API client credentials. Guarded strictly for `admin` and `superadmin` users.
+- AI Assist: implemented on `rj/dev` through P5 (HTTP operator, MCP adapter, Gemini-only provider factory). Not on `main`, not deployed. `AI_ASSIST_ENABLED` is `true` only in the local gitignored `.env`. Voice mode charts enabled with streaming flicker fix.
 - **Hands-free P3**: `propose_opportunity_update` drafts status (`draft`/`for_review`/`sent`/`inactive` only), `opportunityGrade`, or `notes`. The model never writes. Apply is `POST /api/ai-assist/proposals/:id/confirm` (button or spoken “apply that change”). `won`/`lost` stay blocked. Proposals are in-memory, 10-minute TTL, user-bound.
 - **Hands-free P4**: after the mic is clicked, Live stays listening, one bounded reconnect keeps the MediaStream, 10-minute cap, Always-on chip, spoken “stop listening”.
 - **Hands-free P0–P2** remain: page follows Assist, typed Send stays on Live, phone sheet + desktop dock, read tools including `get_opportunity_snapshot` and `search_clients`. History still memory-only.

@@ -40,6 +40,7 @@ import {
   AccountBalance as AccountBalanceIcon,
   Badge as BadgeIcon,
   Build as BuildIcon,
+  Backup as BackupIcon,
 } from '@mui/icons-material';
 import FinanceNavList from './finance/FinanceNavList';
 import SalesNavList from './sales/SalesNavList';
@@ -51,7 +52,7 @@ const SIDEBAR_COLLAPSED_WIDTH = 68;
 const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
 const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form', '/expense-monitoring/direct-labor'];
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
-const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator', '/utilities/acknowledgement-receipt'];
+const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator', '/utilities/acknowledgement-receipt', '/utilities/backups'];
 
 interface SidebarProps {
   /** Mobile: whether the temporary drawer is open. */
@@ -730,6 +731,24 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
                   />
                 </ListItemButton>
               </ListItem>
+              {isAdminUser && (
+                <ListItem disablePadding sx={{ mb: 0.5 }}>
+                  <ListItemButton
+                    selected={location.pathname === '/utilities/backups'}
+                    onClick={() => navigate('/utilities/backups')}
+                    sx={navBtnSx(location.pathname === '/utilities/backups', true)}
+                  >
+                    <ListItemIcon sx={iconSx(true)}>
+                      <BackupIcon fontSize="small" />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary="System Backups"
+                      primaryTypographyProps={{ fontSize: '0.8125rem' }}
+                      sx={{ color: 'white' }}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              )}
             </List>
           </Collapse>
 

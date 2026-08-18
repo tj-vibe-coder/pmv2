@@ -1,5 +1,50 @@
 # Task Log
 
+## 2026-08-18 — System Backups Pane & Corporate OneDrive Export
+
+Implemented complete Firestore backup manager and direct OneDrive synchronization:
+1. **Backend Server Export Engine** (`server/backups/firestoreExport.js`, mirrored to `functions/server/backups/`):
+   - Recursively dumps all Firestore root collections and nested subcollections.
+   - Serializes custom Firestore types (Timestamps, DocumentReferences, GeoPoints, Buffers).
+   - Generates manifest with SHA-256 integrity checksum, doc counts by collection, total count, and timestamped file name.
+2. **OneDrive Graph API Sync Pipeline** (`server/backups/onedriveBackup.js`):
+   - Integrates with corporate OneDrive via Microsoft Graph API client credentials proxy.
+   - Ensures target folder `00 System/Backups/YYYY-MM-DD_HH-MM-SS/` exists.
+   - Automatically uploads `firestore-backup-*.json` snapshot and `manifest.json`, returning OneDrive item ID and `webUrl`.
+3. **Admin Express Router** (`server/backups/router.js` mounted on `/api/backups`):
+   - Admin guard: strictly restricts access to users with `admin` or `superadmin` role.
+   - `GET /api/backups/status`: checks Firestore connectivity and OneDrive health.
+   - `GET /api/backups/history`: retrieves backup logs from `system_backups` Firestore collection.
+   - `POST /api/backups/create`: exports database, uploads to OneDrive, and records audit entry.
+   - `POST /api/backups/download-direct`: streams JSON snapshot for immediate browser download.
+4. **Frontend UI & Navigation** (`src/components/SystemBackupsPage.tsx`, `src/services/backupService.ts`):
+   - Net Pacific styled System Backups page under `/utilities/backups`.
+   - Sidebar navigation item with `BackupIcon` for Admin/Superadmin users.
+   - Status cards (Firestore, OneDrive, Most Recent Backup).
+   - On-demand backup form with "Save to OneDrive" and "Download to Computer" toggles.
+   - Live progress indicator during backup execution.
+   - Backup history table with search/filtering, collection breakdown modal, SHA-256 copy chip, and direct "Open in OneDrive" links.
+
+### Verification
+
+- Node test runner `server/backups/backups.test.js` 4/4 passed
+- Jest `SystemBackupsPage.test.tsx` 2/2 passed
+- `npx tsc --noEmit` clean (exit code 0)
+- `npm run ai-assist:check` no drift detected
+
+Enabled chart widget rendering when using voice mode and resolved live streaming flicker:
+1. When Gemini Live calls summary tools (`get_portfolio_summary` or `get_expense_summary`), `AiAssistProvider` constructs the `AiChart` structure from the real tool execution result and binds it to the active voice assistant turn.
+2. Fixed live streaming flickering:
+   - Disabled Recharts SVG bar entrance animation (`isAnimationActive={false}` in `AiChartPanel`) so rapid re-renders during live audio streaming don't reset bar heights from 0.
+   - Wrapped `AiChartPanel` in `React.memo` with custom prop equality check.
+   - Refactored `applyVoiceTranscript` in `AiAssistProvider` to update the active assistant message in place and retain chart state across streaming transcript chunks rather than clearing and splitting into multiple temporary message turns.
+
+### Verification
+
+- Jest `AiAssistProvider.test.tsx` 14/14 passed
+- All AI component tests (`src/components/ai/`) 50/50 passed
+- `npx tsc --noEmit` clean (exit code 0)
+
 ## 2026-08-15 — P5 in-app provider factory + deploy env (flag off)
 
 Chat now goes through `createAssistChatClient`. `AI_ASSIST_CHAT_PROVIDER` allowlists `gemini` only; anything else is `invalid` and fails closed. Health and the drawer chip report provider + model. `.github/workflows/deploy.yml` writes Assist config into `functions/.env` with `AI_ASSIST_ENABLED=false` so production stays off. `GEMINI_API_KEY` is unchanged; `GEMINI_MODEL` remains the receipt-scan model.
