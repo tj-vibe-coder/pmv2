@@ -10,6 +10,15 @@ export interface AiNavigateTo {
   label: string;
 }
 
+export interface AiChart {
+  // v1 draws a single form — a sequential-hue bar comparing group totals —
+  // the actual "job" of the get_portfolio_summary/get_expense_summary shapes.
+  type: 'bar';
+  title: string;
+  tool: string;
+  data: Record<string, unknown>[];
+}
+
 export interface AiProposal {
   proposalId: string;
   kind: string;
@@ -31,11 +40,20 @@ export interface AiAnswer {
   notice: string;
   navigateTo?: AiNavigateTo | null;
   proposal?: AiProposal | null;
+  chart?: AiChart | null;
 }
 
 export type AiMessage =
   | { id: string; role: 'user'; text: string }
-  | { id: string; role: 'assistant'; text: string; citations: AiCitation[]; notice: string }
+  | {
+      id: string;
+      role: 'assistant';
+      text: string;
+      citations: AiCitation[];
+      notice: string;
+      followUps: string[];
+      chart: AiChart | null;
+    }
   | { id: string; role: 'error'; text: string };
 
 export type AiLivePhase =
@@ -75,6 +93,15 @@ export interface AiHealthResponse {
   chatProvider: string;
   chatModel: string;
   liveModel: string;
+}
+
+export function parseAiChart(value: unknown): AiChart | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (record.type !== 'bar') return null;
+  if (typeof record.title !== 'string' || typeof record.tool !== 'string') return null;
+  if (!Array.isArray(record.data)) return null;
+  return { type: record.type, title: record.title, tool: record.tool, data: record.data };
 }
 
 export function parseAiProposal(value: unknown): AiProposal | null {

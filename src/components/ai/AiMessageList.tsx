@@ -1,16 +1,20 @@
 import React from 'react';
 import { Alert, Box, Chip, Typography } from '@mui/material';
 import type { AiMessage } from '../../types/AiAssist';
+import AiSourceList from './AiSourceList';
+import { renderAiMarkdown } from './aiMarkdown';
 
 interface AiMessageListProps {
   messages: AiMessage[];
   onNavigateSource: (route: string) => void;
+  onFollowUp: (question: string) => void;
 }
 
-export default function AiMessageList({ messages, onNavigateSource }: AiMessageListProps): React.ReactElement {
+export default function AiMessageList({ messages, onNavigateSource, onFollowUp }: AiMessageListProps): React.ReactElement {
+  const lastIndex = messages.length - 1;
   return (
     <Box aria-label="AI Assist messages">
-      {messages.map((message) => {
+      {messages.map((message, index) => {
         if (message.role === 'error') {
           return (
             <Alert key={message.id} severity="error" sx={{ mb: 1 }}>
@@ -35,25 +39,31 @@ export default function AiMessageList({ messages, onNavigateSource }: AiMessageL
                 py: 1,
               }}
             >
-              <Typography variant="body2">{message.text}</Typography>
+              {isUser ? (
+                <Typography variant="body2">{message.text}</Typography>
+              ) : (
+                renderAiMarkdown(message.text)
+              )}
             </Box>
             {message.role === 'assistant' && (
               <>
-                {message.citations.length > 0 && (
+                <AiSourceList citations={message.citations} onNavigateSource={onNavigateSource} />
+                <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="caption">
+                  {message.notice}
+                </Typography>
+                {index === lastIndex && message.followUps.length > 0 && (
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
-                    {message.citations.map((citation) => (
+                    {message.followUps.map((question) => (
                       <Chip
-                        key={citation.id}
-                        label={citation.label}
+                        key={question}
+                        label={question}
                         size="small"
-                        onClick={() => onNavigateSource(citation.route)}
+                        variant="outlined"
+                        onClick={() => onFollowUp(question)}
                       />
                     ))}
                   </Box>
                 )}
-                <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="caption">
-                  {message.notice}
-                </Typography>
               </>
             )}
           </Box>

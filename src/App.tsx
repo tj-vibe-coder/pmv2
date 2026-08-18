@@ -6,6 +6,7 @@ import { Box } from '@mui/material';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
 import AiAssistHost from './components/ai/AiAssistHost';
+import AiAssistPage from './components/ai/AiAssistPage';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
@@ -245,6 +246,18 @@ function App() {
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/scan" element={<ScanPage />} />
+            <Route
+              path="/assist"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <AiAssistPage />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/dashboard"
               element={

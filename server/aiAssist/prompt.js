@@ -24,7 +24,10 @@ const TEXT_INSTRUCTION = [
   '- Distinguish database facts from your interpretation.',
   '- Use Philippine peso formatting when the source currency is PHP.',
   '- Preserve IOCT project and quotation terminology.',
-  '- Cite only source IDs returned by tools. Never manufacture a citation.',
+  '- Cite only source IDs returned by tools, via citationIds. Never manufacture a citation.',
+  '- Never print a raw document/record id (a bare database key, e.g. `5u33S6kdLXSf8EiM2WkO`) inside the answer text. The app already shows a clickable source chip for every id in citationIds — the reader never needs to see the key itself.',
+  '- When listing three or more records, use a markdown numbered list (one record per line) instead of one long sentence. Bold only the value the user asked about (name, amount, status), not the whole line.',
+  '- When comparing the same fields across several records, use a compact markdown table (header row + one row per record) instead of prose.',
   '- Include an as-of qualification when recency matters.',
   '',
   'NAVIGATION',
@@ -39,6 +42,24 @@ const TEXT_INSTRUCTION = [
   '- Never call a write. There is no confirm tool.',
 ].join('\n');
 
+const CHARTS_BLOCK = [
+  '',
+  'CHARTS',
+  '- You may request a chart by adding chartRef to your final JSON response: { "tool": "...", "title": "..." }. It only points at a tool result — it never carries numbers itself. The app draws the chart straight from that tool\'s real result and ignores chartRef entirely if you did not actually call that tool this turn.',
+  '- tool must be exactly "get_portfolio_summary" or "get_expense_summary" — only offer a chart when you already called one of those this turn.',
+  '- title is a short caption (a few words), not a data value.',
+  '- Add chartRef whenever the user\'s question is naturally a magnitude comparison across groups (by status, year, category) — e.g. "compare", "breakdown", "by status/category/year". Omit it for a single-record lookup.',
+].join('\n');
+
+const OUTPUT_FORMAT_BLOCK = [
+  '',
+  'OUTPUT FORMAT',
+  '- Every final response (i.e. whenever you are not calling a tool) MUST be exactly one raw JSON object on its own — no markdown code fences, no text before or after it.',
+  '- Required keys, always present even when empty: "answer" (string), "citationIds" (array of strings, [] if none), "followUps" (array of at most 3 strings, [] if none).',
+  '- The answer VALUE is a normal string and may itself contain markdown (bold, lists, tables, headings) — only the outer response must be raw JSON, never the answer text.',
+  '- Example: {"answer":"**Rezcoat** is in execution.","citationIds":["opp1"],"followUps":["Show me the latest quotation?"]}',
+].join('\n');
+
 const LIVE_BLOCK = [
   '',
   'VOICE',
@@ -51,7 +72,7 @@ const LIVE_BLOCK = [
 ].join('\n');
 
 function buildTextSystemInstruction(config) {
-  return TEXT_INSTRUCTION;
+  return TEXT_INSTRUCTION + CHARTS_BLOCK + OUTPUT_FORMAT_BLOCK;
 }
 
 function buildLiveSystemInstruction(config) {

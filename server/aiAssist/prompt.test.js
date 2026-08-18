@@ -27,3 +27,14 @@ test('never concatenates database values into the instruction', () => {
   const text = buildTextSystemInstruction({ promptVersion: 'ioct-readonly-v1', evilInjectedField: '<script>alert(1)</script>' });
   assert.ok(!text.includes('<script>'));
 });
+
+test('text system instruction requires a raw JSON final response; live instruction does not', () => {
+  const text = buildTextSystemInstruction({ promptVersion: 'ioct-readonly-v1' });
+  assert.ok(text.includes('OUTPUT FORMAT'));
+  assert.ok(text.includes('raw JSON object'));
+  assert.ok(text.includes('"citationIds"'));
+
+  const live = buildLiveSystemInstruction({ promptVersion: 'ioct-readonly-v1' });
+  assert.ok(!live.includes('OUTPUT FORMAT'));
+  assert.ok(!live.includes('raw JSON object'));
+});

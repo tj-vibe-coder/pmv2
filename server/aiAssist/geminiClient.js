@@ -21,6 +21,10 @@ const FINAL_RESPONSE_SCHEMA = {
     answer: { type: 'string' },
     citationIds: { type: 'array', items: { type: 'string' } },
     followUps: { type: 'array', items: { type: 'string' } },
+    chartRef: {
+      type: 'object',
+      properties: { tool: { type: 'string' }, title: { type: 'string' } },
+    },
   },
   required: ['answer', 'citationIds', 'followUps'],
 };
@@ -93,6 +97,10 @@ function parseModelOutput(text) {
         followUps: Array.isArray(parsed.followUps)
           ? parsed.followUps.filter((item) => typeof item === 'string').slice(0, 3)
           : [],
+        // Passed through as-is; chat.js's sanitizeChartRef does the real
+        // shape/allowlist validation (tool name, title length) before this
+        // ever resolves against a real tool result.
+        chartRef: parsed.chartRef ?? null,
       };
     }
   } catch {
@@ -138,6 +146,9 @@ function createGeminiChatClient({ apiKey, model, systemInstruction, toolDeclarat
       }
 
       const response = await chat.sendMessage({ message });
+      if (process.env.AI_ASSIST_TRACE === 'true') {
+        console.error(`[ai-assist:trace:raw] turn=${turn} text=${JSON.stringify(response.text || '')}`);
+      }
 
       const calls = response.functionCalls;
       if (Array.isArray(calls) && calls.length > 0) {

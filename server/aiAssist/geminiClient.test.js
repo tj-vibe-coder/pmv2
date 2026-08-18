@@ -46,3 +46,13 @@ test('parseModelOutput accepts JSON or falls back to plain prose', () => {
   assert.equal(prose.answer, 'Rezcoat is in execution.');
   assert.deepEqual(prose.citationIds, []);
 });
+
+test('parseModelOutput passes chartRef through when the model includes it, and defaults to null otherwise', () => {
+  const withChart = parseModelOutput(
+    '{"answer":"See the chart.","citationIds":[],"followUps":[],"chartRef":{"tool":"get_portfolio_summary","title":"Balance by status"}}',
+  );
+  assert.deepEqual(withChart.chartRef, { tool: 'get_portfolio_summary', title: 'Balance by status' });
+
+  const withoutChart = parseModelOutput('{"answer":"No chart needed.","citationIds":[],"followUps":[]}');
+  assert.equal(withoutChart.chartRef, null);
+});

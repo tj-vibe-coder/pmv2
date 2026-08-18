@@ -21,6 +21,7 @@ function asCitations(sources: unknown[]): AiCitation[] {
 }
 
 interface AiAssistContextType {
+  enabled: boolean;
   isOpen: boolean;
   open: () => void;
   close: () => void;
@@ -165,6 +166,8 @@ export function AiAssistProvider({
         text: event.text,
         citations,
         notice: VOICE_NOTICE,
+        followUps: [],
+        chart: null,
       }];
     });
   }, []);
@@ -268,6 +271,8 @@ export function AiAssistProvider({
         text: `Applied ${draft.field} on ${draft.label || 'the opportunity'}.`,
         citations: [],
         notice: VOICE_NOTICE,
+        followUps: [],
+        chart: null,
       }]);
     } catch (error) {
       const message = error instanceof AiAssistError ? error.message : 'Could not apply that draft.';
@@ -295,6 +300,8 @@ export function AiAssistProvider({
       text: 'Draft discarded. Nothing was saved.',
       citations: [],
       notice: VOICE_NOTICE,
+      followUps: [],
+      chart: null,
     }]);
   }, [proposalBusy]);
 
@@ -346,7 +353,15 @@ export function AiAssistProvider({
       );
       setMessages((prev) => [
         ...prev,
-        { id: nextId(), role: 'assistant', text: answer.answer, citations: answer.citations, notice: answer.notice },
+        {
+          id: nextId(),
+          role: 'assistant',
+          text: answer.answer,
+          citations: answer.citations,
+          notice: answer.notice,
+          followUps: answer.followUps,
+          chart: answer.chart ?? null,
+        },
       ]);
       if (answer.navigateTo?.route) {
         const dest = resolveAiNavigatePath(answer.navigateTo.route);
@@ -407,6 +422,7 @@ export function AiAssistProvider({
   }, [isLoading, messages, performSend]);
 
   const value: AiAssistContextType = {
+    enabled,
     isOpen,
     open: () => setIsOpen(true),
     close: () => setIsOpen(false),

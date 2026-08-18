@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import AiAssistDrawer from './AiAssistDrawer';
 import AiAssistLauncher from './AiAssistLauncher';
 import { AiAssistProvider } from './AiAssistProvider';
@@ -46,10 +47,12 @@ afterEach(() => {
 // drawer tests here open it via the real launcher first, exactly as a user would.
 function renderDrawer(enabled = true) {
   const result = render(
-    <AiAssistProvider enabled={enabled}>
-      <AiAssistLauncher />
-      <AiAssistDrawer pageContext={{ route: '/projects', projectId: null, opportunityId: null, quotationId: null }} />
-    </AiAssistProvider>,
+    <MemoryRouter initialEntries={['/projects']}>
+      <AiAssistProvider enabled={enabled}>
+        <AiAssistLauncher />
+        <AiAssistDrawer pageContext={{ route: '/projects', projectId: null, opportunityId: null, quotationId: null }} />
+      </AiAssistProvider>
+    </MemoryRouter>,
   );
   fireEvent.click(screen.getByLabelText(/open ioct assist/i));
   return result;
@@ -82,7 +85,8 @@ it('shows a pending draft card with Apply and Discard', async () => {
   });
   expect(screen.getByRole('button', { name: /apply/i })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /discard/i })).toBeInTheDocument();
-  expect(screen.getByText(/B → A/)).toBeInTheDocument();
+  expect(screen.getByText('B')).toBeInTheDocument();
+  expect(screen.getByText('A')).toBeInTheDocument();
 });
 
 it('shows a "Read only" badge and a persistent AI-disclaimer when a message exists', async () => {
@@ -195,13 +199,15 @@ it('shows a Now viewing chip and forwards citation navigation', async () => {
   });
   const onNavigateSource = jest.fn();
   render(
-    <AiAssistProvider enabled>
-      <AiAssistLauncher />
-      <AiAssistDrawer
-        pageContext={{ route: '/sales/calcsheet/projects/opp1', projectId: null, opportunityId: 'opp1', quotationId: null }}
-        onNavigateSource={onNavigateSource}
-      />
-    </AiAssistProvider>,
+    <MemoryRouter initialEntries={['/sales/calcsheet/projects/opp1']}>
+      <AiAssistProvider enabled>
+        <AiAssistLauncher />
+        <AiAssistDrawer
+          pageContext={{ route: '/sales/calcsheet/projects/opp1', projectId: null, opportunityId: 'opp1', quotationId: null }}
+          onNavigateSource={onNavigateSource}
+        />
+      </AiAssistProvider>
+    </MemoryRouter>,
   );
   fireEvent.click(screen.getByLabelText(/open ioct assist/i));
   expect(screen.getByText(/now viewing opportunity opp1/i)).toBeInTheDocument();
@@ -211,6 +217,26 @@ it('shows a Now viewing chip and forwards citation navigation', async () => {
   await waitFor(() => expect(screen.getByText('Rezcoat')).toBeInTheDocument());
   fireEvent.click(screen.getByText('Rezcoat'));
   expect(onNavigateSource).toHaveBeenCalledWith('/sales/calcsheet/projects/opp1');
+});
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}</div>;
+}
+
+it('navigates to /assist when "Open full view" is clicked', () => {
+  render(
+    <MemoryRouter initialEntries={['/projects']}>
+      <AiAssistProvider enabled>
+        <AiAssistLauncher />
+        <AiAssistDrawer pageContext={{ route: '/projects', projectId: null, opportunityId: null, quotationId: null }} />
+      </AiAssistProvider>
+      <LocationProbe />
+    </MemoryRouter>,
+  );
+  fireEvent.click(screen.getByLabelText(/open ioct assist/i));
+  fireEvent.click(screen.getByLabelText('Open full view'));
+  expect(screen.getByTestId('location-probe')).toHaveTextContent('/assist');
 });
 
 function mockViewport(isMobile: boolean): void {
@@ -237,9 +263,11 @@ it('opens a bottom sheet on a phone-sized viewport instead of a full-screen dial
 
 it('shows a disabled-feature message instead of a composer when AI Assist is off, without calling the API', () => {
   render(
-    <AiAssistProvider enabled={false}>
-      <AiAssistDrawer pageContext={null} />
-    </AiAssistProvider>,
+    <MemoryRouter>
+      <AiAssistProvider enabled={false}>
+        <AiAssistDrawer pageContext={null} />
+      </AiAssistProvider>
+    </MemoryRouter>,
   );
   expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   expect(sendAiChatMock).not.toHaveBeenCalled();
