@@ -11,6 +11,12 @@ import {
   InputLabel,
   FormControl,
   OutlinedInput,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  TextField,
 } from '@mui/material';
 import {
   Visibility as VisibilityIcon,
@@ -39,6 +45,47 @@ const LoginPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [logoError, setLogoError] = useState(false);
+
+  // Forgot-password request dialog
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotIdentifier, setForgotIdentifier] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotMsg, setForgotMsg] = useState<string | null>(null);
+  const [forgotErr, setForgotErr] = useState<string | null>(null);
+
+  const openForgot = () => {
+    setForgotIdentifier(loginData.username || '');
+    setForgotMsg(null);
+    setForgotErr(null);
+    setForgotOpen(true);
+  };
+
+  const submitForgot = async () => {
+    if (!forgotIdentifier.trim()) {
+      setForgotErr('Enter your username or email.');
+      return;
+    }
+    setForgotLoading(true);
+    setForgotErr(null);
+    setForgotMsg(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: forgotIdentifier.trim() }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setForgotMsg(result.message || 'If that account exists, an administrator has been notified.');
+      } else {
+        setForgotErr(result.error || 'Could not submit the request.');
+      }
+    } catch {
+      setForgotErr('A network error occurred. Please try again.');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
 
   const [loginData, setLoginData] = useState<LoginCredentials>({
     username: '',
@@ -326,7 +373,7 @@ const LoginPage: React.FC = () => {
                 <Typography
                   component="button"
                   type="button"
-                  onClick={() => {}}
+                  onClick={openForgot}
                   sx={{
                     border: 'none',
                     background: 'none',
@@ -517,6 +564,47 @@ const LoginPage: React.FC = () => {
           </Box>
         </Box>
       </Box>
+
+      {/* Forgot-password request dialog */}
+      <Dialog open={forgotOpen} onClose={() => !forgotLoading && setForgotOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Reset your password</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Enter your username or email and an administrator will be notified to reset your
+            password for you. They'll share your new password with you directly.
+          </DialogContentText>
+          {forgotErr && <Alert severity="error" sx={{ mb: 2 }}>{forgotErr}</Alert>}
+          {forgotMsg ? (
+            <Alert severity="success">{forgotMsg}</Alert>
+          ) : (
+            <TextField
+              autoFocus
+              fullWidth
+              label="Username or email"
+              value={forgotIdentifier}
+              onChange={(e) => setForgotIdentifier(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitForgot(); }}
+              disabled={forgotLoading}
+              size="small"
+            />
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setForgotOpen(false)} disabled={forgotLoading}>
+            {forgotMsg ? 'Close' : 'Cancel'}
+          </Button>
+          {!forgotMsg && (
+            <Button
+              variant="contained"
+              onClick={submitForgot}
+              disabled={forgotLoading}
+              sx={{ bgcolor: darkBlue, '&:hover': { bgcolor: '#0f2e4f' } }}
+            >
+              {forgotLoading ? 'Submitting…' : 'Submit request'}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
