@@ -359,6 +359,40 @@ app.get('/api/auth/me', async (req, res) => {
   res.json({ success: true, user: userResponse(user.id, user) });
 });
 
+// Public: a user who can't sign in asks a superadmin to reset their password.
+// There is no email channel, so this just files an in-app request that admins
+// action from the User Approvals page. The response is deliberately generic so
+// it can't be used to probe which usernames/emails exist.
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const identifier = String((req.body && req.body.identifier) || '').trim();
+  const generic = { success: true, message: 'If that account exists, an administrator has been notified to reset your password.' };
+  if (!identifier) return res.status(400).json({ success: false, error: 'Enter your username or email.' });
+  try {
+    let snap = await db.collection('users').where('username', '==', identifier).limit(1).get();
+    if (snap.empty) snap = await db.collection('users').where('email', '==', identifier).limit(1).get();
+    if (snap.empty) return res.json(generic); // unknown account — say nothing
+    const userDoc = snap.docs[0];
+    const u = userDoc.data();
+    const now = Math.floor(Date.now() / 1000);
+    // Coalesce repeat requests: bump the existing pending one instead of piling up.
+    const existing = await db.collection('password_reset_requests')
+      .where('user_id', '==', userDoc.id).where('status', '==', 'pending').limit(1).get();
+    if (!existing.empty) {
+      await existing.docs[0].ref.update({ requested_at: now, request_count: FieldValue.increment(1) });
+    } else {
+      await db.collection('password_reset_requests').add({
+        user_id: userDoc.id, username: u.username || '', email: u.email || '',
+        status: 'pending', requested_at: now, request_count: 1, resolved_by: null, resolved_at: null,
+      });
+    }
+    console.log(`Password reset requested for ${u.username}`);
+    res.json(generic);
+  } catch (err) {
+    console.error('Error creating password reset request:', err);
+    res.json(generic); // never leak details on the public endpoint
+  }
+});
+
 // ========== USERS ROUTES ==========
 const usersRouter = express.Router();
 
@@ -460,6 +494,55 @@ usersRouter.get('/pending', async (req, res) => {
     res.json({ success: true, users });
   } catch (err) {
     console.error('Error fetching pending users:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Superadmin: list pending password-reset requests (see /api/auth/forgot-password).
+usersRouter.get('/reset-requests', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  try {
+    const snap = await db.collection('password_reset_requests').where('status', '==', 'pending').get();
+    const requests = snap.docs
+      .map(doc => { const d = doc.data(); return { id: doc.id, user_id: d.user_id, username: d.username, email: d.email, requested_at: d.requested_at, request_count: d.request_count || 1 }; })
+      .sort((a, b) => (b.requested_at || 0) - (a.requested_at || 0));
+    res.json({ success: true, requests });
+  } catch (err) {
+    console.error('Error fetching reset requests:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Superadmin: resolve a reset request — set a new password (status 'resolved')
+// or dismiss it without changing anything (status 'dismissed').
+usersRouter.post('/reset-requests/:id/resolve', async (req, res) => {
+  const reqId = req.params.id;
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { password } = req.body || {};
+  try {
+    const ref = db.collection('password_reset_requests').doc(reqId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Request not found' });
+    const reqData = doc.data();
+    const now = Math.floor(Date.now() / 1000);
+    let status = 'dismissed';
+    if (password !== undefined && String(password).length > 0) {
+      const nextPassword = String(password);
+      if (nextPassword.length < 6) return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long' });
+      const userRef = db.collection('users').doc(String(reqData.user_id));
+      const userDoc = await userRef.get();
+      if (!userDoc.exists) return res.status(404).json({ success: false, error: 'User no longer exists' });
+      await userRef.update({ password_hash: Buffer.from(nextPassword).toString('base64'), updated_at: now });
+      status = 'resolved';
+    }
+    await ref.update({ status, resolved_by: user.username, resolved_at: now });
+    res.json({ success: true, status, message: status === 'resolved' ? 'Password reset' : 'Request dismissed' });
+  } catch (err) {
+    console.error('Error resolving reset request:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
