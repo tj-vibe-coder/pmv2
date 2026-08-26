@@ -42,6 +42,7 @@ import {
   Add as AddIcon,
   Delete as DeleteIcon,
   Description as DescriptionIcon,
+  CalendarMonth as CalendarMonthIcon,
 } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import type { ProjectInvoice, BillingMilestone, BillToKind } from '../types/Invoice';
@@ -542,6 +543,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   const [progressDialogOpen, setProgressDialogOpen] = useState(false);
   const [budgetAmount, setBudgetAmount] = useState(0);
   const [projectInvoices, setProjectInvoices] = useState<ProjectInvoice[]>([]);
+  const [hasSchedule, setHasSchedule] = useState(false);
   const navigate = useNavigate();
 
   // Billing schedule state
@@ -633,6 +635,18 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
       .then(r => r.json())
       .then((invs: ProjectInvoice[]) => {
         if (!cancelled) setProjectInvoices(Array.isArray(invs) ? invs : []);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [project.id]);
+
+  // Does this project have a Work Schedule? (drives the Update-Progress heads-up)
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/schedule-tasks?projectId=${encodeURIComponent(String(project.id))}`)
+      .then(r => r.json())
+      .then((res: { tasks?: unknown[] }) => {
+        if (!cancelled) setHasSchedule(Array.isArray(res?.tasks) && res.tasks.length > 0);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -943,6 +957,15 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
           </Stack>
         )}
         <Button
+          variant="outlined"
+          size="small"
+          startIcon={<CalendarMonthIcon />}
+          onClick={() => navigate(`/projects/${project.id}/schedule`)}
+          sx={{ ml: 1 }}
+        >
+          Gantt Chart
+        </Button>
+        <Button
           variant="contained"
           size="small"
           onClick={() => setProgressDialogOpen(true)}
@@ -1010,6 +1033,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
       <UpdateProgressDialog
         open={progressDialogOpen}
         project={project}
+        hasSchedule={hasSchedule}
         onClose={() => setProgressDialogOpen(false)}
         onSaved={(updated) => {
           onProjectUpdated?.(updated);

@@ -1359,7 +1359,7 @@ export default function ProjectDetail() {
             startIcon={<CalendarMonthIcon />}
             size="small"
           >
-            Schedule
+            Gantt Chart
           </Button>
           {quotations.length >= 2 && (
             <Button
