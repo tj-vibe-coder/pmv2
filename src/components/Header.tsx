@@ -91,7 +91,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
           )}
           <Box
             component="img"
-            src="/logo192.png"
+            src="/logo.jpeg"
             alt="IOCT Logo"
             sx={{ height: { xs: 36, md: 48 }, mr: { xs: 1, md: 2 }, flexShrink: 0 }}
           />
