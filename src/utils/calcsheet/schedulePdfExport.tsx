@@ -1,8 +1,9 @@
 import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
 import { saveAs } from 'file-saver';
-import type { Project } from '../../types/Quotation';
 import { SCHEDULE_CATEGORY_COLORS, type ScheduleTask } from '../../types/ScheduleTask';
 import { addDays, daysBetween, durationOf, formatLocalDate, MS_PER_DAY, toDate } from './scheduleDates';
+
+type ScheduleProjectRef = { code?: string; name?: string };
 
 const PRIMARY = '#2c5aa0';
 const TEXT = '#222';
@@ -67,7 +68,7 @@ function buildMonths(range: { start: Date; end: Date }, totalDays: number): { la
 function categoryOf(t: ScheduleTask): string { return t.category || 'Other'; }
 function colorOf(t: ScheduleTask): string { return SCHEDULE_CATEGORY_COLORS[categoryOf(t)] || '#8e8e93'; }
 
-function ScheduleDoc({ project, tasks }: { project: Project; tasks: ScheduleTask[] }) {
+function ScheduleDoc({ project, tasks }: { project: ScheduleProjectRef; tasks: ScheduleTask[] }) {
   const range = computeRange(tasks);
   const totalDays = daysBetween(range.start, range.end) + 1;
   const available = PAGE_WIDTH - MARGIN * 2 - LABEL_WIDTH;
@@ -79,7 +80,7 @@ function ScheduleDoc({ project, tasks }: { project: Project; tasks: ScheduleTask
   return (
     <Document>
       <Page size="A4" orientation="landscape" style={styles.page}>
-        <Text style={styles.title}>Work Schedule</Text>
+        <Text style={styles.title}>Gantt Chart</Text>
         <Text style={styles.subtitle}>{project.code} — {project.name}</Text>
 
         {categoriesUsed.length > 0 && (
@@ -164,7 +165,7 @@ function ScheduleDoc({ project, tasks }: { project: Project; tasks: ScheduleTask
   );
 }
 
-export async function exportSchedulePdf(project: Project, tasks: ScheduleTask[]): Promise<void> {
+export async function exportSchedulePdf(project: ScheduleProjectRef, tasks: ScheduleTask[]): Promise<void> {
   const blob = await pdf(<ScheduleDoc project={project} tasks={tasks} />).toBlob();
-  saveAs(blob, `${project.code || 'schedule'}-work-schedule.pdf`);
+  saveAs(blob, `${project.code || 'schedule'}-gantt-chart.pdf`);
 }

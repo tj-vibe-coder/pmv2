@@ -3809,6 +3809,18 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     mainProjectStatusSyncedAt: now,
   });
 
+  // Carry the proposal's Work Schedule over to the awarded project (copy, so the
+  // proposal keeps its baseline). Only on first creation, and copyScheduleTasks…
+  // itself no-ops if the target already has a schedule — a re-sync never clobbers
+  // edits made during execution.
+  if (action === 'created' || action === 'recreated') {
+    try {
+      const copied = await copyScheduleTasksToProject(projectId, mainProjectId);
+      // Freeze the awarded plan as the project's first baseline version.
+      if (copied > 0) await snapshotScheduleVersion(mainProjectId, 'Baseline (at award)', 'System');
+    } catch (e) { console.error('Schedule carry-over failed:', e.message); }
+  }
+
   return {
     action,
     mainProjectId,
@@ -3817,6 +3829,90 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     quotationKind: selectedQuotation.kind,
     amount: quotationGrandTotal(selectedQuotation),
   };
+}
+
+// Copy schedule tasks from one projectId to another (proposal → awarded project).
+// No-ops when the destination already has any tasks, so it never duplicates.
+async function copyScheduleTasksToProject(fromProjectId, toProjectId) {
+  const destSnap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(toProjectId)).limit(1).get();
+  if (!destSnap.empty) return 0;
+  const srcSnap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(fromProjectId)).get();
+  if (srcSnap.empty) return 0;
+  const now = new Date().toISOString();
+  // Pre-allocate new refs so predecessor ids can be remapped source → copy.
+  const items = srcSnap.docs.map((doc) => ({ data: doc.data(), ref: db.collection('calcsheet_schedule_tasks').doc(), srcId: doc.id }));
+  const idMap = new Map(items.map((it) => [it.srcId, it.ref.id]));
+  let batch = db.batch();
+  let count = 0;
+  for (const it of items) {
+    const { id: _id, projectId: _pid, createdAt: _c, updatedAt: _u, predecessors, ...rest } = it.data;
+    const remapped = Array.isArray(predecessors) ? predecessors.map((p) => idMap.get(p)).filter(Boolean) : undefined;
+    batch.set(it.ref, stripUndefinedFields({ ...rest, predecessors: remapped, projectId: String(toProjectId), createdAt: now, updatedAt: now }));
+    count += 1;
+    if (count % 400 === 0) { await batch.commit(); batch = db.batch(); }
+  }
+  await batch.commit();
+  console.log(`Carried over ${count} schedule task(s) to project ${toProjectId}`);
+  return count;
+}
+
+// When a MONITORING project's schedule changes, mirror the progress-weighted
+// overall % into its actual_site_progress_percent (this drives progress billing).
+// No-op for calcsheet projects (no doc in `projects`) or when there are no tasks.
+async function syncScheduleProgressToMonitoringProject(projectId) {
+  if (!projectId) return;
+  const projDoc = await db.collection('projects').doc(String(projectId)).get();
+  if (!projDoc.exists) return;
+  const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
+  if (snap.empty) return;
+  let weighted = 0;
+  let weight = 0;
+  for (const d of snap.docs) {
+    const t = d.data();
+    const start = new Date(t.startDate).getTime();
+    const end = new Date(t.endDate).getTime();
+    const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
+    weighted += (Number(t.progressPct) || 0) * days;
+    weight += days;
+  }
+  if (weight <= 0) return;
+  const pct = Math.max(0, Math.min(100, Math.round(weighted / weight)));
+  const status = pct <= 0 ? 'Not Started' : pct >= 100 ? 'Completed' : 'In Progress';
+  await projDoc.ref.update({ actual_site_progress_percent: pct, project_status: status, updated_at: new Date().toISOString() });
+}
+
+// Progress-weighted overall % across a task array (milestones weigh 1 day).
+function scheduleTasksOverallProgress(tasks) {
+  let weighted = 0;
+  let weight = 0;
+  for (const t of tasks) {
+    const start = new Date(t.startDate).getTime();
+    const end = new Date(t.endDate).getTime();
+    const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
+    weighted += (Number(t.progressPct) || 0) * days;
+    weight += days;
+  }
+  return weight > 0 ? Math.max(0, Math.min(100, Math.round(weighted / weight))) : 0;
+}
+
+// Freeze a project's whole Gantt (all tasks) into a named version snapshot.
+async function snapshotScheduleVersion(projectId, label, savedBy) {
+  const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
+  // Keep each task's id so predecessor links can be remapped on restore.
+  const tasks = snap.docs.map((dd) => { const { id: _i, ...rest } = dd.data(); return { ...rest, id: dd.id }; });
+  const now = new Date().toISOString();
+  const doc = {
+    projectId: String(projectId),
+    savedAt: now,
+    savedBy: savedBy || null,
+    label: (label && String(label).trim()) || null,
+    taskCount: tasks.length,
+    overallProgress: scheduleTasksOverallProgress(tasks),
+    tasks,
+  };
+  const ref = await db.collection('calcsheet_schedule_versions').add(doc);
+  const { tasks: _t, ...meta } = doc;
+  return { ...meta, id: ref.id };
 }
 
 // ── Projects ─────────────────────────────────────────────────────────────────
@@ -4235,6 +4331,7 @@ app.post('/api/schedule-tasks', async (req, res) => {
       updatedAt: new Date().toISOString(),
     });
     const ref = await db.collection('calcsheet_schedule_tasks').add(data);
+    await syncScheduleProgressToMonitoringProject(data.projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
     res.json({ success: true, task: { ...data, id: ref.id } });
   } catch (err) {
     console.error('Error creating schedule task:', err);
@@ -4252,6 +4349,7 @@ app.put('/api/schedule-tasks/:id', async (req, res) => {
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ success: false, error: 'Schedule task not found' });
     await ref.update(data);
+    await syncScheduleProgressToMonitoringProject(doc.data().projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
     res.json({ success: true, task: { ...doc.data(), ...data, id: ref.id } });
   } catch (err) {
     console.error('Error updating schedule task:', err);
@@ -4263,11 +4361,107 @@ app.delete('/api/schedule-tasks/:id', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    await db.collection('calcsheet_schedule_tasks').doc(req.params.id).delete();
+    const ref = db.collection('calcsheet_schedule_tasks').doc(req.params.id);
+    const doc = await ref.get();
+    const projectId = doc.exists ? doc.data().projectId : null;
+    await ref.delete();
+    if (projectId) await syncScheduleProgressToMonitoringProject(projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
     res.json({ success: true });
   } catch (err) {
     console.error('Error deleting schedule task:', err);
     res.status(500).json({ success: false, error: 'Failed to delete schedule task' });
+  }
+});
+
+// ── Gantt schedule version history ───────────────────────────────────────────
+// A "version" freezes the whole schedule (all tasks) for a project — a named
+// snapshot / baseline. Same collection pattern as calcsheet_quotation_versions.
+app.post('/api/schedule-versions', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { projectId, label } = req.body || {};
+    if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
+    const version = await snapshotScheduleVersion(projectId, label, user.full_name || user.username || null);
+    res.json({ success: true, version });
+  } catch (err) {
+    console.error('Error saving schedule version:', err);
+    res.status(500).json({ success: false, error: 'Failed to save schedule version' });
+  }
+});
+
+app.get('/api/schedule-versions', async (req, res) => {
+  try {
+    const { projectId } = req.query;
+    if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
+    const snap = await db.collection('calcsheet_schedule_versions').where('projectId', '==', String(projectId)).get();
+    // Omit the heavy `tasks` array from the list — restore reads the doc directly.
+    const versions = snap.docs.map((dd) => {
+      const { id: _i, tasks: _t, ...meta } = dd.data();
+      return { ...meta, id: dd.id };
+    }).sort((a, b) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')));
+    res.json({ success: true, versions });
+  } catch (err) {
+    console.error('Error fetching schedule versions:', err);
+    res.status(500).json({ success: false, error: 'Failed to get schedule versions' });
+  }
+});
+
+// Full version incl. its task array (the list endpoint strips tasks for weight).
+app.get('/api/schedule-versions/:id', async (req, res) => {
+  try {
+    const doc = await db.collection('calcsheet_schedule_versions').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Version not found' });
+    const { id: _i, ...data } = doc.data();
+    res.json({ success: true, version: { ...data, id: doc.id } });
+  } catch (err) {
+    console.error('Error fetching schedule version:', err);
+    res.status(500).json({ success: false, error: 'Failed to get schedule version' });
+  }
+});
+
+// Restore a version: replace the project's current tasks with the snapshot's.
+// Non-destructive — snapshots the current state first, so a restore is undoable.
+app.post('/api/schedule-versions/:id/restore', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const vref = db.collection('calcsheet_schedule_versions').doc(req.params.id);
+    const vdoc = await vref.get();
+    if (!vdoc.exists) return res.status(404).json({ success: false, error: 'Version not found' });
+    const v = vdoc.data();
+    const projectId = String(v.projectId);
+    await snapshotScheduleVersion(projectId, 'Before restore', user.full_name || user.username || null);
+    const cur = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', projectId).get();
+    const now = new Date().toISOString();
+    const batch = db.batch();
+    cur.docs.forEach((dd) => batch.delete(dd.ref));
+    // Pre-allocate refs and remap predecessor ids (snapshot id → new id).
+    const items = (v.tasks || []).map((t) => ({ t, ref: db.collection('calcsheet_schedule_tasks').doc() }));
+    const idMap = new Map(items.filter((it) => it.t.id).map((it) => [it.t.id, it.ref.id]));
+    items.forEach(({ t, ref }) => {
+      const { id: _i, projectId: _p, createdAt: _c, updatedAt: _u, predecessors, ...rest } = t;
+      const remapped = Array.isArray(predecessors) ? predecessors.map((p) => idMap.get(p)).filter(Boolean) : undefined;
+      batch.set(ref, stripUndefinedFields({ ...rest, predecessors: remapped, projectId, createdAt: now, updatedAt: now }));
+    });
+    await batch.commit();
+    await syncScheduleProgressToMonitoringProject(projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error restoring schedule version:', err);
+    res.status(500).json({ success: false, error: 'Failed to restore schedule version' });
+  }
+});
+
+app.delete('/api/schedule-versions/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    await db.collection('calcsheet_schedule_versions').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting schedule version:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete schedule version' });
   }
 });
 

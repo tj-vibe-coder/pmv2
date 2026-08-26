@@ -9,6 +9,12 @@ export interface ScheduleTask {
   isMilestone: boolean;
   order: number;
   notes?: string;
+  /** Duration value (source of truth). endDate is derived from
+   *  startDate + durationDays under the active working-day calendar. */
+  durationDays?: number;
+  /** Finish-to-start predecessor task ids. A task with predecessors is
+   *  auto-scheduled to start the day after its latest predecessor ends. */
+  predecessors?: string[];
   createdAt?: string;
   updatedAt?: string;
 }
