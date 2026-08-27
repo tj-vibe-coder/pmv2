@@ -16,18 +16,25 @@ function isPlainObject(value) {
 // chart because it never writes the numbers, same trust boundary as citations.
 // v1 draws every chart as a single sequential-hue bar (magnitude-comparison is
 // the actual job of this data — see the app's dataviz guidance), so chartRef
-// carries no chart-type choice; the server is the only thing that sets `type`.
-const CHARTABLE_TOOLS = ['get_portfolio_summary', 'get_expense_summary'];
+const CHARTABLE_TOOLS = ['get_portfolio_summary', 'get_expense_summary', 'query_analytics'];
 
 // A malformed or stale chartRef degrades to "no chart" rather than failing
 // the whole turn — the prose answer is still good even if the chart pointer
 // is bad, so this never throws.
 function sanitizeChartRef(value) {
   if (!isPlainObject(value)) return null;
-  const { tool, title } = value;
+  const { tool, title, type, xAxisKey } = value;
   if (typeof tool !== 'string' || !CHARTABLE_TOOLS.includes(tool)) return null;
   if (typeof title !== 'string' || title.length < 1 || title.length > 80) return null;
-  return { tool, title };
+  const allowedTypes = ['bar', 'horizontal_bar', 'line', 'area', 'pie', 'donut', 'composed'];
+  const chartType = (typeof type === 'string' && allowedTypes.includes(type)) ? type : 'bar';
+  const cleanXAxisKey = (typeof xAxisKey === 'string' && xAxisKey.length <= 40) ? xAxisKey : undefined;
+  return {
+    tool,
+    title,
+    type: chartType,
+    ...(cleanXAxisKey ? { xAxisKey: cleanXAxisKey } : {}),
+  };
 }
 
 function validateFinalResponse(response) {
@@ -96,9 +103,10 @@ async function runChat({ client, registry, config, messages, pageContext, priorT
         const match = [...toolResults].reverse().find((r) => r.name === finalResponse.chartRef.tool);
         if (match && Array.isArray(match.data)) {
           chart = {
-            type: 'bar',
+            type: finalResponse.chartRef.type || 'bar',
             title: finalResponse.chartRef.title,
             tool: finalResponse.chartRef.tool,
+            ...(finalResponse.chartRef.xAxisKey ? { xAxisKey: finalResponse.chartRef.xAxisKey } : {}),
             data: match.data,
           };
         }

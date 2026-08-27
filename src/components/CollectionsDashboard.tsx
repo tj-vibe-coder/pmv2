@@ -488,10 +488,18 @@ export default function CollectionsDashboard() {
   return (
     <Box sx={{ height: '100%', overflow: 'hidden' }}>
       {/* Title */}
-      <Box sx={{ mb: 1.5 }}>
+      <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
           Collections & Receivables
         </Typography>
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={() => navigate('/finance/soa')}
+          sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+        >
+          Statements of Account (SOA)
+        </Button>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError('')}>{error}</Alert>}

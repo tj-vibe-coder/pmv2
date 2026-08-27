@@ -13,6 +13,7 @@ const { createAssistChatClient } = require('./server/aiAssist/providers');
 const { GoogleGenAI: AiAssistGoogleGenAI } = require('@google/genai');
 const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
 const { createBackupsRouter } = require('./server/backups/router');
+const { createSoaRouter } = require('./server/soa/soaRouter');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -6678,6 +6679,16 @@ app.use('/api/backups', createBackupsRouter({
   ensureFolderByPath,
 }));
 // ========== END SYSTEM BACKUPS ==========
+
+// ========== STATEMENTS OF ACCOUNT (SOA Subcontractor & Client Billings) ==========
+app.use('/api/soa', createSoaRouter({
+  db,
+  getCurrentUser,
+  getGraphAppToken,
+  resolveCorporateDriveId,
+  ensureFolderByPath,
+}));
+// ========== END STATEMENTS OF ACCOUNT ==========
 
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {

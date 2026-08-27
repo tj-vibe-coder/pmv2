@@ -15,6 +15,7 @@ import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { ServiceLine } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
+import { blurNumberInputOnWheel } from '../../utils/calcsheet/numberInput';
 import {
   MS_PER_DAY, addDays, daysBetween, durationOf, fmt, toDate, todayStr,
 } from '../../utils/calcsheet/scheduleDates';
@@ -564,6 +565,7 @@ export default function CalcsheetProjectSchedule() {
                 disabled={form.isMilestone}
                 inputProps={{ min: 1 }}
                 onChange={(e) => setForm((f) => ({ ...f, durationDays: Math.max(1, Number(e.target.value) || 1) }))}
+                onWheel={blurNumberInputOnWheel}
               />
             </Stack>
             {!form.isMilestone && (
@@ -652,6 +654,7 @@ export default function CalcsheetProjectSchedule() {
                           inputProps={{ min: 1, style: { textAlign: 'right' } }}
                           sx={{ width: 90 }}
                           onChange={(e) => setImportDurations((prev) => ({ ...prev, [s.id]: Math.max(1, Number(e.target.value) || 1) }))}
+                          onWheel={blurNumberInputOnWheel}
                         />
                       </TableCell>
                     </TableRow>

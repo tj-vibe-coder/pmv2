@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
 import AiAssistHost from './components/ai/AiAssistHost';
 import AiAssistPage from './components/ai/AiAssistPage';
+import AnalyticsStudioPage from './components/analytics/AnalyticsStudioPage';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
@@ -40,6 +41,8 @@ import ProjectExpenseReport from './components/finance/ProjectExpenseReport';
 import OverheadExpensesPage from './components/OverheadExpensesPage';
 import CompanyPnLPage from './components/finance/CompanyPnLPage';
 import TaxFilerLedgerPage from './components/finance/TaxFilerLedgerPage';
+import SoaDashboardPage from './components/finance/soa/SoaDashboardPage';
+import SoaDetailView from './components/finance/soa/SoaDetailView';
 import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
 import DTRPage from './components/employee/DTRPage';
@@ -268,6 +271,47 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            <Route path="/analytics" element={<Navigate to="/projects/analytics" replace />} />
+            <Route path="/analytics/studio" element={<Navigate to="/projects/analytics" replace />} />
+            <Route path="/analytics/projects" element={<Navigate to="/projects/analytics" replace />} />
+            <Route path="/analytics/sales" element={<Navigate to="/sales/analytics" replace />} />
+            <Route path="/analytics/finance" element={<Navigate to="/finance/analytics" replace />} />
+            <Route
+              path="/projects/analytics"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <AnalyticsStudioPage domainScope="projects" />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/analytics"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <AnalyticsStudioPage domainScope="sales" />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/analytics"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <AnalyticsStudioPage domainScope="finance" />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/dashboard"
               element={
@@ -454,6 +498,7 @@ function App() {
             <Route path="/investment-tracker" element={<RedirectWithSearch to="/finance/investment-tracker" />} />
             <Route path="/payroll" element={<RedirectWithSearch to="/finance/payroll" />} />
             <Route path="/collections" element={<RedirectWithSearch to="/finance/collections" />} />
+            <Route path="/soa" element={<RedirectWithSearch to="/finance/soa" />} />
             <Route
               path="/finance"
               element={
@@ -473,6 +518,30 @@ function App() {
                   <EmployeeGuard>
                     <AppLayout>
                       <CollectionsDashboard />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/soa"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <SoaDashboardPage />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/soa/:id"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <SoaDetailView />
                     </AppLayout>
                   </EmployeeGuard>
                 </ProtectedRoute>

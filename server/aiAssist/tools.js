@@ -73,6 +73,10 @@ const PAGE_INDEX = [
   { label: 'Submit Service Report', route: '/employee/service-report', keywords: [] },
   { label: 'Payslips', route: '/employee/payslips', keywords: [] },
   { label: 'Clock In/Out', route: '/employee/clock', keywords: ['time clock'] },
+  { label: 'Projects Analytics Studio', route: '/projects/analytics', keywords: ['projects analytics', 'project charts', 'project visualizer', 'projects studio'] },
+  { label: 'Sales Analytics Studio', route: '/sales/analytics', keywords: ['sales analytics', 'pipeline analytics', 'quotation charts', 'sales studio'] },
+  { label: 'Finance Analytics Studio', route: '/finance/analytics', keywords: ['finance analytics', 'expense analytics', 'soa analytics', 'finance studio'] },
+  { label: 'Analytics Studio', route: '/projects/analytics', keywords: ['analytics', 'analytics studio', 'data formulator', 'charts explorer', 'visualizer', 'data visualization', 'charts'] },
 ];
 
 function round2(value) {
@@ -225,6 +229,20 @@ const TOOL_DECLARATIONS = {
         search: { type: 'string', description: 'Case-insensitive substring against company name or code.' },
       },
       required: ['search'],
+    },
+  },
+  query_analytics: {
+    name: 'query_analytics',
+    description: 'Query aggregated analytics across operational domains (projects, quotations, expenses, sales_pipeline) grouped by dimension (category, year, status, client, grade). Returns safe grouped totals and counts.',
+    parameters: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', enum: ['projects', 'quotations', 'expenses', 'sales_pipeline'], description: 'Operational domain to aggregate.' },
+        groupBy: { type: 'string', enum: ['category', 'year', 'status', 'client', 'grade'], description: 'Grouping dimension.' },
+        metric: { type: 'string', enum: ['total_amount', 'count', 'average_amount', 'balance_amount'], description: 'Metric to compute. Defaults to total_amount.' },
+        year: { type: 'integer', description: 'Optional year filter.' },
+      },
+      required: ['domain'],
     },
   },
   propose_opportunity_update: {
@@ -620,6 +638,144 @@ async function navigateToRecord(db, args, asOf) {
   };
 }
 
+async function queryAnalytics(db, args, asOf) {
+  const domain = args.domain || 'projects';
+  const groupBy = args.groupBy || 'category';
+  const year = args.year;
+
+  let snap;
+  let rows = [];
+
+  if (domain === 'projects') {
+    snap = await db.collection(PROJECT_COLLECTION).get();
+    rows = snap.docs.map(docDataWithId);
+    if (year !== undefined && year !== null) {
+      rows = rows.filter((r) => String(r.year || '').slice(0, 4) === String(year));
+    }
+    const groups = new Map();
+    for (const r of rows) {
+      let gKey = 'Unspecified';
+      if (groupBy === 'category') gKey = r.project_category || 'Uncategorized';
+      else if (groupBy === 'status') gKey = r.project_status || 'Draft';
+      else if (groupBy === 'year') gKey = String(r.year || 'Unknown').slice(0, 4);
+      else if (groupBy === 'client') gKey = r.account_name || 'Direct';
+      if (!groups.has(gKey)) groups.set(gKey, { group: gKey, count: 0, totalAmount: 0, totalBalance: 0, totalBilled: 0 });
+      const g = groups.get(gKey);
+      g.count += 1;
+      const contract = Number(r.updated_contract_amount ?? r.contract_amount ?? 0) || 0;
+      const billed = Number(r.contract_billed ?? r.amount_contract_billed_net ?? 0) || 0;
+      const balance = Number(r.total_contract_balance ?? 0) || 0;
+      g.totalAmount += contract;
+      g.totalBilled += billed;
+      g.totalBalance += balance;
+    }
+    let data = Array.from(groups.values()).map((g) => ({
+      ...g,
+      averageAmount: g.count > 0 ? round2(g.totalAmount / g.count) : 0,
+      totalAmount: round2(g.totalAmount),
+      totalBilled: round2(g.totalBilled),
+      totalBalance: round2(g.totalBalance),
+    }));
+    data.sort((a, b) => b.totalAmount - a.totalAmount);
+    if (data.length > MAX_GROUPED_ROWS) data = data.slice(0, MAX_GROUPED_ROWS);
+    return {
+      data,
+      sources: data.map((g) => sourceFor('analytics:projects:' + g.group, `Projects: ${g.group}`, '/dashboard', asOf)),
+      asOf,
+    };
+  } else if (domain === 'expenses') {
+    snap = await db.collection(EXPENSE_COLLECTION).get();
+    rows = snap.docs.map(docDataWithId);
+    if (year !== undefined && year !== null) {
+      rows = rows.filter((r) => toYear(r.date) === String(year));
+    }
+    const groups = new Map();
+    for (const r of rows) {
+      let gKey = 'Unspecified';
+      if (groupBy === 'category') gKey = r.category || 'General';
+      else if (groupBy === 'year') gKey = toYear(r.date) || 'Unknown';
+      if (!groups.has(gKey)) groups.set(gKey, { group: gKey, count: 0, totalAmount: 0 });
+      const g = groups.get(gKey);
+      g.count += 1;
+      g.totalAmount += Number(r.amount) || 0;
+    }
+    let data = Array.from(groups.values()).map((g) => ({
+      ...g,
+      averageAmount: g.count > 0 ? round2(g.totalAmount / g.count) : 0,
+      totalAmount: round2(g.totalAmount),
+    }));
+    data.sort((a, b) => b.totalAmount - a.totalAmount);
+    if (data.length > MAX_GROUPED_ROWS) data = data.slice(0, MAX_GROUPED_ROWS);
+    return {
+      data,
+      sources: data.map((g) => sourceFor('analytics:expenses:' + g.group, `Expense: ${g.group}`, '/finance/expense-monitoring', asOf)),
+      asOf,
+    };
+  } else if (domain === 'quotations') {
+    snap = await db.collection(QUOTATION_COLLECTION).get();
+    rows = snap.docs.map(docDataWithId);
+    const groups = new Map();
+    for (const r of rows) {
+      let gKey = 'Unspecified';
+      if (groupBy === 'status') gKey = r.status || 'Draft';
+      else if (groupBy === 'year') gKey = toYear(r.date) || 'Unknown';
+      else if (groupBy === 'category') gKey = r.kind || 'Standard';
+      if (!groups.has(gKey)) groups.set(gKey, { group: gKey, count: 0, totalAmount: 0 });
+      const g = groups.get(gKey);
+      g.count += 1;
+      const generalReqts = Array.isArray(r.generalReqts) ? r.generalReqts : [];
+      const components = Array.isArray(r.components) ? r.components : [];
+      const services = Array.isArray(r.services) ? r.services : [];
+      const rawSubtotal = generalReqts.reduce((s, l) => s + (Number(l.unitPrice) || 0) * (Number(l.qty) || 0), 0) +
+        components.reduce((s, l) => s + (Number(l.unitCost) || 0) * (Number(l.qty) || 0), 0) +
+        services.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+      const afterDiscount = rawSubtotal * (1 - (Number(r.discountPct) || 0) / 100);
+      const grandTotal = afterDiscount * (1 + (Number(r.vatPct) || 0) / 100);
+      g.totalAmount += grandTotal;
+    }
+    let data = Array.from(groups.values()).map((g) => ({
+      ...g,
+      averageAmount: g.count > 0 ? round2(g.totalAmount / g.count) : 0,
+      totalAmount: round2(g.totalAmount),
+    }));
+    data.sort((a, b) => b.totalAmount - a.totalAmount);
+    if (data.length > MAX_GROUPED_ROWS) data = data.slice(0, MAX_GROUPED_ROWS);
+    return {
+      data,
+      sources: data.map((g) => sourceFor('analytics:quotations:' + g.group, `Quotations: ${g.group}`, '/sales/calcsheet/projects', asOf)),
+      asOf,
+    };
+  } else {
+    snap = await db.collection(OPPORTUNITY_COLLECTION).get();
+    rows = snap.docs.map(docDataWithId);
+    if (year !== undefined && year !== null) {
+      rows = rows.filter((r) => toYear(r.date) === String(year));
+    }
+    const groups = new Map();
+    for (const r of rows) {
+      let gKey = 'Unspecified';
+      if (groupBy === 'status') gKey = r.status || 'Draft';
+      else if (groupBy === 'grade') gKey = r.opportunityGrade || 'Unassigned';
+      else if (groupBy === 'year') gKey = toYear(r.date) || 'Unknown';
+      if (!groups.has(gKey)) groups.set(gKey, { group: gKey, count: 0, totalAmount: 0 });
+      const g = groups.get(gKey);
+      g.count += 1;
+      g.totalAmount += Number(r.projectCost) || 0;
+    }
+    let data = Array.from(groups.values()).map((g) => ({
+      ...g,
+      totalAmount: round2(g.totalAmount),
+    }));
+    data.sort((a, b) => b.count - a.count);
+    if (data.length > MAX_GROUPED_ROWS) data = data.slice(0, MAX_GROUPED_ROWS);
+    return {
+      data,
+      sources: data.map((g) => sourceFor('analytics:pipeline:' + g.group, `Pipeline: ${g.group}`, '/sales/calcsheet/projects', asOf)),
+      asOf,
+    };
+  }
+}
+
 function createToolRegistry({ db, now = () => new Date(), user = null, proposalStore = null }) {
   const tools = new Map();
   for (const toolName of Object.keys(TOOL_DECLARATIONS)) {
@@ -648,6 +804,8 @@ function createToolRegistry({ db, now = () => new Date(), user = null, proposalS
             return getOpportunitySnapshot(db, args, asOf);
           case 'search_clients':
             return searchClients(db, args, asOf);
+          case 'query_analytics':
+            return queryAnalytics(db, args, asOf);
           case 'propose_opportunity_update': {
             if (!proposalStore || !user) {
               return { data: { applied: false, error: 'propose_unavailable' }, sources: [], asOf };

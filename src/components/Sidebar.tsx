@@ -41,6 +41,7 @@ import {
   Badge as BadgeIcon,
   Build as BuildIcon,
   Backup as BackupIcon,
+  AutoAwesome as AutoAwesomeIcon,
 } from '@mui/icons-material';
 import FinanceNavList from './finance/FinanceNavList';
 import SalesNavList from './sales/SalesNavList';
@@ -280,6 +281,39 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
                   <ListItemText
                     primary="Dashboard"
                     secondary="Project insights and analytics"
+                    secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                )}
+              </ListItemButton>
+            </Tooltip>
+          </ListItem>
+
+          {/* Projects Analytics Studio (Data Formulator) */}
+          <ListItem disablePadding sx={{ mb: 0.5 }}>
+            <Tooltip title={isExpanded ? '' : 'Projects Analytics'} placement="right" arrow>
+              <ListItemButton
+                selected={
+                  location.pathname === '/projects/analytics' ||
+                  location.pathname === '/analytics/projects' ||
+                  location.pathname === '/analytics/studio' ||
+                  location.pathname === '/analytics'
+                }
+                onClick={() => navigate('/projects/analytics')}
+                sx={navBtnSx(
+                  location.pathname === '/projects/analytics' ||
+                  location.pathname === '/analytics/projects' ||
+                  location.pathname === '/analytics/studio' ||
+                  location.pathname === '/analytics'
+                )}
+              >
+                <ListItemIcon sx={iconSx()}>
+                  <AutoAwesomeIcon />
+                </ListItemIcon>
+                {isExpanded && (
+                  <ListItemText
+                    primary="Projects Analytics"
+                    secondary="Visual charts & formulation"
                     secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                     sx={{ color: 'white' }}
                   />

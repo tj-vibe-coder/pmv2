@@ -102,6 +102,10 @@ export default function AiAssistPage(): React.ReactElement {
               messages={messages}
               onFollowUp={(question) => send(question, pageContext)}
               onNavigateSource={onNavigateSource}
+              onOpenStudio={(chart) => {
+                const target = chart.tool === 'get_expense_summary' ? '/finance/analytics' : '/projects/analytics';
+                navigate(target, { state: { chart } });
+              }}
             />
             {lastMessage?.role === 'error' && (
               <Button onClick={() => retry(pageContext)} sx={{ mt: 1 }}>Retry</Button>
@@ -117,7 +121,13 @@ export default function AiAssistPage(): React.ReactElement {
         </Box>
         <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', p: 3 }}>
           {lastChart ? (
-            <AiChartPanel chart={lastChart} />
+            <AiChartPanel
+              chart={lastChart}
+              onOpenStudio={(chart) => {
+                const target = chart.tool === 'get_expense_summary' ? '/finance/analytics' : '/projects/analytics';
+                navigate(target, { state: { chart } });
+              }}
+            />
           ) : (
             <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Typography color="text.secondary">

@@ -142,6 +142,11 @@ export default function AiAssistDrawer({
               messages={messages}
               onFollowUp={(question) => send(question, pageContext)}
               onNavigateSource={onNavigateSource}
+              onOpenStudio={(chart) => {
+                close();
+                const target = chart.tool === 'get_expense_summary' ? '/finance/analytics' : '/projects/analytics';
+                navigate(target, { state: { chart } });
+              }}
             />
             {lastMessage?.role === 'error' && (
               <Button onClick={() => retry(pageContext)} sx={{ mt: 1 }}>Retry</Button>

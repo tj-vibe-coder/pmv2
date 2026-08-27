@@ -45,8 +45,8 @@ it('renders the chart title and, via the table toggle, the real portfolio group 
   expect(table).toBeInTheDocument();
   expect(screen.getByText('Not Started')).toBeInTheDocument();
   expect(screen.getByText('In Progress')).toBeInTheDocument();
-  expect(screen.getByText('₱800,000.00')).toBeInTheDocument();
-  expect(screen.getByText('₱300,000.00')).toBeInTheDocument();
+  expect(screen.getAllByText('₱800,000.00')[0]).toBeInTheDocument();
+  expect(screen.getAllByText('₱300,000.00')[0]).toBeInTheDocument();
 });
 
 it('charts get_expense_summary using totalAmount per group', () => {
@@ -59,5 +59,33 @@ it('charts get_expense_summary using totalAmount per group', () => {
   render(<AiChartPanel chart={chart} />);
   fireEvent.click(screen.getByRole('button', { name: 'View as table' }));
   expect(screen.getByText('Fuel')).toBeInTheDocument();
-  expect(screen.getByText('₱1,500.00')).toBeInTheDocument();
+  expect(screen.getAllByText('₱1,500.00')[0]).toBeInTheDocument();
 });
+
+it('charts query_analytics with line view and triggers studio callback', () => {
+  const onOpenStudio = jest.fn();
+  const chart: AiChart = {
+    type: 'line',
+    title: 'Yearly Trend',
+    tool: 'query_analytics',
+    data: [
+      { group: '2024', totalAmount: 1000000 },
+      { group: '2025', totalAmount: 2500000 },
+      { group: '2026', totalAmount: 4000000 },
+    ],
+  };
+  render(<AiChartPanel chart={chart} onOpenStudio={onOpenStudio} />);
+  expect(screen.getByText('Yearly Trend')).toBeInTheDocument();
+
+  const studioBtn = screen.getByRole('button', { name: /studio/i });
+  expect(studioBtn).toBeInTheDocument();
+  fireEvent.click(studioBtn);
+  expect(onOpenStudio).toHaveBeenCalledWith(chart);
+
+  // Switch to table view
+  fireEvent.click(screen.getByRole('button', { name: 'View as table' }));
+  expect(screen.getByText('2024')).toBeInTheDocument();
+  expect(screen.getByText('₱1,000,000.00')).toBeInTheDocument();
+  expect(screen.getByText('₱4,000,000.00')).toBeInTheDocument();
+});
+

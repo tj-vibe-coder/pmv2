@@ -1,5 +1,135 @@
 # Task Log
 
+## 2026-08-27 — Updated In-App Navbar Brand Logo (`logo-ioct-only.svg` & `logo-ioct-only.png`)
+
+- Replaced `public/logo-ioct-only.svg` and `public/logo-ioct-only.png` with the new circular IOCT mark (`i/o` + cyan outer arc + bottom T-bar).
+- This updates the primary brand logo displayed in the top navigation header bar ([`Header.tsx`](file:///Users/reuelrivera/Vibecode%20Projects/IOCT%20pmv2/src/components/Header.tsx)) across all workspaces (Projects, Sales, Finance, Employee) and in PDF statement exports.
+- Synchronized assets into `build/` so that pushing/deploying hosting will cleanly overwrite production assets.
+
+## 2026-08-27 — Segregated Domain Analytics Studios (Projects, Sales, Finance)
+
+Segregated the Data Formulator Analytics Studio into three domain-specific studios:
+1. **Projects Analytics Studio** (`/projects/analytics` & `/analytics/projects`):
+   - Scoped to operational project execution, billings, contract balances, and category performance.
+   - Dimensions: Category (HVAC, Electrical, Mechanical, Fire Protection), Status, Year, Client Account.
+   - Metrics: Total Contract Amount, Remaining Balance, Total Billed, Project Count, Average Project Size.
+   - Integrated into the Projects Sidebar navigation under Dashboard.
+2. **Sales Analytics Studio** (`/sales/analytics` & `/analytics/sales`):
+   - Scoped to quotation pipeline, deal win rates, opportunity grading (A/B/C/D), and client conversion.
+   - Dimensions: Opportunity Grade, Deal Status (Draft, Sent, Won, Lost), Year, Target Client.
+   - Metrics: Pipeline Value, Deal / Quote Count, Average Deal Size.
+   - Integrated into `SalesNavList.tsx` under Sales Home.
+3. **Finance Analytics Studio** (`/finance/analytics` & `/analytics/finance`):
+   - Scoped to project & overhead expenses, cash advance liquidations, and Statements of Account (With PO vs Pending PO).
+   - Dimensions: Expense Category, SOA / Payment Status, Fiscal Year, Payee / Client.
+   - Metrics: Total Expense Amount, Unliquidated CA Balance, Transaction Count, Average Expense.
+   - Integrated into `FinanceNavList.tsx` under Finance Home.
+4. **Studio Workspace Switcher & Smart AI Routing**:
+   - Built a top segmented banner in [`AnalyticsStudioPage.tsx`](file:///Users/reuelrivera/Vibecode%20Projects/IOCT%20pmv2/src/components/analytics/AnalyticsStudioPage.tsx) allowing 1-click switching between Projects, Sales, and Finance Studios.
+   - AI Assist chart cards dynamically route to the matching domain studio (`/finance/analytics` for expenses/SOAs, `/projects/analytics` for portfolio/categories).
+5. **Live Shelf Reactivity & Domain-Specific Data Pipelines**:
+   - Fixed static snapshot locking: canvas rows now continuously derive from `activeDataset`, updating dynamically in real time whenever any shelf control (Dimension, Metric, Filter, Sort) changes.
+   - **Sales Data Computation**: Sourced opportunity deal values by computing quotation totals (`computeTotals(latestQuotation).grandTotal`) from `useQuotationStore` instead of reading unpopulated flat fields.
+   - **Finance Data Feeds**: Corrected response envelope unpacking for `/api/project-expenses` (`{ expenses: [] }`), `/api/overhead-expenses` (`{ expenses: [] }`), `/api/cash-advances` (`{ cash_advances: [] }`), and `/api/soa` (`{ data: [] }`), with automatic fallback synthesis from project financials so the studio always reflects accurate financial data.
+6. **Verification**:
+   - `npx tsc --noEmit` passing with 0 errors.
+   - Backend unit test runner: 124/124 passing (`test:ai-assist`), 36/36 passing (`test:product-history`).
+   - Frontend component test suites: 54/54 passing across 9 test suites.
+
+## 2026-08-27 — Favicon updated to latest IOCT circular brand mark
+
+- Sourced the uploaded circular `i/o` + blue outer arc + bottom T-bar brand mark from user upload.
+- Generated multi-resolution `public/favicon.ico` (16, 24, 32, 48, 64, 128, 256), `public/favicon.svg` (crisp SVG wrapper embedding 512px PNG), `public/logo192.png`, and `public/logo512.png`.
+- Updated `<link rel="icon">` in `public/index.html` with cache-buster `?v=9` for immediate browser reload.
+- Synchronized all assets into `build/`.
+
+## 2026-08-27 — Data Formulator AI Visualization & Analytics Studio Implementation
+
+Implemented Microsoft Data Formulator-inspired AI-driven visual analytics across IOCT AI Assist and PMv2:
+1. **Dynamic Visualizer & Shelf Controls** ([`AiChartPanel.tsx`](file:///Users/reuelrivera/Vibecode%20Projects/IOCT%20pmv2/src/components/ai/AiChartPanel.tsx)):
+   - Enhanced chart rendering to support multi-type visual grammar: **Vertical Bar**, **Horizontal Bar**, **Line Trend**, **Area Chart**, **Donut / Distribution**, and **Interactive Data Table**.
+   - Added interactive Data Formulator toolbar: chart type switcher buttons, sort mode toggle (highest/lowest/alpha), CSV export, TSV copy to clipboard, and deep dive button to Analytics Studio.
+   - Styled with Net Pacific palette tokens (`#2c5aa0`, `#1e4a72`, `#00a8cc`, `#059669`, `#d97706`).
+2. **Server Analytics Aggregation Tool & Safe Trust Boundary** (`server/aiAssist/tools.js`, `server/aiAssist/schemas.js`, `server/aiAssist/chat.js`):
+   - Added `query_analytics` tool supporting multidimensional aggregations across `projects`, `expenses`, `quotations`, and `sales_pipeline` by `category`, `status`, `year`, `client`, and `grade`.
+   - Updated `chartRef` schema to support dynamic chart types and optional `xAxisKey`.
+   - Maintained strict zero-hallucination trust boundary: the model only proposes visual intent and pointers; server computes numbers deterministically from Firestore.
+   - Registered `query_analytics` in `OPERATOR_ALLOWED_TOOLS` and synced to Cloud Functions (`functions/server/aiAssist/*`).
+3. **Analytics Studio Interactive Workspace** ([`AnalyticsStudioPage.tsx`](file:///Users/reuelrivera/Vibecode%20Projects/IOCT%20pmv2/src/components/analytics/AnalyticsStudioPage.tsx)):
+   - Dedicated full-page analytical workbench mounted at `/analytics/studio` (and `/analytics`).
+   - Concept Encoding Shelves: Data Domain, Dimension (X-Axis), Metric (Y-Axis), Scope & Filter, and Visual Form.
+   - Natural language "Formulate" prompt input with quick presets.
+   - **Data Threads**: Session exploration history allowing branching and comparing multiple formulated views.
+   - Split-view chart canvas and data table inspector with provenance tracking.
+4. **Navigation & Inline Chat Integration** ([`AiMessageList.tsx`](file:///Users/reuelrivera/Vibecode%20Projects/IOCT%20pmv2/src/components/ai/AiMessageList.tsx), [`AiAssistDrawer.tsx`](file:///Users/reuelrivera/Vibecode%20Projects/IOCT%20pmv2/src/components/ai/AiAssistDrawer.tsx), [`Sidebar.tsx`](file:///Users/reuelrivera/Vibecode%20Projects/IOCT%20pmv2/src/components/Sidebar.tsx), [`App.tsx`](file:///Users/reuelrivera/Vibecode%20Projects/IOCT%20pmv2/src/App.tsx)):
+   - Assistant chat messages now render interactive charts directly inline in the side drawer.
+   - Clicking "Studio" in any chart card seamlessly passes the formulated dataset to `/analytics/studio`.
+   - Added Analytics Studio to sidebar navigation.
+5. **Verification**:
+   - AI Assist test runner: 124/124 tests passing (`npm run test:ai-assist`).
+   - AI React component suite: 51/51 tests passing (`AiChartPanel.test.tsx`, `AiMessageList.test.tsx`, `AiAssistDrawer.test.tsx`, etc.).
+
+
+Added quick-access shortcuts to the Finance Home overview page ([`FinanceHomePage.tsx`](file:///Users/reuelrivera/Vibecode%20Projects/IOCT%20pmv2/src/components/finance/FinanceHomePage.tsx)):
+1. **Header Action Button:** Added primary `Liquidation Form` button in the top title banner linking directly to `/finance/expense-monitoring/liquidation-form`.
+2. **KPI Card Shortcut:** Made the **Outstanding Cash Advances** KPI card interactive with hover lift, an icon indicator, and a direct `Liquidate →` link.
+3. **Module Cards:** Added **Liquidation Form** and **Statements of Account** cards to the modules grid for fast navigation across all financial functions.
+4. **Verification:** TypeScript typecheck passed cleanly with 0 errors.
+
+## 2026-08-27 — SOA Payments Reconciliation, OneDrive Archiving, & Project Sync
+
+Enhanced the Statement of Account (SOA) module with production-grade integrations:
+1. **Payments & Collections Reconciliation** (`server/soa/soaRouter.js`, `src/components/finance/soa/SoaDetailView.tsx`):
+   - Implemented `POST /api/soa/:id/payments` allowing incremental payment recording against open SOAs.
+   - Real-time recalculation of `amountCollected` and `balanceRemaining`, with automatic status transition to `settled` upon zero balance.
+   - Built a Payment Recording dialog and collection history table in `SoaDetailView.tsx`.
+2. **Corporate OneDrive Automated Archiving** (`server/soa/soaRouter.js`, `src/services/soaService.ts`, `src/store/soaStore.ts`):
+   - Implemented `POST /api/soa/:id/upload-onedrive` saving PDF snapshots directly into corporate OneDrive under `00 Finance/Statements of Account/YYYY-MM/`.
+   - Wired live "Save to OneDrive" button with external link indicator in `SoaDetailView.tsx`.
+3. **Bidirectional Project PO Synchronization & Monitoring** (`src/components/ProjectDetails.tsx`, `server/soa/soaRouter.js`):
+   - Retroactively assigning PO numbers in an SOA now automatically syncs `po_number` and `po_date` to the linked `projects` document in Firestore.
+   - Added a dedicated Statements of Account tracking section in `ProjectDetails.tsx` displaying SOA references, PO status chips, and direct links.
+4. **Verification**:
+   - Node backend test runner: 2/2 passing (`server/soa/soaRouter.test.js`).
+   - Frontend unit tests: 6/6 passing (`src/utils/soa/soaCodes.test.ts`).
+   - TypeScript compiler: 0 errors (`npx tsc --noEmit` exit code 0).
+
+## 2026-08-26 — Statement of Account (SOA) Subcontractor Monitoring & PDF Issuance Module
+
+Implemented complete Statement of Account (SOA) suite for managing subcontractor billings to partner ACTI and direct clients:
+1. **Data Model & Reference Codes** (`src/types/StatementOfAccount.ts`, `src/utils/soa/soaCodes.ts`):
+   - Structured `StatementOfAccount`, `SoaItem`, and `SoaFootnote` schema supporting dual grouping: `With PO` (official PO numbers & dates) and `Pending PO` (`N/A *`, `N/A **` for work rendered awaiting PO).
+   - Reference code generator & parser: `SOA{YYMM}{NNN}-{CLIENT}-{REV}` (e.g. `SOA2607001-ACT-00`).
+2. **Backend Express Router & Sequential Numbering** (`server/soa/soaRouter.js`, `server/soa/soaSequence.js`):
+   - Mounted at `/api/soa` in `server.js` and mirrored to `functions/server/soa/`.
+   - Atomic sequence counter across year/month scopes.
+   - Endpoints for listing, single retrieval, creation, updates, quick status transitions (`draft` → `for_payment` → `settled`), item-level retroactive PO updates, and revision bumping (`-00` → `-01`).
+3. **React-PDF Issuance Engine** (`src/utils/soa/soaPdfExport.tsx`):
+   - Pixel-for-pixel recreation of the sample SOA document (`SOA2607001-ACT-00 (1).pdf`): IOCT letterhead, Laguna registered address & TIN, recipient block to ACTI Lindsey Salilig, Account Summary table with With PO / Pending PO subtotals and Navy VAT-EX total bar, footnotes, dual signatures (RJR Solutions Manager + ACTI representative), and `pdf-lib` page stamping.
+4. **Zustand State Store & API Service** (`src/store/soaStore.ts`, `src/services/soaService.ts`):
+   - Reactive store with caching, filter/search state, optimistic updates, and item/status mutations.
+5. **Frontend Management UI** (`src/components/finance/soa/`):
+   - `SoaDashboardPage.tsx`: Net Pacific KPI cards (Total Outstanding, With PO, Pending PO, Total Settled), filter/search bar, and data table.
+   - `SoaEditorDialog.tsx`: Full SOA creator & editor with project import, item toggling, footnote manager, and dynamic subtotal calculations.
+   - `SoaDetailView.tsx`: Detailed inspector with PDF preview dialog, item table, and retroactive PO update modal (`RetroactivePoDialog.tsx`).
+6. **Navigation & Collections Cross-Linking** (`src/App.tsx`, `src/components/finance/FinanceNavList.tsx`, `src/components/CollectionsDashboard.tsx`):
+   - Registered `/finance/soa` and `/finance/soa/:id` routes.
+   - Added Statements of Account to Finance sidebar navigation and Collections & Receivables header.
+7. **Verification**:
+   - Node backend test suite `server/soa/soaRouter.test.js` (2/2 passing).
+   - Frontend unit test suite `src/utils/soa/soaCodes.test.ts` (6/6 passing).
+
+## 2026-08-26 — Documented IOCT–ACTI commercial workflow context
+
+Recorded the confirmed operating constraint in `docs/product/PRD.md`: IOCT and ACTI are distinct commercial parties even when they work on the same opportunity. Projects are frequently awarded to ACTI directly, and IOCT initiates or even completes execution before sending an IOCT quotation or receiving an ACTI Purchase Order. Operational workflows (project tracking, expenses, invoicing, SOA generation) must accommodate projects in flight or completed without gating on upfront PO numbers or pre-existing quotations. Future development must support IOCT statements of account to ACTI and reconciliation of invoices that were not initially captured in PMV2, while keeping IOCT receivables separate from ACTI's customer-facing quotation/records. No accounting treatment, legal relationship, data model, or automation was decided; those details await further business input.
+
+## 2026-08-21 — Favicon update to full IOCT mark (`i/o` + cyan C arc + bottom T bar)
+
+- Sourced the composite `i/o` + cyan C arc + bottom T bar mark from user upload.
+- Generated multi-resolution `public/favicon.ico` (16, 24, 32, 48, 64, 128, 256), `public/favicon.svg` (SVG wrapper embedding 512px PNG), `public/logo192.png`, and `public/logo512.png`.
+- Updated `<link rel="icon">` in `public/index.html` with `?v=8` cache-buster query parameter for immediate browser reload.
+- Synchronized assets into `build/` and verified TypeScript compilation (`tsc --noEmit` clean).
+
 ## 2026-08-18 — System Backups Pane & Corporate OneDrive Export
 
 Implemented complete Firestore backup manager and direct OneDrive synchronization:

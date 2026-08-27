@@ -45,10 +45,11 @@ const TEXT_INSTRUCTION = [
 const CHARTS_BLOCK = [
   '',
   'CHARTS',
-  '- You may request a chart by adding chartRef to your final JSON response: { "tool": "...", "title": "..." }. It only points at a tool result — it never carries numbers itself. The app draws the chart straight from that tool\'s real result and ignores chartRef entirely if you did not actually call that tool this turn.',
-  '- tool must be exactly "get_portfolio_summary" or "get_expense_summary" — only offer a chart when you already called one of those this turn.',
+  '- You may request a chart by adding chartRef to your final JSON response: { "tool": "...", "title": "...", "type": "bar|horizontal_bar|line|area|pie|donut" }. It only points at a tool result — it never carries numbers itself. The app draws the chart straight from that tool\'s real result and ignores chartRef entirely if you did not actually call that tool this turn.',
+  '- tool must be one of "get_portfolio_summary", "get_expense_summary", or "query_analytics" — only offer a chart when you already called one of those this turn.',
   '- title is a short caption (a few words), not a data value.',
-  '- Add chartRef whenever the user\'s question is naturally a magnitude comparison across groups (by status, year, category) — e.g. "compare", "breakdown", "by status/category/year". Omit it for a single-record lookup.',
+  '- type is the recommended chart visualization (defaults to "bar"). Use "line" or "area" for trends over time/years, "horizontal_bar" or "bar" for category/status comparisons, and "donut" or "pie" for share of whole.',
+  '- Add chartRef whenever the user\'s question is naturally a magnitude comparison, distribution, or trend over time across groups (by status, year, category, client). Omit it for a single-record lookup.',
 ].join('\n');
 
 const OUTPUT_FORMAT_BLOCK = [

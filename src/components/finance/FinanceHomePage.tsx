@@ -15,6 +15,8 @@ import {
   AccountBalanceWallet as ReceiptIcon,
   TrendingUp as TrendingUpIcon,
   Payments as PaymentsIcon,
+  AssignmentTurnedIn as LiquidationIcon,
+  ReceiptLong as SoaIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
@@ -159,6 +161,21 @@ const FinanceHomePage: React.FC = () => {
       icon: <ReceiptIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
       path: '/finance/expense-monitoring',
     },
+    // Direct shortcut to Liquidation Form for quick expense and CA settlement
+    ...(user?.role !== 'tax_filer'
+      ? [{
+          title: 'Liquidation Form',
+          description: 'Submit, review, and print liquidation reports for cash advances and project expenses.',
+          icon: <LiquidationIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+          path: '/finance/expense-monitoring/liquidation-form',
+        }]
+      : []),
+    {
+      title: 'Statements of Account',
+      description: 'Consolidated statements for partner ACTI and client subcontractor billings.',
+      icon: <SoaIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+      path: '/finance/soa',
+    },
     // Capital ledger, not a BIR substantiation source — hidden from tax_filer.
     ...(user?.role !== 'tax_filer'
       ? [{
@@ -188,10 +205,21 @@ const FinanceHomePage: React.FC = () => {
 
   return (
     <Box sx={{ height: '100%', overflow: 'hidden' }}>
-      <Box sx={{ mb: 1.5 }}>
+      <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
           Finance
         </Typography>
+        {user?.role !== 'tax_filer' && (
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<LiquidationIcon />}
+            onClick={() => navigate('/finance/expense-monitoring/liquidation-form')}
+            sx={{ bgcolor: NET_PACIFIC_COLORS.primary, fontWeight: 600 }}
+          >
+            Liquidation Form
+          </Button>
+        )}
       </Box>
 
       {error && <Alert severity="warning" sx={{ mb: 1.5 }}>{error}</Alert>}
@@ -286,13 +314,30 @@ const FinanceHomePage: React.FC = () => {
           </Card>
         </Grid>
 
-        {/* Outstanding Cash Advances */}
+        {/* Outstanding Cash Advances — clickable shortcut to Liquidation Form */}
         <Grid size={{ xs: 6, sm: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
+          <Card
+            sx={{
+              background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`,
+              color: 'white',
+              cursor: 'pointer',
+              transition: 'transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
+              '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 },
+            }}
+            onClick={() => navigate('/finance/expense-monitoring/liquidation-form')}
+          >
             <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Outstanding Cash Advances</Typography>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Outstanding Cash Advances</Typography>
+                <LiquidationIcon sx={{ fontSize: 18, opacity: 0.8 }} />
+              </Box>
               <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{formatPHP(outstandingCA)}</Typography>
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>Unliquidated balances</Typography>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.5 }}>
+                <Typography variant="caption" sx={{ opacity: 0.8 }}>Unliquidated balances</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 700, textDecoration: 'underline', opacity: 0.95 }}>
+                  Liquidate →
+                </Typography>
+              </Box>
             </CardContent>
           </Card>
         </Grid>

@@ -1,16 +1,18 @@
 import React from 'react';
 import { Alert, Box, Chip, Typography } from '@mui/material';
-import type { AiMessage } from '../../types/AiAssist';
+import type { AiChart, AiMessage } from '../../types/AiAssist';
 import AiSourceList from './AiSourceList';
+import AiChartPanel from './AiChartPanel';
 import { renderAiMarkdown } from './aiMarkdown';
 
 interface AiMessageListProps {
   messages: AiMessage[];
   onNavigateSource: (route: string) => void;
   onFollowUp: (question: string) => void;
+  onOpenStudio?: (chart: AiChart) => void;
 }
 
-export default function AiMessageList({ messages, onNavigateSource, onFollowUp }: AiMessageListProps): React.ReactElement {
+export default function AiMessageList({ messages, onNavigateSource, onFollowUp, onOpenStudio }: AiMessageListProps): React.ReactElement {
   const lastIndex = messages.length - 1;
   return (
     <Box aria-label="AI Assist messages">
@@ -27,14 +29,14 @@ export default function AiMessageList({ messages, onNavigateSource, onFollowUp }
         return (
           <Box
             key={message.id}
-            sx={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', mb: 1.5 }}
+            sx={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', mb: 1.5, width: '100%' }}
           >
             <Box
               sx={{
                 bgcolor: isUser ? 'primary.main' : 'grey.100',
                 color: isUser ? 'primary.contrastText' : 'text.primary',
                 borderRadius: 2,
-                maxWidth: '85%',
+                maxWidth: isUser ? '85%' : '100%',
                 px: 1.5,
                 py: 1,
               }}
@@ -47,6 +49,11 @@ export default function AiMessageList({ messages, onNavigateSource, onFollowUp }
             </Box>
             {message.role === 'assistant' && (
               <>
+                {message.chart && (
+                  <Box sx={{ mt: 1.5, width: '100%' }}>
+                    <AiChartPanel chart={message.chart} onOpenStudio={onOpenStudio} />
+                  </Box>
+                )}
                 <AiSourceList citations={message.citations} onNavigateSource={onNavigateSource} />
                 <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="caption">
                   {message.notice}

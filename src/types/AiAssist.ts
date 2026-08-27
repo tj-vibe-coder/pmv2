@@ -10,12 +10,13 @@ export interface AiNavigateTo {
   label: string;
 }
 
+export type AiChartType = 'bar' | 'horizontal_bar' | 'line' | 'area' | 'pie' | 'donut' | 'composed';
+
 export interface AiChart {
-  // v1 draws a single form — a sequential-hue bar comparing group totals —
-  // the actual "job" of the get_portfolio_summary/get_expense_summary shapes.
-  type: 'bar';
+  type: AiChartType;
   title: string;
   tool: string;
+  xAxisKey?: string;
   data: Record<string, unknown>[];
 }
 
@@ -98,10 +99,19 @@ export interface AiHealthResponse {
 export function parseAiChart(value: unknown): AiChart | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
-  if (record.type !== 'bar') return null;
+  const allowedTypes = ['bar', 'horizontal_bar', 'line', 'area', 'pie', 'donut', 'composed'];
+  const chartType = typeof record.type === 'string' && allowedTypes.includes(record.type)
+    ? (record.type as AiChartType)
+    : 'bar';
   if (typeof record.title !== 'string' || typeof record.tool !== 'string') return null;
   if (!Array.isArray(record.data)) return null;
-  return { type: record.type, title: record.title, tool: record.tool, data: record.data };
+  return {
+    type: chartType,
+    title: record.title,
+    tool: record.tool,
+    ...(typeof record.xAxisKey === 'string' ? { xAxisKey: record.xAxisKey } : {}),
+    data: record.data,
+  };
 }
 
 export function parseAiProposal(value: unknown): AiProposal | null {

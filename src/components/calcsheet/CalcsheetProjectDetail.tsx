@@ -20,6 +20,7 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import CloudOffIcon from '@mui/icons-material/CloudOff';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
+import { blurNumberInputOnWheel, parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import type { ProjectStatus, Quotation, QuotationKind, OpportunityGrade } from '../../types/Quotation';
 import { PROJECT_STATUSES, projectStatusLabel, OPPORTUNITY_GRADES, opportunityGradeLabel } from '../../types/Quotation';
 import { parseLegacyWorkbook } from '../../utils/calcsheet/legacyImport';
@@ -1831,6 +1832,7 @@ export default function ProjectDetail() {
                   size="small"
                   value={pdfForm.validityDays}
                   onChange={(e) => setPdfForm((f) => ({ ...f, validityDays: parseInt(e.target.value, 10) || 30 }))}
+                  onWheel={blurNumberInputOnWheel}
                   sx={{ width: 120 }}
                 />
                 <TextField
@@ -1839,6 +1841,7 @@ export default function ProjectDetail() {
                   size="small"
                   value={pdfForm.warrantyMonths}
                   onChange={(e) => setPdfForm((f) => ({ ...f, warrantyMonths: parseInt(e.target.value, 10) || 12 }))}
+                  onWheel={blurNumberInputOnWheel}
                   sx={{ width: 120 }}
                 />
               </Stack>
@@ -1848,26 +1851,29 @@ export default function ProjectDetail() {
                 <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap>
                   <TextField
                     label="A. General Reqts"
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     size="small"
                     value={pdfForm.sectionA}
-                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionA: parseFloat(e.target.value) || 0 }))}
+                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionA: parseLenientFloat(e.target.value) }))}
                     sx={{ width: 160 }}
                   />
                   <TextField
                     label="B. Components"
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     size="small"
                     value={pdfForm.sectionB}
-                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionB: parseFloat(e.target.value) || 0 }))}
+                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionB: parseLenientFloat(e.target.value) }))}
                     sx={{ width: 160 }}
                   />
                   <TextField
                     label="C. Eng. Services"
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     size="small"
                     value={pdfForm.sectionC}
-                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionC: parseFloat(e.target.value) || 0 }))}
+                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionC: parseLenientFloat(e.target.value) }))}
                     sx={{ width: 160 }}
                   />
                 </Stack>
@@ -1885,10 +1891,11 @@ export default function ProjectDetail() {
                   </TextField>
                   <TextField
                     label="Grand Total (PHP)"
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     size="small"
                     value={pdfForm.grandTotal}
-                    onChange={(e) => setPdfForm((f) => ({ ...f, grandTotal: parseFloat(e.target.value) || 0 }))}
+                    onChange={(e) => setPdfForm((f) => ({ ...f, grandTotal: parseLenientFloat(e.target.value) }))}
                     sx={{ flex: 1, '& input': { fontWeight: 600 } }}
                   />
                 </Stack>

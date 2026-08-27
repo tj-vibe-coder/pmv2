@@ -16,6 +16,7 @@ const OPERATOR_ALLOWED_TOOLS = new Set([
   'list_quotations_for_opportunity',
   'get_opportunity_snapshot',
   'search_clients',
+  'query_analytics',
   'propose_opportunity_update',
 ]);
 
