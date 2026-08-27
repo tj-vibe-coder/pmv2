@@ -51,7 +51,15 @@ interface SoaEditorDialogProps {
   soa: StatementOfAccount | null;
   onClose: () => void;
   onSave: (payload: Partial<StatementOfAccount>) => Promise<void>;
-  availableProjects?: Array<{ id: number | string; project_name: string; po_number?: string; contract_amount?: number; account_name?: string }>;
+  availableProjects?: Array<{
+    id: number | string;
+    project_name: string;
+    po_number?: string;
+    contract_amount?: number;
+    account_name?: string;
+    with_acti?: boolean;
+    commercial_trail?: { acti_to_ioct_po_number?: string };
+  }>;
 }
 
 export default function SoaEditorDialog({
@@ -137,15 +145,26 @@ export default function SoaEditorDialog({
     setItems([...items, newItem]);
   };
 
-  const handleImportProject = (proj: { id: number | string; project_name: string; po_number?: string; contract_amount?: number; account_name?: string }) => {
-    const hasPo = !!proj.po_number;
+  const handleImportProject = (proj: {
+    id: number | string;
+    project_name: string;
+    po_number?: string;
+    contract_amount?: number;
+    account_name?: string;
+    with_acti?: boolean;
+    commercial_trail?: { acti_to_ioct_po_number?: string };
+  }) => {
+    const soaPo = proj.with_acti
+      ? (proj.commercial_trail?.acti_to_ioct_po_number || '')
+      : (proj.po_number || '');
+    const hasPo = !!soaPo;
     const newItem: SoaItem = {
       id: nanoid(8),
       projectId: String(proj.id),
       projectName: proj.account_name || proj.project_name || 'Project',
       description: proj.project_name,
       completionDateText: '',
-      poNumber: proj.po_number || '',
+      poNumber: soaPo,
       poDate: hasPo ? new Date().toISOString().slice(0, 10) : '',
       amount: Number(proj.contract_amount) || 0,
       hasPo,

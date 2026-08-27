@@ -45,6 +45,7 @@ import {
   CalendarMonth as CalendarMonthIcon,
 } from '@mui/icons-material';
 import { Project } from '../types/Project';
+import { actiToIoctPoLabel, isActiInvolved } from '../utils/commercialTrail';
 import type { ProjectInvoice, BillingMilestone, BillToKind } from '../types/Invoice';
 import { getInvoiceStatus, computeDueDate, PAYMENT_TERMS_OPTIONS, BILL_TO_OPTIONS } from '../types/Invoice';
 import dataService from '../services/dataService';
@@ -997,6 +998,84 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
         </Button>
       </Box>
 
+      {isActiInvolved(project) && (
+        <Paper
+          sx={{
+            p: 3,
+            mb: 3,
+            border: `1px solid ${NET_PACIFIC_COLORS.accent1}`,
+            background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+          }}
+        >
+          <Typography variant="h6" sx={{ color: NET_PACIFIC_COLORS.primary, fontWeight: 600, mb: 0.5 }}>
+            ACTI commercial trail
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Coordination with ACTI only. Expected invoice dates do not create Collections AR.
+          </Typography>
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI PO (to IOCT)</Typography>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+                <Typography variant="body1">{actiToIoctPoLabel(project.commercial_trail)}</Typography>
+                <Chip
+                  size="small"
+                  label={project.commercial_trail?.acti_to_ioct_po_number ? 'Received' : (project.commercial_trail?.acti_to_ioct_po_status === 'received' ? 'Received' : 'Pending')}
+                  color={project.commercial_trail?.acti_to_ioct_po_number ? 'success' : 'default'}
+                  variant="outlined"
+                />
+              </Stack>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI PO date</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.acti_to_ioct_po_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">COC served</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.coc_served_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">COC approved</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.coc_approved_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI SI to customer</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.partner_si_no || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI SI date</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.partner_si_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI SI terms</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>
+                {project.commercial_trail?.partner_si_terms_days != null
+                  ? `${project.commercial_trail.partner_si_terms_days} days`
+                  : '—'}
+              </Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI expected collection</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.partner_si_expected_collection_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">IOCT expected invoice</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.ioct_expected_invoice_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">IOCT expected collection</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.ioct_expected_collection_date || '—'}</Typography>
+            </Grid>
+            {project.commercial_trail?.notes && (
+              <Grid size={{ xs: 12 }}>
+                <Typography variant="subtitle2" color="textSecondary">Notes</Typography>
+                <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>{project.commercial_trail.notes}</Typography>
+              </Grid>
+            )}
+          </Grid>
+        </Paper>
+      )}
+
       {(oneDriveErr || oneDriveInfo) && (
         <Alert severity={oneDriveErr ? 'error' : 'success'} sx={{ mb: 2 }} onClose={() => { setOneDriveErr(''); setOneDriveInfo(''); }}>
           {oneDriveErr || oneDriveInfo}
@@ -1093,7 +1172,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
                 <Typography variant="subtitle2" color="textSecondary">
-                  PO Number
+                  {isActiInvolved(project) ? 'Customer PO (to ACTI)' : 'PO Number'}
                 </Typography>
                 <Typography variant="body1" sx={{ mb: 2 }}>
                   {project.po_number || '—'}

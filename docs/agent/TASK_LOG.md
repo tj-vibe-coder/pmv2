@@ -1,5 +1,68 @@
 # Task Log
 
+## 2026-08-27 — Direct SIs 004 (LBI) and 007 (Smartech/Mondelez) collected
+
+IOCT2605001 RCS Plaridel Troubleshooting: SI 004 2026-05-18, PO 26-317R, PHP 15,000 billed/collected, bill_to customer (not ACTI). IOCT2604001 Mondelez servo audit: SI 007 2026-05-30, PO 002.05.2026, completed, PHP 15,000 billed/collected. WHT noted on the invoice (300 / 750).
+
+## 2026-08-27 — SOA With-PO lines: Lear 6u/10u, ADI Invoice 008, Cabuyao
+
+- IOCT2606003 Lear 6 units PO#1211: ACTI PO 2606-005 (2026-06-06), completed 2026-03-24, ₱243,350.10 outstanding.
+- IOCT2606002 Lear 10 units PO#0957: ACTI PO 2606-006 (2026-06-06), completed 2026-03-24, ₱405,583.50 outstanding.
+- IOCT2606001 RCS Cabuyao: ACTI PO 2606-012 (2026-07-01), completed 2026-06-02, ₱30,000 outstanding.
+- IOCT2602001 Invoice 008: unpaid Collections invoice ₱193,414.06 bill_to ACTI (002 already collected). Project fully billed; 008 sits in issued AR not Expected from ACTI.
+
+## 2026-08-27 — SOA pending-PO lines: Lear 14-unit, ADI calibration, Plaridel June 14
+
+- IOCT2601001 ADI calibration: completed 2026-05-25, contract ₱320,000, ACTI PO pending.
+- IOCT2606004 RCS Plaridel Onsite June 14: completed 2026-06-14, contract ₱13,500 (was 15,000), ACTI PO pending.
+- Created IOCT2608001 Lear MES 14 units (PO 0329 & 0330) from calcsheet PCS2607063, completed 2026-04-22, ₱597,702 negotiated, ACTI PO pending. No IOCT invoices — they sit in ACTI pending AR.
+
+## 2026-08-27 — Split Expected from ACTI: pending AR vs ongoing no PO
+
+Collections and Finance Home now segregate ACTI expected jobs: **pending AR** (completed/100%, awaiting PO or invoice) vs **ongoing** (in progress, typically no ACTI PO). Amounts still excluded from issued AR KPIs.
+
+## 2026-08-27 — All Analog Devices projects flagged ACTI; Invoice 002 settled
+
+All four Analog Devices Inc. projects now `with_acti` + ACTI partner: IOCT2601001 (calibration, SOA pending ₱320,000), IOCT2602001 (RH Temp Integration), IOCT2607003, IOCT2607004. IOCT2602001: ACTI PO 2603-010 (2026-03-13), completed 2026-04-14, Invoice 002 paid ₱193,414.05 on 2026-07-07. Expected-from-ACTI queue now uses remaining unbilled contract so Invoice 008 ₱193,414.06 stays on the queue.
+
+## 2026-08-27 — Lear MES IOCT2602002A flagged ACTI (SOA 2603-011 settled)
+
+RJ: this is ACTI-fronted, not direct Ebecor. Updated `project_5`: `with_acti`, partner ACTI, customer PO `731 & 773` (was `731 & 733`), ACTI PO to IOCT `2603-011` dated 2026-03-13, completed 2026-02-25, contract/billed ₱256,158. Added paid Collections invoice `SOA-2603-011` bill_to ACTI, collected 2026-05-07, so Expected from ACTI excludes it.
+
+## 2026-08-27 — Expected from ACTI finance queue
+
+Read-only Collections section + Finance Home KPI derived from ACTI `commercial_trail` / `with_acti` projects that have no IOCT invoice. Stages: Pending PO vs PO in · Uninvoiced; timing Upcoming / Due this week / Past expected (never Overdue). Amount is IOCT contract (expected), excluded from AR Outstanding/Overdue. Tann surfaces ₱178,670 expected 2026-10-03. Belmont (direct) is excluded.
+
+## 2026-08-27 — ACTI commercial trail v1
+
+Implemented ACTI-only dual-PO / partner-SI coordination on `projects.commercial_trail`. Direct jobs (Belmont) keep a single customer PO to IOCT.
+
+- Types/helpers: `CommercialTrail`, `isActiInvolved`, `stripCommercialTrail`, `applyBackToBackExpectedDates`.
+- Dashboard: “to ACTI” chip on customer PO; extra **ACTI PO (to IOCT)** column when any row is ACTI-fronted.
+- Edit Project + Project Details: trail fields only when Joint with ACTI.
+- SOA retroactive PO writes `commercial_trail.acti_to_ioct_po_*` for ACTI jobs and never overwrites customer `po_number`. Direct jobs still update `po_number`.
+- Tann `project_1` backfilled (SI#0076, COC 2026-06-23, expected 2026-10-03, ACTI→IOCT pending). No Collections invoice created.
+- `npx tsc --noEmit` clean. `node --test server/soa/soaRouter.test.js` 4/4.
+
+## 2026-08-27 — Tann SCADA (`project_1` / IOCT2512001) project + finance note
+
+RJ walkthrough of Tann Group SCADA Server Upgrade. Wrote live Firestore `projects/project_1` only (no collections invoice, no SOA):
+
+- Status remains Completed; site progress 100%; evaluated progress set to 100% / PHP 178,670 after COC served and approved 2026-06-23 (`completion_date` / `updated_completion_date`).
+- Contract amount confirmed from IOCT quotation `PCS2508034-TPI-00` grand total PHP 178,670 (VAT-EX). Billed amount left at 0 — IOCT has not invoiced ACTI.
+- Remarks + payment_terms now record: quotation sent 2026-05-25; ACTI has not PO'd IOCT; ACTI SI#0076 to Tann on 2026-08-04 (60 days); ACTI collection and IOCT expected invoice/collection 2026-10-03.
+- Did **not** create an `invoices` row for SI#0076 (that is ACTI→Tann, not IOCT→ACTI) and did **not** mint an expected IOCT invoice (would show as live unpaid AR).
+
+Gaps to add later if this pattern repeats: partner SI to end customer, expected vs issued IOCT invoice, separate ACTI→IOCT PO vs customer PO, COC-approved as a first-class date (vs PDF certificate / completion_date).
+
+## 2026-08-27 — Revert page logo to original IOCT mark (keep Nylle favicon)
+
+Nylle was asked to change the **favicon only**. The in-app header had been switched to the new circular i/O mark (`logo-ioct-only.svg` / `.png`), which rendered as "IOT" next to workspace titles.
+
+- Restored `public/logo-ioct-only.svg` and `public/logo-ioct-only.png` from `abb8c56^` (original IOCT I+C+T icon).
+- Left `public/favicon.svg` and `public/favicon.ico` as the new circular i/O mark.
+- Cache-busted the header image to `/logo-ioct-only.svg?v=10` so browsers do not keep the old file.
+
 ## 2026-08-27 — Updated In-App Navbar Brand Logo (`logo-ioct-only.svg` & `logo-ioct-only.png`)
 
 - Replaced `public/logo-ioct-only.svg` and `public/logo-ioct-only.png` with the new circular IOCT mark (`i/o` + cyan outer arc + bottom T-bar).

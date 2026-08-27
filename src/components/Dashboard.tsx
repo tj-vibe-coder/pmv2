@@ -48,6 +48,7 @@ import {
 } from '@mui/icons-material';
 import { Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, ComposedChart, Line } from 'recharts';
 import { Project, ProjectFilters, YearSummary } from '../types/Project';
+import { actiToIoctPoLabel, actiTrailSummary, isActiInvolved } from '../utils/commercialTrail';
 import dataService from '../services/dataService';
 import AddProjectDialog from './AddProjectDialog';
 import { getBudgets } from '../utils/projectBudgetStorage';
@@ -185,7 +186,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
         const bVal = dataService.getUnbilled(b);
         return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
       }
-      
+      if (sortConfig.key === 'acti_to_ioct_po_number') {
+        const aVal = (a.commercial_trail?.acti_to_ioct_po_number || '').toLowerCase();
+        const bVal = (b.commercial_trail?.acti_to_ioct_po_number || '').toLowerCase();
+        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      }
+
       const aVal = a[sortConfig.key as keyof Project];
       const bVal = b[sortConfig.key as keyof Project];
       
@@ -209,6 +217,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     
     return sortedProjects;
   }, [projects, sortConfig, filterActi]);
+
+  const showActiPoColumn = useMemo(
+    () => filteredProjects.some((p) => isActiInvolved(p)),
+    [filteredProjects],
+  );
 
   // Calculate summary data based on all applied filters (Backlogs = unbilled amount)
   const summary = useMemo(() => {
@@ -567,7 +580,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       'Created At',
       'Updated At',
       'With ACTI',
-      'Partner'
+      'Partner',
+      'Customer PO issued to',
+      'ACTI PO to IOCT',
+      'ACTI PO date',
+      'ACTI PO status',
+      'Partner SI',
+      'Partner SI date',
+      'IOCT expected invoice',
+      'IOCT expected collection',
     ];
 
     // Create CSV content with properly aligned data
@@ -631,7 +652,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           escapeCSV(project.created_at || ''),
           escapeCSV(project.updated_at || ''),
           escapeCSV(project.with_acti ? 'Yes' : 'No'),
-          escapeCSV(project.partner_name || '')
+          escapeCSV(project.partner_name || ''),
+          escapeCSV(isActiInvolved(project) ? 'ACTI' : 'IOCT'),
+          escapeCSV(isActiInvolved(project) ? (project.commercial_trail?.acti_to_ioct_po_number || '') : ''),
+          escapeCSV(isActiInvolved(project) ? (project.commercial_trail?.acti_to_ioct_po_date || '') : ''),
+          escapeCSV(isActiInvolved(project) ? (project.commercial_trail?.acti_to_ioct_po_status || '') : ''),
+          escapeCSV(isActiInvolved(project) ? (project.commercial_trail?.partner_si_no || '') : ''),
+          escapeCSV(isActiInvolved(project) ? (project.commercial_trail?.partner_si_date || '') : ''),
+          escapeCSV(isActiInvolved(project) ? (project.commercial_trail?.ioct_expected_invoice_date || '') : ''),
+          escapeCSV(isActiInvolved(project) ? (project.commercial_trail?.ioct_expected_collection_date || '') : ''),
         ];
 
         return row.join(',');
@@ -707,7 +736,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       'Created At',
       'Updated At',
       'With ACTI',
-      'Partner'
+      'Partner',
+      'Customer PO issued to',
+      'ACTI PO to IOCT',
+      'ACTI PO date',
+      'ACTI PO status',
+      'Partner SI',
+      'Partner SI date',
+      'IOCT expected invoice',
+      'IOCT expected collection',
     ];
 
     // Create BOM for Excel UTF-8 recognition
@@ -773,7 +810,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           project.created_at || '',
           project.updated_at || '',
           project.with_acti ? 'Yes' : 'No',
-          project.partner_name || ''
+          project.partner_name || '',
+          isActiInvolved(project) ? 'ACTI' : 'IOCT',
+          isActiInvolved(project) ? (project.commercial_trail?.acti_to_ioct_po_number || '') : '',
+          isActiInvolved(project) ? (project.commercial_trail?.acti_to_ioct_po_date || '') : '',
+          isActiInvolved(project) ? (project.commercial_trail?.acti_to_ioct_po_status || '') : '',
+          isActiInvolved(project) ? (project.commercial_trail?.partner_si_no || '') : '',
+          isActiInvolved(project) ? (project.commercial_trail?.partner_si_date || '') : '',
+          isActiInvolved(project) ? (project.commercial_trail?.ioct_expected_invoice_date || '') : '',
+          isActiInvolved(project) ? (project.commercial_trail?.ioct_expected_collection_date || '') : '',
         ];
 
         return row.join('\t');
@@ -1222,6 +1267,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('project_name')}>Project Name{getSortIcon('project_name')}</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('account_name')}>Client{getSortIcon('account_name')}</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('po_number')}>PO Number{getSortIcon('po_number')}</TableCell>
+                {showActiPoColumn && (
+                  <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('acti_to_ioct_po_number')}>ACTI PO (to IOCT){getSortIcon('acti_to_ioct_po_number')}</TableCell>
+                )}
+                {showActiPoColumn && (
+                  <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>ACTI trail</TableCell>
+                )}
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('po_date')}>PO Date{getSortIcon('po_date')}</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('client_approver')}>Client Approver{getSortIcon('client_approver')}</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('year')}>Year{getSortIcon('year')}</TableCell>
@@ -1270,10 +1321,49 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                     </Box>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-                      {project.po_number || '—'}
-                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                      <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                        {project.po_number || '—'}
+                      </Typography>
+                      {isActiInvolved(project) && project.po_number && (
+                        <Chip
+                          label="to ACTI"
+                          size="small"
+                          variant="outlined"
+                          sx={{ fontSize: '0.65rem', height: 18 }}
+                        />
+                      )}
+                    </Box>
                   </TableCell>
+                  {showActiPoColumn && (
+                    <TableCell>
+                      <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                        {isActiInvolved(project) ? actiToIoctPoLabel(project.commercial_trail) : '—'}
+                      </Typography>
+                    </TableCell>
+                  )}
+                  {showActiPoColumn && (
+                    <TableCell sx={{ minWidth: 160 }}>
+                      {(() => {
+                        if (!isActiInvolved(project)) {
+                          return <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>—</Typography>;
+                        }
+                        const lines = actiTrailSummary(project.commercial_trail);
+                        if (lines.length === 0) {
+                          return (
+                            <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+                              No trail yet
+                            </Typography>
+                          );
+                        }
+                        return lines.map((line) => (
+                          <Typography key={line} variant="body2" sx={{ fontSize: '0.75rem', lineHeight: 1.35 }}>
+                            {line}
+                          </Typography>
+                        ));
+                      })()}
+                    </TableCell>
+                  )}
                   <TableCell>
                     <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
                       {project.po_date ? dataService.formatDate(project.po_date) : '—'}

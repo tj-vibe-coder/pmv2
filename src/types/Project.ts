@@ -1,6 +1,24 @@
 import type { BillingMilestone } from './Invoice';
 export type { BillingMilestone };
 
+/** ACTI-fronted jobs only. Direct customers (e.g. Belmont) do not use this. */
+export type ActiToIoctPoStatus = 'pending' | 'received';
+
+export interface CommercialTrail {
+  coc_served_date?: string;
+  coc_approved_date?: string;
+  acti_to_ioct_po_number?: string;
+  acti_to_ioct_po_date?: string;
+  acti_to_ioct_po_status?: ActiToIoctPoStatus;
+  partner_si_no?: string;
+  partner_si_date?: string;
+  partner_si_terms_days?: number;
+  partner_si_expected_collection_date?: string;
+  ioct_expected_invoice_date?: string;
+  ioct_expected_collection_date?: string;
+  notes?: string;
+}
+
 export interface Project {
   id: number;
   project_no?: string;
@@ -8,6 +26,7 @@ export interface Project {
   year: number;
   am: string;
   ovp_number: string;
+  /** Customer-originated PO. On ACTI jobs this is end-user → ACTI; on direct jobs, end-user → IOCT. */
   po_number: string;
   po_date: number | null;
   client_status: string;
@@ -78,6 +97,8 @@ export interface Project {
   with_acti?: boolean;
   partner_id?: string | null;
   partner_name?: string;
+  /** ACTI-only coordination facts. Never feed Collections billed/overdue totals. */
+  commercial_trail?: CommercialTrail;
 }
 
 export type ProjectStatus = 'OPEN' | 'CLOSED' | 'FOR_CLOSEOUT' | 'PENDING' | 'CANCELLED';

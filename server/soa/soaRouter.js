@@ -26,6 +26,13 @@ function computeTotals(items) {
   };
 }
 
+function isActiFrontedProject(data) {
+  if (!data) return false;
+  if (data.with_acti) return true;
+  const name = String(data.partner_name || '');
+  return /advance controle|\bacti\b/i.test(name);
+}
+
 function createSoaRouter(opts) {
   const {
     db,
@@ -373,18 +380,32 @@ function createSoaRouter(opts) {
         updatedAt: now,
       });
 
-      // Synchronize PO to linked Project record if present
+      // Synchronize PO to linked Project record if present.
+      // ACTI-fronted jobs: this PO is ACTI → IOCT (never overwrite the customer PO).
+      // Direct jobs: this PO is already the customer → IOCT number.
       if (syncProject && item.projectId && item.poNumber) {
         try {
           const projRef = db.collection('projects').doc(String(item.projectId));
           const projDoc = await projRef.get();
           if (projDoc.exists) {
-            const poDateUnix = item.poDate ? Math.floor(new Date(item.poDate).getTime() / 1000) : null;
-            await projRef.update({
-              po_number: item.poNumber,
-              ...(poDateUnix ? { po_date: poDateUnix } : {}),
-              updated_at: now,
-            });
+            const proj = projDoc.data() || {};
+            if (isActiFrontedProject(proj)) {
+              const trail = { ...(proj.commercial_trail || {}) };
+              trail.acti_to_ioct_po_number = item.poNumber;
+              if (item.poDate) trail.acti_to_ioct_po_date = item.poDate;
+              trail.acti_to_ioct_po_status = 'received';
+              await projRef.update({
+                commercial_trail: trail,
+                updated_at: now,
+              });
+            } else {
+              const poDateUnix = item.poDate ? Math.floor(new Date(item.poDate).getTime() / 1000) : null;
+              await projRef.update({
+                po_number: item.poNumber,
+                ...(poDateUnix ? { po_date: poDateUnix } : {}),
+                updated_at: now,
+              });
+            }
           }
         } catch (syncErr) {
           console.warn('[SOA Router] Project PO sync notice:', syncErr.message);
@@ -576,4 +597,5 @@ function createSoaRouter(opts) {
 module.exports = {
   createSoaRouter,
   computeTotals,
+  isActiFrontedProject,
 };

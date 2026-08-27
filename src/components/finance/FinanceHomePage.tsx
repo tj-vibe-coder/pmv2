@@ -22,6 +22,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
 import { API_BASE } from '../../config/api';
 import { ProjectInvoice, getInvoiceStatus } from '../../types/Invoice';
+import { Project } from '../../types/Project';
+import { buildActiExpectedQueue, splitActiExpectedQueue } from '../../utils/commercialTrail';
 import { PayrollRun } from '../../types/Payroll';
 import { getPayrollRuns } from '../../utils/firebasePayroll';
 
@@ -68,6 +70,7 @@ const FinanceHomePage: React.FC = () => {
   const [totalExpensesYtd, setTotalExpensesYtd] = useState(0);
   const [pendingReimbursements, setPendingReimbursements] = useState(0);
   const [outstandingCA, setOutstandingCA] = useState(0);
+  const [projects, setProjects] = useState<Project[]>([]);
 
   useEffect(() => {
     const token = localStorage.getItem('netpacific_token') || '';
@@ -77,6 +80,11 @@ const FinanceHomePage: React.FC = () => {
       .then(r => { if (!r.ok) throw new Error('invoices'); return r.json(); })
       .then(setInvoices)
       .catch(() => setError('Some figures could not be loaded.'));
+
+    fetch(`${API}/projects`)
+      .then(r => { if (!r.ok) throw new Error('projects'); return r.json(); })
+      .then((rows: Project[]) => setProjects(Array.isArray(rows) ? rows : []))
+      .catch(() => { /* expected-from-ACTI KPI optional */ });
 
     fetch(`${API}/investments`, { headers: authHeaders })
       .then(r => r.json())
@@ -146,6 +154,24 @@ const FinanceHomePage: React.FC = () => {
   const totalInvested = useMemo(
     () => investments.reduce((s, i) => s + (i.amount || 0), 0),
     [investments]
+  );
+
+  const actiExpectedQueue = useMemo(() => {
+    return buildActiExpectedQueue(projects, invoices);
+  }, [projects, invoices]);
+
+  const { pendingAr: actiPendingAr, ongoing: actiOngoing } = useMemo(
+    () => splitActiExpectedQueue(actiExpectedQueue),
+    [actiExpectedQueue],
+  );
+
+  const actiPendingArTotal = useMemo(
+    () => actiPendingAr.reduce((s, r) => s + r.expectedAmount, 0),
+    [actiPendingAr],
+  );
+  const actiOngoingTotal = useMemo(
+    () => actiOngoing.reduce((s, r) => s + r.expectedAmount, 0),
+    [actiOngoing],
   );
 
   const modules: ModuleCard[] = [
@@ -266,6 +292,55 @@ const FinanceHomePage: React.FC = () => {
             </Card>
           )}
         </Grid>
+
+        {actiPendingAr.length > 0 && (
+          <Grid size={{ xs: 6, sm: 3 }}>
+            <Card
+              sx={{
+                background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`,
+                color: 'white',
+                cursor: 'pointer',
+                transition: 'transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
+                '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 },
+              }}
+              onClick={() => navigate('/finance/collections#expected-acti-pending-ar')}
+            >
+              <CardContent sx={{ p: 2 }}>
+                <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>ACTI pending AR</Typography>
+                <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+                  {formatPHP(actiPendingArTotal)}
+                </Typography>
+                <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                  {actiPendingAr.length} completed · no invoice yet
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+        {actiOngoing.length > 0 && (
+          <Grid size={{ xs: 6, sm: 3 }}>
+            <Card
+              sx={{
+                background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent2} 0%, ${NET_PACIFIC_COLORS.secondary} 100%)`,
+                color: 'white',
+                cursor: 'pointer',
+                transition: 'transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
+                '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 },
+              }}
+              onClick={() => navigate('/finance/collections#expected-acti-ongoing')}
+            >
+              <CardContent sx={{ p: 2 }}>
+                <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>ACTI ongoing, no PO</Typography>
+                <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+                  {formatPHP(actiOngoingTotal)}
+                </Typography>
+                <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                  {actiOngoing.length} in progress · watchlist
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
 
         {/* Total Investments — hidden from tax_filer (capital ledger, not BIR substantiation) */}
         {user?.role !== 'tax_filer' && (

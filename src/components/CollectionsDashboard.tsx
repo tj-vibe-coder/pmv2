@@ -22,6 +22,14 @@ import {
   BILL_TO_OPTIONS,
 } from '../types/Invoice';
 import type { Project } from '../types/Project';
+import {
+  actiExpectedStageLabel,
+  actiExpectedTimingLabel,
+  actiToIoctPoLabel,
+  buildActiExpectedQueue,
+  splitActiExpectedQueue,
+  type ActiExpectedRow,
+} from '../utils/commercialTrail';
 import { API_BASE } from '../config/api';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { resolveCorporateDriveId, uploadFileToFolder, projectFolderName } from '../services/onedriveFolderService';
@@ -229,6 +237,36 @@ export default function CollectionsDashboard() {
   }, [projects, invoices, preselectedProjectId]);
 
   const readyTotal = useMemo(() => readyToInvoice.reduce((s, r) => s + r.amount, 0), [readyToInvoice]);
+
+  const actiExpectedQueue = useMemo(() => {
+    const scanProjects = preselectedProjectId
+      ? projects.filter((p) => String(p.id) === preselectedProjectId)
+      : projects;
+    return buildActiExpectedQueue(scanProjects, invoices);
+  }, [projects, invoices, preselectedProjectId]);
+
+  const { pendingAr: actiPendingAr, ongoing: actiOngoing } = useMemo(
+    () => splitActiExpectedQueue(actiExpectedQueue),
+    [actiExpectedQueue],
+  );
+
+  const actiPendingArTotal = useMemo(
+    () => actiPendingAr.reduce((s, r) => s + r.expectedAmount, 0),
+    [actiPendingAr],
+  );
+  const actiOngoingTotal = useMemo(
+    () => actiOngoing.reduce((s, r) => s + r.expectedAmount, 0),
+    [actiOngoing],
+  );
+
+  useEffect(() => {
+    if (loading) return;
+    if (typeof window === 'undefined') return;
+    const id = window.location.hash.replace(/^#/, '');
+    if (id === 'expected-acti' || id === 'expected-acti-pending-ar' || id === 'expected-acti-ongoing') {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [loading, actiExpectedQueue.length]);
 
   // ─── form helpers ────────────────────────────────────────────────────────
   const handleFormChange = (field: keyof InvoiceForm, value: string | number) => {
@@ -474,6 +512,74 @@ export default function CollectionsDashboard() {
     e.target.value = '';
   };
 
+  const renderActiExpectedTable = (rows: ActiExpectedRow[]) => (
+    <TableContainer sx={{ maxHeight: 280 }}>
+      <Table size="small" stickyHeader>
+        <TableHead>
+          <TableRow>
+            <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project</TableCell>
+            <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Customer PO (to ACTI)</TableCell>
+            <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>ACTI PO (to IOCT)</TableCell>
+            <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>ACTI SI to customer</TableCell>
+            <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Expected collection</TableCell>
+            <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Expected amount</TableCell>
+            <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Stage</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((row) => {
+            const p = row.project;
+            const trail = p.commercial_trail;
+            return (
+              <TableRow key={String(p.id)} hover>
+                <TableCell>
+                  <Typography
+                    variant="body2"
+                    sx={{ fontWeight: 600, fontSize: '0.8rem', color: NET_PACIFIC_COLORS.primary, cursor: 'pointer' }}
+                    onClick={() => navigate(`/projects/${p.id}`)}
+                  >
+                    {[p.project_no, p.project_name].filter(Boolean).join(' · ')}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">{p.account_name}</Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>{p.po_number || '—'}</Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>{actiToIoctPoLabel(trail)}</Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                    {trail?.partner_si_no
+                      ? `${trail.partner_si_no}${trail.partner_si_date ? ` · ${trail.partner_si_date}` : ''}`
+                      : '—'}
+                  </Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>{row.expectedCollectionDate || '—'}</Typography>
+                </TableCell>
+                <TableCell align="right">
+                  <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8rem' }}>{PHP.format(row.expectedAmount)}</Typography>
+                </TableCell>
+                <TableCell>
+                  <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                    <Chip size="small" label={actiExpectedStageLabel(row.stage)} variant="outlined" />
+                    <Chip
+                      size="small"
+                      label={actiExpectedTimingLabel(row.timing)}
+                      color={row.timing === 'past_expected' ? 'warning' : row.timing === 'due_soon' ? 'info' : 'default'}
+                      variant={row.timing === 'date_missing' ? 'outlined' : 'filled'}
+                    />
+                  </Stack>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  );
+
   // ─── render ──────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -566,6 +672,28 @@ export default function CollectionsDashboard() {
             </CardContent>
           </Card>
         </Grid>
+        {actiExpectedQueue.length > 0 && (
+          <Grid size={{ xs: 6, sm: 3 }}>
+            <Card
+              sx={{
+                background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`,
+                color: 'white',
+                cursor: 'pointer',
+              }}
+              onClick={() => document.getElementById('expected-acti')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            >
+              <CardContent sx={{ p: 2 }}>
+                <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>ACTI pending AR</Typography>
+                <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+                  {PHP.format(actiPendingArTotal)}
+                </Typography>
+                <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                  {actiPendingAr.length} completed · {actiOngoing.length} ongoing no PO
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
       </Grid>
 
       {/* Ready-to-invoice notification — milestones whose site progress reached the trigger */}
@@ -608,6 +736,47 @@ export default function CollectionsDashboard() {
             ))}
           </Stack>
         </Paper>
+      )}
+
+      {actiExpectedQueue.length > 0 && (
+        <Box id="expected-acti" sx={{ mb: 2 }}>
+          {actiPendingAr.length > 0 && (
+            <Paper id="expected-acti-pending-ar" sx={{ p: 1.5, mb: 1.5, borderRadius: 2, border: '1px solid #e2e8f0' }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 1, flexWrap: 'wrap', gap: 1 }}>
+                <Box>
+                  <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+                    ACTI pending AR — completed, awaiting PO / invoice ({actiPendingAr.length})
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Work is done. Not yet in issued AR. Includes no ACTI PO yet and PO-in uninvoiced.
+                  </Typography>
+                </Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary }}>
+                  {PHP.format(actiPendingArTotal)}
+                </Typography>
+              </Box>
+              {renderActiExpectedTable(actiPendingAr)}
+            </Paper>
+          )}
+          {actiOngoing.length > 0 && (
+            <Paper id="expected-acti-ongoing" sx={{ p: 1.5, borderRadius: 2, border: '1px dashed #c5d4eb', bgcolor: '#f8fafc' }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 1, flexWrap: 'wrap', gap: 1 }}>
+                <Box>
+                  <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.secondary }}>
+                    ACTI ongoing — no PO from ACTI yet ({actiOngoing.length})
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Project still in progress. Watchlist only — not pending collection.
+                  </Typography>
+                </Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.secondary }}>
+                  {PHP.format(actiOngoingTotal)}
+                </Typography>
+              </Box>
+              {renderActiExpectedTable(actiOngoing)}
+            </Paper>
+          )}
+        </Box>
       )}
 
       {/* Filters */}

@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
-const { createSoaRouter, computeTotals } = require('./soaRouter');
+const { createSoaRouter, computeTotals, isActiFrontedProject } = require('./soaRouter');
 
 test('computeTotals correctly aggregates With PO and Pending PO amounts', () => {
   const items = [
@@ -19,52 +19,64 @@ test('computeTotals correctly aggregates With PO and Pending PO amounts', () => 
 });
 
 // Mock Firestore database helper
-function createMockDb(initialRecords = []) {
-  const store = new Map(initialRecords.map((r) => [r.id, { ...r }]));
+function createMockDb(initialRecords = [], extraCollections = {}) {
+  const collections = {
+    statements_of_account: new Map(initialRecords.map((r) => [r.id, { ...r }])),
+    ...Object.fromEntries(
+      Object.entries(extraCollections).map(([name, records]) => [
+        name,
+        new Map((records || []).map((r) => [r.id, { ...r }])),
+      ]),
+    ),
+  };
   let idCounter = initialRecords.length + 1;
 
-  return {
-    collection: (name) => {
-      assert.equal(name, 'statements_of_account');
-      return {
+  const collectionApi = (name) => {
+    if (!collections[name]) collections[name] = new Map();
+    const store = collections[name];
+    return {
+      get: async () => {
+        const docs = Array.from(store.entries()).map(([id, data]) => ({
+          id,
+          data: () => ({ ...data }),
+        }));
+        return {
+          forEach: (cb) => docs.forEach(cb),
+          docs,
+        };
+      },
+      doc: (id) => ({
         get: async () => {
-          const docs = Array.from(store.entries()).map(([id, data]) => ({
-            id,
-            data: () => ({ ...data }),
-          }));
+          const exists = store.has(id);
           return {
-            forEach: (cb) => docs.forEach(cb),
-            docs,
+            exists,
+            id,
+            data: () => (exists ? { ...store.get(id) } : null),
           };
         },
-        doc: (id) => ({
-          get: async () => {
-            const exists = store.has(id);
-            return {
-              exists,
-              id,
-              data: () => (exists ? { ...store.get(id) } : null),
-            };
-          },
-          update: async (updates) => {
-            if (!store.has(id)) throw new Error('Document not found');
-            const existing = store.get(id);
-            store.set(id, { ...existing, ...updates });
-          },
-          delete: async () => {
-            store.delete(id);
-          },
-        }),
-        add: async (data) => {
-          const id = `soa_${idCounter++}`;
-          store.set(id, { id, ...data });
-          return { id };
+        update: async (updates) => {
+          if (!store.has(id)) throw new Error('Document not found');
+          const existing = store.get(id);
+          store.set(id, { ...existing, ...updates });
         },
-        where: function () {
-          return this;
+        delete: async () => {
+          store.delete(id);
         },
-      };
-    },
+      }),
+      add: async (data) => {
+        const id = name === 'statements_of_account' ? `soa_${idCounter++}` : `${name}_${idCounter++}`;
+        store.set(id, { id, ...data });
+        return { id };
+      },
+      where: function () {
+        return this;
+      },
+    };
+  };
+
+  return {
+    collection: collectionApi,
+    _store: (name) => collections[name],
   };
 }
 
@@ -175,5 +187,72 @@ test('SOA API endpoints end-to-end', async () => {
     assert.equal(paid.data.status, 'partially_paid');
     assert.equal(paid.data.collections.length, 1);
     assert.equal(paid.data.collections[0].reference, 'Check #554433');
+  });
+});
+
+test('isActiFrontedProject treats with_acti and ACTI partner name as ACTI-fronted', () => {
+  assert.equal(isActiFrontedProject({ with_acti: true }), true);
+  assert.equal(isActiFrontedProject({ partner_name: 'Advance Controle Technologie Inc' }), true);
+  assert.equal(isActiFrontedProject({ with_acti: false, partner_name: '' }), false);
+  assert.equal(isActiFrontedProject({ account_name: 'Belmont Laboratories Inc.' }), false);
+});
+
+test('SOA retroactive PO writes ACTI→IOCT trail and does not clobber customer po_number', async () => {
+  const mockDb = createMockDb([], {
+    projects: [
+      {
+        id: 'project_1',
+        with_acti: true,
+        po_number: '09-512-25',
+        commercial_trail: { acti_to_ioct_po_status: 'pending' },
+      },
+      {
+        id: 'project_5',
+        with_acti: false,
+        po_number: '7540003597',
+      },
+    ],
+  });
+
+  await withTestServer({ db: mockDb }, async (baseUrl) => {
+    const createRes = await fetch(baseUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        date: '2026-08-27',
+        recipientCode: 'ACT',
+        recipientName: 'Advance Controle Technologie Inc',
+        recipientContactName: 'Lindsey Salilig',
+        items: [
+          { id: 'tann', projectId: 'project_1', projectName: 'Tann', poNumber: '', amount: 178670, hasPo: false },
+          { id: 'belmont', projectId: 'project_5', projectName: 'Belmont', poNumber: '', amount: 100, hasPo: false },
+        ],
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    const created = await createRes.json();
+    const soaId = created.id;
+
+    const tannPatch = await fetch(`${baseUrl}/${soaId}/items/tann`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ poNumber: 'ACTI-IOCT-001', poDate: '2026-09-01', hasPo: true }),
+    });
+    assert.equal(tannPatch.status, 200);
+    const tannProj = mockDb._store('projects').get('project_1');
+    assert.equal(tannProj.po_number, '09-512-25');
+    assert.equal(tannProj.commercial_trail.acti_to_ioct_po_number, 'ACTI-IOCT-001');
+    assert.equal(tannProj.commercial_trail.acti_to_ioct_po_date, '2026-09-01');
+    assert.equal(tannProj.commercial_trail.acti_to_ioct_po_status, 'received');
+
+    const belmontPatch = await fetch(`${baseUrl}/${soaId}/items/belmont`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ poNumber: '7540003597-R1', poDate: '2026-09-02', hasPo: true }),
+    });
+    assert.equal(belmontPatch.status, 200);
+    const belmontProj = mockDb._store('projects').get('project_5');
+    assert.equal(belmontProj.po_number, '7540003597-R1');
+    assert.equal(belmontProj.commercial_trail, undefined);
   });
 });

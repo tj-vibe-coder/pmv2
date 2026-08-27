@@ -1895,7 +1895,9 @@ const ExpenseMonitoring: React.FC = () => {
                     .map((expense) => {
                       const project = expense.scope === 'project' ? allProjects.find((p) => String(p.id) === String(expense.projectId)) : undefined;
                       const projectNo = project?.project_no || String(project?.item_no ?? project?.id ?? '');
-                      const poNumber = project?.po_number ?? '—';
+                      const poNumber = project?.po_number
+                        ? (project.with_acti ? `${project.po_number} (to ACTI)` : project.po_number)
+                        : '—';
                       const origin = expenseOrigin(expense);
                       const rowToken = financeFocusToken(origin);
                       const linkedOrigins = linkedOriginsForExpense(expense);
