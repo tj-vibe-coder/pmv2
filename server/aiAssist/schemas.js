@@ -52,6 +52,12 @@ const TOOL_ARG_SHAPES = {
   search_clients: {
     search: { type: 'string', required: true },
   },
+  query_analytics: {
+    domain: { type: 'enum', values: ['projects', 'quotations', 'expenses', 'sales_pipeline'], required: true },
+    groupBy: { type: 'enum', values: ['category', 'year', 'status', 'client', 'grade'] },
+    metric: { type: 'enum', values: ['total_amount', 'count', 'average_amount', 'balance_amount'] },
+    year: { type: 'integer' },
+  },
   propose_opportunity_update: {
     opportunityId: { type: 'string', required: true },
     field: { type: 'enum', values: ['status', 'opportunityGrade', 'notes'] },

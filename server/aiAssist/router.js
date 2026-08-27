@@ -143,6 +143,7 @@ function createAiAssistRouter(opts) {
       notice: result.notice,
       navigateTo: result.navigateTo || null,
       proposal: result.proposal || null,
+      chart: result.chart || null,
     });
   });
 

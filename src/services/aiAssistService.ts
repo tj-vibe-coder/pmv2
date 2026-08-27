@@ -1,6 +1,6 @@
 import { API_BASE } from '../config/api';
 import type { AiAnswer, AiMessage, AiNavigateTo, AiPageContext, AiPriorToolResult, AiLiveTokenResponse, AiProposal, AiHealthResponse } from '../types/AiAssist';
-import { parseAiProposal } from '../types/AiAssist';
+import { parseAiChart, parseAiProposal } from '../types/AiAssist';
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
@@ -80,6 +80,7 @@ export async function sendAiChat(
   } else {
     answer.proposal = null;
   }
+  answer.chart = parsed.chart != null ? parseAiChart(parsed.chart) : null;
   return answer;
 }
 

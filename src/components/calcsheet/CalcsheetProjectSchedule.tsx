@@ -19,6 +19,7 @@ import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { ServiceLine, Quotation } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
+import { blurNumberInputOnWheel } from '../../utils/calcsheet/numberInput';
 import {
   MS_PER_DAY, addDays, daysBetween, durationOf, fmt, toDate, todayStr,
   addWorkingDays, nextWorkingDay, workingDaysBetween,
@@ -1022,6 +1023,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 disabled={form.isMilestone}
                 inputProps={{ min: 1 }}
                 onChange={(e) => setForm((f) => ({ ...f, durationDays: Math.max(1, Number(e.target.value) || 1) }))}
+                onWheel={blurNumberInputOnWheel}
               />
             </Stack>
             {!form.isMilestone && (
@@ -1137,6 +1139,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                           inputProps={{ min: 1, style: { textAlign: 'right' } }}
                           sx={{ width: 90 }}
                           onChange={(e) => setImportDurations((prev) => ({ ...prev, [s.id]: Math.max(1, Number(e.target.value) || 1) }))}
+                          onWheel={blurNumberInputOnWheel}
                         />
                       </TableCell>
                     </TableRow>

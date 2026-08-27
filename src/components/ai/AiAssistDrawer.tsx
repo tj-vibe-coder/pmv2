@@ -13,7 +13,9 @@ import {
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import MicIcon from '@mui/icons-material/Mic';
+import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import { useTheme } from '@mui/material/styles';
+import { useNavigate } from 'react-router-dom';
 import type { AiHealthResponse, AiPageContext } from '../../types/AiAssist';
 import { describeAiPage } from '../../ai/pageContext';
 import { fetchAiHealth } from '../../services/aiAssistService';
@@ -72,6 +74,7 @@ export default function AiAssistDrawer({
     else void startVoice();
   };
   const theme = useTheme();
+  const navigate = useNavigate();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   // The provider currently does not expose its feature flag. A missing page context
   // is therefore treated as unavailable too, preventing a request without scope.
@@ -104,9 +107,14 @@ export default function AiAssistDrawer({
           {viewing ? <Chip label={`Now viewing ${viewing}`} size="small" variant="outlined" /> : null}
           {isVoiceActive && <Chip color="primary" label="Always on" size="small" />}
         </Stack>
-        <IconButton aria-label="Close IOCT Assist" onClick={close}>
-          <CloseIcon />
-        </IconButton>
+        <Stack direction="row">
+          <IconButton aria-label="Open full view" onClick={() => navigate('/assist')}>
+            <OpenInFullIcon fontSize="small" />
+          </IconButton>
+          <IconButton aria-label="Close IOCT Assist" onClick={close}>
+            <CloseIcon />
+          </IconButton>
+        </Stack>
       </Stack>
       <Divider />
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', p: 2 }}>
@@ -130,7 +138,16 @@ export default function AiAssistDrawer({
                 proposal={pendingProposal}
               />
             ) : null}
-            <AiMessageList messages={messages} onNavigateSource={onNavigateSource} />
+            <AiMessageList
+              messages={messages}
+              onFollowUp={(question) => send(question, pageContext)}
+              onNavigateSource={onNavigateSource}
+              onOpenStudio={(chart) => {
+                close();
+                const target = chart.tool === 'get_expense_summary' ? '/finance/analytics' : '/projects/analytics';
+                navigate(target, { state: { chart } });
+              }}
+            />
             {lastMessage?.role === 'error' && (
               <Button onClick={() => retry(pageContext)} sx={{ mt: 1 }}>Retry</Button>
             )}

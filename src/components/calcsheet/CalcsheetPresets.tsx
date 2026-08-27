@@ -12,6 +12,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { LaborRolePreset } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
+import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 
 const empty: Omit<LaborRolePreset, 'id'> = {
   role: '', group: 'engineering', dailyRate: 0, allowance: 0,
@@ -181,8 +182,8 @@ export default function Presets() {
               <MenuItem value="engineering">Engineering / Automation</MenuItem>
               <MenuItem value="labor">Laborers</MenuItem>
             </TextField>
-            <TextField label="Daily Rate (PHP)" type="number" value={form.dailyRate} onChange={(e) => setForm({ ...form, dailyRate: parseFloat(e.target.value) || 0 })} fullWidth />
-            <TextField label="Allowance (PHP)" type="number" value={form.allowance} onChange={(e) => setForm({ ...form, allowance: parseFloat(e.target.value) || 0 })} fullWidth />
+            <TextField label="Daily Rate (PHP)" type="text" inputMode="decimal" value={form.dailyRate} onChange={(e) => setForm({ ...form, dailyRate: parseLenientFloat(e.target.value) })} fullWidth />
+            <TextField label="Allowance (PHP)" type="text" inputMode="decimal" value={form.allowance} onChange={(e) => setForm({ ...form, allowance: parseLenientFloat(e.target.value) })} fullWidth />
             <Typography variant="caption" color="text.secondary">
               Daily cost = {PHP(form.dailyRate + form.allowance)}
             </Typography>

@@ -21,6 +21,7 @@ import {
   Build as BuildIcon,
   Summarize as PnLIcon,
   ReceiptLong as TaxLedgerIcon,
+  AutoAwesome as AutoAwesomeIcon,
 } from '@mui/icons-material';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
 
@@ -77,6 +78,29 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
         </Tooltip>
       </ListItem>
 
+      {/* Finance Analytics Studio (Data Formulator) */}
+      <ListItem disablePadding sx={{ mb: 0.5 }}>
+        <Tooltip title={isExpanded ? '' : 'Finance Analytics'} placement="right" arrow>
+          <ListItemButton
+            selected={location.pathname === '/finance/analytics' || location.pathname === '/analytics/finance'}
+            onClick={() => navigate('/finance/analytics')}
+            sx={navBtnSx(location.pathname === '/finance/analytics' || location.pathname === '/analytics/finance')}
+          >
+            <ListItemIcon sx={iconSx()}>
+              <AutoAwesomeIcon />
+            </ListItemIcon>
+            {isExpanded && (
+              <ListItemText
+                primary="Finance Analytics"
+                secondary="Expense, CA & SOA formulation"
+                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                sx={{ color: 'white' }}
+              />
+            )}
+          </ListItemButton>
+        </Tooltip>
+      </ListItem>
+
       {/* Collections & AR */}
       <ListItem disablePadding sx={{ mb: 0.5 }}>
         <Tooltip title={isExpanded ? '' : 'Collections & AR'} placement="right" arrow>
@@ -92,6 +116,29 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
               <ListItemText
                 primary="Collections & AR"
                 secondary="Invoices, due dates, collections"
+                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                sx={{ color: 'white' }}
+              />
+            )}
+          </ListItemButton>
+        </Tooltip>
+      </ListItem>
+
+      {/* Statements of Account (SOA) */}
+      <ListItem disablePadding sx={{ mb: 0.5 }}>
+        <Tooltip title={isExpanded ? '' : 'Statements of Account'} placement="right" arrow>
+          <ListItemButton
+            selected={location.pathname === '/finance/soa' || location.pathname.startsWith('/finance/soa/')}
+            onClick={() => navigate('/finance/soa')}
+            sx={navBtnSx(location.pathname === '/finance/soa' || location.pathname.startsWith('/finance/soa/'))}
+          >
+            <ListItemIcon sx={iconSx()}>
+              <TaxLedgerIcon />
+            </ListItemIcon>
+            {isExpanded && (
+              <ListItemText
+                primary="Statements of Account"
+                secondary="Partner (ACTI) & client SOAs"
                 secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                 sx={{ color: 'white' }}
               />

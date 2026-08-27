@@ -6,6 +6,8 @@ import { Box } from '@mui/material';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
 import AiAssistHost from './components/ai/AiAssistHost';
+import AiAssistPage from './components/ai/AiAssistPage';
+import AnalyticsStudioPage from './components/analytics/AnalyticsStudioPage';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
@@ -25,6 +27,7 @@ import UtilitiesPage from './components/UtilitiesPage';
 import EHSPage from './components/EHSPage';
 import IDGeneratorPage from './components/IDGeneratorPage';
 import AcknowledgementReceiptPage from './components/AcknowledgementReceiptPage';
+import SystemBackupsPage from './components/SystemBackupsPage';
 import DirectLaborPage from './components/DirectLaborPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
 import UsersPage from './components/UsersPage';
@@ -38,6 +41,8 @@ import ProjectExpenseReport from './components/finance/ProjectExpenseReport';
 import OverheadExpensesPage from './components/OverheadExpensesPage';
 import CompanyPnLPage from './components/finance/CompanyPnLPage';
 import TaxFilerLedgerPage from './components/finance/TaxFilerLedgerPage';
+import SoaDashboardPage from './components/finance/soa/SoaDashboardPage';
+import SoaDetailView from './components/finance/soa/SoaDetailView';
 import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
 import DTRPage from './components/employee/DTRPage';
@@ -157,6 +162,15 @@ const SuperadminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) 
   return <>{children}</>;
 };
 
+// Admin & Superadmin route: redirect to dashboard if neither admin nor superadmin
+const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
+  if (user?.role !== 'superadmin' && user?.role !== 'admin') {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <>{children}</>;
+};
+
 // Employee guard: redirect user/viewer roles to the employee portal
 const EmployeeGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
@@ -246,6 +260,59 @@ function App() {
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/scan" element={<ScanPage />} />
+            <Route
+              path="/assist"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <AiAssistPage />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/analytics" element={<Navigate to="/projects/analytics" replace />} />
+            <Route path="/analytics/studio" element={<Navigate to="/projects/analytics" replace />} />
+            <Route path="/analytics/projects" element={<Navigate to="/projects/analytics" replace />} />
+            <Route path="/analytics/sales" element={<Navigate to="/sales/analytics" replace />} />
+            <Route path="/analytics/finance" element={<Navigate to="/finance/analytics" replace />} />
+            <Route
+              path="/projects/analytics"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <AnalyticsStudioPage domainScope="projects" />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/analytics"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <AnalyticsStudioPage domainScope="sales" />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/analytics"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <AnalyticsStudioPage domainScope="finance" />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/dashboard"
               element={
@@ -392,6 +459,7 @@ function App() {
               <Route path="ehs/:tab?" element={<EHSPage />} />
               <Route path="id-generator" element={<IDGeneratorPage />} />
               <Route path="acknowledgement-receipt" element={<AcknowledgementReceiptPage />} />
+              <Route path="backups" element={<AdminRoute><SystemBackupsPage /></AdminRoute>} />
             </Route>
             <Route path="/id-generator" element={<Navigate to="/utilities/id-generator" replace />} />
             <Route 
@@ -431,6 +499,7 @@ function App() {
             <Route path="/investment-tracker" element={<RedirectWithSearch to="/finance/investment-tracker" />} />
             <Route path="/payroll" element={<RedirectWithSearch to="/finance/payroll" />} />
             <Route path="/collections" element={<RedirectWithSearch to="/finance/collections" />} />
+            <Route path="/soa" element={<RedirectWithSearch to="/finance/soa" />} />
             <Route
               path="/finance"
               element={
@@ -450,6 +519,30 @@ function App() {
                   <EmployeeGuard>
                     <AppLayout>
                       <CollectionsDashboard />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/soa"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <SoaDashboardPage />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/soa/:id"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <SoaDetailView />
                     </AppLayout>
                   </EmployeeGuard>
                 </ProtectedRoute>

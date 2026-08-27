@@ -7,7 +7,7 @@ test('registry exposes exactly the approved read-only tools', () => {
   assert.deepEqual([...registry.keys()].sort(), [
     'get_expense_summary', 'get_opportunity_snapshot', 'get_portfolio_summary',
     'get_project_snapshot', 'get_quotation_summary', 'list_quotations_for_opportunity',
-    'navigate_to_record', 'propose_opportunity_update', 'search_clients', 'search_projects', 'search_sales_opportunities'
+    'navigate_to_record', 'propose_opportunity_update', 'query_analytics', 'search_clients', 'search_projects', 'search_sales_opportunities'
   ]);
 });
 
@@ -321,3 +321,36 @@ test('propose_opportunity_update returns error code on invalid input when handle
   assert.equal(result.data.applied, false);
   assert.equal(result.data.error, 'field_not_allowed');
 });
+
+test('query_analytics aggregates project data by category and attaches provenance', async () => {
+  const fakeDb = {
+    collection: (name) => {
+      assert.equal(name, 'projects');
+      return {
+        get: async () => ({
+          docs: [
+            { id: 'p1', data: () => ({ project_category: 'HVAC', contract_amount: 1000000, year: 2026 }) },
+            { id: 'p2', data: () => ({ project_category: 'HVAC', contract_amount: 500000, year: 2026 }) },
+            { id: 'p3', data: () => ({ project_category: 'Electrical', contract_amount: 800000, year: 2026 }) },
+          ],
+        }),
+      };
+    },
+  };
+  const registry = createToolRegistry({ db: fakeDb, now: () => new Date('2026-08-27T00:00:00.000Z') });
+  const result = await registry.get('query_analytics').execute({
+    domain: 'projects',
+    groupBy: 'category',
+    year: 2026,
+  });
+  assert.equal(result.data.length, 2);
+  assert.equal(result.data[0].group, 'HVAC');
+  assert.equal(result.data[0].count, 2);
+  assert.equal(result.data[0].totalAmount, 1500000);
+  assert.equal(result.data[0].averageAmount, 750000);
+  assert.equal(result.data[1].group, 'Electrical');
+  assert.equal(result.data[1].totalAmount, 800000);
+  assert.ok(result.sources.length > 0);
+  assert.equal(result.asOf, '2026-08-27T00:00:00.000Z');
+});
+

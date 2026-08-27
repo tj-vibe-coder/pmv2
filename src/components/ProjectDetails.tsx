@@ -56,6 +56,7 @@ import { ORDER_TRACKER_STORAGE_KEY } from './OrderTrackerPage';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import { ensureExecutionFolder, resolveSharingUrl } from '../services/onedriveFolderService';
+import { getSoasByProject } from '../services/soaService';
 
 const PROJECT_EXPENSES_KEY = 'projectExpenses';
 const MATERIAL_REQUESTS_KEY = 'materialRequests';
@@ -629,6 +630,8 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     setBudgetAmount(getBudget(project.id));
   }, [project.id]);
 
+  const [projectSoas, setProjectSoas] = useState<Array<{ id: string; soaNo: string; date: string; status: string; recipientName: string; matchingItems: any[] }>>([]);
+
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/invoices?project_id=${encodeURIComponent(String(project.id))}`)
@@ -637,6 +640,13 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
         if (!cancelled) setProjectInvoices(Array.isArray(invs) ? invs : []);
       })
       .catch(() => {});
+
+    getSoasByProject(String(project.id))
+      .then(soas => {
+        if (!cancelled) setProjectSoas(soas);
+      })
+      .catch(() => {});
+
     return () => { cancelled = true; };
   }, [project.id]);
 
@@ -1708,16 +1718,79 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                   </Box>
                 )}
 
-                {/* Empty state */}
-                {!scheduleEditMode && schedule.length === 0 && (
-                  <Box sx={{ py: 4, textAlign: 'center' }}>
-                    <ReceiptIcon sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                      No billing schedule set up for this project.
-                    </Typography>
-                    <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={openScheduleEdit}>
-                      Set Up Billing Schedule
-                    </Button>
+                {/* Statements of Account (SOA) Link Section */}
+                {(projectSoas.length > 0 || project.with_acti) && (
+                  <Box sx={{ mt: 3, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+                        Statements of Account (SOA)
+                      </Typography>
+                      <Button
+                        size="small"
+                        variant="text"
+                        endIcon={<OpenInNewIcon fontSize="small" />}
+                        onClick={() => navigate('/finance/soa')}
+                        sx={{ fontSize: '0.75rem' }}
+                      >
+                        Open SOA Module
+                      </Button>
+                    </Box>
+
+                    {projectSoas.length > 0 ? (
+                      <Stack spacing={1}>
+                        {projectSoas.map((s) => (
+                          <Box
+                            key={s.id}
+                            onClick={() => navigate(`/finance/soa/${s.id}`)}
+                            sx={{
+                              p: 1.5,
+                              borderRadius: 1,
+                              bgcolor: '#f8fafc',
+                              border: '1px solid #e2e8f0',
+                              cursor: 'pointer',
+                              '&:hover': { bgcolor: '#edf2f7' },
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              flexWrap: 'wrap',
+                              gap: 1,
+                            }}
+                          >
+                            <Box>
+                              <Typography variant="body2" sx={{ fontWeight: 700, fontFamily: 'monospace', color: NET_PACIFIC_COLORS.primary }}>
+                                {s.soaNo}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {s.recipientName} · Issued {s.date}
+                              </Typography>
+                            </Box>
+                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                              {s.matchingItems.map((it, idx) => (
+                                <Chip
+                                  key={idx}
+                                  size="small"
+                                  label={it.hasPo ? `PO: ${it.poNumber}` : 'Pending PO'}
+                                  color={it.hasPo ? 'success' : 'warning'}
+                                  variant="outlined"
+                                  sx={{ fontSize: '0.7rem' }}
+                                />
+                              ))}
+                              <Chip
+                                size="small"
+                                label={s.status.replace(/_/g, ' ').toUpperCase()}
+                                sx={{ fontSize: '0.7rem', fontWeight: 600 }}
+                              />
+                            </Box>
+                          </Box>
+                        ))}
+                      </Stack>
+                    ) : (
+                      <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: '#f8fafc', border: '1px dashed #cbd5e1' }}>
+                        <Typography variant="caption" color="text.secondary">
+                          This project is marked for ACTI subcontractor execution. No statement of account has been issued for it yet.
+                        </Typography>
+                      </Box>
+                    )}
                   </Box>
                 )}
               </Paper>

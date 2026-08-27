@@ -11,6 +11,7 @@ import {
   arrayMove, useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { sanitizeNumericText, parseLenientFloat } from '../../utils/calcsheet/numberInput';
 
 export interface Column<T> {
   key: keyof T | string;
@@ -55,11 +56,16 @@ function NumberCell({
     <TextField
       value={display}
       onChange={(e) => {
-        if (nullable && e.target.value === '') return onChange(undefined);
-        onChange(parseFloat(e.target.value) || 0);
+        // Plain text + manual sanitize/parse — type="number" can't handle
+        // thousands separators and mangles pasted comma-formatted figures
+        // (e.g. "503,170.08" copied from Excel/a PDF).
+        const raw = sanitizeNumericText(e.target.value);
+        if (nullable && raw === '') return onChange(undefined);
+        onChange(parseLenientFloat(raw));
       }}
       onFocus={(e) => e.target.select()}
-      type="number"
+      type="text"
+      inputMode="decimal"
       variant="standard"
       placeholder={placeholder ?? '0'}
       disabled={readOnly}

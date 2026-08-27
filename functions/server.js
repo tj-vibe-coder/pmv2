@@ -12,6 +12,8 @@ const { buildTextSystemInstruction } = require('./server/aiAssist/prompt');
 const { createAssistChatClient } = require('./server/aiAssist/providers');
 const { GoogleGenAI: AiAssistGoogleGenAI } = require('@google/genai');
 const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
+const { createBackupsRouter } = require('./server/backups/router');
+const { createSoaRouter } = require('./server/soa/soaRouter');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -6666,6 +6668,27 @@ app.use('/api/ai-assist', createAiAssistRouter({
   geminiApiKey: process.env.GEMINI_API_KEY,
 }));
 // ========== END AI ASSIST ==========
+
+// ========== SYSTEM BACKUPS (Firestore recursive backup + OneDrive export, Admin only) ==========
+app.use('/api/backups', createBackupsRouter({
+  db,
+  admin,
+  getCurrentUser,
+  getGraphAppToken,
+  resolveCorporateDriveId,
+  ensureFolderByPath,
+}));
+// ========== END SYSTEM BACKUPS ==========
+
+// ========== STATEMENTS OF ACCOUNT (SOA Subcontractor & Client Billings) ==========
+app.use('/api/soa', createSoaRouter({
+  db,
+  getCurrentUser,
+  getGraphAppToken,
+  resolveCorporateDriveId,
+  ensureFolderByPath,
+}));
+// ========== END STATEMENTS OF ACCOUNT ==========
 
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {

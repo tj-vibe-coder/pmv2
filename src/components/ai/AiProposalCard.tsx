@@ -38,9 +38,20 @@ export default function AiProposalCard({
       <Typography color="text.secondary" variant="body2">
         {proposal.label || proposal.recordId || 'Opportunity'} · {proposal.field}
       </Typography>
-      <Typography sx={{ mt: 0.75 }} variant="body2">
-        {displayValue(proposal.currentValue)} → {displayValue(proposal.proposedValue)}
-      </Typography>
+      <Stack spacing={0.75} sx={{ mt: 0.75 }}>
+        <Box>
+          <Typography color="text.secondary" variant="caption">Current</Typography>
+          <Typography sx={{ whiteSpace: 'pre-wrap' }} variant="body2">
+            {displayValue(proposal.currentValue)}
+          </Typography>
+        </Box>
+        <Box>
+          <Typography color="text.secondary" variant="caption">Proposed</Typography>
+          <Typography sx={{ fontWeight: 600, whiteSpace: 'pre-wrap' }} variant="body2">
+            {displayValue(proposal.proposedValue)}
+          </Typography>
+        </Box>
+      </Stack>
       {proposal.reason ? (
         <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="caption">
           {proposal.reason}

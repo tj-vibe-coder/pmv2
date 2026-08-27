@@ -349,6 +349,62 @@ it('executes an allowlisted navigate_to_record result from a Live tool call', as
   expect(onNavigateRoute).toHaveBeenCalledWith('/sales/calcsheet/projects/opp1');
 });
 
+it('attaches a chart to the voice assistant message when a summary tool executes', async () => {
+  let handlers: {
+    onServerContent: (content: Record<string, unknown>) => void;
+    onToolCall: (call: { name: string; args: Record<string, unknown>; id: string }) => Promise<void>;
+  } | undefined;
+  (liveSession.getUserMedia as jest.Mock).mockResolvedValue({ getTracks: () => [] });
+  (liveSession.createCaptureContext as jest.Mock).mockReturnValue({
+    sampleRate: 48000,
+    createCaptureNode: () => ({ onFrame: null, disconnect: () => {} }),
+    close: async () => {},
+  });
+  (liveSession.createPlaybackContext as jest.Mock).mockReturnValue({
+    currentTime: 0,
+    createSourceFromPcm16: () => ({ onended: null, start: () => {}, stop: () => {} }),
+    close: async () => {},
+  });
+  (liveSession.connectSession as jest.Mock).mockImplementation(async (nextHandlers) => {
+    handlers = nextHandlers;
+    return { sendRealtimeInputPcm: () => {}, sendToolResponse: () => {}, sendClientContent: () => {}, close: () => {} };
+  });
+  (liveSession.executeLiveToolCall as jest.Mock).mockResolvedValue({
+    result: [
+      { group: 'Active', count: 3, totalBalance: 150000 },
+      { group: 'Completed', count: 5, totalBalance: 0 },
+    ],
+    sources: [],
+  });
+
+  renderHarness();
+  fireEvent.click(screen.getByText('start-voice'));
+  await waitFor(() => expect(handlers).toBeDefined());
+
+  await act(async () => {
+    await handlers!.onToolCall({ name: 'get_portfolio_summary', args: {}, id: 'c-chart' });
+    handlers!.onServerContent({
+      outputText: 'Here is the portfolio balance by status.',
+      outputDone: true,
+    });
+  });
+
+  await waitFor(() => {
+    const messages = JSON.parse(screen.getByTestId('messages').textContent || '[]');
+    const lastMsg = messages[messages.length - 1];
+    expect(lastMsg.role).toBe('assistant');
+    expect(lastMsg.chart).toEqual({
+      type: 'bar',
+      title: 'Portfolio balance by status',
+      tool: 'get_portfolio_summary',
+      data: [
+        { group: 'Active', count: 3, totalBalance: 150000 },
+        { group: 'Completed', count: 5, totalBalance: 0 },
+      ],
+    });
+  });
+});
+
 it('applies navigateTo from a typed chat answer', async () => {
   const onNavigateRoute = jest.fn();
   sendAiChatMock.mockResolvedValue({

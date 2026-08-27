@@ -224,3 +224,92 @@ test('surfaces propose_opportunity_update proposal on chat result', async () => 
   assert.equal(result.proposal.field, 'opportunityGrade');
   assert.equal(result.proposal.proposedValue, 'A');
 });
+
+test('chartRef resolves to the real tool result when that tool was actually called this turn', async () => {
+  const portfolioData = [
+    { group: 'Not Started', count: 3, totalContractAmount: 900000, totalBilled: 100000, totalBalance: 800000 },
+    { group: 'In Progress', count: 2, totalContractAmount: 500000, totalBilled: 200000, totalBalance: 300000 },
+  ];
+  const registry = makeRegistry({
+    get_portfolio_summary: { data: portfolioData, sources: [], asOf: 'x' },
+  });
+  let call = 0;
+  const client = {
+    send: async () => {
+      call += 1;
+      if (call === 1) return { functionCalls: [{ name: 'get_portfolio_summary', args: {} }] };
+      return {
+        finalResponse: {
+          answer: 'Not Started projects carry the largest balance.',
+          citationIds: [],
+          followUps: [],
+          chartRef: { tool: 'get_portfolio_summary', title: 'Balance by status' },
+        },
+      };
+    },
+  };
+  const result = await runChat({
+    client,
+    registry,
+    config: { maxToolRounds: 4, maxResultBytes: 60000 },
+    messages: [{ role: 'user', text: 'compare balance by status' }],
+    pageContext: null,
+    requestId: 'r-chart',
+  });
+  assert.deepEqual(result.chart, {
+    type: 'bar',
+    title: 'Balance by status',
+    tool: 'get_portfolio_summary',
+    data: portfolioData,
+  });
+});
+
+test('chartRef pointing at a tool never called this turn is dropped, not fatal', async () => {
+  const registry = makeRegistry({
+    get_expense_summary: { data: [{ group: 'Fuel', count: 1, totalAmount: 500 }], sources: [], asOf: 'x' },
+  });
+  let call = 0;
+  const client = {
+    send: async () => {
+      call += 1;
+      if (call === 1) return { functionCalls: [{ name: 'get_expense_summary', args: {} }] };
+      return {
+        finalResponse: {
+          answer: 'Here is the expense breakdown.',
+          citationIds: [],
+          followUps: [],
+          // References a tool that was never called this turn.
+          chartRef: { tool: 'get_portfolio_summary', title: 'Balance by status' },
+        },
+      };
+    },
+  };
+  const result = await runChat({
+    client,
+    registry,
+    config: { maxToolRounds: 4, maxResultBytes: 60000 },
+    messages: [{ role: 'user', text: 'expenses?' }],
+    pageContext: null,
+    requestId: 'r-chart-miss',
+  });
+  assert.equal(result.chart, null);
+  assert.equal(result.answer, 'Here is the expense breakdown.');
+});
+
+test('a malformed chartRef is dropped rather than failing the whole turn', async () => {
+  const registry = makeRegistry({});
+  const client = {
+    send: async () => ({
+      finalResponse: {
+        answer: 'No chart needed here.',
+        citationIds: [],
+        followUps: [],
+        chartRef: { tool: 'delete_everything', title: 'x' },
+      },
+    }),
+  };
+  const config = { maxToolRounds: 4, maxResultBytes: 60000 };
+  const result = await runChat({ client, registry, config, messages: [{ role: 'user', text: 'q' }], pageContext: null, requestId: 'r-chart-bad' });
+  assert.equal(result.chart, null);
+  assert.equal(result.answer, 'No chart needed here.');
+});

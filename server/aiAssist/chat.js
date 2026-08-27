@@ -10,17 +10,45 @@ function isPlainObject(value) {
   return proto === Object.prototype || proto === null;
 }
 
+// Tools whose result is already a flat, grouped-totals array — the only shape
+// the chart panel knows how to draw. chartRef is a POINTER at one of these
+// calls, never chart data itself: the model cannot put a wrong number in a
+// chart because it never writes the numbers, same trust boundary as citations.
+// v1 draws every chart as a single sequential-hue bar (magnitude-comparison is
+// the actual job of this data — see the app's dataviz guidance), so chartRef
+const CHARTABLE_TOOLS = ['get_portfolio_summary', 'get_expense_summary', 'query_analytics'];
+
+// A malformed or stale chartRef degrades to "no chart" rather than failing
+// the whole turn — the prose answer is still good even if the chart pointer
+// is bad, so this never throws.
+function sanitizeChartRef(value) {
+  if (!isPlainObject(value)) return null;
+  const { tool, title, type, xAxisKey } = value;
+  if (typeof tool !== 'string' || !CHARTABLE_TOOLS.includes(tool)) return null;
+  if (typeof title !== 'string' || title.length < 1 || title.length > 80) return null;
+  const allowedTypes = ['bar', 'horizontal_bar', 'line', 'area', 'pie', 'donut', 'composed'];
+  const chartType = (typeof type === 'string' && allowedTypes.includes(type)) ? type : 'bar';
+  const cleanXAxisKey = (typeof xAxisKey === 'string' && xAxisKey.length <= 40) ? xAxisKey : undefined;
+  return {
+    tool,
+    title,
+    type: chartType,
+    ...(cleanXAxisKey ? { xAxisKey: cleanXAxisKey } : {}),
+  };
+}
+
 function validateFinalResponse(response) {
   if (!isPlainObject(response)) {
     throw new Error('finalResponse must be a plain object');
   }
 
-  const allowedKeys = ['answer', 'citationIds', 'followUps'];
+  const requiredKeys = ['answer', 'citationIds', 'followUps'];
+  const allowedKeys = [...requiredKeys, 'chartRef'];
   const unexpected = Object.keys(response).filter((key) => !allowedKeys.includes(key));
   if (unexpected.length > 0) {
     throw new Error(`finalResponse has unexpected field(s): ${unexpected.join(', ')}`);
   }
-  for (const key of allowedKeys) {
+  for (const key of requiredKeys) {
     if (!(key in response)) {
       throw new Error(`finalResponse is missing required field "${key}"`);
     }
@@ -42,7 +70,9 @@ function validateFinalResponse(response) {
     throw new Error('finalResponse.followUps must be an array of at most 3 strings, each at most 120 characters');
   }
 
-  return { answer, citationIds, followUps };
+  const chartRef = 'chartRef' in response ? sanitizeChartRef(response.chartRef) : null;
+
+  return { answer, citationIds, followUps, chartRef };
 }
 
 async function runChat({ client, registry, config, messages, pageContext, priorToolResults, requestId }) {
@@ -68,6 +98,19 @@ async function runChat({ client, registry, config, messages, pageContext, priorT
       const citations = finalResponse.citationIds
         .map((id) => sourceMap.get(id))
         .filter((source) => source !== undefined);
+      let chart = null;
+      if (finalResponse.chartRef) {
+        const match = [...toolResults].reverse().find((r) => r.name === finalResponse.chartRef.tool);
+        if (match && Array.isArray(match.data)) {
+          chart = {
+            type: finalResponse.chartRef.type || 'bar',
+            title: finalResponse.chartRef.title,
+            tool: finalResponse.chartRef.tool,
+            ...(finalResponse.chartRef.xAxisKey ? { xAxisKey: finalResponse.chartRef.xAxisKey } : {}),
+            data: match.data,
+          };
+        }
+      }
       return {
         answer: finalResponse.answer,
         citations,
@@ -75,6 +118,7 @@ async function runChat({ client, registry, config, messages, pageContext, priorT
         notice: 'AI-generated summary from IOCT records. Verify before making decisions.',
         navigateTo,
         proposal,
+        chart,
       };
     }
 

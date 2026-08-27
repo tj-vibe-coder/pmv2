@@ -29,6 +29,7 @@ import {
 } from '../../utils/calcsheet/calc';
 import { ISSUER_NAMES, DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from '../../utils/calcsheet/defaultTerms';
 import { quotationRefNo } from '../../utils/calcsheet/codes';
+import { sanitizeNumericText, parseLenientFloat, parseLenientInt } from '../../utils/calcsheet/numberInput';
 import { FloatingTotalsWidget } from './FloatingTotalsWidget';
 import type {
   ComponentLine, GeneralReqLine, HistoricalPriceSource, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
@@ -170,10 +171,16 @@ function NumField({
 }: { label: string; value: number; onChange: (v: number) => void; integer?: boolean; sx?: any; helperText?: string; disabled?: boolean }) {
   const [text, setText] = useState(() => (value === 0 ? '' : String(value)));
   const lastEmitted = useRef(value);
+  const focused = useRef(false);
 
   useEffect(() => {
     // Only resync from outside (e.g. another control writing the same field, or a reset) —
     // not from the onChange we just fired ourselves, which would clobber in-progress typing.
+    // Some callers pass a `value` derived by round-tripping through other math (e.g. a peso
+    // discount recomputed from a stored percentage) rather than echoing what was typed —
+    // that round trip rarely lands on the exact same float, so skip resyncing while the
+    // field is focused or we'd stomp on the user's keystrokes mid-type.
+    if (focused.current) return;
     if (value !== lastEmitted.current) {
       setText(value === 0 ? '' : String(value));
       lastEmitted.current = value;
@@ -184,18 +191,29 @@ function NumField({
     <TextField
       label={label}
       size="small"
-      type="number"
+      type="text"
+      inputMode="decimal"
       value={text}
       placeholder="0"
       onChange={(e) => {
-        const raw = e.target.value;
+        // type="number" can't parse thousands separators and browsers are
+        // inconsistent (sometimes outright buggy) about pasted comma-formatted
+        // figures like "503,170.08" copied from Excel/a PDF — so this is a
+        // plain text field and we sanitize+parse pasted/typed input ourselves.
+        const raw = sanitizeNumericText(e.target.value);
         setText(raw);
-        const parsed = integer ? parseInt(raw, 10) : parseFloat(raw);
-        const num = Number.isFinite(parsed) ? parsed : 0;
-        lastEmitted.current = num;
-        onChange(num);
+        const parsed = integer ? parseLenientInt(raw) : parseLenientFloat(raw);
+        lastEmitted.current = parsed;
+        onChange(parsed);
       }}
-      onFocus={(e) => e.target.select()}
+      onFocus={(e) => { focused.current = true; e.target.select(); }}
+      onBlur={() => {
+        focused.current = false;
+        if (value !== lastEmitted.current) {
+          setText(value === 0 ? '' : String(value));
+          lastEmitted.current = value;
+        }
+      }}
       disabled={disabled}
       sx={sx}
       helperText={helperText}
