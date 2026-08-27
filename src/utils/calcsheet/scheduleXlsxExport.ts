@@ -1,8 +1,9 @@
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
-import type { Project } from '../../types/Quotation';
 import { SCHEDULE_CATEGORY_COLORS, type ScheduleTask } from '../../types/ScheduleTask';
 import { addDays, daysBetween, durationOf, formatLocalDate, MS_PER_DAY, toDate } from './scheduleDates';
+
+type ScheduleProjectRef = { code?: string; name?: string };
 
 function hexToArgb(hex: string): string {
   return `FF${hex.replace('#', '').toUpperCase()}`;
@@ -36,7 +37,7 @@ function computeRange(tasks: ScheduleTask[]): { start: Date; end: Date } {
   return { start: min, end: max };
 }
 
-export async function exportScheduleXlsx(project: Project, tasks: ScheduleTask[]): Promise<void> {
+export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: ScheduleTask[]): Promise<void> {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'IOCT Calcsheet';
   wb.created = new Date();
@@ -128,5 +129,5 @@ export async function exportScheduleXlsx(project: Project, tasks: ScheduleTask[]
 
   const buffer = await wb.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/octet-stream' });
-  saveAs(blob, `${project.code || 'schedule'}-work-schedule.xlsx`);
+  saveAs(blob, `${project.code || 'schedule'}-gantt-chart.xlsx`);
 }

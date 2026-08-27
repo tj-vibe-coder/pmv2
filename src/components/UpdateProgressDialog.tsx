@@ -27,6 +27,8 @@ interface UpdateProgressDialogProps {
   project: Project;
   onClose: () => void;
   onSaved: (project: Project) => void;
+  /** True when the project has a Work Schedule that drives its progress. */
+  hasSchedule?: boolean;
 }
 
 const MARKS = [
@@ -42,6 +44,7 @@ const UpdateProgressDialog: React.FC<UpdateProgressDialogProps> = ({
   project,
   onClose,
   onSaved,
+  hasSchedule = false,
 }) => {
   const [progress, setProgress] = useState(project.actual_site_progress_percent ?? 0);
   const [notes, setNotes] = useState('');
@@ -124,6 +127,14 @@ const UpdateProgressDialog: React.FC<UpdateProgressDialogProps> = ({
       <DialogContent>
         <Stack spacing={3} sx={{ mt: 1 }}>
           {error && <Alert severity="error">{error}</Alert>}
+
+          {hasSchedule && (
+            <Alert severity="warning">
+              This project has a <strong>Gantt Chart</strong> schedule, which normally sets its site progress.
+              A value you enter here will be <strong>recalculated from the schedule</strong> (replacing this)
+              the next time a schedule task changes.
+            </Alert>
+          )}
 
           <Box>
             <Typography variant="body2" color="text.secondary" gutterBottom>

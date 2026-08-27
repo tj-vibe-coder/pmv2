@@ -55,6 +55,7 @@ import CalcsheetProjectDetail from './components/calcsheet/CalcsheetProjectDetai
 import CalcsheetQuotationEditor from './components/calcsheet/CalcsheetQuotationEditor';
 import CalcsheetCompareView from './components/calcsheet/CalcsheetCompareView';
 import CalcsheetProjectSchedule from './components/calcsheet/CalcsheetProjectSchedule';
+import ProjectSchedulePage from './components/ProjectSchedulePage';
 import CalcsheetClients from './components/calcsheet/CalcsheetClients';
 import CalcsheetPresets from './components/calcsheet/CalcsheetPresets';
 import PricelistBrowser from './components/pricelists/PricelistBrowser';
@@ -751,6 +752,16 @@ function App() {
                     <CalcsheetInit>
                       <CalcsheetProjectSchedule />
                     </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/projects/:id/schedule"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <ProjectSchedulePage />
                   </AppLayout>
                 </ProtectedRoute>
               }
