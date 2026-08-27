@@ -1,6 +1,36 @@
 # Task Log
 
-## 2026-08-27 — Implemented Expense Forecasting & Recurring Run Rate Engine in Finance Analytics Studio
+## 2026-08-27 — Restructured Finance Navigation Hierarchy, Unique Icons & Purchase Order Integration
+
+Overhauled the Finance workspace navigation bar, Finance Home dashboard shortcuts, and Projects sidebar integration for clear hierarchy, zero redundancy, and unique semantic icons:
+- **Integrated Purchase Orders into Finance Workspace (`/finance/purchase-order`)**:
+  - Added Purchase Orders (`src/components/PurchaseOrderPage.tsx`) directly into the Finance Outflow & Expense operations, giving finance managers complete oversight over procurement commitments and supplier purchase orders.
+  - Mounted `/finance/purchase-order` route in `src/App.tsx`.
+- **Differentiated & Semantic Iconography (Zero Repeating Icons)**:
+  - Finance Home: `AccountBalance`
+  - Finance Analytics Studio: `AutoAwesome`
+  - Collections & AR: `Paid`
+  - Statements of Account (SOA): `Description`
+  - Sales EWT / 2307: `FactCheck`
+  - Expense Monitoring: `AccountBalanceWallet` (parent)
+    - Expense Register: `Receipt`
+    - Cash Advances (CA): `RequestQuote`
+    - Liquidation Form: `AssignmentTurnedIn`
+    - Direct Labor: `Engineering`
+  - Purchase Orders: `ShoppingCart`
+  - Reimbursements: `PriceCheck`
+  - Tax Filer Ledger: `MenuBook`
+  - Profit & Loss: `Summarize`
+- **Moved Sales EWT / 2307 under Compliance & Accounting (`/finance/ewt-2307`)**:
+  - Placed BIR 2307 customer withholding certificate tracking under Compliance & Accounting alongside the Tax Filer Ledger (`/finance/tax-ledger`) and Profit & Loss, keeping BIR tax credit compliance consolidated.
+- **Streamlined Projects Workspace Sidebar (`src/components/Sidebar.tsx`)**:
+  - Removed `Expense Monitoring` completely from the Projects workspace sidebar, preserving clean domain separation so that all accounting, disbursements, and expense monitoring are exclusively managed within the Finance workspace.
+- **Enhanced Budget vs Actual Spending Chart Visual Encoding (`src/components/ExpenseMonitoring.tsx`)**:
+  - Updated the bar chart color scheme to use high-contrast palettes (Royal Blue `#3b82f6` for Budget and Vivid Amber `#f97316` for Spent).
+  - Clarified that projects with set budgets and zero recorded disbursements will show only the budget baseline until expenses/liquidations are recorded.
+- **Verification**:
+  - `npx tsc --noEmit` passed with 0 errors.
+  - Full unit test suite (41/41 suites, 301/301 tests) passed cleanly.
 
 Implemented comprehensive expense forecasting and fixed recurring run rate modeling in Finance Analytics Studio (`/finance/analytics` via `src/components/analytics/AnalyticsStudioPage.tsx`) and backend AI deterministic tools (`server/aiAssist/tools.js`, `server/aiAssist/schemas.js`):
 - **Fixed Recurring vs Variable Expense Modeling & Scenario Projections**:

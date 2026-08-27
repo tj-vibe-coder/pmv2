@@ -632,6 +632,18 @@ function App() {
               }
             />
             <Route
+              path="/finance/purchase-order"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <PurchaseOrderPage />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/finance/overhead-expenses"
               element={
                 <ProtectedRoute>
