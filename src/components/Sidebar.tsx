@@ -91,9 +91,6 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
     if (REPORTS_PATHS.some((p) => location.pathname.startsWith(p))) {
       setReportsOpen(true);
     }
-    if (EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)) {
-      setExpenseMonitoringOpen(true);
-    }
     if (UTILITIES_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(p))) {
       setUtilitiesOpen(true);
     }
