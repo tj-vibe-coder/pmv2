@@ -47,27 +47,76 @@ const GRADE_OPTIONS: OpportunityGrade[] = OPPORTUNITY_GRADES;
 type SortKey = 'code' | 'name' | 'customer' | 'date' | 'updatedAt' | 'status' | 'grade' | 'grandTotal' | 'margin';
 type SortDir = 'asc' | 'desc';
 
-// Last-used sort persists per browser so the list reopens the way the user left it
-const SORT_PREF_KEY = 'calcsheet-projects-sort';
+// Last-used sort + filters persist per browser so the list reopens the way the user left it
+const PREFS_KEY = 'calcsheet-projects-prefs';
+const SORT_PREF_KEY = 'calcsheet-projects-sort'; // pre-filter-prefs key, still read for migration
 const SORT_KEYS: SortKey[] = ['code', 'name', 'customer', 'date', 'updatedAt', 'status', 'grade', 'grandTotal', 'margin'];
+const LEGACY_FILTERS = ['all', 'legacy', 'current'] as const;
 
-function loadSortPref(): { key: SortKey; dir: SortDir } {
+type ListPrefs = {
+  sortKey: SortKey;
+  sortDir: SortDir;
+  search: string;
+  statusFilter: ProjectStatus[];
+  customerFilter: string;
+  yearFilter: string;
+  legacyFilter: 'all' | 'legacy' | 'current';
+  ongoingOnly: boolean;
+  hideInactive: boolean;
+};
+
+function defaultListPrefs(): ListPrefs {
+  return {
+    sortKey: 'updatedAt',
+    sortDir: 'desc',
+    search: '',
+    statusFilter: [],
+    customerFilter: 'all',
+    yearFilter: 'all',
+    legacyFilter: 'all',
+    ongoingOnly: false,
+    hideInactive: true,
+  };
+}
+
+function loadListPrefs(): ListPrefs {
+  const defaults = defaultListPrefs();
   try {
-    const raw = localStorage.getItem(SORT_PREF_KEY);
+    const raw = localStorage.getItem(PREFS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      return {
+        sortKey: SORT_KEYS.includes(parsed.sortKey) ? parsed.sortKey : defaults.sortKey,
+        sortDir: parsed.sortDir === 'asc' || parsed.sortDir === 'desc' ? parsed.sortDir : defaults.sortDir,
+        search: typeof parsed.search === 'string' ? parsed.search : '',
+        statusFilter: Array.isArray(parsed.statusFilter)
+          ? parsed.statusFilter.filter((s: string): s is ProjectStatus =>
+              (PROJECT_STATUSES as readonly string[]).includes(s))
+          : [],
+        customerFilter: typeof parsed.customerFilter === 'string' ? parsed.customerFilter : 'all',
+        yearFilter: typeof parsed.yearFilter === 'string' ? parsed.yearFilter : 'all',
+        legacyFilter: (LEGACY_FILTERS as readonly string[]).includes(parsed.legacyFilter)
+          ? parsed.legacyFilter
+          : 'all',
+        ongoingOnly: !!parsed.ongoingOnly,
+        hideInactive: parsed.hideInactive !== false,
+      };
+    }
+    const oldSort = localStorage.getItem(SORT_PREF_KEY);
+    if (oldSort) {
+      const parsed = JSON.parse(oldSort);
       if (SORT_KEYS.includes(parsed.key) && (parsed.dir === 'asc' || parsed.dir === 'desc')) {
-        return { key: parsed.key, dir: parsed.dir };
+        return { ...defaults, sortKey: parsed.key, sortDir: parsed.dir };
       }
     }
   } catch { /* corrupted pref — fall through to default */ }
-  return { key: 'updatedAt', dir: 'desc' }; // most recently edited projects at the top by default
+  return defaults;
 }
 
-function saveSortPref(key: SortKey, dir: SortDir) {
+function saveListPrefs(prefs: ListPrefs) {
   try {
-    localStorage.setItem(SORT_PREF_KEY, JSON.stringify({ key, dir }));
-  } catch { /* storage unavailable (private mode/quota) — sort still works for the session */ }
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch { /* storage unavailable (private mode/quota) */ }
 }
 
 const empty = {
@@ -211,15 +260,22 @@ export default function Projects() {
   };
 
   // ── filter + sort state ────────────────────────────────────────────────────
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<ProjectStatus[]>([]);
-  const [customerFilter, setCustomerFilter] = useState<string>('all');
-  const [yearFilter, setYearFilter] = useState<string>('all');
-  const [legacyFilter, setLegacyFilter] = useState<'all' | 'legacy' | 'current'>('all');
-  const [ongoingOnly, setOngoingOnly] = useState(false);
-  const [hideInactive, setHideInactive] = useState(true); // hide lost/inactive by default
-  const [sortKey, setSortKey] = useState<SortKey>(() => loadSortPref().key);
-  const [sortDir, setSortDir] = useState<SortDir>(() => loadSortPref().dir);
+  const [initPrefs] = useState(loadListPrefs);
+  const [search, setSearch] = useState(initPrefs.search);
+  const [statusFilter, setStatusFilter] = useState<ProjectStatus[]>(initPrefs.statusFilter);
+  const [customerFilter, setCustomerFilter] = useState<string>(initPrefs.customerFilter);
+  const [yearFilter, setYearFilter] = useState<string>(initPrefs.yearFilter);
+  const [legacyFilter, setLegacyFilter] = useState<'all' | 'legacy' | 'current'>(initPrefs.legacyFilter);
+  const [ongoingOnly, setOngoingOnly] = useState(initPrefs.ongoingOnly);
+  const [hideInactive, setHideInactive] = useState(initPrefs.hideInactive);
+  const [sortKey, setSortKey] = useState<SortKey>(initPrefs.sortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(initPrefs.sortDir);
+
+  useEffect(() => {
+    saveListPrefs({
+      sortKey, sortDir, search, statusFilter, customerFilter, yearFilter, legacyFilter, ongoingOnly, hideInactive,
+    });
+  }, [sortKey, sortDir, search, statusFilter, customerFilter, yearFilter, legacyFilter, ongoingOnly, hideInactive]);
 
   // OneDrive is no longer a hard gate on project creation. When it's configured
   // but the user isn't signed in, we still let them create the project and link
@@ -357,7 +413,6 @@ export default function Projects() {
       : (key === 'date' || key === 'updatedAt' || key === 'grandTotal' ? 'desc' : 'asc');
     setSortKey(key);
     setSortDir(nextDir);
-    saveSortPref(key, nextDir);
   };
 
   // ── scroll-position memory + last-clicked row highlight ────────────────────

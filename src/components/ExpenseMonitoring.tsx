@@ -59,7 +59,8 @@ import {
 import { Add as AddIcon, Sync as SyncIcon, Delete as DeleteIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, ExpandMore as ExpandMoreIcon, SwapHoriz as PromoteIcon, AddAPhoto as AddAPhotoIcon, OpenInNew as OpenInNewIcon, Edit as EditIcon, DriveFileMove as MoveIcon, AccountBalanceWallet as InvestorLinkIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import dataService from '../services/dataService';
-import { getBudgets } from '../utils/projectBudgetStorage';
+import { resolveBudgetsForProjects } from '../utils/calcsheetBudget';
+import { useQuotationStore } from '../store/quotationStore';
 import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem } from './PurchaseOrderPage';
 import { API_BASE } from '../config/api';
 import { PROJECT_EXPENSE_CATEGORIES, OVERHEAD_CATEGORIES, INVOICE_TYPES, INVESTORS, type FundingSource } from '../data/financeCategories';
@@ -221,6 +222,8 @@ const ExpenseMonitoring: React.FC = () => {
   const isChildRoute = /\/(ca-form|liquidation-form|direct-labor)$/.test(location.pathname);
   
   const [allProjects, setAllProjects] = useState<Project[]>([]);
+  const csProjects = useQuotationStore((s) => s.projects);
+  const quotations = useQuotationStore((s) => s.quotations);
   const [selectedYear, setSelectedYear] = useState<number>(0);
   // Month (1-12) and quarter (1-4) are mutually exclusive; 0 = no filter.
   const [selectedMonth, setSelectedMonth] = useState<number>(0);
@@ -354,9 +357,12 @@ const ExpenseMonitoring: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    setBudgets(getBudgets());
     fetchExpenses();
   }, [fetchExpenses]);
+
+  useEffect(() => {
+    setBudgets(resolveBudgetsForProjects(allProjects, csProjects, quotations));
+  }, [allProjects, csProjects, quotations]);
 
   // Reload expenses when navigating within expense monitoring (e.g. back from Liquidation form) so liquidations are reflected
   useEffect(() => {

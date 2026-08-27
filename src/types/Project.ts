@@ -87,6 +87,9 @@ export interface Project {
   calcsheet_code?: string;
   calcsheet_quotation_id?: string;
   source_module?: 'calcsheet' | string;
+  /** Spendable budget seeded from the IOCT quotation (value − margin) when a
+   *  proposal is won / synced to Project List. Manual edits persist here too. */
+  project_budget?: number;
   executionFolderId?: string;
   executionFolderUrl?: string;
   billing_schedule?: BillingMilestone[];

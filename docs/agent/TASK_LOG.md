@@ -1,5 +1,31 @@
 # Task Log
 
+## 2026-08-27 — Client filter on Projects list
+
+Dashboard filter bar now has a Client dropdown (account names from the project list). Selection is persisted with the other list prefs.
+
+## 2026-08-27 — Persist last sort and filters on Projects and Calcsheet
+
+Dashboard and Calcsheet project lists remember sort + filters in localStorage (`projects-list-prefs`, `calcsheet-projects-prefs`). Calcsheet already saved sort; filters (search, status, customer, year, formula, active-only, hide lost/inactive) now persist too.
+
+## 2026-08-27 — Projects status filter is a checkbox multi-select
+
+Dashboard Status dropdown now matches Calcsheet: checkboxes for each project status. Empty selection still means All.
+
+## 2026-08-27 — IOCT2601001 budget from PCS2512036 (₱299,700)
+
+Set `project_budget` to ₱186,600 (IOCT ₱299,700 − margin ₱113,100) and linked `calcsheet_project_id` / `calcsheet_code` to PCS2512036-ADI-00. PCS2602005-ACT-00 is no longer in calcsheet (user cleaned the duplicate).
+
+## 2026-08-27 — Backfilled project_budget on 15 Project List rows
+
+Ran `scripts/backfill-project-budgets.js --apply` against production. 15 of 17 projects now have `project_budget` = IOCT quotation value − margin. Left unset: ACTI240808 (DOXO, no calcsheet) and IOCT2601001 (ADI calibration; contract ₱320,000 does not uniquely match a quotation).
+
+## 2026-08-27 — Project budget from calcsheet; completion tooltip unit
+
+Dashboard S-curve tooltip labeled Completion Trend (%) but formatted the value as pesos because Recharts passes the series display name, not the dataKey. Formatter now treats that series as a percentage.
+
+Project Budget is seeded onto the Project List row at proposal→project handoff (`sync-main` / mark won): IOCT quotation VAT-ex value minus margin (cost basis), stored as `project_budget`. Amount-sync fills it only when the field is still empty so a typed budget is not overwritten. Project Details / Expense Monitoring / dashboard health / Project Expense Report read that field, then localStorage, then a live calcsheet fallback for older rows. Manual edits persist back to `project_budget`.
+
 ## 2026-08-27 — Sync billing-schedule milestones to existing invoices
 
 Ready-to-invoice banner was still offering PB1/PB2 because Collections invoices had empty `pb_number`. Linked SI 004 → PB1 (Plaridel troubleshooting), Invoice 002 → PB1 and Invoice 008 → PB2 (ADI RH Temp).

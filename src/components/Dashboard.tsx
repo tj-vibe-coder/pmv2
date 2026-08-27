@@ -19,7 +19,7 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  SelectChangeEvent,
+  OutlinedInput,
   Button,
   Stack,
   Checkbox,
@@ -51,7 +51,8 @@ import { Project, ProjectFilters, YearSummary } from '../types/Project';
 import { actiToIoctPoLabel, actiTrailSummary, isActiInvolved } from '../utils/commercialTrail';
 import dataService from '../services/dataService';
 import AddProjectDialog from './AddProjectDialog';
-import { getBudgets } from '../utils/projectBudgetStorage';
+import { resolveBudgetsForProjects } from '../utils/calcsheetBudget';
+import { useQuotationStore } from '../store/quotationStore';
 
 const PROJECT_EXPENSES_KEY = 'projectExpenses';
 function loadProjectExpenses(): { projectId: string; amount: number }[] {
@@ -73,14 +74,69 @@ const NET_PACIFIC_COLORS = {
   info: '#74b9ff',
 };
 
+const DASHBOARD_PREFS_KEY = 'projects-list-prefs';
+
+type DashboardListPrefs = {
+  searchTerm: string;
+  year?: number;
+  client?: string;
+  statusFilter: string[];
+  filterActi: boolean;
+  sortKey: string;
+  sortDir: 'asc' | 'desc';
+};
+
+function loadDashboardPrefs(): DashboardListPrefs {
+  const defaults: DashboardListPrefs = {
+    searchTerm: '',
+    year: undefined,
+    client: undefined,
+    statusFilter: [],
+    filterActi: false,
+    sortKey: 'project_no',
+    sortDir: 'desc',
+  };
+  try {
+    const raw = localStorage.getItem(DASHBOARD_PREFS_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    const yearNum = Number(parsed.year);
+    return {
+      searchTerm: typeof parsed.searchTerm === 'string' ? parsed.searchTerm : '',
+      year: Number.isFinite(yearNum) && yearNum > 0 ? yearNum : undefined,
+      client: typeof parsed.client === 'string' && parsed.client ? parsed.client : undefined,
+      statusFilter: Array.isArray(parsed.statusFilter)
+        ? parsed.statusFilter.filter((s: unknown) => typeof s === 'string')
+        : [],
+      filterActi: !!parsed.filterActi,
+      sortKey: typeof parsed.sortKey === 'string' && parsed.sortKey ? parsed.sortKey : 'project_no',
+      sortDir: parsed.sortDir === 'asc' || parsed.sortDir === 'desc' ? parsed.sortDir : 'desc',
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function saveDashboardPrefs(prefs: DashboardListPrefs) {
+  try {
+    localStorage.setItem(DASHBOARD_PREFS_KEY, JSON.stringify(prefs));
+  } catch { /* private mode / quota */ }
+}
+
 interface DashboardProps {
   onProjectSelect: (project: Project) => void;
   refreshTrigger?: number;
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: externalRefreshTrigger = 0 }) => {
-  const [filters, setFilters] = useState<ProjectFilters>({});
-  const [filterActi, setFilterActi] = useState(false);
+  const [initPrefs] = useState(loadDashboardPrefs);
+  const [filters, setFilters] = useState<ProjectFilters>({
+    searchTerm: initPrefs.searchTerm || undefined,
+    year: initPrefs.year,
+    client: initPrefs.client,
+  });
+  const [statusFilter, setStatusFilter] = useState<string[]>(initPrefs.statusFilter);
+  const [filterActi, setFilterActi] = useState(initPrefs.filterActi);
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [exportMenuAnchor, setExportMenuAnchor] = useState<null | HTMLElement>(null);
@@ -88,7 +144,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
   const [isDeleting, setIsDeleting] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const effectiveRefreshTrigger = externalRefreshTrigger + refreshTrigger;
-  const [sortConfig, setSortConfig] = useState<{key: string; direction: 'asc' | 'desc'} | null>({ key: 'project_no', direction: 'desc' });
+  const [sortConfig, setSortConfig] = useState<{key: string; direction: 'asc' | 'desc'} | null>({
+    key: initPrefs.sortKey,
+    direction: initPrefs.sortDir,
+  });
+
+  useEffect(() => {
+    saveDashboardPrefs({
+      searchTerm: filters.searchTerm || '',
+      year: filters.year,
+      client: filters.client,
+      statusFilter,
+      filterActi,
+      sortKey: sortConfig?.key || 'project_no',
+      sortDir: sortConfig?.direction || 'desc',
+    });
+  }, [filters.searchTerm, filters.year, filters.client, statusFilter, filterActi, sortConfig]);
 
   // Sorting function
   const handleSort = (key: string) => {
@@ -115,7 +186,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
   const [statusDistribution, setStatusDistribution] = useState<{name: string, value: number}[]>([]);
   const [uniqueStatuses, setUniqueStatuses] = useState<string[]>([]);
   const [uniqueYears, setUniqueYears] = useState<number[]>([]);
+  const [uniqueClients, setUniqueClients] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const csProjects = useQuotationStore((s) => s.projects);
+  const quotations = useQuotationStore((s) => s.quotations);
 
   // Load projects on component mount and when filters/refresh change
   useEffect(() => {
@@ -167,6 +241,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
         setStatusDistribution(statusDist.map(item => ({ name: item.label, value: item.value })));
         setUniqueStatuses(statuses);
         setUniqueYears(years);
+        const clientNames = Array.from(new Set(
+          allProjects.map((p) => (p.account_name || '').trim()).filter(Boolean),
+        )).sort((a, b) => a.localeCompare(b));
+        setUniqueClients(clientNames);
       } catch (error) {
         console.error('Error loading static data:', error);
       }
@@ -174,9 +252,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     loadStaticData();
   }, [refreshTrigger]);
   
-  // Since we're now filtering server-side, filteredProjects is projects with client-side sorting
+  // Server returns the year/search slice; status is a client-side multi-select
+  // (empty selection = all, same as the old "All" option).
   const filteredProjects = useMemo(() => {
-    const base = filterActi ? projects.filter(p => p.with_acti) : projects;
+    let base = filterActi ? projects.filter(p => p.with_acti) : projects;
+    if (statusFilter.length > 0) {
+      const allowed = new Set(statusFilter);
+      base = base.filter((p) => allowed.has(p.project_status || ''));
+    }
     if (!sortConfig) return base;
 
     const sortedProjects = [...base].sort((a, b) => {
@@ -216,7 +299,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     });
     
     return sortedProjects;
-  }, [projects, sortConfig, filterActi]);
+  }, [projects, sortConfig, filterActi, statusFilter]);
 
   const showActiPoColumn = useMemo(
     () => filteredProjects.some((p) => isActiInvolved(p)),
@@ -234,9 +317,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     };
   }, [filteredProjects]);
 
-  // Project health from budget vs expenses (localStorage)
+  // Project health from budget vs expenses (manual override, else calcsheet cost)
   const projectHealthMap = useMemo(() => {
-    const budgets = getBudgets();
+    const budgets = resolveBudgetsForProjects(filteredProjects, csProjects, quotations);
     const expenses = loadProjectExpenses();
     const spentByProject: Record<string, number> = {};
     expenses.forEach((e) => {
@@ -244,7 +327,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     });
     const map: Record<string, { label: string; color: 'success' | 'warning' | 'error' | 'default' }> = {};
     filteredProjects.forEach((p) => {
-      const budget = (budgets as Record<string, number>)[String(p.id)] ?? 0;
+      const budget = budgets[String(p.id)] ?? 0;
       const spent = spentByProject[String(p.id)] ?? 0;
       const remaining = budget - spent;
       const remainingPct = budget > 0 ? (remaining / budget) * 100 : 100;
@@ -259,15 +342,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       }
     });
     return map;
-  }, [filteredProjects]);
-
-  // Handle filter changes
-  const handleFilterChange = (field: keyof ProjectFilters) => (event: SelectChangeEvent<string>) => {
-    setFilters(prev => ({
-      ...prev,
-      [field]: event.target.value || undefined
-    }));
-  };
+  }, [filteredProjects, csProjects, quotations]);
 
   const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setFilters(prev => ({
@@ -960,24 +1035,19 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
                     fontSize: '12px'
                   }}
-                  formatter={(value: number, name: string, props: any) => {
-                    let label = '';
-                    let formattedValue = '';
-                    
-                    if (name === 'totalContractAmount') {
-                      label = 'Contract Amount';
-                      formattedValue = dataService.formatCurrency(value);
-                    } else if (name === 'totalBacklogs') {
-                      label = 'Backlogs';
-                      formattedValue = dataService.formatCurrency(value);
-                    } else if (name === 'completionPercentage') {
-                      label = 'Completion Rate';
-                      formattedValue = `${value.toFixed(1)}%`;
-                    } else {
-                      label = name;
-                      formattedValue = dataService.formatCurrency(value);
+                  formatter={(value: number, name: string, item: any) => {
+                    const key = item?.dataKey || name;
+                    const n = typeof value === 'number' ? value : Number(value);
+                    if (key === 'completionPercentage' || name === 'Completion Trend (%)') {
+                      return [`${n.toFixed(2)}%`, 'Completion Trend (%)'];
                     }
-                    return [formattedValue, label];
+                    if (key === 'totalBacklogs' || name === 'Backlogs') {
+                      return [dataService.formatCurrency(n), 'Backlogs'];
+                    }
+                    if (key === 'totalContractAmount' || name === 'Contract Amount') {
+                      return [dataService.formatCurrency(n), 'Contract Amount'];
+                    }
+                    return [dataService.formatCurrency(n), name];
                   }}
                   labelFormatter={(label) => {
                     if (typeof label === 'string') {
@@ -1085,23 +1155,52 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
               size="small"
             />
           </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Status</InputLabel>
               <Select
-                value={filters.status || ''}
-                onChange={handleFilterChange('status')}
-                label="Status"
+                multiple
+                value={statusFilter}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setStatusFilter(typeof next === 'string' ? next.split(',').filter(Boolean) : next);
+                }}
+                input={<OutlinedInput label="Status" />}
+                renderValue={(selected) =>
+                  selected.length === 0 || selected.length === uniqueStatuses.length
+                    ? 'All'
+                    : selected.join(', ')
+                }
               >
-                <MenuItem value="">All</MenuItem>
-                {uniqueStatuses.map(status => (
-                  <MenuItem key={status} value={status}>{status}</MenuItem>
+                {uniqueStatuses.map((status) => (
+                  <MenuItem key={status} value={status}>
+                    <Checkbox size="small" checked={statusFilter.includes(status)} />
+                    <ListItemText primary={status} />
+                  </MenuItem>
                 ))}
               </Select>
             </FormControl>
           </Grid>
           
           <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Client</InputLabel>
+              <Select
+                value={filters.client || ''}
+                onChange={(e) => setFilters((prev) => ({
+                  ...prev,
+                  client: e.target.value || undefined,
+                }))}
+                label="Client"
+              >
+                <MenuItem value="">All</MenuItem>
+                {uniqueClients.map((client) => (
+                  <MenuItem key={client} value={client}>{client}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Year</InputLabel>
               <Select
@@ -1119,7 +1218,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
               </Select>
             </FormControl>
           </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
             <Chip
               label="With ACTI"
               color={filterActi ? 'primary' : 'default'}

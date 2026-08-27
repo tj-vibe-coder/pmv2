@@ -3578,6 +3578,119 @@ function quotationGrandTotal(q) {
   return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
 }
 
+// Spendable Project Budget seeded onto the Project List row at proposal→project
+// handoff. Matches src/utils/calcsheet/calc.ts ioctCostBasis: VAT-ex value minus
+// gross margin (equals total cost when cost fields are real; otherwise VAT-ex
+// net). Keep brace-free string literals so the parity test can extract this.
+function quotationCostBasis(q) {
+  if (!q) return 0;
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const generalReqts = Array.isArray(q.generalReqts) ? q.generalReqts : [];
+  const components = Array.isArray(q.components) ? q.components : [];
+  const manpower = Array.isArray(q.manpower) ? q.manpower : [];
+  const services = Array.isArray(q.services) ? q.services : [];
+  const lineGeneralTotal = (l) => num(l.unitPrice) * num(l.qty);
+  const finishCost = (generalReqtsCost, componentsCost, laborCost, generalReqtsSubtotal, componentsSubtotal, servicesSub, discountAmt) => {
+    const net = generalReqtsSubtotal + componentsSubtotal + servicesSub - discountAmt;
+    if (net <= 0) return 0;
+    const totalCost = generalReqtsCost + componentsCost + laborCost;
+    const totalSubtotals = generalReqtsSubtotal + componentsSubtotal + servicesSub;
+    if (Math.abs(totalCost - totalSubtotals) < 0.01) return net;
+    return totalCost;
+  };
+
+  if (q.formulaVersion === 'legacy') {
+    const snap = q.legacyTotalsSnapshot;
+    if (snap) {
+      const fromSnap = finishCost(
+        num(snap.generalReqtsCost),
+        num(snap.componentsCost),
+        num(snap.laborCost),
+        num(snap.generalReqtsSubtotal),
+        num(snap.componentsSubtotal),
+        num(snap.servicesSubtotal),
+        num(snap.discount),
+      );
+      if (fromSnap > 0) return fromSnap;
+      const net = num(snap.subtotal) - num(snap.discount);
+      if (net > 0) return net;
+      return num(snap.grandTotal);
+    }
+    const cont = num(q.globalContingencyPct) / 100;
+    const generalReqtsCost = generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0);
+    const generalReqtsWithContingency = q.generalReqContingencyMode === 'baked'
+      ? generalReqtsCost
+      : generalReqtsCost * (1 + cont);
+    const generalReqtsSubtotal = generalReqtsWithContingency * (1 + num(q.generalReqMarkupPct) / 100);
+    const componentsCost = components.reduce((s, l) => {
+      const base = num(l.unitCost) * (num(l.forex) || 1);
+      const adjusted = base * (1 + num(l.contingencyPct) / 100 - num(l.discountPct) / 100);
+      return s + adjusted * num(l.qty);
+    }, 0);
+    const componentsSubtotal = components.reduce((s, l) => {
+      const base = num(l.unitCost) * (num(l.forex) || 1);
+      const adjusted = base * (1 + num(l.contingencyPct) / 100 - num(l.discountPct) / 100);
+      return s + adjusted * (1 + num(q.productMarkupPct) / 100) * num(l.qty);
+    }, 0);
+    let laborCost;
+    let servicesSub;
+    if (q.servicesFromManpower) {
+      laborCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0);
+      const laborWithContingency = manpower.reduce((s, m) => {
+        const unit = (num(m.dailyRate) + num(m.allowance)) * (1 + cont);
+        return s + num(m.headcount) * num(m.mandays) * unit;
+      }, 0);
+      servicesSub = laborWithContingency * (1 + num(q.laborMarkupPct) / 100);
+    } else {
+      servicesSub = services.reduce((s, l) => s + num(l.amount), 0);
+      laborCost = servicesSub;
+    }
+    const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
+    const discountAmt = subtotal * (num(q.discountPct) / 100);
+    return finishCost(generalReqtsCost, componentsCost, laborCost, generalReqtsSubtotal, componentsSubtotal, servicesSub, discountAmt);
+  }
+
+  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, num(q.generalReqtsExportQty) || 1) : 1;
+  const engineeringServicesQty = q.servicesFromManpower ? Math.max(1, num(q.engineeringServicesQty) || 1) : 1;
+  const generalReqtsCost = generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty;
+  const hasPerLineGenMarkup = generalReqts.some((l) => l.markupPct != null);
+  const generalReqtsSubtotal = hasPerLineGenMarkup
+    ? generalReqts.reduce((s, l) => {
+        const markup = l.markupPct != null ? num(l.markupPct) : num(q.generalReqMarkupPct);
+        return s + lineGeneralTotal(l) * (1 + markup / 100);
+      }, 0) * generalReqtsQty
+    : generalReqtsCost * (1 + num(q.generalReqMarkupPct) / 100);
+  const contractComponents = components.filter((l) => !l.optional);
+  const componentsCost = contractComponents.reduce((s, l) => {
+    const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
+    return s + costUnit * num(l.qty);
+  }, 0);
+  const componentsSubtotal = contractComponents.reduce((s, l) => {
+    const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
+    const adjusted = costUnit * (1 + num(l.contingencyPct) / 100);
+    const markup = l.markupPct != null ? num(l.markupPct) : num(q.productMarkupPct);
+    return s + adjusted * (1 + markup / 100) * num(l.qty);
+  }, 0);
+  let laborCost;
+  let servicesSub;
+  if (q.servicesFromManpower) {
+    if (q.servicesPerLinePricing) {
+      const dailyRate = manpower.reduce((s, m) => s + num(m.headcount) * (num(m.dailyRate) + num(m.allowance)), 0);
+      laborCost = services.reduce((s, l) => s + num(l.days) * dailyRate, 0);
+      servicesSub = services.reduce((s, l) => s + num(l.amount), 0);
+    } else {
+      laborCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0) * engineeringServicesQty;
+      servicesSub = laborCost * (1 + num(q.laborMarkupPct) / 100);
+    }
+  } else {
+    servicesSub = services.reduce((s, l) => s + num(l.amount), 0);
+    laborCost = servicesSub;
+  }
+  const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
+  const discountAmt = subtotal * (num(q.discountPct) / 100);
+  return finishCost(generalReqtsCost, componentsCost, laborCost, generalReqtsSubtotal, componentsSubtotal, servicesSub, discountAmt);
+}
+
 function clientApproverFromClient(client) {
   const contacts = Array.isArray(client?.contacts) ? client.contacts : [];
   const primary = contacts.find((c) => c.isPrimary) || contacts[0];
@@ -3616,6 +3729,7 @@ function contractAmountPatchFromSales(mainData, amount, quotation, project, now)
 function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
   const amount = quotationGrandTotal(quotation);
+  const budget = quotationCostBasis(quotation);
   const year = Number.isFinite(new Date(project.date || now).getFullYear())
     ? new Date(project.date || now).getFullYear()
     : new Date().getFullYear();
@@ -3681,6 +3795,7 @@ function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, p
     calcsheet_code: project.code || '',
     calcsheet_quotation_id: quotation?.id || null,
     source_module: 'calcsheet',
+    project_budget: budget || 0,
     executionFolderId: project.executionFolderId || '',
     executionFolderUrl: project.executionFolderUrl || '',
     with_acti: !!withActi,
@@ -3757,6 +3872,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
       project,
       now,
     );
+    // Fill Project Budget from IOCT cost (value − margin) when the linked
+    // row still has none — never clobber a budget someone already typed.
+    const budgetSource = ioct || selectedQuotation;
+    const seededBudget = quotationCostBasis(budgetSource);
+    if (!(Number(linkedData.project_budget) > 0) && seededBudget > 0) {
+      amountPatch.project_budget = seededBudget;
+    }
     await linkedDoc.ref.update(amountPatch);
     await projectRef.update({
       mainProjectId: linkedDoc.id,

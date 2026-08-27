@@ -246,6 +246,16 @@ export function ioctMargin(t: QuotationTotals): { value: number; pct: number } |
   return { value: net - totalCost, pct: ((net - totalCost) / net) * 100 };
 }
 
+/** Spendable project budget from an IOCT quotation: VAT-ex value minus gross margin.
+ *  When cost fields are real this equals total cost; when margin is unknown it
+ *  falls back to the VAT-ex net (so a linked quotation still fills a budget). */
+export function ioctCostBasis(t: QuotationTotals): number | null {
+  const net = t.subtotal - t.discount;
+  if (net <= 0) return null;
+  const m = ioctMargin(t);
+  return net - (m?.value ?? 0);
+}
+
 export const PHP = (n: number): string =>
   'PHP ' +
   (Number.isFinite(n) ? n : 0).toLocaleString('en-PH', {

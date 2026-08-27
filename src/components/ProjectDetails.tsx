@@ -52,6 +52,8 @@ import dataService from '../services/dataService';
 import EditProjectDialog from './EditProjectDialog';
 import UpdateProgressDialog from './UpdateProgressDialog';
 import { getBudget, setBudget } from '../utils/projectBudgetStorage';
+import { resolveCalcsheetBudget } from '../utils/calcsheetBudget';
+import { useQuotationStore } from '../store/quotationStore';
 import { ResponsiveContainer, BarChart, CartesianGrid, XAxis, YAxis, Bar, Cell, Tooltip as RechartsTooltip } from 'recharts';
 import { ORDER_TRACKER_STORAGE_KEY } from './OrderTrackerPage';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
@@ -544,6 +546,19 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [progressDialogOpen, setProgressDialogOpen] = useState(false);
   const [budgetAmount, setBudgetAmount] = useState(0);
+  const csProjects = useQuotationStore((s) => s.projects);
+  const quotations = useQuotationStore((s) => s.quotations);
+  const calcsheetBudget = useMemo(
+    () => resolveCalcsheetBudget(project, csProjects, quotations),
+    [project, csProjects, quotations],
+  );
+  const storedBudget = getBudget(project.id);
+  const persistedBudget = Number(project.project_budget ?? 0);
+  const budgetIsOverride = Boolean(
+    calcsheetBudget
+    && ((persistedBudget > 0 && Math.abs(persistedBudget - calcsheetBudget.amount) > 0.5)
+      || (persistedBudget <= 0 && storedBudget > 0 && Math.abs(storedBudget - calcsheetBudget.amount) > 0.5)),
+  );
   const [projectInvoices, setProjectInvoices] = useState<ProjectInvoice[]>([]);
   const [hasSchedule, setHasSchedule] = useState(false);
   const navigate = useNavigate();
@@ -628,8 +643,18 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   };
 
   useEffect(() => {
-    setBudgetAmount(getBudget(project.id));
-  }, [project.id]);
+    const stored = getBudget(project.id);
+    const persisted = Number(project.project_budget ?? 0);
+    if (persisted > 0) {
+      setBudgetAmount(persisted);
+    } else if (stored > 0) {
+      setBudgetAmount(stored);
+    } else if (calcsheetBudget) {
+      setBudgetAmount(calcsheetBudget.amount);
+    } else {
+      setBudgetAmount(0);
+    }
+  }, [project.id, project.project_budget, calcsheetBudget]);
 
   const [projectSoas, setProjectSoas] = useState<Array<{ id: string; soaNo: string; date: string; status: string; recipientName: string; matchingItems: any[] }>>([]);
 
@@ -848,9 +873,12 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     }
   };
 
-  const handleBudgetChange = (value: number) => {
+  const persistBudget = (value: number) => {
     setBudgetAmount(value);
     setBudget(project.id, value);
+    dataService.updateProject(project.id, { project_budget: value }).then((result) => {
+      if (result.success) onProjectUpdated?.({ ...project, project_budget: value });
+    });
   };
 
   const backlogsAmount = dataService.getUnbilled(project);
@@ -866,7 +894,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   }, [project.id]);
 
   const projectHealthColor = useMemo(() => {
-    const budget = getBudget(project.id);
+    const budget = budgetAmount;
     const expenses = loadProjectExpenses().filter((e) => e.projectId === project.id);
     const spent = expenses.reduce((sum, e) => sum + e.amount, 0);
     const remaining = budget - spent;
@@ -875,7 +903,6 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     if (remaining < 0) return '#f44336';
     if (remainingPct <= 20) return '#ff9800';
     return '#4caf50';
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- budgetAmount triggers re-run when user changes budget
   }, [project.id, budgetAmount]);
 
 
@@ -1294,16 +1321,38 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
               <Typography variant="subtitle2" color="textSecondary" gutterBottom>
                 Project Budget
               </Typography>
-              <TextField
-                type="number"
-                size="small"
-                value={budgetAmount || ''}
-                onChange={(e) => handleBudgetChange(Number(e.target.value) || 0)}
-                placeholder="Set budget"
-                inputProps={{ min: 0, step: 0.01 }}
-                sx={{ width: 200 }}
-                helperText="Budget for this project (used in Expense Monitoring)"
-              />
+              <Stack direction="row" spacing={1} alignItems="flex-start">
+                <TextField
+                  type="number"
+                  size="small"
+                  value={budgetAmount || ''}
+                  onChange={(e) => setBudgetAmount(Number(e.target.value) || 0)}
+                  onBlur={() => persistBudget(budgetAmount)}
+                  placeholder="Set budget"
+                  inputProps={{ min: 0, step: 0.01 }}
+                  sx={{ width: 260 }}
+                  helperText={
+                    calcsheetBudget
+                      ? (budgetIsOverride
+                          ? `Manual override · calcsheet cost is ${dataService.formatCurrency(calcsheetBudget.amount)}`
+                          : calcsheetBudget.hasMargin
+                            ? `From calcsheet${calcsheetBudget.calcsheetCode ? ` (${calcsheetBudget.calcsheetCode})` : ''}: ${dataService.formatCurrency(calcsheetBudget.value)} − margin ${dataService.formatCurrency(calcsheetBudget.margin)}`
+                            : `From calcsheet quotation${calcsheetBudget.calcsheetCode ? ` (${calcsheetBudget.calcsheetCode})` : ''} (no cost/margin on file)`)
+                      : 'Budget for this project (used in Expense Monitoring). Link a calcsheet quotation to auto-fill.'
+                  }
+                />
+                {budgetIsOverride && calcsheetBudget && (
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      persistBudget(calcsheetBudget.amount);
+                    }}
+                    sx={{ mt: 0.5, whiteSpace: 'nowrap' }}
+                  >
+                    Use calcsheet
+                  </Button>
+                )}
+              </Stack>
             </Box>
             <Divider sx={{ my: 2 }} />
             <Box sx={{ mb: 2 }}>

@@ -9,16 +9,16 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { computeTotals } from './calc';
+import { computeTotals, ioctCostBasis } from './calc';
 import type { Quotation } from '../../types/Quotation';
 
-// ── Extract quotationGrandTotal from server.js ────────────────────────────────
+// ── Extract a named function from server.js ───────────────────────────────────
 // Brace-matching extraction; the function is written brace-safe (no braces in
 // string literals) to keep this simple.
-function extractServerFn(): (q: unknown) => number {
+function extractServerFn(name: string): (q: unknown) => number {
   const serverSrc = fs.readFileSync(path.resolve(process.cwd(), 'server.js'), 'utf8');
-  const start = serverSrc.indexOf('function quotationGrandTotal(');
-  if (start === -1) throw new Error('quotationGrandTotal not found in server.js');
+  const start = serverSrc.indexOf(`function ${name}(`);
+  if (start === -1) throw new Error(`${name} not found in server.js`);
   const open = serverSrc.indexOf('{', start);
   let depth = 0;
   let end = -1;
@@ -29,13 +29,14 @@ function extractServerFn(): (q: unknown) => number {
       if (depth === 0) { end = i + 1; break; }
     }
   }
-  if (end === -1) throw new Error('Unbalanced braces extracting quotationGrandTotal');
+  if (end === -1) throw new Error(`Unbalanced braces extracting ${name}`);
   const fnSrc = serverSrc.slice(start, end);
   // eslint-disable-next-line no-new-func
-  return new Function(`${fnSrc}; return quotationGrandTotal;`)() as (q: unknown) => number;
+  return new Function(`${fnSrc}; return ${name};`)() as (q: unknown) => number;
 }
 
-const serverGrandTotal = extractServerFn();
+const serverGrandTotal = extractServerFn('quotationGrandTotal');
+const serverCostBasis = extractServerFn('quotationCostBasis');
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 const baseQuotation = {
@@ -159,5 +160,50 @@ describe('server.js quotationGrandTotal parity with calc.ts computeTotals', () =
     });
     expect(serverGrandTotal(legacy)).toBe(350000);
     expect(computeTotals(legacy).grandTotal).toBe(350000);
+  });
+});
+
+describe('server.js quotationCostBasis parity with calc.ts ioctCostBasis', () => {
+  const expectedBudget = (quotation: Quotation): number => {
+    const t = computeTotals(quotation);
+    const cost = ioctCostBasis(t);
+    if (cost != null && cost > 0) return cost;
+    const net = t.subtotal - t.discount;
+    if (net > 0) return net;
+    return t.grandTotal || 0;
+  };
+
+  it.each(FIXTURES)('%s', (_name, quotation) => {
+    expect(serverCostBasis(quotation)).toBeCloseTo(expectedBudget(quotation), 6);
+  });
+
+  it('legacy snapshot with real costs is value minus margin', () => {
+    const legacy = q({
+      formulaVersion: 'legacy',
+      legacyTotalsSnapshot: {
+        generalReqtsCost: 10000,
+        generalReqtsWithContingency: 10000,
+        generalReqtsSubtotal: 15000,
+        componentsCost: 20000,
+        componentsSubtotal: 30000,
+        laborCost: 40000,
+        laborWithContingency: 40000,
+        servicesSubtotal: 55000,
+        subtotal: 100000,
+        discount: 0,
+        vat: 12000,
+        grandTotal: 112000,
+      },
+    });
+    expect(serverCostBasis(legacy)).toBe(70000);
+    expect(ioctCostBasis(computeTotals(legacy))).toBe(70000);
+  });
+
+  it('legacy snapshot with only grandTotal falls back to that total', () => {
+    const legacy = q({
+      formulaVersion: 'legacy',
+      legacyTotalsSnapshot: { grandTotal: 350000 },
+    });
+    expect(serverCostBasis(legacy)).toBe(350000);
   });
 });
