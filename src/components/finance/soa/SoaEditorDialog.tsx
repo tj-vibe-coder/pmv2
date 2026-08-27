@@ -21,11 +21,9 @@ import {
   FormControlLabel,
   Grid,
   Alert,
-  Divider,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
-import PostAddIcon from '@mui/icons-material/PostAdd';
 import type { StatementOfAccount, SoaItem, SoaFootnote } from '../../../types/StatementOfAccount';
 import {
   computeSoaTotals,
@@ -143,34 +141,6 @@ export default function SoaEditorDialog({
       poNumber: hasPo ? '' : '',
       poDate: hasPo ? new Date().toISOString().slice(0, 10) : '',
       amount: 0,
-      hasPo,
-      footnoteSymbol: hasPo ? undefined : '*',
-    };
-    setItems([...items, newItem]);
-  };
-
-  const handleImportProject = (proj: {
-    id: number | string;
-    project_name: string;
-    po_number?: string;
-    contract_amount?: number;
-    account_name?: string;
-    with_acti?: boolean;
-    commercial_trail?: { acti_to_ioct_po_number?: string };
-  }) => {
-    const soaPo = proj.with_acti
-      ? (proj.commercial_trail?.acti_to_ioct_po_number || '')
-      : (proj.po_number || '');
-    const hasPo = !!soaPo;
-    const newItem: SoaItem = {
-      id: nanoid(8),
-      projectId: String(proj.id),
-      projectName: proj.account_name || proj.project_name || 'Project',
-      description: proj.project_name,
-      completionDateText: '',
-      poNumber: soaPo,
-      poDate: hasPo ? new Date().toISOString().slice(0, 10) : '',
-      amount: Number(proj.contract_amount) || 0,
       hasPo,
       footnoteSymbol: hasPo ? undefined : '*',
     };

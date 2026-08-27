@@ -75,4 +75,68 @@ it('renders the Finance Analytics Studio when scoped to finance', async () => {
 
   expect(screen.getByText('Finance Analytics Studio')).toBeInTheDocument();
   expect(screen.getAllByText('Expense Breakdown by Category')[0]).toBeInTheDocument();
+  expect(screen.getAllByText('3-Month Expense Forecast (Recurring Run Rate)')[0]).toBeInTheDocument();
+  expect(screen.getAllByText('Recurring vs Variable Expense Projection')[0]).toBeInTheDocument();
+  expect(screen.getAllByText('Recurring Run Rate by Category')[0]).toBeInTheDocument();
 });
+
+it('switches to 3-Month Expense Forecast preset in Finance Studio', async () => {
+  // Mock fetch responses for finance
+  global.fetch = jest.fn((url: string) => {
+    if (url.includes('/api/project-expenses')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          expenses: [
+            { id: 'pe-1', category: 'Materials', amount: 45000, date: '2026-07-15', status: 'Recorded' },
+            { id: 'pe-2', category: '3rd Party Labor', amount: 25000, date: '2026-08-10', status: 'Recorded' },
+          ],
+        }),
+      } as Response);
+    }
+    if (url.includes('/api/overhead-expenses')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          expenses: [
+            { id: 'oe-1', category: 'Rent', amount: 50000, date: '2026-07-01', status: 'Paid' },
+            { id: 'oe-2', category: 'Salaries & Wages', amount: 120000, date: '2026-08-01', status: 'Paid' },
+            { id: 'oe-3', category: 'Communication & Utilities', amount: 15000, date: '2026-08-05', status: 'Paid' },
+          ],
+        }),
+      } as Response);
+    }
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ success: true, cash_advances: [], data: [] }),
+    } as Response);
+  }) as jest.Mock;
+
+  render(
+    <MemoryRouter initialEntries={['/finance/analytics']}>
+      <AnalyticsStudioPage domainScope="finance" />
+    </MemoryRouter>
+  );
+
+  const forecastPreset = screen.getAllByText('3-Month Expense Forecast (Recurring Run Rate)')[0];
+  fireEvent.click(forecastPreset);
+
+  // The active thread or title should reflect the forecast selection
+  expect(screen.getAllByText(/Forecast/i).length).toBeGreaterThan(0);
+});
+
+it('formulates an expense forecast from natural language query in Finance Studio', async () => {
+  render(
+    <MemoryRouter initialEntries={['/finance/analytics']}>
+      <AnalyticsStudioPage domainScope="finance" />
+    </MemoryRouter>
+  );
+
+  const input = screen.getByPlaceholderText(/Ask anything about finance/i);
+  fireEvent.change(input, { target: { value: 'Forecast next 6 months recurring expense burn' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Formulate' }));
+
+  // Creates a thread with the query
+  expect(screen.getAllByText('Forecast next 6 months recurring expense burn')[0]).toBeInTheDocument();
+});
+

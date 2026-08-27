@@ -354,3 +354,50 @@ test('query_analytics aggregates project data by category and attaches provenanc
   assert.equal(result.asOf, '2026-08-27T00:00:00.000Z');
 });
 
+test('query_analytics forecasts expenses with monthly recurring run rate and provenance', async () => {
+  const fakeDb = {
+    collection: (name) => {
+      if (name === 'project_expenses') {
+        return {
+          get: async () => ({
+            docs: [
+              { id: 'pe1', data: () => ({ category: 'Materials', amount: 50000, date: '2026-07-10' }) },
+              { id: 'pe2', data: () => ({ category: '3rd Party Labor', amount: 30000, date: '2026-08-05' }) },
+            ],
+          }),
+        };
+      }
+      if (name === 'overhead_expenses') {
+        return {
+          get: async () => ({
+            docs: [
+              { id: 'oe1', data: () => ({ category: 'Rent', amount: 60000, date: '2026-07-01' }) },
+              { id: 'oe2', data: () => ({ category: 'Salaries & Wages', amount: 100000, date: '2026-08-01' }) },
+            ],
+          }),
+        };
+      }
+      return { get: async () => ({ docs: [] }) };
+    },
+  };
+  const registry = createToolRegistry({ db: fakeDb, now: () => new Date('2026-08-27T00:00:00.000Z') });
+  const result = await registry.get('query_analytics').execute({
+    domain: 'expenses',
+    groupBy: 'forecast_monthly',
+  });
+  assert.ok(result.data.length > 0);
+  assert.ok(result.data.some((d) => d.group.includes('(Actual)')));
+  assert.ok(result.data.some((d) => d.group.includes('(Forecast)')));
+  assert.ok(result.sources.length > 0);
+  assert.equal(result.sources[0].route, '/finance/analytics');
+
+  const recurringResult = await registry.get('query_analytics').execute({
+    domain: 'expenses',
+    groupBy: 'forecast_recurring',
+  });
+  assert.equal(recurringResult.data.length, 3);
+  assert.equal(recurringResult.data[0].group, 'Fixed Recurring Overhead (Monthly Run Rate)');
+  assert.equal(recurringResult.data[0].recurringAmount, 80000);
+});
+
+

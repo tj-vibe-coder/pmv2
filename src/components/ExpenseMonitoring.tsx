@@ -1768,12 +1768,12 @@ const ExpenseMonitoring: React.FC = () => {
               <BarChart data={budgetVsActualData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                 <defs>
                   <linearGradient id="budgetGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={NET_PACIFIC_COLORS.accent1} stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor={NET_PACIFIC_COLORS.accent1} stopOpacity={0.3}/>
+                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.85}/>
+                    <stop offset="95%" stopColor="#93c5fd" stopOpacity={0.35}/>
                   </linearGradient>
                   <linearGradient id="spentGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={NET_PACIFIC_COLORS.primary} stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor={NET_PACIFIC_COLORS.primary} stopOpacity={0.3}/>
+                    <stop offset="5%" stopColor="#f97316" stopOpacity={0.9}/>
+                    <stop offset="95%" stopColor="#fdba74" stopOpacity={0.4}/>
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.1)" />

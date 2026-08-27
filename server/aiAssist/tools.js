@@ -13,6 +13,7 @@ const PROJECT_COLLECTION = 'projects';
 const OPPORTUNITY_COLLECTION = 'calcsheet_projects';
 const QUOTATION_COLLECTION = 'calcsheet_quotations';
 const EXPENSE_COLLECTION = 'project_expenses';
+const OVERHEAD_EXPENSE_COLLECTION = 'overhead_expenses';
 const CLIENT_COLLECTION = 'clients';
 
 const MAX_LIST_RESULTS = 10;
@@ -234,13 +235,13 @@ const TOOL_DECLARATIONS = {
   },
   query_analytics: {
     name: 'query_analytics',
-    description: 'Query aggregated analytics across operational domains (projects, quotations, expenses, sales_pipeline) grouped by dimension (category, year, status, client, grade). Returns safe grouped totals and counts.',
+    description: 'Query aggregated analytics across operational domains (projects, quotations, expenses, sales_pipeline) grouped by dimension (category, year, status, client, grade, forecast_monthly, forecast_recurring, forecast_category). Returns safe grouped totals and counts.',
     parameters: {
       type: 'object',
       properties: {
         domain: { type: 'string', enum: ['projects', 'quotations', 'expenses', 'sales_pipeline'], description: 'Operational domain to aggregate.' },
-        groupBy: { type: 'string', enum: ['category', 'year', 'status', 'client', 'grade'], description: 'Grouping dimension.' },
-        metric: { type: 'string', enum: ['total_amount', 'count', 'average_amount', 'balance_amount'], description: 'Metric to compute. Defaults to total_amount.' },
+        groupBy: { type: 'string', enum: ['category', 'year', 'status', 'client', 'grade', 'forecast_monthly', 'forecast_recurring', 'forecast_category'], description: 'Grouping dimension.' },
+        metric: { type: 'string', enum: ['total_amount', 'count', 'average_amount', 'balance_amount', 'recurring_runrate'], description: 'Metric to compute. Defaults to total_amount.' },
         year: { type: 'integer', description: 'Optional year filter.' },
       },
       required: ['domain'],
@@ -685,16 +686,136 @@ async function queryAnalytics(db, args, asOf) {
       asOf,
     };
   } else if (domain === 'expenses') {
-    snap = await db.collection(EXPENSE_COLLECTION).get();
-    rows = snap.docs.map(docDataWithId);
-    if (year !== undefined && year !== null) {
-      rows = rows.filter((r) => toYear(r.date) === String(year));
+    const pSnap = await db.collection(EXPENSE_COLLECTION).get();
+    const pRows = pSnap.docs.map(docDataWithId).map((r) => ({ ...r, _source: 'project', _isRecurring: false }));
+    let oRows = [];
+    try {
+      const oSnap = await db.collection(OVERHEAD_EXPENSE_COLLECTION).get();
+      oRows = oSnap.docs.map(docDataWithId).map((r) => ({ ...r, _source: 'overhead', _isRecurring: true }));
+    } catch {
+      // best-effort
     }
+    rows = [...pRows, ...oRows];
+
+    if (year !== undefined && year !== null) {
+      rows = rows.filter((r) => toYear(r.date || r.created_at) === String(year));
+    }
+
+    if (groupBy === 'forecast_monthly' || groupBy === 'forecast_recurring' || groupBy === 'forecast_category') {
+      const RECURRING_CATS = ['Rent', 'Salaries & Wages', 'Communication & Utilities', 'Government Contributions', 'Advertising/Marketing', 'Supplies', 'Repairs & Maintenance', 'Entertainment'];
+      const monthMap = new Map();
+      const catMap = new Map();
+
+      for (const r of rows) {
+        const dStr = String(r.date || r.created_at || '');
+        const mo = dStr.slice(0, 7) || '2026-08';
+        const isRec = r._isRecurring || (r.category && RECURRING_CATS.some((c) => c.toLowerCase() === String(r.category).toLowerCase()));
+        const amt = Number(r.amount) || 0;
+
+        if (!monthMap.has(mo)) monthMap.set(mo, { month: mo, recurring: 0, variable: 0, total: 0, count: 0 });
+        const mg = monthMap.get(mo);
+        mg.count += 1;
+        mg.total += amt;
+        if (isRec) mg.recurring += amt;
+        else mg.variable += amt;
+
+        const cat = r.category || (r._source === 'overhead' ? 'Overhead Expense' : 'General');
+        if (!catMap.has(cat)) catMap.set(cat, { category: cat, total: 0, isRecurring: isRec, count: 0 });
+        const cg = catMap.get(cat);
+        cg.total += amt;
+        cg.count += 1;
+      }
+
+      const historicalMonths = Array.from(monthMap.keys()).sort();
+      const mCount = Math.max(1, historicalMonths.length);
+      let totalRec = 0;
+      let totalVar = 0;
+      monthMap.forEach((mg) => {
+        totalRec += mg.recurring;
+        totalVar += mg.variable;
+      });
+
+      const recRunRate = round2(totalRec / mCount);
+      const varAvg = round2(totalVar / mCount);
+      const totalBurn = round2(recRunRate + varAvg);
+
+      if (groupBy === 'forecast_recurring') {
+        const horizon = 3;
+        const data = [
+          { group: 'Fixed Recurring Overhead (Monthly Run Rate)', totalAmount: recRunRate, recurringAmount: recRunRate, variableAmount: 0 },
+          { group: 'Variable Direct Costs (Monthly Average)', totalAmount: varAvg, recurringAmount: 0, variableAmount: varAvg },
+          { group: `Projected ${horizon}-Month Total Outflow`, totalAmount: round2(totalBurn * horizon), recurringAmount: round2(recRunRate * horizon), variableAmount: round2(varAvg * horizon) },
+        ];
+        return {
+          data,
+          sources: data.map((g) => sourceFor('analytics:forecast:' + g.group, `Forecast: ${g.group}`, '/finance/analytics', asOf)),
+          asOf,
+        };
+      }
+
+      if (groupBy === 'forecast_category') {
+        let data = Array.from(catMap.values()).map((c) => ({
+          group: `${c.category}${c.isRecurring ? ' [Recurring]' : ' [Variable]'}`,
+          totalAmount: round2(c.total / mCount),
+          count: c.count,
+        }));
+        data.sort((a, b) => b.totalAmount - a.totalAmount);
+        if (data.length > MAX_GROUPED_ROWS) data = data.slice(0, MAX_GROUPED_ROWS);
+        return {
+          data,
+          sources: data.map((g) => sourceFor('analytics:forecast:' + g.group, `Forecast Category: ${g.group}`, '/finance/analytics', asOf)),
+          asOf,
+        };
+      }
+
+      // Default forecast_monthly
+      const latestMo = historicalMonths[historicalMonths.length - 1] || '2026-08';
+      const data = [];
+      for (const m of historicalMonths.slice(-3)) {
+        const mg = monthMap.get(m);
+        data.push({
+          group: `${m} (Actual)`,
+          totalAmount: round2(mg.total),
+          recurringAmount: round2(mg.recurring),
+          variableAmount: round2(mg.variable),
+          count: mg.count,
+        });
+      }
+
+      let [yrS, moS] = latestMo.split('-');
+      let yr = parseInt(yrS, 10) || 2026;
+      let mo = parseInt(moS, 10) || 8;
+      for (let i = 1; i <= 3; i++) {
+        mo += 1;
+        if (mo > 12) {
+          mo -= 12;
+          yr += 1;
+        }
+        const nextMoStr = `${yr}-${String(mo).padStart(2, '0')}`;
+        data.push({
+          group: `${nextMoStr} (Forecast)`,
+          totalAmount: totalBurn,
+          recurringAmount: recRunRate,
+          variableAmount: varAvg,
+          count: 0,
+        });
+      }
+
+      return {
+        data,
+        sources: data.map((g) => sourceFor('analytics:forecast:' + g.group, `Forecast: ${g.group}`, '/finance/analytics', asOf)),
+        asOf,
+      };
+    }
+
     const groups = new Map();
     for (const r of rows) {
       let gKey = 'Unspecified';
       if (groupBy === 'category') gKey = r.category || 'General';
-      else if (groupBy === 'year') gKey = toYear(r.date) || 'Unknown';
+      else if (groupBy === 'year') gKey = toYear(r.date || r.created_at) || 'Unknown';
+      else if (groupBy === 'client') gKey = r.payee || r.supplier || r.vendor || 'Payee';
+      else if (groupBy === 'status') gKey = r.status || 'Recorded';
+
       if (!groups.has(gKey)) groups.set(gKey, { group: gKey, count: 0, totalAmount: 0 });
       const g = groups.get(gKey);
       g.count += 1;

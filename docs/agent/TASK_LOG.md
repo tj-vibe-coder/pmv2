@@ -1,6 +1,63 @@
 # Task Log
 
-## 2026-08-27 — Implemented Dedicated Collected & Settlement Ledger in Collections Dashboard
+## 2026-08-27 — Restructured Finance Navigation Hierarchy, Unique Icons & Purchase Order Integration
+
+Overhauled the Finance workspace navigation bar, Finance Home dashboard shortcuts, and Projects sidebar integration for clear hierarchy, zero redundancy, and unique semantic icons:
+- **Integrated Purchase Orders into Finance Workspace (`/finance/purchase-order`)**:
+  - Added Purchase Orders (`src/components/PurchaseOrderPage.tsx`) directly into the Finance Outflow & Expense operations, giving finance managers complete oversight over procurement commitments and supplier purchase orders.
+  - Mounted `/finance/purchase-order` route in `src/App.tsx`.
+- **Differentiated & Semantic Iconography (Zero Repeating Icons)**:
+  - Finance Home: `AccountBalance`
+  - Finance Analytics Studio: `AutoAwesome`
+  - Collections & AR: `Paid`
+  - Statements of Account (SOA): `Description`
+  - Sales EWT / 2307: `FactCheck`
+  - Expense Monitoring: `AccountBalanceWallet` (parent)
+    - Expense Register: `Receipt`
+    - Cash Advances (CA): `RequestQuote`
+    - Liquidation Form: `AssignmentTurnedIn`
+    - Direct Labor: `Engineering`
+  - Purchase Orders: `ShoppingCart`
+  - Reimbursements: `PriceCheck`
+  - Tax Filer Ledger: `MenuBook`
+  - Profit & Loss: `Summarize`
+- **Moved Sales EWT / 2307 under Compliance & Accounting (`/finance/ewt-2307`)**:
+  - Placed BIR 2307 customer withholding certificate tracking under Compliance & Accounting alongside the Tax Filer Ledger (`/finance/tax-ledger`) and Profit & Loss, keeping BIR tax credit compliance consolidated.
+- **Streamlined Projects Workspace Sidebar (`src/components/Sidebar.tsx`)**:
+  - Removed `Expense Monitoring` completely from the Projects workspace sidebar, preserving clean domain separation so that all accounting, disbursements, and expense monitoring are exclusively managed within the Finance workspace.
+- **Enhanced Budget vs Actual Spending Chart Visual Encoding (`src/components/ExpenseMonitoring.tsx`)**:
+  - Updated the bar chart color scheme to use high-contrast palettes (Royal Blue `#3b82f6` for Budget and Vivid Amber `#f97316` for Spent).
+  - Clarified that projects with set budgets and zero recorded disbursements will show only the budget baseline until expenses/liquidations are recorded.
+- **Verification**:
+  - `npx tsc --noEmit` passed with 0 errors.
+  - Full unit test suite (41/41 suites, 301/301 tests) passed cleanly.
+
+Implemented comprehensive expense forecasting and fixed recurring run rate modeling in Finance Analytics Studio (`/finance/analytics` via `src/components/analytics/AnalyticsStudioPage.tsx`) and backend AI deterministic tools (`server/aiAssist/tools.js`, `server/aiAssist/schemas.js`):
+- **Fixed Recurring vs Variable Expense Modeling & Scenario Projections**:
+  - Automatically identifies fixed recurring commitments (`OVERHEAD_CATEGORIES`: Rent, Salaries & Wages, Communication & Utilities, Government Contributions, Advertising/Marketing, Supplies, Repairs & Maintenance, Entertainment) vs variable direct project costs (Materials, 3rd Party Labor, Transportation, Gas, Meals, Accommodation).
+  - Computes `monthlyRecurringRunRate` = `totalHistoricalRecurring / distinctMonthsCount`, `monthlyVariableAverage` = `totalHistoricalVariable / distinctMonthsCount`.
+  - Added **Scenario Modeling (P10 / P50 / P90)**:
+    - **Base Case (P50)**: Standard historical recurring run rate + historical variable monthly average.
+    - **Conservative / High-Burn (P90)**: Fixed recurring baseline + 25% variable cost volatility buffer.
+    - **Lean / Minimum-Burn (P10)**: Fixed recurring baseline + 25% lean direct cost reduction.
+- **Executive Forecasting Intelligence Banner**:
+  - Interactive top banner in Finance Studio rendering 4 executive KPIs: *Monthly Recurring Run Rate* (fixed baseline), *Monthly Variable Spend* (with active scenario indicator), *Estimated Monthly Burn* (with P10–P90 confidence range bounds), and *Horizon Outflow Forecast* (with quick 3M, 6M, 12M horizon buttons).
+  - Interactive Scenario Switcher buttons (`[Lean (P10)]`, `[Base (P50)]`, `[Conservative (P90)]`) and distinct historical baseline provenance subtitle.
+  - Cost driver chips showing top recurring category monthly run rates.
+- **Visual Encoding Grammar**:
+  - Added new Dimensions: `forecast_monthly` (Monthly Expense Forecast: Actuals + Horizon Projection), `forecast_recurring` (Fixed Recurring vs Variable Outflow Projection), and `forecast_category` (Recurring Run Rate by Category).
+  - Added Metric: `recurring_runrate` (Monthly Recurring Run Rate in PHP).
+  - Presets: `3-Month Expense Forecast (Recurring Run Rate)` (line chart), `6-Month Expense Outflow Projection` (bar chart), `Recurring vs Variable Expense Projection` (donut chart), `Recurring Run Rate by Category` (bar chart).
+  - Visual distinction with Net Pacific Teal accents for projected forecast periods vs Primary Blue for historical actuals.
+- **Natural Language Data Formulator**:
+  - Added intent detection for natural language queries like `"forecast recurring expenses"`, `"project next 6 months burn rate"`, `"recurring vs variable split"`.
+- **Backend AI Tools & Deterministic Sync**:
+  - Extended `query_analytics` tool in `server/aiAssist/tools.js` and `server/aiAssist/schemas.js` to support `forecast_monthly`, `forecast_recurring`, `forecast_category` dimensions and `recurring_runrate` metric.
+  - Sourced with provenance linking back to `/finance/analytics`.
+  - Ran `npm run ai-assist:sync` and passed 125/125 AI Assist test suite.
+- **Verification**:
+  - Added unit test cases in `src/components/analytics/AnalyticsStudioPage.test.tsx` (5/5 passed).
+  - `npx tsc --noEmit` and `CI=true npm run build` passed cleanly with 0 errors.
 
 Implemented a 3-tab layout at `/finance/collections` (`?tab=receivables`, `?tab=settled`, `?tab=acti`) featuring the **Collected & Settlement Ledger**:
 - **Settlement Summary Metrics**: Displays Total Cash Inflow, BIR 2307 EWT Recognized, Gross Settled Revenue, and Average Turnaround Days (DSO from invoice date to collection date).

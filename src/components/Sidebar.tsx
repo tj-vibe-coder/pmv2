@@ -37,7 +37,6 @@ import {
   Cloud as CloudIcon,
   RequestQuote as EstimateIcon,
   HowToReg as HowToRegIcon,
-  AccountBalance as AccountBalanceIcon,
   Badge as BadgeIcon,
   Build as BuildIcon,
   Backup as BackupIcon,
@@ -51,7 +50,6 @@ const SIDEBAR_WIDTH = 280;
 const SIDEBAR_COLLAPSED_WIDTH = 68;
 
 const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
-const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form', '/expense-monitoring/direct-labor'];
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
 const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator', '/utilities/acknowledgement-receipt', '/utilities/backups'];
 
@@ -82,9 +80,6 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
   const [reportsOpen, setReportsOpen] = useState(() =>
     REPORTS_PATHS.some((p) => location.pathname.startsWith(p))
   );
-  const [expenseMonitoringOpen, setExpenseMonitoringOpen] = useState(() =>
-    EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)
-  );
   const [utilitiesOpen, setUtilitiesOpen] = useState(() =>
     UTILITIES_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(p))
   );
@@ -95,9 +90,6 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
     }
     if (REPORTS_PATHS.some((p) => location.pathname.startsWith(p))) {
       setReportsOpen(true);
-    }
-    if (EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)) {
-      setExpenseMonitoringOpen(true);
     }
     if (UTILITIES_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(p))) {
       setUtilitiesOpen(true);
@@ -322,107 +314,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
             </Tooltip>
           </ListItem>
 
-          {/* Expense Monitoring (collapsible) */}
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <Tooltip title={isExpanded ? '' : 'Expense Monitoring'} placement="right" arrow>
-              <ListItemButton
-                onClick={() => setExpenseMonitoringOpen((open) => !open)}
-                sx={navBtnSx(false)}
-              >
-                <ListItemIcon sx={iconSx()}>
-                  <ReceiptIcon />
-                </ListItemIcon>
-                {isExpanded && (
-                  <>
-                    <ListItemText
-                      primary="Expense Monitoring"
-                      secondary="Expenses, CA, liquidation, labor"
-                      secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                      sx={{ color: 'white' }}
-                    />
-                    {expenseMonitoringOpen ? <ExpandLessIcon sx={{ color: 'white' }} /> : <ExpandMoreIcon sx={{ color: 'white' }} />}
-                  </>
-                )}
-              </ListItemButton>
-            </Tooltip>
-          </ListItem>
-          <Collapse in={expenseMonitoringOpen && isExpanded} timeout="auto" unmountOnExit>
-            <List component="div" disablePadding sx={{ pl: 2 }}>
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
-                <ListItemButton
-                  selected={
-                    location.pathname === '/expense-monitoring' &&
-                    !location.pathname.includes('/ca-form') &&
-                    !location.pathname.includes('/liquidation-form') &&
-                    !location.pathname.includes('/direct-labor')
-                  }
-                  onClick={() => navigate('/expense-monitoring')}
-                  sx={navBtnSx(location.pathname === '/expense-monitoring', true)}
-                >
-                  <ListItemIcon sx={iconSx(true)}>
-                    <ReceiptIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Expense Monitoring"
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                </ListItemButton>
-              </ListItem>
-              {user?.role !== 'tax_filer' && (
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
-                <ListItemButton
-                  selected={location.pathname === '/expense-monitoring/ca-form'}
-                  onClick={() => navigate('/expense-monitoring/ca-form')}
-                  sx={navBtnSx(location.pathname === '/expense-monitoring/ca-form', true)}
-                >
-                  <ListItemIcon sx={iconSx(true)}>
-                    <AccountBalanceIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="CA Form"
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                </ListItemButton>
-              </ListItem>
-              )}
-              {user?.role !== 'tax_filer' && (
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
-                <ListItemButton
-                  selected={location.pathname === '/expense-monitoring/liquidation-form'}
-                  onClick={() => navigate('/expense-monitoring/liquidation-form')}
-                  sx={navBtnSx(location.pathname === '/expense-monitoring/liquidation-form', true)}
-                >
-                  <ListItemIcon sx={iconSx(true)}>
-                    <ReceiptIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Liquidation Form"
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                </ListItemButton>
-              </ListItem>
-              )}
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
-                <ListItemButton
-                  selected={location.pathname === '/expense-monitoring/direct-labor'}
-                  onClick={() => navigate('/expense-monitoring/direct-labor')}
-                  sx={navBtnSx(location.pathname === '/expense-monitoring/direct-labor', true)}
-                >
-                  <ListItemIcon sx={iconSx(true)}>
-                    <BuildIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Direct Labor"
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                </ListItemButton>
-              </ListItem>
-            </List>
-          </Collapse>
+
 
           {/* Clients */}
           <ListItem disablePadding sx={{ mb: 0.5 }}>
