@@ -47,7 +47,7 @@ import {
 import { Project } from '../types/Project';
 import { actiToIoctPoLabel, isActiInvolved } from '../utils/commercialTrail';
 import type { ProjectInvoice, BillingMilestone, BillToKind } from '../types/Invoice';
-import { getInvoiceStatus, computeDueDate, PAYMENT_TERMS_OPTIONS, BILL_TO_OPTIONS } from '../types/Invoice';
+import { getInvoiceStatus, computeDueDate, PAYMENT_TERMS_OPTIONS, BILL_TO_OPTIONS, invoiceCash, invoiceOutstanding } from '../types/Invoice';
 import dataService from '../services/dataService';
 import EditProjectDialog from './EditProjectDialog';
 import UpdateProgressDialog from './UpdateProgressDialog';
@@ -691,14 +691,13 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   const arSummary = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     const totalInvoiced = projectInvoices.reduce((s, i) => s + i.amount, 0);
-    const totalCollected = projectInvoices.reduce((s, i) => s + (i.amount_collected || 0), 0);
-    const outstanding = projectInvoices.filter(i => (i.amount - (i.amount_collected || 0)) > 0)
-      .reduce((s, i) => s + Math.max(0, i.amount - (i.amount_collected || 0)), 0);
+    const totalCollected = projectInvoices.reduce((s, i) => s + invoiceCash(i), 0);
+    const outstanding = projectInvoices.reduce((s, i) => s + invoiceOutstanding(i), 0);
     const overdueList = projectInvoices.filter(i => {
-      const rem = i.amount - (i.amount_collected || 0);
+      const rem = invoiceOutstanding(i);
       return rem > 0 && i.due_date && i.due_date < today;
     });
-    return { totalInvoiced, totalCollected, outstanding, overdueCount: overdueList.length, overdueAmount: overdueList.reduce((s, i) => s + Math.max(0, i.amount - (i.amount_collected || 0)), 0) };
+    return { totalInvoiced, totalCollected, outstanding, overdueCount: overdueList.length, overdueAmount: overdueList.reduce((s, i) => s + invoiceOutstanding(i), 0) };
   }, [projectInvoices]);
 
   // Map pb_number → invoice for milestone matching
@@ -1759,8 +1758,8 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                                   <Typography variant="caption" color="text.disabled">—</Typography>
                                 )}
                               </TableCell>
-                              <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: (linkedInvoice?.amount_collected ?? 0) > 0 ? 'success.main' : 'text.secondary' }}>
-                                {linkedInvoice ? PHP_FMT.format(linkedInvoice.amount_collected || 0) : '—'}
+                              <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: linkedInvoice && invoiceCash(linkedInvoice) > 0 ? 'success.main' : 'text.secondary' }}>
+                                {linkedInvoice ? PHP_FMT.format(invoiceCash(linkedInvoice)) : '—'}
                               </TableCell>
                               <TableCell>
                                 {invoiceStatus ? (

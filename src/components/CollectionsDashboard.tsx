@@ -20,6 +20,10 @@ import {
   formatPaymentTerms,
   PAYMENT_TERMS_OPTIONS,
   BILL_TO_OPTIONS,
+  invoiceCash,
+  invoiceCashDue,
+  invoiceOutstanding,
+  invoiceWht,
 } from '../types/Invoice';
 import type { Project } from '../types/Project';
 import {
@@ -83,6 +87,8 @@ interface InvoiceForm {
   notes: string;
   pb_number: string;
   bill_to: BillToKind;
+  wht_amount: string;
+  wht_rate_pct: string;
 }
 
 const blankForm = (): InvoiceForm => ({
@@ -97,6 +103,8 @@ const blankForm = (): InvoiceForm => ({
   notes: '',
   pb_number: '',
   bill_to: 'customer',
+  wht_amount: '',
+  wht_rate_pct: '',
 });
 
 interface CollectForm {
@@ -183,7 +191,9 @@ export default function CollectionsDashboard() {
   const enriched = useMemo(() => invoices.map(inv => ({
     ...inv,
     _status: getInvoiceStatus(inv),
-    _outstanding: Math.max(0, inv.amount - inv.amount_collected),
+    _outstanding: invoiceOutstanding(inv),
+    _wht: invoiceWht(inv),
+    _cash: invoiceCash(inv),
   })), [invoices]);
 
   const filtered = useMemo(() => {
@@ -203,11 +213,12 @@ export default function CollectionsDashboard() {
 
   const summary = useMemo(() => {
     const totalInvoiced = enriched.reduce((s, i) => s + i.amount, 0);
-    const totalCollected = enriched.reduce((s, i) => s + i.amount_collected, 0);
+    const totalCash = enriched.reduce((s, i) => s + i._cash, 0);
+    const totalWht = enriched.reduce((s, i) => s + i._wht, 0);
     const outstanding = enriched.filter(i => i._status !== 'paid').reduce((s, i) => s + i._outstanding, 0);
     const overdueAmount = enriched.filter(i => i._status === 'overdue').reduce((s, i) => s + i._outstanding, 0);
     const overdueCount = enriched.filter(i => i._status === 'overdue').length;
-    return { totalInvoiced, totalCollected, outstanding, overdueAmount, overdueCount };
+    return { totalInvoiced, totalCash, totalWht, totalSettled: totalCash + totalWht, outstanding, overdueAmount, overdueCount };
   }, [enriched]);
 
   // Milestones eligible to invoice: site progress has reached the trigger, and no
@@ -299,6 +310,8 @@ export default function CollectionsDashboard() {
       notes: inv.notes || '',
       pb_number: inv.pb_number || '',
       bill_to: inv.bill_to || 'customer',
+      wht_amount: inv.wht_amount ? String(inv.wht_amount) : '',
+      wht_rate_pct: inv.wht_rate_pct ? String(inv.wht_rate_pct) : '',
     });
     setFormErr('');
     setEditTarget(inv);
@@ -324,6 +337,8 @@ export default function CollectionsDashboard() {
       notes: [m.label, m.pb_number].filter(Boolean).join(' — '),
       pb_number: m.pb_number,
       bill_to: project.with_acti ? 'acti' : 'customer',
+      wht_amount: '',
+      wht_rate_pct: '',
     });
     setFormErr('');
     setEditTarget(null);
@@ -331,8 +346,11 @@ export default function CollectionsDashboard() {
   };
 
   const openCollect = (inv: ProjectInvoice) => {
-    const remaining = Math.max(0, inv.amount - inv.amount_collected);
-    setCollectForm({ amount_collected: String(remaining), collection_date: TODAY() });
+    const remainingCash = invoiceCashDue(inv);
+    setCollectForm({
+      amount_collected: String(invoiceCash(inv) + remainingCash),
+      collection_date: TODAY(),
+    });
     setCollectErr('');
     setCollectDialog(inv);
   };
@@ -344,6 +362,13 @@ export default function CollectionsDashboard() {
     const amount = parseFloat(form.amount);
     if (!amount || amount <= 0) { setFormErr('Enter a valid amount.'); return; }
     if (!form.due_date) { setFormErr('Due date is required.'); return; }
+    const whtAmount = parseFloat(form.wht_amount);
+    const wht = Number.isFinite(whtAmount) && whtAmount > 0 ? whtAmount : 0;
+    if (wht > amount) { setFormErr('WHT cannot exceed invoice amount.'); return; }
+    const rateParsed = parseFloat(form.wht_rate_pct);
+    const whtRate = Number.isFinite(rateParsed) && rateParsed > 0
+      ? rateParsed
+      : (wht > 0 && amount > 0 ? Math.round((wht / amount) * 10000) / 100 : 0);
 
     setSaving(true);
     setFormErr('');
@@ -361,6 +386,9 @@ export default function CollectionsDashboard() {
         pb_number: form.pb_number || undefined,
         bill_to: form.bill_to,
         bill_to_name: form.bill_to === 'acti' ? ACTI_NAME : (selectedProject?.account_name || form.project_name || ''),
+        wht_amount: wht,
+        wht_rate_pct: whtRate || undefined,
+        wht_2307_status: wht > 0 ? (editTarget?.wht_2307_status || 'expected') : undefined,
         ...(invoiceDialog === 'add' ? { amount_collected: 0 } : {}),
       };
       const url = invoiceDialog === 'edit' && editTarget
@@ -392,7 +420,11 @@ export default function CollectionsDashboard() {
     if (!collectDialog) return;
     const collected = parseFloat(collectForm.amount_collected);
     if (isNaN(collected) || collected < 0) { setCollectErr('Enter a valid amount.'); return; }
-    if (collected > collectDialog.amount) { setCollectErr('Collected amount exceeds invoice amount.'); return; }
+    const maxCash = collectDialog.amount - invoiceWht(collectDialog);
+    if (collected > maxCash + 0.005) {
+      setCollectErr(`Cash collected cannot exceed ${PHP.format(maxCash)} (invoice minus EWT).`);
+      return;
+    }
 
     setCollectSaving(true);
     setCollectErr('');
@@ -598,14 +630,24 @@ export default function CollectionsDashboard() {
         <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
           Collections & Receivables
         </Typography>
-        <Button
-          variant="outlined"
-          size="small"
-          onClick={() => navigate('/finance/soa')}
-          sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
-        >
-          Statements of Account (SOA)
-        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => navigate('/finance/ewt-2307')}
+            sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+          >
+            EWT / 2307
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => navigate('/finance/soa')}
+            sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+          >
+            Statements of Account (SOA)
+          </Button>
+        </Stack>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError('')}>{error}</Alert>}
@@ -629,14 +671,34 @@ export default function CollectionsDashboard() {
         <Grid size={{ xs: 6, sm: 3 }}>
           <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Collected</Typography>
+              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Cash Received</Typography>
               <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
-                {PHP.format(summary.totalCollected)}
+                {PHP.format(summary.totalCash)}
               </Typography>
               <Typography variant="caption" sx={{ opacity: 0.8 }}>
                 {summary.totalInvoiced > 0
-                  ? `${((summary.totalCollected / summary.totalInvoiced) * 100).toFixed(1)}% of invoiced`
+                  ? `${((summary.totalCash / summary.totalInvoiced) * 100).toFixed(1)}% of invoiced · settled ${PHP.format(summary.totalSettled)}`
                   : '—'}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid size={{ xs: 6, sm: 3 }}>
+          <Card
+            sx={{
+              background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent2} 0%, ${NET_PACIFIC_COLORS.secondary} 100%)`,
+              color: 'white',
+              cursor: 'pointer',
+            }}
+            onClick={() => navigate('/finance/ewt-2307')}
+          >
+            <CardContent sx={{ p: 2 }}>
+              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>EWT / 2307</Typography>
+              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+                {PHP.format(summary.totalWht)}
+              </Typography>
+              <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                Tax credit, not cash · open register
               </Typography>
             </CardContent>
           </Card>
@@ -849,7 +911,8 @@ export default function CollectionsDashboard() {
                 <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Amount</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Terms</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Due Date</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Collected</TableCell>
+                <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Cash</TableCell>
+                <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>EWT</TableCell>
                 <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Outstanding</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Status</TableCell>
                 <TableCell align="center" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Actions</TableCell>
@@ -858,7 +921,7 @@ export default function CollectionsDashboard() {
             <TableBody>
               {filtered.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={12} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: '0.875rem' }}>
+                  <TableCell colSpan={13} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: '0.875rem' }}>
                     {enriched.length === 0
                       ? 'No invoices yet. Click "Add Invoice" to get started.'
                       : 'No invoices match the current filters.'}
@@ -928,8 +991,11 @@ export default function CollectionsDashboard() {
                         <Typography variant="caption" color="error.main">Past due</Typography>
                       )}
                     </TableCell>
-                    <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: inv.amount_collected > 0 ? 'success.main' : 'text.secondary' }}>
-                      {PHP.format(inv.amount_collected)}
+                    <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: inv._cash > 0 ? 'success.main' : 'text.secondary' }}>
+                      {PHP.format(inv._cash)}
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: inv._wht > 0 ? NET_PACIFIC_COLORS.accent2 : 'text.disabled' }}>
+                      {inv._wht > 0 ? PHP.format(inv._wht) : '—'}
                     </TableCell>
                     <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
                       {inv._outstanding > 0
@@ -1079,6 +1145,33 @@ export default function CollectionsDashboard() {
               </Grid>
             </Grid>
 
+            <Grid container spacing={2}>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  label="EWT / WHT (PHP)"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={form.wht_amount}
+                  onChange={e => handleFormChange('wht_amount', e.target.value)}
+                  inputProps={{ min: 0, step: 0.01 }}
+                  helperText="Customer withholding (BIR 2307). Not cash."
+                />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  label="EWT rate %"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={form.wht_rate_pct}
+                  onChange={e => handleFormChange('wht_rate_pct', e.target.value)}
+                  inputProps={{ min: 0, step: 0.01 }}
+                  helperText="Optional. 1, 2, or 5 typical."
+                />
+              </Grid>
+            </Grid>
+
             <FormControl size="small" fullWidth>
               <InputLabel>Bill To</InputLabel>
               <Select
@@ -1131,20 +1224,25 @@ export default function CollectionsDashboard() {
                   <Typography variant="caption" color="text.secondary">Due: {collectDialog.due_date}</Typography>
                 </Stack>
                 <Divider sx={{ my: 1 }} />
-                <Typography variant="caption">Previously collected: {PHP.format(collectDialog.amount_collected)}</Typography>
+                <Typography variant="caption">Cash received: {PHP.format(invoiceCash(collectDialog))}</Typography>
+                {invoiceWht(collectDialog) > 0 && (
+                  <Typography variant="caption" display="block">
+                    EWT / 2307: {PHP.format(invoiceWht(collectDialog))} (not cash)
+                  </Typography>
+                )}
                 <Typography variant="caption" display="block">
-                  Remaining: <strong>{PHP.format(Math.max(0, collectDialog.amount - collectDialog.amount_collected))}</strong>
+                  Cash still due: <strong>{PHP.format(invoiceCashDue(collectDialog))}</strong>
                 </Typography>
               </Box>
 
               <TextField
-                label="Amount Collected (PHP)"
+                label="Total cash collected (PHP)"
                 type="number"
                 size="small"
                 value={collectForm.amount_collected}
                 onChange={e => setCollectForm(prev => ({ ...prev, amount_collected: e.target.value }))}
-                inputProps={{ min: 0, step: 0.01, max: collectDialog.amount }}
-                helperText={`Max: ${PHP.format(collectDialog.amount)}`}
+                inputProps={{ min: 0, step: 0.01, max: collectDialog.amount - invoiceWht(collectDialog) }}
+                helperText={`Max cash: ${PHP.format(collectDialog.amount - invoiceWht(collectDialog))} (invoice minus EWT)`}
                 required
               />
 

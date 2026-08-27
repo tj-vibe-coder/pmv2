@@ -1,5 +1,9 @@
 # Task Log
 
+## 2026-08-27 — Customer EWT / BIR 2307 first slice
+
+Invoices gained optional `wht_amount` (cash stays on `amount_collected`). Paid = cash + EWT. Collections KPIs split Cash vs EWT; new read-only register at `/finance/ewt-2307`. Certificates stay `expected` until a 2307 is on file. Backfill script `scripts/backfill-invoice-wht.js` splits SI 001/004/007 (₱3,611.58 total).
+
 ## 2026-08-27 — Client filter on Projects list
 
 Dashboard filter bar now has a Client dropdown (account names from the project list). Selection is persisted with the other list prefs.

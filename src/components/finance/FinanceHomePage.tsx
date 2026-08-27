@@ -21,7 +21,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
 import { API_BASE } from '../../config/api';
-import { ProjectInvoice, getInvoiceStatus } from '../../types/Invoice';
+import { ProjectInvoice, getInvoiceStatus, invoiceOutstanding } from '../../types/Invoice';
 import { Project } from '../../types/Project';
 import { buildActiExpectedQueue, splitActiExpectedQueue } from '../../utils/commercialTrail';
 import { PayrollRun } from '../../types/Payroll';
@@ -142,7 +142,7 @@ const FinanceHomePage: React.FC = () => {
   const arSummary = useMemo(() => {
     const enriched = invoices.map(inv => ({
       status: getInvoiceStatus(inv),
-      outstanding: Math.max(0, inv.amount - inv.amount_collected),
+      outstanding: invoiceOutstanding(inv),
     }));
     const outstanding = enriched.filter(i => i.status !== 'paid').reduce((s, i) => s + i.outstanding, 0);
     const overdueAmount = enriched.filter(i => i.status === 'overdue').reduce((s, i) => s + i.outstanding, 0);

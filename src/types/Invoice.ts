@@ -35,6 +35,20 @@ export interface ProjectInvoice {
    *  Absent/'customer' = billed to the end customer (the default, back-compatible). */
   bill_to?: BillToKind;
   bill_to_name?: string;
+  /** Customer expanded withholding tax (EWT / BIR 2307). Not cash. Settles AR
+   *  as a tax credit. `amount_collected` stays cash only. */
+  wht_amount?: number;
+  /** Creditable WHT rate as a whole-number percent (1, 2, 5, …). */
+  wht_rate_pct?: number;
+  /** Date on the 2307 / withholding event if known (YYYY-MM-DD). */
+  wht_date?: string;
+  /** Certificate number or other 2307 reference when received. */
+  wht_2307_ref?: string;
+  /** Journal amount is not proof of the form. expected = recorded from books;
+   *  received = certificate on file. */
+  wht_2307_status?: 'expected' | 'received';
+  /** Provenance for a backfill or manual entry, e.g. sales-journal-2026. */
+  wht_source?: string;
   created_at: string;
   updated_at: string;
 }
@@ -48,9 +62,33 @@ export const BILL_TO_OPTIONS: { label: string; value: BillToKind }[] = [
 
 export type InvoiceStatus = 'paid' | 'partial' | 'overdue' | 'unpaid';
 
+export function invoiceWht(inv: Pick<ProjectInvoice, 'wht_amount'>): number {
+  const n = Number(inv.wht_amount);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+export function invoiceCash(inv: Pick<ProjectInvoice, 'amount_collected'>): number {
+  const n = Number(inv.amount_collected);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Cash + recognized EWT. This is what settles AR — not cash alone. */
+export function invoiceSettled(inv: Pick<ProjectInvoice, 'amount_collected' | 'wht_amount'>): number {
+  return invoiceCash(inv) + invoiceWht(inv);
+}
+
+export function invoiceOutstanding(inv: Pick<ProjectInvoice, 'amount' | 'amount_collected' | 'wht_amount'>): number {
+  return Math.max(0, (Number(inv.amount) || 0) - invoiceSettled(inv));
+}
+
+/** Cash still due after EWT. Cap for the collect dialog. */
+export function invoiceCashDue(inv: Pick<ProjectInvoice, 'amount' | 'amount_collected' | 'wht_amount'>): number {
+  return Math.max(0, (Number(inv.amount) || 0) - invoiceWht(inv) - invoiceCash(inv));
+}
+
 export function getInvoiceStatus(inv: ProjectInvoice): InvoiceStatus {
-  if (inv.amount > 0 && inv.amount_collected >= inv.amount) return 'paid';
-  if (inv.amount_collected > 0) return 'partial';
+  if (inv.amount > 0 && invoiceOutstanding(inv) <= 0.005) return 'paid';
+  if (invoiceSettled(inv) > 0) return 'partial';
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   if (inv.due_date && new Date(inv.due_date) < today) return 'overdue';

@@ -317,6 +317,28 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
         </Tooltip>
       </ListItem>
 
+      <ListItem disablePadding sx={{ mb: 0.5 }}>
+        <Tooltip title={isExpanded ? '' : 'Sales EWT / 2307'} placement="right" arrow>
+          <ListItemButton
+            selected={location.pathname === '/finance/ewt-2307'}
+            onClick={() => navigate('/finance/ewt-2307')}
+            sx={navBtnSx(location.pathname === '/finance/ewt-2307')}
+          >
+            <ListItemIcon sx={iconSx()}>
+              <TaxLedgerIcon />
+            </ListItemIcon>
+            {isExpanded && (
+              <ListItemText
+                primary="Sales EWT / 2307"
+                secondary="Customer withholding tax credits"
+                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                sx={{ color: 'white' }}
+              />
+            )}
+          </ListItemButton>
+        </Tooltip>
+      </ListItem>
+
       {/* Payroll — only visible to authorized users */}
       {isPayrollAuthorized(user?.role) && (
         <ListItem disablePadding sx={{ mb: 0.5 }}>

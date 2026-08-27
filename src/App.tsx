@@ -41,6 +41,7 @@ import ProjectExpenseReport from './components/finance/ProjectExpenseReport';
 import OverheadExpensesPage from './components/OverheadExpensesPage';
 import CompanyPnLPage from './components/finance/CompanyPnLPage';
 import TaxFilerLedgerPage from './components/finance/TaxFilerLedgerPage';
+import SalesEwtRegisterPage from './components/finance/SalesEwtRegisterPage';
 import SoaDashboardPage from './components/finance/soa/SoaDashboardPage';
 import SoaDetailView from './components/finance/soa/SoaDetailView';
 import SalesHomePage from './components/sales/SalesHomePage';
@@ -661,6 +662,18 @@ function App() {
                   <EmployeeGuard>
                     <AppLayout>
                       <TaxFilerLedgerPage />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/ewt-2307"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <SalesEwtRegisterPage />
                     </AppLayout>
                   </EmployeeGuard>
                 </ProtectedRoute>
