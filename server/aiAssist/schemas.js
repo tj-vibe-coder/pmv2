@@ -54,8 +54,8 @@ const TOOL_ARG_SHAPES = {
   },
   query_analytics: {
     domain: { type: 'enum', values: ['projects', 'quotations', 'expenses', 'sales_pipeline'], required: true },
-    groupBy: { type: 'enum', values: ['category', 'year', 'status', 'client', 'grade'] },
-    metric: { type: 'enum', values: ['total_amount', 'count', 'average_amount', 'balance_amount'] },
+    groupBy: { type: 'enum', values: ['category', 'year', 'status', 'client', 'grade', 'forecast_monthly', 'forecast_recurring', 'forecast_category'] },
+    metric: { type: 'enum', values: ['total_amount', 'count', 'average_amount', 'balance_amount', 'recurring_runrate'] },
     year: { type: 'integer' },
   },
   propose_opportunity_update: {

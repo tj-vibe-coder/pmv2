@@ -2,7 +2,7 @@ import { Document, Page, Text, View, Image, StyleSheet, pdf } from '@react-pdf/r
 import { saveAs } from 'file-saver';
 import { format } from 'date-fns';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import type { StatementOfAccount, SoaItem, SoaFootnote } from '../../types/StatementOfAccount';
+import type { StatementOfAccount } from '../../types/StatementOfAccount';
 import { computeSoaTotals } from '../../types/StatementOfAccount';
 
 // ─── Colors & Typography ─────────────────────────────────────────────────────

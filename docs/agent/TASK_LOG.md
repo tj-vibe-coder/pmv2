@@ -1,6 +1,33 @@
 # Task Log
 
-## 2026-08-27 — Implemented Dedicated Collected & Settlement Ledger in Collections Dashboard
+## 2026-08-27 — Implemented Expense Forecasting & Recurring Run Rate Engine in Finance Analytics Studio
+
+Implemented comprehensive expense forecasting and fixed recurring run rate modeling in Finance Analytics Studio (`/finance/analytics` via `src/components/analytics/AnalyticsStudioPage.tsx`) and backend AI deterministic tools (`server/aiAssist/tools.js`, `server/aiAssist/schemas.js`):
+- **Fixed Recurring vs Variable Expense Modeling & Scenario Projections**:
+  - Automatically identifies fixed recurring commitments (`OVERHEAD_CATEGORIES`: Rent, Salaries & Wages, Communication & Utilities, Government Contributions, Advertising/Marketing, Supplies, Repairs & Maintenance, Entertainment) vs variable direct project costs (Materials, 3rd Party Labor, Transportation, Gas, Meals, Accommodation).
+  - Computes `monthlyRecurringRunRate` = `totalHistoricalRecurring / distinctMonthsCount`, `monthlyVariableAverage` = `totalHistoricalVariable / distinctMonthsCount`.
+  - Added **Scenario Modeling (P10 / P50 / P90)**:
+    - **Base Case (P50)**: Standard historical recurring run rate + historical variable monthly average.
+    - **Conservative / High-Burn (P90)**: Fixed recurring baseline + 25% variable cost volatility buffer.
+    - **Lean / Minimum-Burn (P10)**: Fixed recurring baseline + 25% lean direct cost reduction.
+- **Executive Forecasting Intelligence Banner**:
+  - Interactive top banner in Finance Studio rendering 4 executive KPIs: *Monthly Recurring Run Rate* (fixed baseline), *Monthly Variable Spend* (with active scenario indicator), *Estimated Monthly Burn* (with P10–P90 confidence range bounds), and *Horizon Outflow Forecast* (with quick 3M, 6M, 12M horizon buttons).
+  - Interactive Scenario Switcher buttons (`[Lean (P10)]`, `[Base (P50)]`, `[Conservative (P90)]`) and distinct historical baseline provenance subtitle.
+  - Cost driver chips showing top recurring category monthly run rates.
+- **Visual Encoding Grammar**:
+  - Added new Dimensions: `forecast_monthly` (Monthly Expense Forecast: Actuals + Horizon Projection), `forecast_recurring` (Fixed Recurring vs Variable Outflow Projection), and `forecast_category` (Recurring Run Rate by Category).
+  - Added Metric: `recurring_runrate` (Monthly Recurring Run Rate in PHP).
+  - Presets: `3-Month Expense Forecast (Recurring Run Rate)` (line chart), `6-Month Expense Outflow Projection` (bar chart), `Recurring vs Variable Expense Projection` (donut chart), `Recurring Run Rate by Category` (bar chart).
+  - Visual distinction with Net Pacific Teal accents for projected forecast periods vs Primary Blue for historical actuals.
+- **Natural Language Data Formulator**:
+  - Added intent detection for natural language queries like `"forecast recurring expenses"`, `"project next 6 months burn rate"`, `"recurring vs variable split"`.
+- **Backend AI Tools & Deterministic Sync**:
+  - Extended `query_analytics` tool in `server/aiAssist/tools.js` and `server/aiAssist/schemas.js` to support `forecast_monthly`, `forecast_recurring`, `forecast_category` dimensions and `recurring_runrate` metric.
+  - Sourced with provenance linking back to `/finance/analytics`.
+  - Ran `npm run ai-assist:sync` and passed 125/125 AI Assist test suite.
+- **Verification**:
+  - Added unit test cases in `src/components/analytics/AnalyticsStudioPage.test.tsx` (5/5 passed).
+  - `npx tsc --noEmit` and `CI=true npm run build` passed cleanly with 0 errors.
 
 Implemented a 3-tab layout at `/finance/collections` (`?tab=receivables`, `?tab=settled`, `?tab=acti`) featuring the **Collected & Settlement Ledger**:
 - **Settlement Summary Metrics**: Displays Total Cash Inflow, BIR 2307 EWT Recognized, Gross Settled Revenue, and Average Turnaround Days (DSO from invoice date to collection date).
