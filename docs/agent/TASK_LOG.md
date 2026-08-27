@@ -1,5 +1,9 @@
 # Task Log
 
+## 2026-08-27 — Sync billing-schedule milestones to existing invoices
+
+Ready-to-invoice banner was still offering PB1/PB2 because Collections invoices had empty `pb_number`. Linked SI 004 → PB1 (Plaridel troubleshooting), Invoice 002 → PB1 and Invoice 008 → PB2 (ADI RH Temp).
+
 ## 2026-08-27 — Direct SIs 004 (LBI) and 007 (Smartech/Mondelez) collected
 
 IOCT2605001 RCS Plaridel Troubleshooting: SI 004 2026-05-18, PO 26-317R, PHP 15,000 billed/collected, bill_to customer (not ACTI). IOCT2604001 Mondelez servo audit: SI 007 2026-05-30, PO 002.05.2026, completed, PHP 15,000 billed/collected. WHT noted on the invoice (300 / 750).
