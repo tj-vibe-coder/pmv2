@@ -199,10 +199,10 @@ function createSoaRouter(opts) {
         subtotalPendingPo: totals.subtotalPendingPo,
         totalOutstanding: totals.totalOutstanding,
 
-        preparedByName: payload.preparedByName || req.user.name || 'Reuel Joshua Rivera',
-        preparedByTitle: payload.preparedByTitle || req.user.position || 'Solutions Manager',
-        preparedByPhone: payload.preparedByPhone || '+63 919 082 5434',
-        preparedByEmail: payload.preparedByEmail || 'rj.rivera@iocontroltech.com',
+        preparedByName: payload.preparedByName || req.user.full_name || req.user.name || 'Reuel Joshua Rivera',
+        preparedByTitle: payload.preparedByTitle || req.user.designation || req.user.position || 'Managing Partner - Operations',
+        preparedByPhone: payload.preparedByPhone || req.user.contact_number || '+63 919 082 5434',
+        preparedByEmail: payload.preparedByEmail || req.user.email || 'rj.rivera@iocontroltech.com',
 
         amountCollected: Number(payload.amountCollected) || 0,
         balanceRemaining: Math.max(0, totals.totalOutstanding - (Number(payload.amountCollected) || 0)),

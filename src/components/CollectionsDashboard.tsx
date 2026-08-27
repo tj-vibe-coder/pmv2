@@ -4,7 +4,7 @@ import {
   IconButton, TextField, Dialog, DialogActions, DialogContent, DialogTitle,
   MenuItem, Chip, Table, TableHead, TableRow, TableCell, TableBody,
   TableContainer, Tooltip, Alert, CircularProgress, Stack, Autocomplete,
-  FormControl, InputLabel, Select, Divider,
+  FormControl, InputLabel, Select, Divider, Tabs, Tab,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -13,6 +13,14 @@ import PaymentIcon from '@mui/icons-material/Payment';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
+import PaymentsIcon from '@mui/icons-material/Payments';
+import HandshakeIcon from '@mui/icons-material/Handshake';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import DescriptionIcon from '@mui/icons-material/Description';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import type { ProjectInvoice, InvoiceStatus, BillingMilestone, BillToKind } from '../types/Invoice';
 import {
   getInvoiceStatus,
@@ -26,6 +34,8 @@ import {
   invoiceWht,
 } from '../types/Invoice';
 import type { Project } from '../types/Project';
+import type { StatementOfAccount } from '../types/StatementOfAccount';
+import { listSoas } from '../services/soaService';
 import {
   actiExpectedStageLabel,
   actiExpectedTimingLabel,
@@ -114,18 +124,31 @@ interface CollectForm {
 
 // ─── component ────────────────────────────────────────────────────────────────
 export default function CollectionsDashboard() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const preselectedProjectId = searchParams.get('project_id');
+  const rawTab = searchParams.get('tab') || 'receivables';
+  const currentTab = (rawTab === 'settled' || rawTab === 'collected')
+    ? 'settled'
+    : rawTab === 'acti'
+      ? 'acti'
+      : 'receivables';
+
   const [invoices, setInvoices] = useState<ProjectInvoice[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [soas, setSoas] = useState<StatementOfAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // filters
+  // filters for Receivables tab
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<InvoiceStatus | ''>('');
   const [filterActi, setFilterActi] = useState(false);
+
+  // filters for Settled tab
+  const [searchSettled, setSearchSettled] = useState('');
+  const [filterSettledStatus, setFilterSettledStatus] = useState<'all' | 'paid' | 'partial'>('all');
+  const [filterSettledBillTo, setFilterSettledBillTo] = useState<'all' | 'customer' | 'acti'>('all');
 
   // add/edit dialog
   const [invoiceDialog, setInvoiceDialog] = useState<'add' | 'edit' | null>(null);
@@ -149,6 +172,17 @@ export default function CollectionsDashboard() {
   const [uploadingScanId, setUploadingScanId] = useState<string | null>(null);
   const [uploadScanErr, setUploadScanErr] = useState('');
 
+  // ─── tab navigation helper ───────────────────────────────────────────────
+  const handleTabChange = (_: React.SyntheticEvent, newTab: string) => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (newTab === 'receivables') {
+      nextParams.delete('tab');
+    } else {
+      nextParams.set('tab', newTab);
+    }
+    setSearchParams(nextParams, { replace: true });
+  };
+
   // ─── fetch ───────────────────────────────────────────────────────────────
   const fetchInvoices = useCallback(async () => {
     try {
@@ -168,8 +202,13 @@ export default function CollectionsDashboard() {
     Promise.all([
       fetch(`${API}/projects`).then(r => r.json()),
       fetch(invoiceUrl).then(r => r.json()),
+      listSoas().catch(() => [] as StatementOfAccount[]),
     ])
-      .then(([ps, invs]) => { setProjects(ps); setInvoices(invs); })
+      .then(([ps, invs, soaList]) => {
+        setProjects(Array.isArray(ps) ? ps : []);
+        setInvoices(Array.isArray(invs) ? invs : []);
+        setSoas(Array.isArray(soaList) ? soaList : []);
+      })
       .catch((err: unknown) => {
         console.error('CollectionsDashboard load error:', err);
         setError(err instanceof Error ? err.message : 'Failed to load data.');
@@ -184,6 +223,32 @@ export default function CollectionsDashboard() {
     return m;
   }, [projects]);
 
+  // SOA Lookup Map for quick deep-link trail
+  const soasByProjectId = useMemo(() => {
+    const map: Record<string, StatementOfAccount[]> = {};
+    soas.forEach(s => {
+      (s.items || []).forEach(item => {
+        if (item.projectId) {
+          const pid = String(item.projectId);
+          if (!map[pid]) map[pid] = [];
+          if (!map[pid].some(existing => existing.id === s.id)) {
+            map[pid].push(s);
+          }
+        }
+      });
+    });
+    return map;
+  }, [soas]);
+
+  const findSoasForInvoice = useCallback((inv: ProjectInvoice): StatementOfAccount[] => {
+    const byPid = soasByProjectId[String(inv.project_id)] || [];
+    if (byPid.length > 0) return byPid;
+    if (inv.project_no) {
+      return soas.filter(s => (s.items || []).some(item => item.projectNo === inv.project_no));
+    }
+    return [];
+  }, [soas, soasByProjectId]);
+
   // An invoice counts as "with ACTI" when its project is ACTI-joint or it's billed to ACTI.
   const isActiInvoice = (inv: ProjectInvoice) =>
     inv.bill_to === 'acti' || !!projectsById[String(inv.project_id)]?.with_acti;
@@ -196,7 +261,7 @@ export default function CollectionsDashboard() {
     _cash: invoiceCash(inv),
   })), [invoices]);
 
-  const filtered = useMemo(() => {
+  const filteredReceivables = useMemo(() => {
     const q = search.toLowerCase();
     return enriched.filter(inv => {
       if (filterStatus && inv._status !== filterStatus) return false;
@@ -211,6 +276,66 @@ export default function CollectionsDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enriched, search, filterStatus, filterActi, projectsById]);
 
+  // Settled / Collected invoices list
+  const collectedInvoices = useMemo(() => {
+    return enriched
+      .filter(inv => inv._cash > 0 || inv._wht > 0 || inv._status === 'paid')
+      .sort((a, b) => {
+        const dateA = a.collection_date || a.invoice_date || a.created_at || '';
+        const dateB = b.collection_date || b.invoice_date || b.created_at || '';
+        return dateB.localeCompare(dateA);
+      });
+  }, [enriched]);
+
+  const filteredSettled = useMemo(() => {
+    const q = searchSettled.toLowerCase().trim();
+    return collectedInvoices.filter(inv => {
+      if (filterSettledStatus === 'paid' && inv._status !== 'paid') return false;
+      if (filterSettledStatus === 'partial' && inv._status !== 'partial') return false;
+      if (filterSettledBillTo === 'customer' && inv.bill_to === 'acti') return false;
+      if (filterSettledBillTo === 'acti' && inv.bill_to !== 'acti') return false;
+
+      if (q) {
+        const p = projectsById[String(inv.project_id)];
+        const matchingSoas = findSoasForInvoice(inv);
+        const matchSoaNo = matchingSoas.some(s => s.soaNo.toLowerCase().includes(q));
+        const matchText = (
+          (inv.invoice_no || '') + ' ' +
+          (inv.project_name || '') + ' ' +
+          (inv.project_no || '') + ' ' +
+          (inv.pb_number || '') + ' ' +
+          (inv.notes || '') + ' ' +
+          (p?.account_name || '') + ' ' +
+          (p?.project_name || '') + ' ' +
+          (p?.project_no || '')
+        ).toLowerCase();
+        if (!matchText.includes(q) && !matchSoaNo) return false;
+      }
+      return true;
+    });
+  }, [collectedInvoices, searchSettled, filterSettledStatus, filterSettledBillTo, projectsById, findSoasForInvoice]);
+
+  // Turnaround statistics
+  const turnaroundStats = useMemo(() => {
+    let totalDays = 0;
+    let count = 0;
+    collectedInvoices.forEach(inv => {
+      if (inv.invoice_date && inv.collection_date) {
+        const invD = new Date(inv.invoice_date).getTime();
+        const colD = new Date(inv.collection_date).getTime();
+        if (!isNaN(invD) && !isNaN(colD) && colD >= invD) {
+          const days = Math.round((colD - invD) / (1000 * 60 * 60 * 24));
+          totalDays += days;
+          count++;
+        }
+      }
+    });
+    return {
+      avgDays: count > 0 ? Math.round(totalDays / count) : null,
+      sampleCount: count,
+    };
+  }, [collectedInvoices]);
+
   const summary = useMemo(() => {
     const totalInvoiced = enriched.reduce((s, i) => s + i.amount, 0);
     const totalCash = enriched.reduce((s, i) => s + i._cash, 0);
@@ -218,7 +343,19 @@ export default function CollectionsDashboard() {
     const outstanding = enriched.filter(i => i._status !== 'paid').reduce((s, i) => s + i._outstanding, 0);
     const overdueAmount = enriched.filter(i => i._status === 'overdue').reduce((s, i) => s + i._outstanding, 0);
     const overdueCount = enriched.filter(i => i._status === 'overdue').length;
-    return { totalInvoiced, totalCash, totalWht, totalSettled: totalCash + totalWht, outstanding, overdueAmount, overdueCount };
+    const fullyPaidCount = enriched.filter(i => i._status === 'paid').length;
+    const partialCount = enriched.filter(i => i._status === 'partial').length;
+    return {
+      totalInvoiced,
+      totalCash,
+      totalWht,
+      totalSettled: totalCash + totalWht,
+      outstanding,
+      overdueAmount,
+      overdueCount,
+      fullyPaidCount,
+      partialCount,
+    };
   }, [enriched]);
 
   // Milestones eligible to invoice: site progress has reached the trigger, and no
@@ -273,11 +410,13 @@ export default function CollectionsDashboard() {
   useEffect(() => {
     if (loading) return;
     if (typeof window === 'undefined') return;
-    const id = window.location.hash.replace(/^#/, '');
-    if (id === 'expected-acti' || id === 'expected-acti-pending-ar' || id === 'expected-acti-ongoing') {
-      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const hash = window.location.hash.replace(/^#/, '');
+    if (hash.startsWith('expected-acti') && currentTab !== 'acti') {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set('tab', 'acti');
+      setSearchParams(nextParams, { replace: true });
     }
-  }, [loading, actiExpectedQueue.length]);
+  }, [loading, searchParams, currentTab, setSearchParams]);
 
   // ─── form helpers ────────────────────────────────────────────────────────
   const handleFormChange = (field: keyof InvoiceForm, value: string | number) => {
@@ -544,6 +683,89 @@ export default function CollectionsDashboard() {
     e.target.value = '';
   };
 
+  const calculateTurnaround = (invoiceDate?: string, collectionDate?: string): string => {
+    if (!invoiceDate || !collectionDate) return '—';
+    const invD = new Date(invoiceDate).getTime();
+    const colD = new Date(collectionDate).getTime();
+    if (isNaN(invD) || isNaN(colD)) return '—';
+    const diffDays = Math.round((colD - invD) / (1000 * 60 * 60 * 24));
+    if (diffDays === 0) return 'Same day';
+    if (diffDays === 1) return '1 day';
+    if (diffDays < 0) return '—';
+    return `${diffDays} days`;
+  };
+
+  // ─── Export CSV for Settled Ledger ──────────────────────────────────────
+  const exportCollectedToCSV = () => {
+    const escapeCSV = (value: unknown): string => {
+      if (value === null || value === undefined) return '';
+      const str = String(value);
+      if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const headers = [
+      'Collection Date',
+      'Project No',
+      'Project Name',
+      'Client / Account',
+      'PB Milestone',
+      'Invoice No',
+      'Invoice Date',
+      'Bill To',
+      'Invoice Amount (PHP)',
+      'Cash Collected (PHP)',
+      'EWT Amount (PHP)',
+      'EWT Rate %',
+      'EWT 2307 Status',
+      'Outstanding Balance (PHP)',
+      'Settlement Status',
+      'Turnaround (Days)',
+      'Linked SOA(s)',
+      'Scan File URL',
+      'Notes',
+    ];
+
+    const rows = filteredSettled.map(inv => {
+      const p = projectsById[String(inv.project_id)];
+      const matchingSoas = findSoasForInvoice(inv);
+      const turnaround = calculateTurnaround(inv.invoice_date, inv.collection_date);
+      return [
+        inv.collection_date || inv.invoice_date || '',
+        inv.project_no || p?.project_no || '',
+        inv.project_name || p?.project_name || '',
+        p?.account_name || '',
+        inv.pb_number || '',
+        inv.invoice_no || '',
+        inv.invoice_date || '',
+        inv.bill_to === 'acti' ? 'ACTI' : 'End Customer',
+        inv.amount ?? 0,
+        inv._cash ?? 0,
+        inv._wht ?? 0,
+        inv.wht_rate_pct ? `${inv.wht_rate_pct}%` : '',
+        inv.wht_2307_status || '',
+        inv._outstanding ?? 0,
+        STATUS_LABELS[inv._status] || inv._status,
+        turnaround,
+        matchingSoas.map(s => s.soaNo).join('; ') || '',
+        inv.scan_file?.onedrive_web_url || '',
+        inv.notes || '',
+      ].map(escapeCSV).join(',');
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `IOCT_Collected_Settlements_${TODAY()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const renderActiExpectedTable = (rows: ActiExpectedRow[]) => (
     <TableContainer sx={{ maxHeight: 280 }}>
       <Table size="small" stickyHeader>
@@ -653,403 +875,927 @@ export default function CollectionsDashboard() {
       {error && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError('')}>{error}</Alert>}
       {uploadScanErr && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setUploadScanErr('')}>{uploadScanErr}</Alert>}
 
-      {/* KPI Cards */}
+      {/* Global KPI Cards (Clickable Quick Tabs/Filters) */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Invoiced</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+        <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+          <Card
+            sx={{
+              background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`,
+              color: 'white',
+              cursor: 'pointer',
+              transition: 'transform 0.15s ease-in-out',
+              '&:hover': { transform: 'translateY(-2px)' },
+            }}
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.delete('tab');
+              setSearchParams(next, { replace: true });
+              setFilterStatus('');
+            }}
+          >
+            <CardContent sx={{ p: 1.5 }}>
+              <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', fontWeight: 500 }}>Total Invoiced</Typography>
+              <Typography variant="h6" component="div" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
                 {PHP.format(summary.totalInvoiced)}
               </Typography>
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>
+              <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.7rem' }}>
                 {enriched.length} invoice{enriched.length !== 1 ? 's' : ''}
               </Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, color: 'white' }}>
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Cash Received</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+        <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+          <Card
+            sx={{
+              background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`,
+              color: 'white',
+              cursor: 'pointer',
+              transition: 'transform 0.15s ease-in-out',
+              '&:hover': { transform: 'translateY(-2px)' },
+            }}
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.set('tab', 'settled');
+              setSearchParams(next, { replace: true });
+            }}
+          >
+            <CardContent sx={{ p: 1.5 }}>
+              <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', fontWeight: 500 }}>Cash Received</Typography>
+              <Typography variant="h6" component="div" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
                 {PHP.format(summary.totalCash)}
               </Typography>
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>
+              <Typography variant="caption" sx={{ opacity: 0.85, fontSize: '0.7rem' }}>
                 {summary.totalInvoiced > 0
-                  ? `${((summary.totalCash / summary.totalInvoiced) * 100).toFixed(1)}% of invoiced · settled ${PHP.format(summary.totalSettled)}`
+                  ? `${((summary.totalCash / summary.totalInvoiced) * 100).toFixed(1)}% of gross · open ledger`
                   : '—'}
               </Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid size={{ xs: 6, sm: 3 }}>
+        <Grid size={{ xs: 6, sm: 4, md: 2 }}>
           <Card
             sx={{
               background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent2} 0%, ${NET_PACIFIC_COLORS.secondary} 100%)`,
               color: 'white',
               cursor: 'pointer',
+              transition: 'transform 0.15s ease-in-out',
+              '&:hover': { transform: 'translateY(-2px)' },
             }}
             onClick={() => navigate('/finance/ewt-2307')}
           >
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>EWT / 2307</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+            <CardContent sx={{ p: 1.5 }}>
+              <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', fontWeight: 500 }}>EWT / 2307</Typography>
+              <Typography variant="h6" component="div" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
                 {PHP.format(summary.totalWht)}
               </Typography>
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                Tax credit, not cash · open register
+              <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.7rem' }}>
+                Tax credit · view 2307 register
               </Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Outstanding</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+        <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+          <Card
+            sx={{
+              background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`,
+              color: 'white',
+              cursor: 'pointer',
+              transition: 'transform 0.15s ease-in-out',
+              '&:hover': { transform: 'translateY(-2px)' },
+            }}
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.delete('tab');
+              setSearchParams(next, { replace: true });
+              setFilterStatus('unpaid');
+            }}
+          >
+            <CardContent sx={{ p: 1.5 }}>
+              <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', fontWeight: 500 }}>Outstanding</Typography>
+              <Typography variant="h6" component="div" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
                 {PHP.format(summary.outstanding)}
               </Typography>
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                {enriched.filter(i => i._status !== 'paid').length} pending
+              <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.7rem' }}>
+                {enriched.filter(i => i._status !== 'paid').length} pending collection
               </Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Card sx={{
-            background: summary.overdueCount > 0
-              ? `linear-gradient(135deg, #e53935 0%, #ef9a9a 100%)`
-              : `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`,
-            color: summary.overdueCount > 0 ? 'white' : '#2d3436',
-          }}>
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Overdue</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+        <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+          <Card
+            sx={{
+              background: summary.overdueCount > 0
+                ? `linear-gradient(135deg, #e53935 0%, #ef9a9a 100%)`
+                : `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`,
+              color: summary.overdueCount > 0 ? 'white' : '#2d3436',
+              cursor: 'pointer',
+              transition: 'transform 0.15s ease-in-out',
+              '&:hover': { transform: 'translateY(-2px)' },
+            }}
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.delete('tab');
+              setSearchParams(next, { replace: true });
+              setFilterStatus('overdue');
+            }}
+          >
+            <CardContent sx={{ p: 1.5 }}>
+              <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', fontWeight: 500 }}>Overdue</Typography>
+              <Typography variant="h6" component="div" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
                 {PHP.format(summary.overdueAmount)}
               </Typography>
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                {summary.overdueCount} invoice{summary.overdueCount !== 1 ? 's' : ''} past due
+              <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.7rem' }}>
+                {summary.overdueCount} past due
               </Typography>
             </CardContent>
           </Card>
         </Grid>
-        {actiExpectedQueue.length > 0 && (
-          <Grid size={{ xs: 6, sm: 3 }}>
-            <Card
-              sx={{
-                background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`,
-                color: 'white',
-                cursor: 'pointer',
-              }}
-              onClick={() => document.getElementById('expected-acti')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-            >
-              <CardContent sx={{ p: 2 }}>
-                <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>ACTI pending AR</Typography>
-                <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
-                  {PHP.format(actiPendingArTotal)}
-                </Typography>
-                <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                  {actiPendingAr.length} completed · {actiOngoing.length} ongoing no PO
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-        )}
+        <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+          <Card
+            sx={{
+              background: `linear-gradient(135deg, #636e72 0%, #b2bec3 100%)`,
+              color: 'white',
+              cursor: 'pointer',
+              transition: 'transform 0.15s ease-in-out',
+              '&:hover': { transform: 'translateY(-2px)' },
+            }}
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.set('tab', 'acti');
+              setSearchParams(next, { replace: true });
+            }}
+          >
+            <CardContent sx={{ p: 1.5 }}>
+              <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', fontWeight: 500 }}>ACTI Watchlist</Typography>
+              <Typography variant="h6" component="div" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                {PHP.format(actiPendingArTotal)}
+              </Typography>
+              <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.7rem' }}>
+                {actiPendingAr.length} pending · {actiOngoing.length} ongoing
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
       </Grid>
 
-      {/* Ready-to-invoice notification — milestones whose site progress reached the trigger */}
-      {readyToInvoice.length > 0 && (
-        <Paper variant="outlined" sx={{ p: 1.5, mb: 2, borderRadius: 2, borderColor: NET_PACIFIC_COLORS.warning, bgcolor: '#fffbe6' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-            <NotificationsActiveIcon sx={{ color: '#b7791f' }} fontSize="small" />
-            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-              {readyToInvoice.length} milestone{readyToInvoice.length !== 1 ? 's' : ''} ready to invoice
-            </Typography>
-            <Typography variant="body2" color="text.secondary">· {PHP.format(readyTotal)}</Typography>
-          </Box>
-          <Stack spacing={0} sx={{ maxHeight: 240, overflowY: 'auto' }}>
-            {readyToInvoice.map(r => (
-              <Box
-                key={`${r.project.id}-${r.milestone.pb_number}`}
-                sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap', py: 0.75, borderTop: '1px solid', borderColor: 'rgba(0,0,0,0.06)' }}
-              >
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    {[r.project.project_no, r.project.project_name].filter(Boolean).join(' · ') || `Project ${r.project.id}`}
-                    {' — '}
-                    <Box component="span" sx={{ fontFamily: 'monospace', color: NET_PACIFIC_COLORS.primary }}>{r.milestone.pb_number}</Box>
-                    {r.milestone.label ? ` ${r.milestone.label}` : ''}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    Site {r.project.actual_site_progress_percent ?? 0}% ≥ trigger {r.milestone.trigger_pct}% · bills {r.milestone.billing_pct}% = {PHP.format(r.amount)}
-                  </Typography>
-                </Box>
-                <Button
+      {/* Tabs Navigation Bar */}
+      <Paper sx={{ mb: 2, borderRadius: 2, bgcolor: '#ffffff' }}>
+        <Tabs
+          value={currentTab}
+          onChange={handleTabChange}
+          indicatorColor="primary"
+          textColor="primary"
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{
+            borderBottom: '1px solid #e0e0e0',
+            px: 1.5,
+            '& .MuiTab-root': {
+              fontWeight: 600,
+              textTransform: 'none',
+              fontSize: '0.9rem',
+              minHeight: 48,
+            },
+          }}
+        >
+          <Tab
+            value="receivables"
+            icon={<ReceiptLongIcon fontSize="small" />}
+            iconPosition="start"
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <span>Receivables & Billing</span>
+                <Chip
                   size="small"
-                  variant="contained"
-                  startIcon={<AddIcon />}
-                  onClick={() => openCreateForMilestone(r.project, r.milestone)}
-                  sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary }, flexShrink: 0 }}
-                >
-                  Create Invoice
-                </Button>
+                  label={enriched.filter(i => i._status !== 'paid').length + readyToInvoice.length}
+                  color={summary.overdueCount > 0 ? 'error' : 'default'}
+                  sx={{ height: 20, fontSize: '0.725rem', fontWeight: 600 }}
+                />
               </Box>
-            ))}
-          </Stack>
-        </Paper>
+            }
+          />
+          <Tab
+            value="settled"
+            icon={<PaymentsIcon fontSize="small" />}
+            iconPosition="start"
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <span>Collected & Settlement Ledger</span>
+                <Chip
+                  size="small"
+                  label={collectedInvoices.length}
+                  color="success"
+                  sx={{ height: 20, fontSize: '0.725rem', fontWeight: 600 }}
+                />
+              </Box>
+            }
+          />
+          <Tab
+            value="acti"
+            icon={<HandshakeIcon fontSize="small" />}
+            iconPosition="start"
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <span>ACTI Expected Watchlist</span>
+                {actiExpectedQueue.length > 0 && (
+                  <Chip
+                    size="small"
+                    label={actiExpectedQueue.length}
+                    color="primary"
+                    variant="outlined"
+                    sx={{ height: 20, fontSize: '0.725rem', fontWeight: 600 }}
+                  />
+                )}
+              </Box>
+            }
+          />
+        </Tabs>
+      </Paper>
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          TAB 1: RECEIVABLES & BILLING QUEUE
+         ═══════════════════════════════════════════════════════════════════════ */}
+      {currentTab === 'receivables' && (
+        <Box>
+          {/* Ready-to-invoice notification */}
+          {readyToInvoice.length > 0 && (
+            <Paper variant="outlined" sx={{ p: 1.5, mb: 2, borderRadius: 2, borderColor: NET_PACIFIC_COLORS.warning, bgcolor: '#fffbe6' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+                <NotificationsActiveIcon sx={{ color: '#b7791f' }} fontSize="small" />
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                  {readyToInvoice.length} milestone{readyToInvoice.length !== 1 ? 's' : ''} ready to invoice
+                </Typography>
+                <Typography variant="body2" color="text.secondary">· {PHP.format(readyTotal)}</Typography>
+              </Box>
+              <Stack spacing={0} sx={{ maxHeight: 200, overflowY: 'auto' }}>
+                {readyToInvoice.map(r => (
+                  <Box
+                    key={`${r.project.id}-${r.milestone.pb_number}`}
+                    sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap', py: 0.75, borderTop: '1px solid', borderColor: 'rgba(0,0,0,0.06)' }}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        {[r.project.project_no, r.project.project_name].filter(Boolean).join(' · ') || `Project ${r.project.id}`}
+                        {' — '}
+                        <Box component="span" sx={{ fontFamily: 'monospace', color: NET_PACIFIC_COLORS.primary }}>{r.milestone.pb_number}</Box>
+                        {r.milestone.label ? ` ${r.milestone.label}` : ''}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Site {r.project.actual_site_progress_percent ?? 0}% ≥ trigger {r.milestone.trigger_pct}% · bills {r.milestone.billing_pct}% = {PHP.format(r.amount)}
+                      </Typography>
+                    </Box>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      startIcon={<AddIcon />}
+                      onClick={() => openCreateForMilestone(r.project, r.milestone)}
+                      sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary }, flexShrink: 0 }}
+                    >
+                      Create Invoice
+                    </Button>
+                  </Box>
+                ))}
+              </Stack>
+            </Paper>
+          )}
+
+          {/* Filters */}
+          <Paper sx={{ p: 1.5, mb: 1.5, borderRadius: 2 }}>
+            <Grid container spacing={1.5} alignItems="center">
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <TextField
+                  fullWidth
+                  label="Search"
+                  placeholder="Invoice no., project name…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  size="small"
+                />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Status</InputLabel>
+                  <Select
+                    value={filterStatus}
+                    onChange={e => setFilterStatus(e.target.value as InvoiceStatus | '')}
+                    label="Status"
+                  >
+                    <MenuItem value="">All Statuses</MenuItem>
+                    <MenuItem value="unpaid">Unpaid</MenuItem>
+                    <MenuItem value="partial">Partial</MenuItem>
+                    <MenuItem value="overdue">Overdue</MenuItem>
+                    <MenuItem value="paid">Paid</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+                <Chip
+                  label="With ACTI"
+                  color={filterActi ? 'primary' : 'default'}
+                  variant={filterActi ? 'filled' : 'outlined'}
+                  onClick={() => setFilterActi(v => !v)}
+                  clickable
+                />
+              </Grid>
+            </Grid>
+          </Paper>
+
+          {/* Invoices Table */}
+          <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2, flexGrow: 1 }}>
+            <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e0e0e0' }}>
+              <Typography variant="h6" sx={{ fontSize: '1.05rem', fontWeight: 600 }}>
+                Invoices ({filteredReceivables.length})
+              </Typography>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<AddIcon />}
+                onClick={openAdd}
+                sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+              >
+                Add Invoice
+              </Button>
+            </Box>
+
+            <TableContainer sx={{ maxHeight: 'calc(100vh - 460px)', minHeight: 300 }}>
+              <Table stickyHeader size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Project</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Invoice No.</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>PB #</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Bill To</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Date Issued</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Amount</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Terms</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Due Date</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Cash</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>EWT</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Outstanding</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Status</TableCell>
+                    <TableCell align="center" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {filteredReceivables.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={13} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: '0.875rem' }}>
+                        {enriched.length === 0
+                          ? 'No invoices yet. Click "Add Invoice" to get started.'
+                          : 'No invoices match the current filters.'}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {filteredReceivables.map(inv => {
+                    const isOverdue = inv._status === 'overdue';
+                    const handleProjectClick = () => {
+                      sessionStorage.setItem('selectedProjectId', String(inv.project_id));
+                      navigate(`/projects/${inv.project_id}`);
+                    };
+                    return (
+                      <TableRow key={inv.id} hover sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
+                        <TableCell>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontWeight: 500,
+                              fontSize: '0.8rem',
+                              color: NET_PACIFIC_COLORS.primary,
+                              cursor: 'pointer',
+                              '&:hover': { textDecoration: 'underline' },
+                            }}
+                            onClick={handleProjectClick}
+                          >
+                            {inv.project_name || '—'}
+                          </Typography>
+                          {inv.project_no && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{ cursor: 'pointer' }}
+                              onClick={handleProjectClick}
+                            >
+                              {inv.project_no}
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2" sx={{ fontSize: '0.8rem', fontFamily: 'monospace' }}>
+                            {inv.invoice_no}
+                          </Typography>
+                        </TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                          {inv.pb_number
+                            ? <Chip label={inv.pb_number} size="small" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
+                            : <Typography variant="caption" color="text.disabled">—</Typography>}
+                        </TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                          {inv.bill_to === 'acti'
+                            ? <Chip label="ACTI" size="small" color="primary" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
+                            : <Typography variant="caption" color="text.secondary">Customer</Typography>}
+                        </TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{inv.invoice_date}</TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                          {PHP.format(inv.amount)}
+                        </TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                          {formatPaymentTerms(inv.payment_terms_days)}
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Typography variant="body2" sx={{ fontSize: '0.8rem', color: isOverdue ? 'error.main' : 'inherit', fontWeight: isOverdue ? 600 : 400 }}>
+                            {inv.due_date}
+                          </Typography>
+                          {isOverdue && (
+                            <Typography variant="caption" color="error.main" display="block">Past due</Typography>
+                          )}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: inv._cash > 0 ? 'success.main' : 'text.secondary', fontWeight: inv._cash > 0 ? 600 : 400 }}>
+                          {PHP.format(inv._cash)}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: inv._wht > 0 ? NET_PACIFIC_COLORS.accent2 : 'text.disabled' }}>
+                          {inv._wht > 0 ? PHP.format(inv._wht) : '—'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                          {inv._outstanding > 0
+                            ? <Typography variant="body2" sx={{ fontSize: '0.8rem', color: isOverdue ? 'error.main' : 'warning.dark', fontWeight: isOverdue ? 600 : 400 }}>{PHP.format(inv._outstanding)}</Typography>
+                            : <Typography variant="body2" sx={{ fontSize: '0.8rem', color: 'text.disabled' }}>—</Typography>}
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={STATUS_LABELS[inv._status]}
+                            color={STATUS_COLORS[inv._status]}
+                            size="small"
+                            variant="outlined"
+                          />
+                        </TableCell>
+                        <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                          {inv._status !== 'paid' && (
+                            <Tooltip title="Record collection">
+                              <IconButton size="small" color="success" onClick={() => openCollect(inv)}>
+                                <PaymentIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {inv.scan_file?.onedrive_web_url ? (
+                            <Tooltip title={`View scan: ${inv.scan_file.filename}`}>
+                              <IconButton size="small" color="info" onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')}>
+                                <VisibilityIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          ) : (
+                            <Tooltip title={uploadingScanId === inv.id ? 'Uploading…' : 'Upload invoice scan'}>
+                              <IconButton size="small" color="primary" disabled={uploadingScanId === inv.id} component="label">
+                                {uploadingScanId === inv.id ? <CircularProgress size={16} /> : <CloudUploadIcon fontSize="small" />}
+                                <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          <Tooltip title="Edit">
+                            <IconButton size="small" onClick={() => openEdit(inv)}>
+                              <EditIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Delete">
+                            <IconButton size="small" color="error" onClick={() => { setDeleteTarget(inv); setDeleteConfirm(true); }}>
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+        </Box>
       )}
 
-      {actiExpectedQueue.length > 0 && (
-        <Box id="expected-acti" sx={{ mb: 2 }}>
+      {/* ═══════════════════════════════════════════════════════════════════════
+          TAB 2: COLLECTED & SETTLEMENT LEDGER
+         ═══════════════════════════════════════════════════════════════════════ */}
+      {currentTab === 'settled' && (
+        <Box>
+          {/* Settlement Metrics Summary */}
+          <Grid container spacing={1.5} sx={{ mb: 2 }}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Paper sx={{ p: 2, borderRadius: 2, bgcolor: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                  <AccountBalanceIcon sx={{ color: 'success.main', fontSize: 20 }} />
+                  <Typography variant="body2" color="success.dark" fontWeight={600}>Total Cash Inflow</Typography>
+                </Box>
+                <Typography variant="h5" fontWeight={700} color="success.dark">
+                  {PHP.format(summary.totalCash)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Cash collected and banked to date
+                </Typography>
+              </Paper>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Paper
+                sx={{
+                  p: 2,
+                  borderRadius: 2,
+                  bgcolor: '#f8fafc',
+                  border: '1px solid #cbd5e1',
+                  cursor: 'pointer',
+                  '&:hover': { bgcolor: '#f1f5f9' },
+                }}
+                onClick={() => navigate('/finance/ewt-2307')}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                  <CheckCircleIcon sx={{ color: NET_PACIFIC_COLORS.accent2, fontSize: 20 }} />
+                  <Typography variant="body2" fontWeight={600} color={NET_PACIFIC_COLORS.accent2}>
+                    BIR 2307 EWT Recognized
+                  </Typography>
+                </Box>
+                <Typography variant="h5" fontWeight={700} color={NET_PACIFIC_COLORS.accent2}>
+                  {PHP.format(summary.totalWht)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Tax credit settlement · click for 2307 register
+                </Typography>
+              </Paper>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Paper sx={{ p: 2, borderRadius: 2, bgcolor: '#eff6ff', border: '1px solid #bfdbfe' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                  <PaymentsIcon sx={{ color: NET_PACIFIC_COLORS.primary, fontSize: 20 }} />
+                  <Typography variant="body2" fontWeight={600} color={NET_PACIFIC_COLORS.primary}>
+                    Gross Settled Revenue
+                  </Typography>
+                </Box>
+                <Typography variant="h5" fontWeight={700} color={NET_PACIFIC_COLORS.primary}>
+                  {PHP.format(summary.totalSettled)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {summary.fullyPaidCount} fully paid · {summary.partialCount} partial
+                </Typography>
+              </Paper>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Paper sx={{ p: 2, borderRadius: 2, bgcolor: '#faf5ff', border: '1px solid #e9d5ff' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                  <AccessTimeIcon sx={{ color: '#7e22ce', fontSize: 20 }} />
+                  <Typography variant="body2" fontWeight={600} color="#7e22ce">
+                    Avg Turnaround (DSO)
+                  </Typography>
+                </Box>
+                <Typography variant="h5" fontWeight={700} color="#7e22ce">
+                  {turnaroundStats.avgDays != null ? `${turnaroundStats.avgDays} days` : '—'}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {turnaroundStats.sampleCount > 0 ? `Based on ${turnaroundStats.sampleCount} dated collections` : 'Collection dates tracking active'}
+                </Typography>
+              </Paper>
+            </Grid>
+          </Grid>
+
+          {/* Settled Filters & Export Bar */}
+          <Paper sx={{ p: 1.5, mb: 1.5, borderRadius: 2 }}>
+            <Grid container spacing={1.5} alignItems="center">
+              <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                <TextField
+                  fullWidth
+                  label="Search Settled Records"
+                  placeholder="Invoice #, project, client, SOA #…"
+                  value={searchSettled}
+                  onChange={e => setSearchSettled(e.target.value)}
+                  size="small"
+                />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 3, md: 3 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Settlement Type</InputLabel>
+                  <Select
+                    value={filterSettledStatus}
+                    onChange={e => setFilterSettledStatus(e.target.value as 'all' | 'paid' | 'partial')}
+                    label="Settlement Type"
+                  >
+                    <MenuItem value="all">All Collected ({collectedInvoices.length})</MenuItem>
+                    <MenuItem value="paid">Fully Settled ({summary.fullyPaidCount})</MenuItem>
+                    <MenuItem value="partial">Partially Collected ({summary.partialCount})</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid size={{ xs: 6, sm: 3, md: 2 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Bill To</InputLabel>
+                  <Select
+                    value={filterSettledBillTo}
+                    onChange={e => setFilterSettledBillTo(e.target.value as 'all' | 'customer' | 'acti')}
+                    label="Bill To"
+                  >
+                    <MenuItem value="all">All Counterparties</MenuItem>
+                    <MenuItem value="customer">End Customer</MenuItem>
+                    <MenuItem value="acti">ACTI</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid size={{ xs: 12, sm: 12, md: 3 }} sx={{ display: 'flex', justifyContent: { xs: 'flex-start', md: 'flex-end' } }}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<FileDownloadIcon />}
+                  onClick={exportCollectedToCSV}
+                  disabled={filteredSettled.length === 0}
+                  sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+                >
+                  Export CSV ({filteredSettled.length})
+                </Button>
+              </Grid>
+            </Grid>
+          </Paper>
+
+          {/* Settled Ledger Table */}
+          <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2, flexGrow: 1 }}>
+            <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e0e0e0' }}>
+              <Typography variant="h6" sx={{ fontSize: '1.05rem', fontWeight: 600 }}>
+                Collected & Settlement History ({filteredSettled.length})
+              </Typography>
+            </Box>
+
+            <TableContainer sx={{ maxHeight: 'calc(100vh - 460px)', minHeight: 320 }}>
+              <Table stickyHeader size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Collection Date</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Project & PB Milestone</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Invoice No.</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Bill To</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Gross Billed</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Cash Collected</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>EWT (2307)</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Status</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Turnaround</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Linked SOA / Provenance</TableCell>
+                    <TableCell align="center" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {filteredSettled.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={11} align="center" sx={{ py: 5, color: 'text.secondary', fontSize: '0.875rem' }}>
+                        {collectedInvoices.length === 0
+                          ? 'No collections recorded yet. Use the Receivables tab to record your first payment.'
+                          : 'No collected records match the active filter.'}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {filteredSettled.map(inv => {
+                    const p = projectsById[String(inv.project_id)];
+                    const matchingSoas = findSoasForInvoice(inv);
+                    const turnaround = calculateTurnaround(inv.invoice_date, inv.collection_date);
+
+                    const handleProjectClick = () => {
+                      sessionStorage.setItem('selectedProjectId', String(inv.project_id));
+                      navigate(`/projects/${inv.project_id}`);
+                    };
+
+                    return (
+                      <TableRow key={inv.id} hover sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8rem', color: '#2d3436' }}>
+                            {inv.collection_date || '—'}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            Issued: {inv.invoice_date}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontWeight: 600,
+                              fontSize: '0.8rem',
+                              color: NET_PACIFIC_COLORS.primary,
+                              cursor: 'pointer',
+                              '&:hover': { textDecoration: 'underline' },
+                            }}
+                            onClick={handleProjectClick}
+                          >
+                            {[inv.project_no, inv.project_name].filter(Boolean).join(' · ') || `Project ${inv.project_id}`}
+                          </Typography>
+                          <Stack direction="row" spacing={0.5} alignItems="center" mt={0.25}>
+                            {inv.pb_number && (
+                              <Chip
+                                label={inv.pb_number}
+                                size="small"
+                                color="primary"
+                                variant="outlined"
+                                sx={{ fontSize: '0.675rem', height: 18 }}
+                              />
+                            )}
+                            {p?.account_name && (
+                              <Typography variant="caption" color="text.secondary">
+                                {p.account_name}
+                              </Typography>
+                            )}
+                          </Stack>
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Typography variant="body2" sx={{ fontSize: '0.8rem', fontFamily: 'monospace', fontWeight: 600 }}>
+                            {inv.invoice_no}
+                          </Typography>
+                          {inv.scan_file?.onedrive_web_url && (
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: NET_PACIFIC_COLORS.primary,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 0.25,
+                                '&:hover': { textDecoration: 'underline' },
+                              }}
+                              onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')}
+                            >
+                              <VisibilityIcon sx={{ fontSize: 12 }} /> Scan on file
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          {inv.bill_to === 'acti' ? (
+                            <Chip label="ACTI" size="small" color="primary" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
+                          ) : (
+                            <Typography variant="caption" color="text.secondary">Customer</Typography>
+                          )}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                          {PHP.format(inv.amount)}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: 'success.main', fontWeight: 700 }}>
+                          {PHP.format(inv._cash)}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                          {inv._wht > 0 ? (
+                            <Box sx={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                              <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 600, color: NET_PACIFIC_COLORS.accent2 }}>
+                                {PHP.format(inv._wht)}
+                              </Typography>
+                              <Chip
+                                size="small"
+                                label={inv.wht_2307_status === 'received' ? '2307 on file' : '2307 expected'}
+                                color={inv.wht_2307_status === 'received' ? 'success' : 'warning'}
+                                variant="outlined"
+                                onClick={() => navigate('/finance/ewt-2307')}
+                                sx={{ fontSize: '0.65rem', height: 16, cursor: 'pointer', mt: 0.25 }}
+                              />
+                            </Box>
+                          ) : (
+                            <Typography variant="caption" color="text.disabled">—</Typography>
+                          )}
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Chip
+                            label={STATUS_LABELS[inv._status]}
+                            color={STATUS_COLORS[inv._status]}
+                            size="small"
+                            variant="filled"
+                            sx={{ height: 22, fontSize: '0.75rem', fontWeight: 600 }}
+                          />
+                          {inv._status === 'partial' && (
+                            <Typography variant="caption" color="warning.dark" display="block" sx={{ fontSize: '0.7rem' }}>
+                              Due: {PHP.format(inv._outstanding)}
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+                            {turnaround}
+                          </Typography>
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                            {matchingSoas.length > 0 ? (
+                              matchingSoas.map(soa => (
+                                <Tooltip key={soa.id} title={`View Statement of Account: ${soa.soaNo}`}>
+                                  <Chip
+                                    label={soa.soaNo}
+                                    size="small"
+                                    color="secondary"
+                                    variant="outlined"
+                                    onClick={() => navigate(`/finance/soa/${soa.id}`)}
+                                    sx={{ fontSize: '0.7rem', height: 20, cursor: 'pointer' }}
+                                  />
+                                </Tooltip>
+                              ))
+                            ) : (
+                              <Typography variant="caption" color="text.disabled">Direct invoice</Typography>
+                            )}
+                          </Stack>
+                        </TableCell>
+                        <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                          <Tooltip title="Update / Adjust collection amount">
+                            <IconButton size="small" color="success" onClick={() => openCollect(inv)}>
+                              <PaymentIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          {inv.scan_file?.onedrive_web_url ? (
+                            <Tooltip title={`View scan: ${inv.scan_file.filename}`}>
+                              <IconButton size="small" color="info" onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')}>
+                                <VisibilityIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          ) : (
+                            <Tooltip title="Upload scan">
+                              <IconButton size="small" color="primary" disabled={uploadingScanId === inv.id} component="label">
+                                <CloudUploadIcon fontSize="small" />
+                                <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {inv.pb_number && (
+                            <Tooltip title={`Open Progress Report for ${inv.pb_number}`}>
+                              <IconButton
+                                size="small"
+                                onClick={() => navigate(`/reports/progress?projectId=${encodeURIComponent(String(inv.project_id))}&pb=${encodeURIComponent(inv.pb_number || '')}`)}
+                                sx={{ color: NET_PACIFIC_COLORS.accent1 }}
+                              >
+                                <DescriptionIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          <Tooltip title="Edit invoice details">
+                            <IconButton size="small" onClick={() => openEdit(inv)}>
+                              <EditIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Delete">
+                            <IconButton size="small" color="error" onClick={() => { setDeleteTarget(inv); setDeleteConfirm(true); }}>
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+        </Box>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          TAB 3: ACTI EXPECTED WATCHLIST
+         ═══════════════════════════════════════════════════════════════════════ */}
+      {currentTab === 'acti' && (
+        <Box>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <strong>IOCT–ACTI Commercial Trail:</strong> IOCT and ACTI are distinct commercial parties.
+            The items below track project coordination milestones (Customer PO → ACTI, ACTI PO → IOCT, Partner SI).
+            These expected dates <em>do not create Accounting AR</em> until an official IOCT invoice is issued.
+          </Alert>
+
           {actiPendingAr.length > 0 && (
-            <Paper id="expected-acti-pending-ar" sx={{ p: 1.5, mb: 1.5, borderRadius: 2, border: '1px solid #e2e8f0' }}>
+            <Paper id="expected-acti-pending-ar" sx={{ p: 2, mb: 2, borderRadius: 2, border: '1px solid #e2e8f0' }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 1, flexWrap: 'wrap', gap: 1 }}>
                 <Box>
                   <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
                     ACTI pending AR — completed, awaiting PO / invoice ({actiPendingAr.length})
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Work is done. Not yet in issued AR. Includes no ACTI PO yet and PO-in uninvoiced.
+                    Work is completed on site. Awaiting partner PO issuance or invoicing.
                   </Typography>
                 </Box>
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary }}>
                   {PHP.format(actiPendingArTotal)}
                 </Typography>
               </Box>
               {renderActiExpectedTable(actiPendingAr)}
             </Paper>
           )}
+
           {actiOngoing.length > 0 && (
-            <Paper id="expected-acti-ongoing" sx={{ p: 1.5, borderRadius: 2, border: '1px dashed #c5d4eb', bgcolor: '#f8fafc' }}>
+            <Paper id="expected-acti-ongoing" sx={{ p: 2, borderRadius: 2, border: '1px dashed #c5d4eb', bgcolor: '#f8fafc' }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 1, flexWrap: 'wrap', gap: 1 }}>
                 <Box>
                   <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.secondary }}>
                     ACTI ongoing — no PO from ACTI yet ({actiOngoing.length})
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Project still in progress. Watchlist only — not pending collection.
+                    Project still in progress on site. Watchlist only — not yet pending collection.
                   </Typography>
                 </Box>
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.secondary }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.secondary }}>
                   {PHP.format(actiOngoingTotal)}
                 </Typography>
               </Box>
               {renderActiExpectedTable(actiOngoing)}
             </Paper>
           )}
+
+          {actiExpectedQueue.length === 0 && (
+            <Paper sx={{ p: 4, textAlign: 'center', borderRadius: 2 }}>
+              <Typography variant="body1" color="text.secondary">
+                No active ACTI joint coordination projects in the expected queue.
+              </Typography>
+            </Paper>
+          )}
         </Box>
       )}
-
-      {/* Filters */}
-      <Paper sx={{ p: 1.5, mb: 1.5, borderRadius: 2 }}>
-        <Grid container spacing={1.5} alignItems="center">
-          <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-            <TextField
-              fullWidth
-              label="Search"
-              placeholder="Invoice no., project name…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              size="small"
-            />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-            <FormControl fullWidth size="small">
-              <InputLabel>Status</InputLabel>
-              <Select
-                value={filterStatus}
-                onChange={e => setFilterStatus(e.target.value as InvoiceStatus | '')}
-                label="Status"
-              >
-                <MenuItem value="">All</MenuItem>
-                <MenuItem value="unpaid">Unpaid</MenuItem>
-                <MenuItem value="partial">Partial</MenuItem>
-                <MenuItem value="overdue">Overdue</MenuItem>
-                <MenuItem value="paid">Paid</MenuItem>
-              </Select>
-            </FormControl>
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-            <Chip
-              label="With ACTI"
-              color={filterActi ? 'primary' : 'default'}
-              variant={filterActi ? 'filled' : 'outlined'}
-              onClick={() => setFilterActi(v => !v)}
-              clickable
-            />
-          </Grid>
-        </Grid>
-      </Paper>
-
-      {/* Table */}
-      <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2, flexGrow: 1 }}>
-        <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e0e0e0' }}>
-          <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
-            Invoices ({filtered.length})
-          </Typography>
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={<AddIcon />}
-            onClick={openAdd}
-            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
-          >
-            Add Invoice
-          </Button>
-        </Box>
-
-        <TableContainer sx={{ maxHeight: 'calc(100vh - 480px)', minHeight: 300 }}>
-          <Table stickyHeader size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Invoice No.</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>PB #</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Bill To</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Date Issued</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Amount</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Terms</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Due Date</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Cash</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>EWT</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Outstanding</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Status</TableCell>
-                <TableCell align="center" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {filtered.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={13} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: '0.875rem' }}>
-                    {enriched.length === 0
-                      ? 'No invoices yet. Click "Add Invoice" to get started.'
-                      : 'No invoices match the current filters.'}
-                  </TableCell>
-                </TableRow>
-              )}
-              {filtered.map(inv => {
-                const isOverdue = inv._status === 'overdue';
-                const handleProjectClick = () => {
-                  sessionStorage.setItem('selectedProjectId', String(inv.project_id));
-                  navigate('/dashboard');
-                };
-                return (
-                  <TableRow key={inv.id} hover sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
-                    <TableCell>
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          fontWeight: 500,
-                          fontSize: '0.8rem',
-                          color: NET_PACIFIC_COLORS.primary,
-                          cursor: 'pointer',
-                          '&:hover': { textDecoration: 'underline' },
-                        }}
-                        onClick={handleProjectClick}
-                      >
-                        {inv.project_name || '—'}
-                      </Typography>
-                      {inv.project_no && (
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ cursor: 'pointer' }}
-                          onClick={handleProjectClick}
-                        >
-                          {inv.project_no}
-                        </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" sx={{ fontSize: '0.8rem', fontFamily: 'monospace' }}>
-                        {inv.invoice_no}
-                      </Typography>
-                    </TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
-                      {inv.pb_number
-                        ? <Chip label={inv.pb_number} size="small" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
-                        : <Typography variant="caption" color="text.disabled">—</Typography>}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
-                      {inv.bill_to === 'acti'
-                        ? <Chip label="ACTI" size="small" color="primary" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
-                        : <Typography variant="caption" color="text.secondary">Customer</Typography>}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{inv.invoice_date}</TableCell>
-                    <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
-                      {PHP.format(inv.amount)}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
-                      {formatPaymentTerms(inv.payment_terms_days)}
-                    </TableCell>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                      <Typography variant="body2" sx={{ fontSize: '0.8rem', color: isOverdue ? 'error.main' : 'inherit', fontWeight: isOverdue ? 600 : 400 }}>
-                        {inv.due_date}
-                      </Typography>
-                      {isOverdue && (
-                        <Typography variant="caption" color="error.main">Past due</Typography>
-                      )}
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: inv._cash > 0 ? 'success.main' : 'text.secondary' }}>
-                      {PHP.format(inv._cash)}
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: inv._wht > 0 ? NET_PACIFIC_COLORS.accent2 : 'text.disabled' }}>
-                      {inv._wht > 0 ? PHP.format(inv._wht) : '—'}
-                    </TableCell>
-                    <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
-                      {inv._outstanding > 0
-                        ? <Typography variant="body2" sx={{ fontSize: '0.8rem', color: isOverdue ? 'error.main' : 'warning.dark', fontWeight: isOverdue ? 600 : 400 }}>{PHP.format(inv._outstanding)}</Typography>
-                        : <Typography variant="body2" sx={{ fontSize: '0.8rem', color: 'text.disabled' }}>—</Typography>}
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        label={STATUS_LABELS[inv._status]}
-                        color={STATUS_COLORS[inv._status]}
-                        size="small"
-                        variant="outlined"
-                      />
-                    </TableCell>
-                    <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
-                      {inv._status !== 'paid' && (
-                        <Tooltip title="Record collection">
-                          <IconButton size="small" color="success" onClick={() => openCollect(inv)}>
-                            <PaymentIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      )}
-                      {inv.scan_file?.onedrive_web_url ? (
-                        <Tooltip title={`View scan: ${inv.scan_file.filename}`}>
-                          <IconButton size="small" color="info" onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')}>
-                            <VisibilityIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      ) : (
-                        <Tooltip title={uploadingScanId === inv.id ? 'Uploading…' : 'Upload invoice scan'}>
-                          <IconButton size="small" color="primary" disabled={uploadingScanId === inv.id} component="label">
-                            {uploadingScanId === inv.id ? <CircularProgress size={16} /> : <CloudUploadIcon fontSize="small" />}
-                            <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
-                          </IconButton>
-                        </Tooltip>
-                      )}
-                      <Tooltip title="Edit">
-                        <IconButton size="small" onClick={() => openEdit(inv)}>
-                          <EditIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Delete">
-                        <IconButton size="small" color="error" onClick={() => { setDeleteTarget(inv); setDeleteConfirm(true); }}>
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Paper>
 
       {/* ── Add / Edit Invoice Dialog ─────────────────────────────────────── */}
       <Dialog open={invoiceDialog !== null} onClose={() => setInvoiceDialog(null)} maxWidth="sm" fullWidth>

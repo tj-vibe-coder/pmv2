@@ -51,7 +51,7 @@ export const seedSalesContacts = (): SalesContact[] => [
   {
     id: nanoid(8),
     name: 'Reuel Joshua Rivera',
-    position: 'Solutions Manager',
+    position: 'Managing Partner - Operations',
     email: 'reuel.rivera@iocontroltech.com',
     phone: '+63 919 082 5434',
     actiPosition: 'Project Manager',

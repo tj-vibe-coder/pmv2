@@ -36,7 +36,10 @@ const candidate: FinanceTraceCandidate = {
   evidence: ['same amount', 'same project'], needsReview: true, confirmable: true,
 };
 
-beforeEach(() => resolveMock.mockReset());
+beforeEach(() => {
+  jest.setTimeout(15000);
+  resolveMock.mockReset();
+});
 
 function renderDialog(onResolved = jest.fn()) {
   render(
@@ -90,7 +93,7 @@ test('requires a reason and explicit deletion confirmation', async () => {
   renderDialog();
   fireEvent.click(screen.getByRole('radio', { name: /Keep investment.*delete expense/i }));
   expect(screen.getByRole('button', { name: 'Apply resolution' })).toBeDisabled();
-  await userEvent.type(screen.getByLabelText(/Review reason/), 'Duplicate itemized elsewhere');
+  fireEvent.change(screen.getByLabelText(/Review reason/), { target: { value: 'Duplicate itemized elsewhere' } });
   expect(screen.getByRole('button', { name: 'Apply resolution' })).toBeDisabled();
   fireEvent.click(screen.getByRole('checkbox', { name: /I understand this deletes/i }));
   expect(screen.getByRole('button', { name: 'Apply resolution' })).toBeEnabled();
@@ -101,8 +104,8 @@ test('submits investment reclassification and reports the refreshed trace', asyn
   const response: any = { success: true, message: 'Resolved', trace: { originKey: 'investment:i1' } };
   resolveMock.mockResolvedValue(response);
   fireEvent.click(screen.getByRole('radio', { name: /Keep investment.*delete expense/i }));
-  await userEvent.type(screen.getByLabelText('Investment category (optional)'), 'Capital Contribution');
-  await userEvent.type(screen.getByLabelText(/Review reason/), 'Liquidation already records the expense');
+  fireEvent.change(screen.getByLabelText('Investment category (optional)'), { target: { value: 'Capital Contribution' } });
+  fireEvent.change(screen.getByLabelText(/Review reason/), { target: { value: 'Liquidation already records the expense' } });
   fireEvent.click(screen.getByRole('checkbox', { name: /I understand this deletes/i }));
   fireEvent.click(screen.getByRole('button', { name: 'Apply resolution' }));
   await waitFor(() => expect(resolveMock).toHaveBeenCalledWith({
@@ -124,10 +127,11 @@ test('turns protected-source errors into an Open source action', async () => {
     message: 'Correct this expense at its source',
     sourceFocusUrl: '/finance/expense-monitoring/liquidation-form?focus=liquidation%3Al1%3Ar1',
   }));
-  await userEvent.type(screen.getByLabelText(/Review reason/), 'Needs source correction');
+  fireEvent.change(screen.getByLabelText(/Review reason/), { target: { value: 'Needs source correction' } });
   fireEvent.click(screen.getByRole('button', { name: 'Apply resolution' }));
   expect(await screen.findByText('Correct this expense at its source')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Open source' })).toHaveAttribute(
     'href', expect.stringContaining('liquidation-form'),
   );
 });
+

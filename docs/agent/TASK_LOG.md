@@ -1,5 +1,27 @@
 # Task Log
 
+## 2026-08-27 — Implemented Dedicated Collected & Settlement Ledger in Collections Dashboard
+
+Implemented a 3-tab layout at `/finance/collections` (`?tab=receivables`, `?tab=settled`, `?tab=acti`) featuring the **Collected & Settlement Ledger**:
+- **Settlement Summary Metrics**: Displays Total Cash Inflow, BIR 2307 EWT Recognized, Gross Settled Revenue, and Average Turnaround Days (DSO from invoice date to collection date).
+- **Settled & Collections Table**: Displays historical settlement records with collection dates, project name/number, PB milestone, invoice number, OneDrive scan preview links, bill-to counterparty, cash collected, BIR 2307 withholding tax recognition badge (linking directly to `/finance/ewt-2307`), settlement turnaround duration, and linked Statement of Account badges (linking to `/finance/soa/:id`).
+- **CSV Export**: Added 1-click CSV export (`exportCollectedToCSV`) downloading all filtered settlement records with full financial and provenance audit columns.
+- **Clickable KPI Navigation**: Top KPI cards now navigate or switch directly to corresponding tabs and filter presets.
+- **Verification**: Created `src/components/CollectionsDashboard.test.tsx` (all 3 unit tests passing) and ran `npx tsc --noEmit` cleanly.
+
+## 2026-08-27 — Updated SOA signatory title to Managing Partner - Operations
+
+Updated the default signatory title for Reuel Joshua Rivera in the SOA generator, PDF export template, editor dialog, and server endpoints to **Managing Partner - Operations** (matching the user's `designation` in Firestore `users/user_14` and sales contacts seed). Also updated the `preparedByTitle` on the seeded Firestore SOA document `HH10tnufd8S9FwGMsNf0`.
+
+## 2026-08-27 — Seeded sample SOA for ACTI from live PMv2 project contract data
+
+Generated sample Statement of Account `SOA2607001-ACT-00` for Advance Controle Technologie Inc (ACTI) populated directly with current project database values (contract amounts, commercial trail PO numbers, and completed job milestones):
+- With PO items (₱1,065,761.71): Ebecor 6u (PO 2606-005, ₱243,350.10), Ebecor 10u (PO 2606-006, ₱405,583.50), RCS Cabuyao (PO 2606-012, ₱30,000.00), ADI RH Temp (PO 2603-010, ₱386,828.11).
+- Pending PO items (₱1,072,202.00): Ebecor 14u (₱597,702.00 in DB contract), Tann SCADA (₱161,300.00 in DB contract), ADI B1P1 Calibration (₱299,700.00 in DB contract), RCS Plaridel June 14 (₱13,500.00 in DB contract).
+- Total Outstanding (VAT-EX): ₱2,137,963.71.
+- Document stored in Firestore `statements_of_account` (ID: `HH10tnufd8S9FwGMsNf0`) and accessible at `/finance/soa`.
+
+
 ## 2026-08-27 — Customer EWT / BIR 2307 first slice
 
 Invoices gained optional `wht_amount` (cash stays on `amount_collected`). Paid = cash + EWT. Collections KPIs split Cash vs EWT; new read-only register at `/finance/ewt-2307`. Certificates stay `expected` until a 2307 is on file. Backfill script `scripts/backfill-invoice-wht.js` splits SI 001/004/007 (₱3,611.58 total).

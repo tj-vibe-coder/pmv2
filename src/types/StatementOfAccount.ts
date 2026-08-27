@@ -81,7 +81,7 @@ export interface StatementOfAccount {
 
   // Signatory & Prepared By
   preparedByName: string;             // "Reuel Joshua Rivera"
-  preparedByTitle: string;            // "Solutions Manager"
+  preparedByTitle: string;            // "Managing Partner - Operations"
   preparedByPhone: string;            // "+63 919 082 5434"
   preparedByEmail: string;            // "rj.rivera@iocontroltech.com"
 

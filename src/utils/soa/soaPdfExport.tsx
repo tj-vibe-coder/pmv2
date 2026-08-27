@@ -482,7 +482,7 @@ export function StatementOfAccountDocument({ soa }: SoaPdfProps) {
           <View style={styles.sigBlock}>
             <Text style={styles.sigHeader}>Prepared by:</Text>
             <Text style={styles.sigName}>{soa.preparedByName || 'Reuel Joshua Rivera'}</Text>
-            <Text style={styles.sigTitle}>{soa.preparedByTitle || 'Solutions Manager'}</Text>
+            <Text style={styles.sigTitle}>{soa.preparedByTitle || 'Managing Partner - Operations'}</Text>
             {soa.preparedByPhone && (
               <Text style={styles.sigContact}>Mobile No.: {soa.preparedByPhone}</Text>
             )}

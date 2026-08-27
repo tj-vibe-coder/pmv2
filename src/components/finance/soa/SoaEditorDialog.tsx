@@ -85,7 +85,7 @@ export default function SoaEditorDialog({
   const [footnotes, setFootnotes] = useState<SoaFootnote[]>(DEFAULT_SOA_FOOTNOTES);
 
   const [preparedByName, setPreparedByName] = useState('Reuel Joshua Rivera');
-  const [preparedByTitle, setPreparedByTitle] = useState('Solutions Manager');
+  const [preparedByTitle, setPreparedByTitle] = useState('Managing Partner - Operations');
   const [preparedByPhone, setPreparedByPhone] = useState('+63 919 082 5434');
   const [preparedByEmail, setPreparedByEmail] = useState('rj.rivera@iocontroltech.com');
 
@@ -108,7 +108,7 @@ export default function SoaEditorDialog({
         setItems(soa.items ? JSON.parse(JSON.stringify(soa.items)) : []);
         setFootnotes(soa.footnotes && soa.footnotes.length ? JSON.parse(JSON.stringify(soa.footnotes)) : DEFAULT_SOA_FOOTNOTES);
         setPreparedByName(soa.preparedByName || 'Reuel Joshua Rivera');
-        setPreparedByTitle(soa.preparedByTitle || 'Solutions Manager');
+        setPreparedByTitle(soa.preparedByTitle || 'Managing Partner - Operations');
         setPreparedByPhone(soa.preparedByPhone || '+63 919 082 5434');
         setPreparedByEmail(soa.preparedByEmail || 'rj.rivera@iocontroltech.com');
       } else {
@@ -125,6 +125,10 @@ export default function SoaEditorDialog({
         setBodyText(DEFAULT_SOA_BODY_TEXT);
         setItems([]);
         setFootnotes(DEFAULT_SOA_FOOTNOTES);
+        setPreparedByName('Reuel Joshua Rivera');
+        setPreparedByTitle('Managing Partner - Operations');
+        setPreparedByPhone('+63 919 082 5434');
+        setPreparedByEmail('rj.rivera@iocontroltech.com');
       }
       setError(null);
     }
