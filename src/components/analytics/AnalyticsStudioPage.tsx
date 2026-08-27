@@ -915,7 +915,7 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
     }
 
     return rows;
-  }, [activeScope, rawProjects, rawExpenses, salesOpportunities, salesQuotations, salesClients, dimension, metric, scopeFilter, sortAscending, financeForecastInsights]);
+  }, [activeScope, rawProjects, rawExpenses, salesOpportunities, salesQuotations, salesClients, dimension, metric, scopeFilter, sortAscending, financeForecastInsights, forecastScenario]);
 
   // Current canvas rows always derive dynamically from the live activeDataset
   const currentRows = activeDataset;

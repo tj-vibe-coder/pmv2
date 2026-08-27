@@ -37,7 +37,6 @@ import {
   Cloud as CloudIcon,
   RequestQuote as EstimateIcon,
   HowToReg as HowToRegIcon,
-  AccountBalance as AccountBalanceIcon,
   Badge as BadgeIcon,
   Build as BuildIcon,
   Backup as BackupIcon,
@@ -51,7 +50,6 @@ const SIDEBAR_WIDTH = 280;
 const SIDEBAR_COLLAPSED_WIDTH = 68;
 
 const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
-const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form', '/expense-monitoring/direct-labor'];
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
 const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator', '/utilities/acknowledgement-receipt', '/utilities/backups'];
 
@@ -81,9 +79,6 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
   );
   const [reportsOpen, setReportsOpen] = useState(() =>
     REPORTS_PATHS.some((p) => location.pathname.startsWith(p))
-  );
-  const [expenseMonitoringOpen, setExpenseMonitoringOpen] = useState(() =>
-    EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)
   );
   const [utilitiesOpen, setUtilitiesOpen] = useState(() =>
     UTILITIES_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(p))
