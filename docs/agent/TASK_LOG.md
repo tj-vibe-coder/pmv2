@@ -1,6 +1,48 @@
 # Task Log
 
-## 2026-08-27 — Restructured Finance Navigation Hierarchy, Unique Icons & Purchase Order Integration
+## 2026-08-28 — Tax Filer Role Scope Isolation & Dedicated Compliance Surface
+
+Restricted the `tax_filer` role to dedicated Compliance & Accounting surfaces (Tax Filer Ledger, Sales EWT / 2307, Collections & Settled Ledger) and completely removed Projects, Sales, SOAs, Analytics, and Outflow & Expense operations:
+- **Finance Navigation Bar (`src/components/finance/FinanceNavList.tsx`)**:
+  - Hidden **Finance Analytics Studio** (`/finance/analytics`).
+  - Hidden **Statements of Account** (`/finance/soa`).
+  - Hidden entire **Outflow & Expenses** section (Expense Monitoring, Expense Register, Cash Advances, Liquidation Form, Direct Labor, Purchase Orders, Reimbursements).
+- **Collections & AR / Finance Home ACTI Expected Watchlist (`src/components/CollectionsDashboard.tsx`, `src/components/finance/FinanceHomePage.tsx`)**:
+  - Hidden **ACTI Expected Watchlist** tab (`?tab=acti`), top ACTI Watchlist KPI card, and Tab 3 panel from `tax_filer`.
+  - Hidden **ACTI pending AR** and **ACTI ongoing** KPI cards on Finance Home for `tax_filer`.
+- **Finance Home Dashboard (`src/components/finance/FinanceHomePage.tsx`)**:
+  - Hidden SOA, Outflows, Analytics, and Investment Tracker from module lists and interactive cards.
+  - Hidden Outflow KPI cards (*Total Expenses YTD*, *Outstanding Cash Advances*, *Pending Reimbursements*, *Latest Payroll Run*).
+  - Hidden Section 2 (*Outflow & Expense Operations*).
+  - Updated Quick Actions for `tax_filer` to surface `Tax Filer Ledger` and `Sales EWT / 2307`.
+- **Workspace Navigation & Toggles (`src/components/Header.tsx`, `src/components/Sidebar.tsx`)**:
+  - Hidden desktop and mobile workspace toggle switchers (Projects / Sales / Finance) for `tax_filer`, pinning them cleanly to the Finance/Compliance workspace.
+- **Route Guards & Protection (`src/App.tsx`)**:
+  - Wrapped all Projects workspace routes (`/dashboard`, `/projects/:id`, `/location-analysis`, `/clients`, `/material-request`, `/delivery`, `/suppliers`, `/purchase-order`, `/estimates`, `/reports`) with `TaxFilerBlock`.
+  - Wrapped all Sales workspace routes (`/sales`, `/sales/calcsheet/*`, `/sales/clients`, `/sales/pricelists`, `/sales/material-request`, etc.) with `TaxFilerBlock`.
+  - Wrapped all Analytics Studio routes (`/projects/analytics`, `/sales/analytics`, `/finance/analytics`) with `TaxFilerBlock`.
+  - Wrapped SOA and Outflows routes (`/finance/soa`, `/finance/soa/:id`, `/finance/expense-monitoring`, `/finance/purchase-order`, `/finance/overhead-expenses`, `/finance/projects/:id/expenses`) with `TaxFilerBlock`.
+  - Updated `RootRedirect` to land `tax_filer` on `/finance/tax-ledger` on default navigation.
+- **Verification**:
+  - `npx tsc --noEmit` passed with 0 errors.
+  - `npm run test:ai-assist` passed (126/126 tests).
+
+Added full payroll intelligence, headcount run rates, and DOLE P.D. 851 statutory 13th-month pay forecasting across IOCT Assist and Finance Analytics Studio:
+- **IOCT Assist AI Tools & System Prompt Enhancement**:
+  - Implemented `get_payroll_summary` tool (`server/aiAssist/tools.js`, `server/aiAssist/schemas.js`, `server/aiAssist/operator.js`): computes active employee headcount, monthly basic and meal allowance run rates, YTD actual payouts, remaining calendar cutoffs, and statutory DOLE P.D. 851 13th-month pay ($\frac{\text{Total Basic Salary Earned in Year}}{12}$).
+  - Extended `query_analytics` tool to support operational domain `payroll` with `groupBy: 'employee' | 'forecast_payroll'`.
+  - Updated AI Assist system prompt (`server/aiAssist/prompt.js`) and safety boundaries to allow authorized payroll analytics while maintaining zero-exposure security for credentials, passwords, bank details, and government IDs.
+  - Mirrored changes to Cloud Functions via `npm run ai-assist:sync`.
+  - Added unit test suites (`server/aiAssist/tools.test.js`); full suite 126/126 passing.
+- **Finance Analytics Studio Integration (`/finance/analytics` via `src/components/analytics/AnalyticsStudioPage.tsx`)**:
+  - Ingests active payroll employees and payroll run history alongside expenses.
+  - Added visual dimension `forecast_payroll` with presets (`Payroll & Year-End 13th-Month Projection`, `Full-Year Compensation by Employee`).
+  - Added **Executive Payroll Run Rate & Year-End Accruals Banner** displaying 5 executive KPIs: *Monthly Payroll Run Rate*, *YTD Disbursed*, *Projected Outflow (Sep–Dec)*, *13th-Month Accrual*, and *Full Year Grand Total*, with quick toggles for *Monthly Trajectory (Jan–Dec)* vs *By Employee Breakdown*.
+  - Added natural language query interception for payroll, salary, 13th-month, and compensation prompts.
+- **Verification**:
+  - `npx tsc --noEmit` clean (0 errors).
+  - `npm run test:ai-assist` 126/126 passing.
+  - Live query verified: 5 active employees, ₱128,000/mo run rate, ₱534,500 YTD actuals, ₱512,000 Sep–Dec projection, ₱86,583.33 13th-month pay, grand total ₱1,133,083.33.
 
 Overhauled the Finance workspace navigation bar, Finance Home dashboard shortcuts, and Projects sidebar integration for clear hierarchy, zero redundancy, and unique semantic icons:
 - **Integrated Purchase Orders into Finance Workspace (`/finance/purchase-order`)**:

@@ -15,6 +15,8 @@ const QUOTATION_COLLECTION = 'calcsheet_quotations';
 const EXPENSE_COLLECTION = 'project_expenses';
 const OVERHEAD_EXPENSE_COLLECTION = 'overhead_expenses';
 const CLIENT_COLLECTION = 'clients';
+const PAYROLL_EMPLOYEE_COLLECTION = 'payroll_employees';
+const PAYROLL_RUN_COLLECTION = 'payroll_runs';
 
 const MAX_LIST_RESULTS = 10;
 const MAX_GROUPED_ROWS = 20;
@@ -233,14 +235,25 @@ const TOOL_DECLARATIONS = {
       required: ['search'],
     },
   },
-  query_analytics: {
-    name: 'query_analytics',
-    description: 'Query aggregated analytics across operational domains (projects, quotations, expenses, sales_pipeline) grouped by dimension (category, year, status, client, grade, forecast_monthly, forecast_recurring, forecast_category). Returns safe grouped totals and counts.',
+  get_payroll_summary: {
+    name: 'get_payroll_summary',
+    description: 'Summarize company payroll, active headcount, monthly recurring salary & meal run rates, YTD actual payouts, remaining calendar year projections, and statutory DOLE P.D. 851 13th-month pay calculations. Safe summary without passwords, credentials, bank accounts, or government IDs.',
     parameters: {
       type: 'object',
       properties: {
-        domain: { type: 'string', enum: ['projects', 'quotations', 'expenses', 'sales_pipeline'], description: 'Operational domain to aggregate.' },
-        groupBy: { type: 'string', enum: ['category', 'year', 'status', 'client', 'grade', 'forecast_monthly', 'forecast_recurring', 'forecast_category'], description: 'Grouping dimension.' },
+        year: { type: 'integer', description: 'Calendar year for payroll computation (defaults to 2026).' },
+      },
+      required: [],
+    },
+  },
+  query_analytics: {
+    name: 'query_analytics',
+    description: 'Query aggregated analytics across operational domains (projects, quotations, expenses, sales_pipeline, payroll) grouped by dimension (category, year, status, client, grade, forecast_monthly, forecast_recurring, forecast_category, employee, forecast_payroll). Returns safe grouped totals and counts.',
+    parameters: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', enum: ['projects', 'quotations', 'expenses', 'sales_pipeline', 'payroll'], description: 'Operational domain to aggregate.' },
+        groupBy: { type: 'string', enum: ['category', 'year', 'status', 'client', 'grade', 'forecast_monthly', 'forecast_recurring', 'forecast_category', 'employee', 'forecast_payroll'], description: 'Grouping dimension.' },
         metric: { type: 'string', enum: ['total_amount', 'count', 'average_amount', 'balance_amount', 'recurring_runrate'], description: 'Metric to compute. Defaults to total_amount.' },
         year: { type: 'integer', description: 'Optional year filter.' },
       },
@@ -867,6 +880,79 @@ async function queryAnalytics(db, args, asOf) {
       sources: data.map((g) => sourceFor('analytics:quotations:' + g.group, `Quotations: ${g.group}`, '/sales/calcsheet/projects', asOf)),
       asOf,
     };
+  } else if (domain === 'payroll') {
+    const summary = await getPayrollSummary(db, { year: args.year || 2026 }, asOf);
+    const pData = summary.data;
+
+    if (groupBy === 'employee') {
+      const data = pData.employeeBreakdown.map((emp) => ({
+        group: `${emp.name} (${emp.designation})`,
+        monthlyRate: emp.monthlyRate,
+        regularPayroll: emp.fullYearRegularPayroll,
+        thirteenthMonth: emp.thirteenthMonthPay,
+        totalAmount: emp.totalCompensationWith13thMonth,
+        count: 1,
+      }));
+      data.sort((a, b) => b.totalAmount - a.totalAmount);
+      return {
+        data,
+        sources: [sourceFor('payroll:analytics:employee', 'Payroll by Employee', '/finance/payroll', asOf)],
+        asOf,
+      };
+    }
+
+    // Default or forecast_payroll / forecast_monthly
+    const months = [
+      { month: `${pData.year}-01`, label: 'Jan' },
+      { month: `${pData.year}-02`, label: 'Feb' },
+      { month: `${pData.year}-03`, label: 'Mar' },
+      { month: `${pData.year}-04`, label: 'Apr' },
+      { month: `${pData.year}-05`, label: 'May' },
+      { month: `${pData.year}-06`, label: 'Jun' },
+      { month: `${pData.year}-07`, label: 'Jul' },
+      { month: `${pData.year}-08`, label: 'Aug' },
+      { month: `${pData.year}-09`, label: 'Sep' },
+      { month: `${pData.year}-10`, label: 'Oct' },
+      { month: `${pData.year}-11`, label: 'Nov' },
+      { month: `${pData.year}-12`, label: 'Dec (incl. 13th Month)' },
+    ];
+
+    const data = months.map((m, idx) => {
+      if (idx < (12 - pData.remainingMonths)) {
+        const histMonths = Math.max(1, 12 - pData.remainingMonths);
+        const estMonthly = round2(pData.ytdActualPayroll / histMonths);
+        return {
+          group: `${m.month} (${m.label} Actual)`,
+          totalAmount: estMonthly,
+          regularPayroll: estMonthly,
+          thirteenthMonth: 0,
+          count: 2,
+        };
+      } else if (idx === 11) {
+        const decTotal = round2(pData.monthlyRecurringRunRate + pData.total13thMonthPay);
+        return {
+          group: `${m.month} (${m.label} Forecast + 13th Month)`,
+          totalAmount: decTotal,
+          regularPayroll: pData.monthlyRecurringRunRate,
+          thirteenthMonth: pData.total13thMonthPay,
+          count: 2,
+        };
+      } else {
+        return {
+          group: `${m.month} (${m.label} Forecast)`,
+          totalAmount: pData.monthlyRecurringRunRate,
+          regularPayroll: pData.monthlyRecurringRunRate,
+          thirteenthMonth: 0,
+          count: 2,
+        };
+      }
+    });
+
+    return {
+      data,
+      sources: [sourceFor('payroll:analytics:forecast', 'Payroll & 13th Month Forecast', '/finance/payroll', asOf)],
+      asOf,
+    };
   } else {
     snap = await db.collection(OPPORTUNITY_COLLECTION).get();
     rows = snap.docs.map(docDataWithId);
@@ -898,6 +984,181 @@ async function queryAnalytics(db, args, asOf) {
   }
 }
 
+async function getPayrollSummary(db, args, asOf) {
+  const reqYear = args.year || 2026;
+  const empSnap = await db.collection(PAYROLL_EMPLOYEE_COLLECTION).get();
+  const runsSnap = await db.collection(PAYROLL_RUN_COLLECTION).get();
+
+  const employees = (empSnap.docs || []).map(docDataWithId).filter((e) => e.isActive !== false);
+  const employeeMap = new Map();
+  for (const emp of employees) {
+    employeeMap.set(emp.id, {
+      id: emp.id,
+      employeeNumber: emp.employeeNumber || '',
+      name: emp.name || 'Unnamed Employee',
+      designation: emp.designation || 'Staff',
+      dateHired: emp.dateHired || `${reqYear}-01-01`,
+      monthlyRate: Number(emp.monthlyRate) || (Number(emp.dailyRate) ? Number(emp.dailyRate) * 26 : 0),
+      mealAllowance: Number(emp.mealAllowance) || 0,
+      payFrequency: emp.payFrequency || 'SEMI_MONTHLY',
+      ytdBasic: 0,
+      ytdMeal: 0,
+      ytdGross: 0,
+      ytdNet: 0,
+      runCount: 0,
+    });
+  }
+
+  let ytdActualBasic = 0;
+  let ytdActualMeal = 0;
+  let ytdActualGross = 0;
+  let ytdActualNet = 0;
+  let latestRunDate = `${reqYear}-01-01`;
+
+  for (const runDoc of (runsSnap.docs || [])) {
+    const rData = typeof runDoc.data === 'function' ? runDoc.data() : runDoc;
+    const pStart = String(rData.periodStart || '');
+    const pEnd = String(rData.periodEnd || '');
+    const rYear = parseInt(pStart.slice(0, 4) || pEnd.slice(0, 4), 10);
+    if (rYear !== reqYear) continue;
+
+    if (pEnd > latestRunDate) {
+      latestRunDate = pEnd;
+    }
+
+    let payslipsSnap = null;
+    if (typeof db.collection === 'function') {
+      try {
+        const runCol = db.collection(PAYROLL_RUN_COLLECTION);
+        if (typeof runCol.doc === 'function') {
+          const docRef = runCol.doc(runDoc.id);
+          if (docRef && typeof docRef.collection === 'function') {
+            payslipsSnap = await docRef.collection('payslips').get();
+          }
+        }
+      } catch {
+        payslipsSnap = null;
+      }
+    }
+
+    if (payslipsSnap && payslipsSnap.docs && payslipsSnap.docs.length > 0) {
+      payslipsSnap.docs.forEach((psDoc) => {
+        const ps = typeof psDoc.data === 'function' ? psDoc.data() : psDoc;
+        const empId = ps.employeeId || (ps.employee && ps.employee.id);
+        const bPay = Number(ps.basicPay) || 0;
+        const mPay = Number(ps.mealAllowance) || 0;
+        const nPay = Number(ps.netPay) || (bPay + mPay);
+        const gPay = Number(ps.grossEarnings) || (bPay + mPay);
+
+        ytdActualBasic += bPay;
+        ytdActualMeal += mPay;
+        ytdActualGross += gPay;
+        ytdActualNet += nPay;
+
+        if (empId && employeeMap.has(empId)) {
+          const eg = employeeMap.get(empId);
+          eg.ytdBasic += bPay;
+          eg.ytdMeal += mPay;
+          eg.ytdGross += gPay;
+          eg.ytdNet += nPay;
+          eg.runCount += 1;
+        }
+      });
+    } else {
+      const rGross = Number(rData.totalGrossPay) || Number(rData.totalNetPay) || 0;
+      const rNet = Number(rData.totalNetPay) || rGross;
+      ytdActualGross += rGross;
+      ytdActualNet += rNet;
+      ytdActualBasic += rGross;
+    }
+  }
+
+  let latestMonth = 8;
+  if (latestRunDate && latestRunDate.length >= 7) {
+    latestMonth = parseInt(latestRunDate.slice(5, 7), 10) || 8;
+  }
+  const remainingMonths = Math.max(0, 12 - latestMonth);
+  const remainingSemiMonthlyPeriods = remainingMonths * 2;
+
+  let totalMonthlyBasicRunRate = 0;
+  let totalMonthlyMealRunRate = 0;
+  let totalProjectedRemainingBasic = 0;
+  let totalProjectedRemainingMeal = 0;
+  let total13thMonthPay = 0;
+  let fullYearTotalPayroll = 0;
+
+  const employeeSummaries = [];
+
+  for (const emp of employeeMap.values()) {
+    const mBasic = emp.monthlyRate;
+    const mMeal = emp.mealAllowance;
+    totalMonthlyBasicRunRate += mBasic;
+    totalMonthlyMealRunRate += mMeal;
+
+    const empRemBasic = mBasic * remainingMonths;
+    const empRemMeal = mMeal * remainingMonths;
+    const empRemGross = empRemBasic + empRemMeal;
+
+    totalProjectedRemainingBasic += empRemBasic;
+    totalProjectedRemainingMeal += empRemMeal;
+
+    const fullYearBasic = emp.ytdBasic + empRemBasic;
+    const fullYearMeal = emp.ytdMeal + empRemMeal;
+    const fullYearRegularPayroll = (emp.ytdGross > 0 ? emp.ytdGross : emp.ytdBasic + emp.ytdMeal) + empRemGross;
+
+    const thirteenthMonth = round2(fullYearBasic / 12);
+    total13thMonthPay += thirteenthMonth;
+    fullYearTotalPayroll += fullYearRegularPayroll;
+
+    employeeSummaries.push({
+      employeeNumber: emp.employeeNumber,
+      name: emp.name,
+      designation: emp.designation,
+      dateHired: emp.dateHired,
+      monthlyRate: mBasic,
+      monthlyMealAllowance: mMeal,
+      ytdBasicEarned: round2(emp.ytdBasic),
+      ytdMealEarned: round2(emp.ytdMeal),
+      ytdTotalPaid: round2(emp.ytdGross),
+      projectedRemainingPayroll: round2(empRemGross),
+      fullYearRegularPayroll: round2(fullYearRegularPayroll),
+      thirteenthMonthPay: thirteenthMonth,
+      totalCompensationWith13thMonth: round2(fullYearRegularPayroll + thirteenthMonth),
+    });
+  }
+
+  const monthlyTotalRunRate = round2(totalMonthlyBasicRunRate + totalMonthlyMealRunRate);
+  const projectedRemainingTotalPayroll = round2(totalProjectedRemainingBasic + totalProjectedRemainingMeal);
+  const fullYearRegularPayrollTotal = round2(ytdActualGross + projectedRemainingTotalPayroll);
+  const grandTotalWith13thMonth = round2(fullYearRegularPayrollTotal + total13thMonthPay);
+
+  const data = {
+    year: reqYear,
+    activeHeadcount: employees.length,
+    monthlyRecurringRunRate: monthlyTotalRunRate,
+    monthlyBasicRunRate: round2(totalMonthlyBasicRunRate),
+    monthlyMealRunRate: round2(totalMonthlyMealRunRate),
+    ytdActualPayroll: round2(ytdActualGross),
+    ytdActualBasic: round2(ytdActualBasic),
+    ytdActualMeal: round2(ytdActualMeal),
+    remainingMonths,
+    remainingSemiMonthlyPeriods,
+    projectedRemainingPayroll: projectedRemainingTotalPayroll,
+    fullYearRegularPayroll: fullYearRegularPayrollTotal,
+    total13thMonthPay: round2(total13thMonthPay),
+    grandTotalPayrollAnd13thMonth: grandTotalWith13thMonth,
+    employeeBreakdown: employeeSummaries,
+  };
+
+  return {
+    data,
+    sources: [
+      sourceFor('payroll:summary', `Payroll & 13th-Month Summary (${reqYear})`, '/finance/payroll', asOf),
+    ],
+    asOf,
+  };
+}
+
 function createToolRegistry({ db, now = () => new Date(), user = null, proposalStore = null }) {
   const tools = new Map();
   for (const toolName of Object.keys(TOOL_DECLARATIONS)) {
@@ -918,6 +1179,8 @@ function createToolRegistry({ db, now = () => new Date(), user = null, proposalS
             return getQuotationSummary(db, args, asOf);
           case 'get_expense_summary':
             return getExpenseSummary(db, args, asOf);
+          case 'get_payroll_summary':
+            return getPayrollSummary(db, args, asOf);
           case 'navigate_to_record':
             return navigateToRecord(db, args, asOf);
           case 'list_quotations_for_opportunity':

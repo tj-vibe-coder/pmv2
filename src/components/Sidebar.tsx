@@ -68,7 +68,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
   const { user } = useAuth();
   const isAdminUser = user?.role === 'superadmin' || user?.role === 'admin';
   const isEmployeeWorkspace = location.pathname === '/employee' || location.pathname.startsWith('/employee/');
-  const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
+  const isFinanceWorkspace = user?.role === 'tax_filer' || location.pathname === '/finance' || location.pathname.startsWith('/finance/');
   const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
   const [isHovered, setIsHovered] = useState(false);
   // On mobile the drawer is a full temporary panel (always shows labels); on
@@ -184,7 +184,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
           toggle, which is hidden on small screens — so surface it in the drawer.
           Admins also get it inside the employee workspace (+ an Employee option)
           so they can reach and leave their own portal on a phone. */}
-      {isMobile && (!isEmployeeWorkspace || isAdminUser) && (
+      {isMobile && user?.role !== 'tax_filer' && (!isEmployeeWorkspace || isAdminUser) && (
         <Box sx={{ px: 2, pb: 1.5 }}>
           <ToggleButtonGroup
             value={isEmployeeWorkspace ? 'employee' : isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects'}

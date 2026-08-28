@@ -12,6 +12,7 @@ const OPERATOR_ALLOWED_TOOLS = new Set([
   'search_sales_opportunities',
   'get_quotation_summary',
   'get_expense_summary',
+  'get_payroll_summary',
   'navigate_to_record',
   'list_quotations_for_opportunity',
   'get_opportunity_snapshot',

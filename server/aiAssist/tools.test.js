@@ -5,7 +5,7 @@ const { createToolRegistry } = require('./tools');
 test('registry exposes exactly the approved read-only tools', () => {
   const registry = createToolRegistry({ db: {} });
   assert.deepEqual([...registry.keys()].sort(), [
-    'get_expense_summary', 'get_opportunity_snapshot', 'get_portfolio_summary',
+    'get_expense_summary', 'get_opportunity_snapshot', 'get_payroll_summary', 'get_portfolio_summary',
     'get_project_snapshot', 'get_quotation_summary', 'list_quotations_for_opportunity',
     'navigate_to_record', 'propose_opportunity_update', 'query_analytics', 'search_clients', 'search_projects', 'search_sales_opportunities'
   ]);
@@ -398,6 +398,77 @@ test('query_analytics forecasts expenses with monthly recurring run rate and pro
   assert.equal(recurringResult.data.length, 3);
   assert.equal(recurringResult.data[0].group, 'Fixed Recurring Overhead (Monthly Run Rate)');
   assert.equal(recurringResult.data[0].recurringAmount, 80000);
+});
+
+test('get_payroll_summary computes accurate active headcount, monthly run rate, and 13th-month DOLE projection', async () => {
+  const employees = [
+    {
+      id: 'emp1',
+      data: () => ({ name: 'Juan Dela Cruz', designation: 'Engineer', monthlyRate: 30000, mealAllowance: 1000, isActive: true, dateHired: '2026-01-01' }),
+    },
+    {
+      id: 'emp2',
+      data: () => ({ name: 'Maria Santos', designation: 'Admin', monthlyRate: 20000, mealAllowance: 0, isActive: true, dateHired: '2026-06-01' }),
+    },
+  ];
+
+  const runs = [
+    {
+      id: 'run1',
+      periodStart: '2026-08-01',
+      periodEnd: '2026-08-15',
+      totalGrossPay: 25500,
+      totalNetPay: 25500,
+      data: () => ({ periodStart: '2026-08-01', periodEnd: '2026-08-15', totalGrossPay: 25500, totalNetPay: 25500 }),
+    },
+  ];
+
+  const fakeDb = {
+    collection: (name) => {
+      if (name === 'payroll_employees') {
+        return { get: async () => ({ docs: employees }) };
+      }
+      if (name === 'payroll_runs') {
+        return {
+          get: async () => ({ docs: runs }),
+          doc: (runId) => ({
+            collection: (subName) => {
+              if (subName === 'payslips') {
+                return {
+                  get: async () => ({
+                    docs: [
+                      { data: () => ({ employeeId: 'emp1', basicPay: 15000, mealAllowance: 500, grossEarnings: 15500, netPay: 15500 }) },
+                      { data: () => ({ employeeId: 'emp2', basicPay: 10000, mealAllowance: 0, grossEarnings: 10000, netPay: 10000 }) },
+                    ],
+                  }),
+                };
+              }
+              return { get: async () => ({ docs: [] }) };
+            },
+          }),
+        };
+      }
+      return { get: async () => ({ docs: [] }) };
+    },
+  };
+
+  const registry = createToolRegistry({ db: fakeDb, now: () => new Date('2026-08-28T00:00:00.000Z') });
+  const result = await registry.get('get_payroll_summary').execute({ year: 2026 });
+
+  assert.equal(result.data.activeHeadcount, 2);
+  assert.equal(result.data.monthlyRecurringRunRate, 51000); // 30k + 1k + 20k
+  assert.equal(result.data.ytdActualPayroll, 25500);
+  assert.ok(result.data.total13thMonthPay > 0);
+  assert.ok(result.data.grandTotalPayrollAnd13thMonth > 0);
+  assert.equal(result.sources[0].route, '/finance/payroll');
+
+  const analyticsResult = await registry.get('query_analytics').execute({
+    domain: 'payroll',
+    groupBy: 'employee',
+  });
+  assert.equal(analyticsResult.data.length, 2);
+  assert.ok(analyticsResult.data[0].totalAmount > 0);
+  assert.equal(analyticsResult.sources[0].route, '/finance/payroll');
 });
 
 

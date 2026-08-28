@@ -49,6 +49,7 @@ import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { resolveCorporateDriveId, uploadFileToFolder, projectFolderName } from '../services/onedriveFolderService';
 import { onedriveConfig } from '../config/onedriveConfig';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 
 const API = `${API_BASE}/api`;
 const ACTI_NAME = 'Advance Controle Technologie Inc';
@@ -124,13 +125,15 @@ interface CollectForm {
 
 // ─── component ────────────────────────────────────────────────────────────────
 export default function CollectionsDashboard() {
+  const { user } = useAuth();
+  const isTaxFiler = user?.role === 'tax_filer';
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const preselectedProjectId = searchParams.get('project_id');
   const rawTab = searchParams.get('tab') || 'receivables';
   const currentTab = (rawTab === 'settled' || rawTab === 'collected')
     ? 'settled'
-    : rawTab === 'acti'
+    : (rawTab === 'acti' && !isTaxFiler)
       ? 'acti'
       : 'receivables';
 
@@ -1010,32 +1013,34 @@ export default function CollectionsDashboard() {
             </CardContent>
           </Card>
         </Grid>
-        <Grid size={{ xs: 6, sm: 4, md: 2 }}>
-          <Card
-            sx={{
-              background: `linear-gradient(135deg, #636e72 0%, #b2bec3 100%)`,
-              color: 'white',
-              cursor: 'pointer',
-              transition: 'transform 0.15s ease-in-out',
-              '&:hover': { transform: 'translateY(-2px)' },
-            }}
-            onClick={() => {
-              const next = new URLSearchParams(searchParams);
-              next.set('tab', 'acti');
-              setSearchParams(next, { replace: true });
-            }}
-          >
-            <CardContent sx={{ p: 1.5 }}>
-              <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', fontWeight: 500 }}>ACTI Watchlist</Typography>
-              <Typography variant="h6" component="div" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-                {PHP.format(actiPendingArTotal)}
-              </Typography>
-              <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.7rem' }}>
-                {actiPendingAr.length} pending · {actiOngoing.length} ongoing
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
+        {!isTaxFiler && (
+          <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+            <Card
+              sx={{
+                background: `linear-gradient(135deg, #636e72 0%, #b2bec3 100%)`,
+                color: 'white',
+                cursor: 'pointer',
+                transition: 'transform 0.15s ease-in-out',
+                '&:hover': { transform: 'translateY(-2px)' },
+              }}
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.set('tab', 'acti');
+                setSearchParams(next, { replace: true });
+              }}
+            >
+              <CardContent sx={{ p: 1.5 }}>
+                <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', fontWeight: 500 }}>ACTI Watchlist</Typography>
+                <Typography variant="h6" component="div" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                  {PHP.format(actiPendingArTotal)}
+                </Typography>
+                <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.7rem' }}>
+                  {actiPendingAr.length} pending · {actiOngoing.length} ongoing
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
       </Grid>
 
       {/* Tabs Navigation Bar */}
@@ -1090,25 +1095,27 @@ export default function CollectionsDashboard() {
               </Box>
             }
           />
-          <Tab
-            value="acti"
-            icon={<HandshakeIcon fontSize="small" />}
-            iconPosition="start"
-            label={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <span>ACTI Expected Watchlist</span>
-                {actiExpectedQueue.length > 0 && (
-                  <Chip
-                    size="small"
-                    label={actiExpectedQueue.length}
-                    color="primary"
-                    variant="outlined"
-                    sx={{ height: 20, fontSize: '0.725rem', fontWeight: 600 }}
-                  />
-                )}
-              </Box>
-            }
-          />
+          {!isTaxFiler && (
+            <Tab
+              value="acti"
+              icon={<HandshakeIcon fontSize="small" />}
+              iconPosition="start"
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <span>ACTI Expected Watchlist</span>
+                  {actiExpectedQueue.length > 0 && (
+                    <Chip
+                      size="small"
+                      label={actiExpectedQueue.length}
+                      color="primary"
+                      variant="outlined"
+                      sx={{ height: 20, fontSize: '0.725rem', fontWeight: 600 }}
+                    />
+                  )}
+                </Box>
+              }
+            />
+          )}
         </Tabs>
       </Paper>
 
@@ -1741,7 +1748,7 @@ export default function CollectionsDashboard() {
       {/* ═══════════════════════════════════════════════════════════════════════
           TAB 3: ACTI EXPECTED WATCHLIST
          ═══════════════════════════════════════════════════════════════════════ */}
-      {currentTab === 'acti' && (
+      {!isTaxFiler && currentTab === 'acti' && (
         <Box>
           <Alert severity="info" sx={{ mb: 2 }}>
             <strong>IOCT–ACTI Commercial Trail:</strong> IOCT and ACTI are distinct commercial parties.

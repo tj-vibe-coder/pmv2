@@ -115,7 +115,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, md: 2 }, flexShrink: 0 }}>
           {isAuthenticated ? (
             <>
-              {(!isEmployeeWorkspace || isAdminUser) && (
+              {user?.role !== 'tax_filer' && (!isEmployeeWorkspace || isAdminUser) && (
               <ToggleButtonGroup
                 value={workspace}
                 exclusive

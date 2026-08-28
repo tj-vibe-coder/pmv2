@@ -191,29 +191,34 @@ const FinanceHomePage: React.FC = () => {
       icon: <PaidIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
       path: '/finance/collections',
     },
-    {
-      title: 'Statements of Account',
-      description: 'Consolidated statements for partner ACTI and client subcontractor billings.',
-      icon: <SoaIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
-      path: '/finance/soa',
-    },
-  ];
-
-  const outflowModules: ModuleCard[] = [
-    {
-      title: 'Expense Register',
-      description: 'Unified project & overhead expense tracker with receipt proof and PO sync.',
-      icon: <ExpenseRegisterIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
-      path: '/finance/expense-monitoring',
-    },
-    {
-      title: 'Purchase Orders',
-      description: 'Review and manage supplier purchase orders, procurement commitments, and item orders.',
-      icon: <PoIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
-      path: '/finance/purchase-order',
-    },
     ...(user?.role !== 'tax_filer'
       ? [
+          {
+            title: 'Statements of Account',
+            description: 'Consolidated statements for partner ACTI and client subcontractor billings.',
+            icon: <SoaIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+            path: '/finance/soa',
+          },
+        ]
+      : []),
+  ];
+
+  const outflowModules: ModuleCard[] =
+    user?.role === 'tax_filer'
+      ? []
+      : [
+          {
+            title: 'Expense Register',
+            description: 'Unified project & overhead expense tracker with receipt proof and PO sync.',
+            icon: <ExpenseRegisterIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+            path: '/finance/expense-monitoring',
+          },
+          {
+            title: 'Purchase Orders',
+            description: 'Review and manage supplier purchase orders, procurement commitments, and item orders.',
+            icon: <PoIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+            path: '/finance/purchase-order',
+          },
           {
             title: 'Cash Advances (CA)',
             description: 'Issue, track, and monitor cash advances and unliquidated balances.',
@@ -226,31 +231,35 @@ const FinanceHomePage: React.FC = () => {
             icon: <LiquidationIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
             path: '/finance/expense-monitoring/liquidation-form',
           },
-        ]
-      : []),
-    ...(isAdmin
-      ? [{
-          title: 'Reimbursements',
-          description: 'Review and mark out-of-pocket liquidation claims as reimbursed.',
-          icon: <ReimbursementIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
-          path: '/finance/reimbursements',
-        }]
-      : []),
-    {
-      title: 'Direct Labor',
-      description: 'Track direct field labor logs, payroll distributions, and man-hours.',
-      icon: <LaborIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
-      path: '/finance/expense-monitoring/direct-labor',
-    },
-  ];
+          ...(isAdmin
+            ? [
+                {
+                  title: 'Reimbursements',
+                  description: 'Review and mark out-of-pocket liquidation claims as reimbursed.',
+                  icon: <ReimbursementIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+                  path: '/finance/reimbursements',
+                },
+              ]
+            : []),
+          {
+            title: 'Direct Labor',
+            description: 'Track direct field labor logs, payroll distributions, and man-hours.',
+            icon: <LaborIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+            path: '/finance/expense-monitoring/direct-labor',
+          },
+        ];
 
   const intelligenceModules: ModuleCard[] = [
-    {
-      title: 'Finance Analytics',
-      description: 'Visual charts, recurring run-rate forecasting, and CA/SOA formulation studio.',
-      icon: <AnalyticsIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
-      path: '/finance/analytics',
-    },
+    ...(user?.role !== 'tax_filer'
+      ? [
+          {
+            title: 'Finance Analytics',
+            description: 'Visual charts, recurring run-rate forecasting, and CA/SOA formulation studio.',
+            icon: <AnalyticsIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+            path: '/finance/analytics',
+          },
+        ]
+      : []),
     {
       title: 'Tax Filer Ledger',
       description: 'Consolidated BIR substantiation audit ledger for expenses and payroll.',
@@ -303,15 +312,17 @@ const FinanceHomePage: React.FC = () => {
         </Box>
 
         <Stack direction="row" spacing={1} flexWrap="wrap">
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<SoaIcon />}
-            onClick={() => navigate('/finance/soa')}
-            sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary, fontWeight: 600 }}
-          >
-            Statements of Account
-          </Button>
+          {user?.role !== 'tax_filer' && (
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<SoaIcon />}
+              onClick={() => navigate('/finance/soa')}
+              sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary, fontWeight: 600 }}
+            >
+              Statements of Account
+            </Button>
+          )}
           {user?.role !== 'tax_filer' && (
             <Button
               variant="outlined"
@@ -333,6 +344,28 @@ const FinanceHomePage: React.FC = () => {
             >
               Liquidation Form
             </Button>
+          )}
+          {user?.role === 'tax_filer' && (
+            <>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<TaxLedgerIcon />}
+                onClick={() => navigate('/finance/tax-ledger')}
+                sx={{ bgcolor: NET_PACIFIC_COLORS.primary, '&:hover': { bgcolor: NET_PACIFIC_COLORS.secondary }, fontWeight: 600 }}
+              >
+                Tax Filer Ledger
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<EwtIcon />}
+                onClick={() => navigate('/finance/ewt-2307')}
+                sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary, fontWeight: 600 }}
+              >
+                Sales EWT / 2307
+              </Button>
+            </>
           )}
         </Stack>
       </Box>
@@ -402,7 +435,7 @@ const FinanceHomePage: React.FC = () => {
         </Grid>
 
         {/* ACTI Pending AR */}
-        {actiPendingAr.length > 0 && (
+        {user?.role !== 'tax_filer' && actiPendingAr.length > 0 && (
           <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <Card
               sx={{
@@ -428,7 +461,7 @@ const FinanceHomePage: React.FC = () => {
         )}
 
         {/* ACTI Ongoing */}
-        {actiOngoing.length > 0 && (
+        {user?.role !== 'tax_filer' && actiOngoing.length > 0 && (
           <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <Card
               sx={{
@@ -454,55 +487,59 @@ const FinanceHomePage: React.FC = () => {
         )}
 
         {/* Total Expenses (YTD) */}
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Card
-            sx={{
-              background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent1} 0%, ${NET_PACIFIC_COLORS.accent2} 100%)`,
-              color: 'white',
-              cursor: 'pointer',
-              transition: 'transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
-              '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 },
-            }}
-            onClick={() => navigate('/finance/expense-monitoring')}
-          >
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Expenses (YTD)</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{formatPHP(totalExpensesYtd)}</Typography>
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>{`Year ${new Date().getFullYear()} · View Register →`}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
+        {user?.role !== 'tax_filer' && (
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <Card
+              sx={{
+                background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent1} 0%, ${NET_PACIFIC_COLORS.accent2} 100%)`,
+                color: 'white',
+                cursor: 'pointer',
+                transition: 'transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
+                '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 },
+              }}
+              onClick={() => navigate('/finance/expense-monitoring')}
+            >
+              <CardContent sx={{ p: 2 }}>
+                <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Expenses (YTD)</Typography>
+                <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{formatPHP(totalExpensesYtd)}</Typography>
+                <Typography variant="caption" sx={{ opacity: 0.8 }}>{`Year ${new Date().getFullYear()} · View Register →`}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
 
         {/* Outstanding Cash Advances */}
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Card
-            sx={{
-              background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`,
-              color: 'white',
-              cursor: 'pointer',
-              transition: 'transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
-              '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 },
-            }}
-            onClick={() => navigate('/finance/expense-monitoring/liquidation-form')}
-          >
-            <CardContent sx={{ p: 2 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Outstanding Cash Advances</Typography>
-                <LiquidationIcon sx={{ fontSize: 18, opacity: 0.8 }} />
-              </Box>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{formatPHP(outstandingCA)}</Typography>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.5 }}>
-                <Typography variant="caption" sx={{ opacity: 0.8 }}>Unliquidated balances</Typography>
-                <Typography variant="caption" sx={{ fontWeight: 700, textDecoration: 'underline', opacity: 0.95 }}>
-                  Liquidate →
-                </Typography>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
+        {user?.role !== 'tax_filer' && (
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <Card
+              sx={{
+                background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`,
+                color: 'white',
+                cursor: 'pointer',
+                transition: 'transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
+                '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 },
+              }}
+              onClick={() => navigate('/finance/expense-monitoring/liquidation-form')}
+            >
+              <CardContent sx={{ p: 2 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Outstanding Cash Advances</Typography>
+                  <LiquidationIcon sx={{ fontSize: 18, opacity: 0.8 }} />
+                </Box>
+                <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{formatPHP(outstandingCA)}</Typography>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.5 }}>
+                  <Typography variant="caption" sx={{ opacity: 0.8 }}>Unliquidated balances</Typography>
+                  <Typography variant="caption" sx={{ fontWeight: 700, textDecoration: 'underline', opacity: 0.95 }}>
+                    Liquidate →
+                  </Typography>
+                </Box>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
 
         {/* Pending Reimbursements */}
-        {isAdmin && (
+        {isAdmin && user?.role !== 'tax_filer' && (
           <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <Card
               sx={{
@@ -550,7 +587,7 @@ const FinanceHomePage: React.FC = () => {
         )}
 
         {/* Latest Payroll Run */}
-        {payrollAllowed && (
+        {payrollAllowed && user?.role !== 'tax_filer' && (
           <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <Card
               sx={{
@@ -625,50 +662,52 @@ const FinanceHomePage: React.FC = () => {
       </Box>
 
       {/* --- Section 2: Outflow & Expense Operations --- */}
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5, color: NET_PACIFIC_COLORS.secondary, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <ExpenseWalletIcon fontSize="small" sx={{ color: NET_PACIFIC_COLORS.primary }} /> Outflow & Expense Operations
-        </Typography>
-        <Grid container spacing={1.5}>
-          {outflowModules.map((m) => (
-            <Grid key={m.path} size={{ xs: 12, sm: 6, md: 4 }}>
-              <Paper sx={{
-                borderRadius: 2,
-                overflow: 'hidden',
-                background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
-                border: '1px solid #e2e8f0',
-                height: '100%',
-                display: 'flex',
-                flexDirection: 'column',
-                transition: 'box-shadow 0.15s ease-in-out',
-                '&:hover': { boxShadow: 2 },
-              }}>
-                <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0', display: 'flex', alignItems: 'center', gap: 1 }}>
-                  {m.icon}
-                  <Typography variant="h6" sx={{ fontSize: '1.05rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
-                    {m.title}
-                  </Typography>
-                </Box>
-                <Box sx={{ p: 1.5, flexGrow: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 1.5 }}>
-                  <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                    {m.description}
-                  </Typography>
-                  <Box>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={() => navigate(m.path)}
-                      sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
-                    >
-                      Open
-                    </Button>
+      {user?.role !== 'tax_filer' && outflowModules.length > 0 && (
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5, color: NET_PACIFIC_COLORS.secondary, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ExpenseWalletIcon fontSize="small" sx={{ color: NET_PACIFIC_COLORS.primary }} /> Outflow & Expense Operations
+          </Typography>
+          <Grid container spacing={1.5}>
+            {outflowModules.map((m) => (
+              <Grid key={m.path} size={{ xs: 12, sm: 6, md: 4 }}>
+                <Paper sx={{
+                  borderRadius: 2,
+                  overflow: 'hidden',
+                  background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+                  border: '1px solid #e2e8f0',
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  transition: 'box-shadow 0.15s ease-in-out',
+                  '&:hover': { boxShadow: 2 },
+                }}>
+                  <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0', display: 'flex', alignItems: 'center', gap: 1 }}>
+                    {m.icon}
+                    <Typography variant="h6" sx={{ fontSize: '1.05rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+                      {m.title}
+                    </Typography>
                   </Box>
-                </Box>
-              </Paper>
-            </Grid>
-          ))}
-        </Grid>
-      </Box>
+                  <Box sx={{ p: 1.5, flexGrow: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 1.5 }}>
+                    <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+                      {m.description}
+                    </Typography>
+                    <Box>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={() => navigate(m.path)}
+                        sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+                      >
+                        Open
+                      </Button>
+                    </Box>
+                  </Box>
+                </Paper>
+              </Grid>
+            ))}
+          </Grid>
+        </Box>
+      )}
 
       {/* --- Section 3: Financial Intelligence & Accounting --- */}
       <Box sx={{ mb: 3 }}>

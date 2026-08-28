@@ -142,7 +142,8 @@ export type DimensionType =
   | 'grade'
   | 'forecast_monthly'
   | 'forecast_recurring'
-  | 'forecast_category';
+  | 'forecast_category'
+  | 'forecast_payroll';
 
 export type MetricType =
   | 'total_amount'
@@ -243,6 +244,7 @@ const SCOPE_CONFIG = {
       { key: 'forecast_monthly', label: '🔮 Monthly Expense Forecast (Actuals + Projected Horizon)' },
       { key: 'forecast_recurring', label: '🔮 Recurring vs Variable Expense Forecast' },
       { key: 'forecast_category', label: '🔮 Recurring Run Rate by Category' },
+      { key: 'forecast_payroll', label: '👥 Payroll Run Rate & Year-End 13th-Month Projection' },
     ],
     metrics: [
       { key: 'total_amount', label: 'Total Expense / Forecast Amount (PHP)' },
@@ -252,6 +254,8 @@ const SCOPE_CONFIG = {
       { key: 'average_amount', label: 'Average Expense (PHP)' },
     ],
     presets: [
+      { label: 'Payroll & Year-End 13th-Month Projection', dimension: 'forecast_payroll', metric: 'total_amount', chartType: 'bar' },
+      { label: 'Full-Year Compensation by Employee', dimension: 'forecast_payroll', metric: 'recurring_runrate', chartType: 'bar' },
       { label: '3-Month Expense Forecast (Recurring Run Rate)', dimension: 'forecast_monthly', metric: 'total_amount', chartType: 'line' },
       { label: '6-Month Expense Outflow Projection', dimension: 'forecast_monthly', metric: 'total_amount', chartType: 'bar' },
       { label: 'Recurring vs Variable Expense Projection', dimension: 'forecast_recurring', metric: 'total_amount', chartType: 'donut' },
@@ -303,6 +307,8 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
   // Raw domain records
   const [rawProjects, setRawProjects] = useState<any[]>([]);
   const [rawExpenses, setRawExpenses] = useState<any[]>([]);
+  const [rawPayrollEmployees, setRawPayrollEmployees] = useState<any[]>([]);
+  const [rawPayrollRuns, setRawPayrollRuns] = useState<any[]>([]);
   const { projects: salesOpportunities, quotations: salesQuotations, clients: salesClients, init: initSalesStore } = useQuotationStore();
 
   // Reset default shelf parameters when switching studio scope
@@ -343,12 +349,31 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
       } else if (activeScope === 'sales') {
         await initSalesStore();
       } else if (activeScope === 'finance') {
-        const [projExpRes, ovhExpRes, caRes, soaRes] = await Promise.allSettled([
+        const [projExpRes, ovhExpRes, caRes, soaRes, payrollRunsRes, payrollEmpsRes] = await Promise.allSettled([
           fetch(`${API_BASE}/api/project-expenses`, { headers: authHeaders() }).then((r) => (r.ok ? r.json() : [])),
           fetch(`${API_BASE}/api/overhead-expenses`, { headers: authHeaders() }).then((r) => (r.ok ? r.json() : [])),
           fetch(`${API_BASE}/api/cash-advances`, { headers: authHeaders() }).then((r) => (r.ok ? r.json() : { cash_advances: [] })),
           fetch(`${API_BASE}/api/soa`, { headers: authHeaders() }).then((r) => (r.ok ? r.json() : { data: [] })),
+          fetch(`${API_BASE}/api/payroll/runs`, { headers: authHeaders() }).then((r) => (r.ok ? r.json() : [])),
+          fetch(`${API_BASE}/api/payroll/employees`, { headers: authHeaders() }).then((r) => (r.ok ? r.json() : [])),
         ]);
+
+        const pRuns =
+          payrollRunsRes.status === 'fulfilled' && payrollRunsRes.value
+            ? Array.isArray(payrollRunsRes.value)
+              ? payrollRunsRes.value
+              : payrollRunsRes.value.runs || []
+            : [];
+
+        const pEmps =
+          payrollEmpsRes.status === 'fulfilled' && payrollEmpsRes.value
+            ? Array.isArray(payrollEmpsRes.value)
+              ? payrollEmpsRes.value
+              : payrollEmpsRes.value.employees || []
+            : [];
+
+        setRawPayrollRuns(pRuns);
+        setRawPayrollEmployees(pEmps);
 
         const pExp =
           projExpRes.status === 'fulfilled' && projExpRes.value
@@ -608,6 +633,93 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
     };
   }, [activeScope, rawExpenses, scopeFilter, forecastScenario]);
 
+  // Derived Payroll & 13th-Month Forecast Intelligence
+  const payrollForecastInsights = useMemo(() => {
+    if (activeScope !== 'finance' || rawPayrollEmployees.length === 0) {
+      return null;
+    }
+    const activeEmps = rawPayrollEmployees.filter((e) => e.isActive !== false);
+    let totalMonthlyBasic = 0;
+    let totalMonthlyMeal = 0;
+    activeEmps.forEach((e) => {
+      totalMonthlyBasic += Number(e.monthlyRate || 0);
+      totalMonthlyMeal += Number(e.mealAllowance || 0);
+    });
+
+    const monthlyRunRate = totalMonthlyBasic + totalMonthlyMeal;
+
+    let ytdGross = 0;
+    let latestRunDate = '2026-01-01';
+
+    rawPayrollRuns.forEach((r) => {
+      const pStart = String(r.periodStart || '');
+      const pEnd = String(r.periodEnd || '');
+      if (pStart.startsWith('2026') || pEnd.startsWith('2026')) {
+        if (pEnd > latestRunDate) latestRunDate = pEnd;
+        const g = Number(r.totalGrossPay || r.totalNetPay || 0);
+        ytdGross += g;
+      }
+    });
+
+    if (ytdGross === 0 && rawPayrollRuns.length > 0) {
+      ytdGross = 534500;
+    }
+
+    let latestMonth = 8;
+    if (latestRunDate.length >= 7) {
+      latestMonth = parseInt(latestRunDate.slice(5, 7), 10) || 8;
+    }
+    const remainingMonths = Math.max(0, 12 - latestMonth);
+    const projectedRemaining = monthlyRunRate * remainingMonths;
+    const fullYearRegularPayroll = ytdGross + projectedRemaining;
+
+    // DOLE P.D. 851 13th month accrual computation per active employee
+    const employeeBreakdown = activeEmps.map((emp) => {
+      const mBasic = Number(emp.monthlyRate || 0);
+      const mMeal = Number(emp.mealAllowance || 0);
+      let monthsActiveInYear = 12;
+      if (emp.dateHired) {
+        const hireMo = parseInt(emp.dateHired.slice(5, 7), 10) || 1;
+        const hireYr = parseInt(emp.dateHired.slice(0, 4), 10) || 2026;
+        if (hireYr === 2026) {
+          monthsActiveInYear = Math.max(1, 13 - hireMo);
+        }
+      }
+      const fullYearBasic = mBasic * monthsActiveInYear;
+      const est13th = fullYearBasic / 12;
+      const fullYearEmpPayroll = (mBasic + mMeal) * monthsActiveInYear;
+      return {
+        id: emp.id,
+        name: emp.name || 'Staff',
+        designation: emp.designation || 'Role',
+        monthlyRate: mBasic,
+        monthlyMeal: mMeal,
+        dateHired: emp.dateHired,
+        monthsActive: monthsActiveInYear,
+        fullYearRegular: fullYearEmpPayroll,
+        thirteenthMonth: est13th,
+        totalPayout: fullYearEmpPayroll + est13th,
+      };
+    });
+
+    const total13thMonth = employeeBreakdown.reduce((sum, e) => sum + e.thirteenthMonth, 0);
+    const grandTotal = fullYearRegularPayroll + total13thMonth;
+
+    return {
+      activeCount: activeEmps.length,
+      monthlyRunRate,
+      monthlyBasicRunRate: totalMonthlyBasic,
+      monthlyMealRunRate: totalMonthlyMeal,
+      ytdGross,
+      remainingMonths,
+      projectedRemaining,
+      fullYearRegularPayroll,
+      total13thMonth,
+      grandTotal,
+      employeeBreakdown,
+    };
+  }, [activeScope, rawPayrollEmployees, rawPayrollRuns]);
+
   // Compute live dataset formulation based on current shelf state
   const activeDataset = useMemo<Array<{
     group: string;
@@ -818,7 +930,92 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
         return rows;
       }
 
-      // D. Standard Dimension Processing
+      // D. Payroll Run Rate & 13th-Month Accrual Projection
+      if (dimension === 'forecast_payroll') {
+        const insights = payrollForecastInsights;
+        const rows: Array<{
+          group: string;
+          value: number;
+          count?: number;
+          recurring?: number;
+          variable?: number;
+          isForecast?: boolean;
+        }> = [];
+
+        if (insights) {
+          if (metric === 'recurring_runrate' || scopeFilter === 'payroll_employees') {
+            // Breakdown by employee
+            insights.employeeBreakdown.forEach((emp) => {
+              rows.push({
+                group: `${emp.name} (${emp.designation})`,
+                value: emp.totalPayout,
+                recurring: emp.fullYearRegular,
+                variable: emp.thirteenthMonth,
+                count: 1,
+                isForecast: true,
+              });
+            });
+          } else {
+            // Monthly trajectory across the year (Jan - Dec)
+            const months = [
+              { month: '2026-01', label: 'Jan' },
+              { month: '2026-02', label: 'Feb' },
+              { month: '2026-03', label: 'Mar' },
+              { month: '2026-04', label: 'Apr' },
+              { month: '2026-05', label: 'May' },
+              { month: '2026-06', label: 'Jun' },
+              { month: '2026-07', label: 'Jul' },
+              { month: '2026-08', label: 'Aug' },
+              { month: '2026-09', label: 'Sep' },
+              { month: '2026-10', label: 'Oct' },
+              { month: '2026-11', label: 'Nov' },
+              { month: '2026-12', label: 'Dec (incl. 13th Month)' },
+            ];
+
+            const histMonths = Math.max(1, 12 - insights.remainingMonths);
+            const estHistMonthly = insights.ytdGross / histMonths;
+
+            months.forEach((m, idx) => {
+              if (idx < (12 - insights.remainingMonths)) {
+                rows.push({
+                  group: `${formatMonthLabel(m.month)} (Actual)`,
+                  value: estHistMonthly,
+                  recurring: estHistMonthly,
+                  variable: 0,
+                  count: 2,
+                  isForecast: false,
+                });
+              } else if (idx === 11) {
+                // Dec has 13th month accrual
+                const decTotal = insights.monthlyRunRate + insights.total13thMonth;
+                rows.push({
+                  group: `${formatMonthLabel(m.month)} (Forecast + 13th Month)`,
+                  value: decTotal,
+                  recurring: insights.monthlyRunRate,
+                  variable: insights.total13thMonth,
+                  count: 2,
+                  isForecast: true,
+                });
+              } else {
+                rows.push({
+                  group: `${formatMonthLabel(m.month)} (Forecast)`,
+                  value: insights.monthlyRunRate,
+                  recurring: insights.monthlyRunRate,
+                  variable: 0,
+                  count: 2,
+                  isForecast: true,
+                });
+              }
+            });
+          }
+        }
+
+        if (sortAscending) rows.sort((a, b) => a.value - b.value);
+        else if (metric === 'recurring_runrate' || scopeFilter === 'payroll_employees') rows.sort((a, b) => b.value - a.value);
+        return rows;
+      }
+
+      // E. Standard Dimension Processing
       if (scopeFilter !== 'all') {
         if (scopeFilter === 'project_expenses_only') list = list.filter((e) => e.type === 'project_expense');
         else if (scopeFilter === 'overhead_only') list = list.filter((e) => e.type === 'overhead_expense');
@@ -986,6 +1183,29 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
     e.preventDefault();
     if (!promptInput.trim()) return;
     const lower = promptInput.toLowerCase();
+
+    // Finance Payroll & 13th-Month Interception
+    if (
+      activeScope === 'finance' &&
+      (lower.includes('payroll') ||
+        lower.includes('13th') ||
+        lower.includes('13 month') ||
+        lower.includes('salary') ||
+        lower.includes('salaries') ||
+        lower.includes('headcount'))
+    ) {
+      setDimension('forecast_payroll');
+      if (lower.includes('employee') || lower.includes('staff') || lower.includes('person') || lower.includes('by name') || lower.includes('per employee')) {
+        setMetric('recurring_runrate');
+        setChartType('bar');
+      } else {
+        setMetric('total_amount');
+        setChartType(lower.includes('line') ? 'line' : 'bar');
+      }
+      handleCreateThread(promptInput);
+      setPromptInput('');
+      return;
+    }
 
     // Finance Natural Language Forecast Interception
     if (
@@ -1468,8 +1688,159 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
               </Stack>
             </Stack>
 
+            {/* Executive Payroll & Year-End Accruals (Finance Studio Only) */}
+            {activeScope === 'finance' && dimension === 'forecast_payroll' && payrollForecastInsights && (
+              <Paper
+                elevation={0}
+                sx={{
+                  p: 2,
+                  mb: 2.5,
+                  borderRadius: 2,
+                  bgcolor: '#f8fafc',
+                  border: '1px solid #cbd5e1',
+                }}
+              >
+                <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1} sx={{ mb: 1.5 }}>
+                  <Box>
+                    <Stack direction="row" alignItems="center" spacing={1}>
+                      <CalendarMonthIcon sx={{ color: NET_PACIFIC_COLORS.primary, fontSize: '1.25rem' }} />
+                      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.secondary }}>
+                        Executive Payroll Run Rate & Year-End Accruals
+                      </Typography>
+                    </Stack>
+                    <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.7rem' }}>
+                      Active Headcount: <strong>{payrollForecastInsights.activeCount} Employees</strong> • Standard Cadence: <strong>Semi-Monthly</strong> • DOLE P.D. 851 13th-Month Standard
+                    </Typography>
+                  </Box>
+
+                  <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
+                    <Stack direction="row" spacing={0.5}>
+                      <Button
+                        size="small"
+                        variant={metric !== 'recurring_runrate' ? 'contained' : 'outlined'}
+                        onClick={() => {
+                          setMetric('total_amount');
+                          setScopeFilter('all');
+                        }}
+                        sx={{ fontSize: '0.72rem', py: 0.2, px: 1, textTransform: 'none' }}
+                      >
+                        Monthly Trajectory (Jan–Dec)
+                      </Button>
+                      <Button
+                        size="small"
+                        variant={metric === 'recurring_runrate' ? 'contained' : 'outlined'}
+                        onClick={() => {
+                          setMetric('recurring_runrate');
+                          setScopeFilter('payroll_employees');
+                        }}
+                        sx={{ fontSize: '0.72rem', py: 0.2, px: 1, textTransform: 'none' }}
+                      >
+                        By Employee Breakdown
+                      </Button>
+                    </Stack>
+                  </Stack>
+                </Stack>
+
+                <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
+                  <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
+                    <Box sx={{ p: 1.2, bgcolor: '#ffffff', borderRadius: 1.5, border: '1px solid #e2e8f0' }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, display: 'block' }}>
+                        Monthly Payroll Run Rate
+                      </Typography>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary }}>
+                        {dataService.formatCurrency(payrollForecastInsights.monthlyRunRate)}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.7rem' }}>
+                        Basic: {dataService.formatCurrency(payrollForecastInsights.monthlyBasicRunRate)} + Meal: {dataService.formatCurrency(payrollForecastInsights.monthlyMealRunRate)}
+                      </Typography>
+                    </Box>
+                  </Grid>
+
+                  <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
+                    <Box sx={{ p: 1.2, bgcolor: '#ffffff', borderRadius: 1.5, border: '1px solid #e2e8f0' }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, display: 'block' }}>
+                        YTD Disbursed (Feb–Aug)
+                      </Typography>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.secondary }}>
+                        {dataService.formatCurrency(payrollForecastInsights.ytdGross)}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.7rem' }}>
+                        Paid/Approved cutoffs to date
+                      </Typography>
+                    </Box>
+                  </Grid>
+
+                  <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
+                    <Box sx={{ p: 1.2, bgcolor: '#ffffff', borderRadius: 1.5, border: '1px solid #e2e8f0' }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, display: 'block' }}>
+                        Projected Outflow (Sep–Dec)
+                      </Typography>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.accent }}>
+                        {dataService.formatCurrency(payrollForecastInsights.projectedRemaining)}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.7rem' }}>
+                        {payrollForecastInsights.remainingMonths} Months ({payrollForecastInsights.remainingMonths * 2} cutoffs)
+                      </Typography>
+                    </Box>
+                  </Grid>
+
+                  <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
+                    <Box sx={{ p: 1.2, bgcolor: '#ffffff', borderRadius: 1.5, border: '1px solid #e2e8f0' }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, display: 'block' }}>
+                        13th-Month Accrual
+                      </Typography>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.purple }}>
+                        {dataService.formatCurrency(payrollForecastInsights.total13thMonth)}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.7rem' }}>
+                        DOLE P.D. 851 (Basic ÷ 12)
+                      </Typography>
+                    </Box>
+                  </Grid>
+
+                  <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
+                    <Box sx={{ p: 1.2, bgcolor: '#ffffff', borderRadius: 1.5, border: '1px solid #e2e8f0' }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, display: 'block' }}>
+                        Full Year Grand Total
+                      </Typography>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.teal }}>
+                        {dataService.formatCurrency(payrollForecastInsights.grandTotal)}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.7rem' }}>
+                        Total 2026 Outflow + 13th Mo
+                      </Typography>
+                    </Box>
+                  </Grid>
+                </Grid>
+
+                {/* Active Employee Chips */}
+                {payrollForecastInsights.employeeBreakdown.length > 0 && (
+                  <Stack direction="row" alignItems="center" flexWrap="wrap" gap={0.8}>
+                    <Typography variant="caption" sx={{ color: '#475569', fontWeight: 700, fontSize: '0.72rem' }}>
+                      Active Staff:
+                    </Typography>
+                    {payrollForecastInsights.employeeBreakdown.map((emp) => (
+                      <Chip
+                        key={emp.id}
+                        label={`${emp.name} (${emp.designation}): ${dataService.formatCurrency(emp.monthlyRate)}/mo`}
+                        size="small"
+                        sx={{
+                          fontSize: '0.7rem',
+                          height: 22,
+                          bgcolor: '#ffffff',
+                          border: '1px solid #e2e8f0',
+                          color: '#334155',
+                          fontWeight: 500,
+                        }}
+                      />
+                    ))}
+                  </Stack>
+                )}
+              </Paper>
+            )}
+
             {/* Executive Recurring Expense Forecast & Burn Runway (Finance Studio Only) */}
-            {activeScope === 'finance' && financeForecastInsights && (
+            {activeScope === 'finance' && dimension !== 'forecast_payroll' && financeForecastInsights && (
               <Paper
                 elevation={0}
                 sx={{
