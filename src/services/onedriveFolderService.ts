@@ -25,6 +25,8 @@ export interface DriveItemRef {
   id: string;
   webUrl: string;
   name?: string;
+  /** True when the drive item is a folder (present on `listChildrenById` results). */
+  isFolder?: boolean;
 }
 
 function authHeaders(): Record<string, string> {
@@ -138,9 +140,9 @@ export async function listChildrenById(
     throw new Error(`List children failed (${res.status}) for folder "${folderId}": ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
-  const items: Array<{ id: string; name?: string; webUrl?: string }> =
+  const items: Array<{ id: string; name?: string; webUrl?: string; isFolder?: boolean }> =
     Array.isArray(data?.items) ? data.items : [];
-  return items.map((it) => ({ id: it.id, webUrl: it.webUrl || '', name: it.name }));
+  return items.map((it) => ({ id: it.id, webUrl: it.webUrl || '', name: it.name, isFolder: !!it.isFolder }));
 }
 
 /**
