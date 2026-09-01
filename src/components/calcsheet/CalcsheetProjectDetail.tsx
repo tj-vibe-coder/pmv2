@@ -81,6 +81,14 @@ export default function ProjectDetail() {
   const [poErr, setPoErr] = useState('');
   const [poDeleteTarget, setPoDeleteTarget] = useState<CustomerPO | null>(null);
   const [poDeleteBusy, setPoDeleteBusy] = useState(false);
+
+  // Ad-hoc "drop any file into the project folder" uploads
+  const projectFilesInputRef = useRef<HTMLInputElement | null>(null);
+  const [projectFilesBusy, setProjectFilesBusy] = useState(false);
+  const [projectFilesProgress, setProjectFilesProgress] = useState<{ done: number; total: number } | null>(null);
+  const [projectFilesErr, setProjectFilesErr] = useState('');
+  const [projectFilesDragOver, setProjectFilesDragOver] = useState(false);
+  const [uploadedProjectFiles, setUploadedProjectFiles] = useState<{ name: string; url?: string }[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Quotation | null>(null);
   const [duplicateTarget, setDuplicateTarget] = useState<Quotation | null>(null);
   // Non-error info message shown next to the OneDrive buttons. Used to tell the
@@ -294,6 +302,80 @@ export default function ProjectDetail() {
       setPoDeleteTarget(null);
     } finally {
       setPoDeleteBusy(false);
+    }
+  };
+
+  // Upload arbitrary files straight into the project's active OneDrive folder
+  // (proposal folder while the project is open; project/execution folder once
+  // it's won). Creates the folder on the fly if it doesn't exist yet. Files land
+  // at the folder root so the user can organise them from OneDrive afterwards.
+  const uploadProjectFiles = async (fileList: FileList | File[] | null) => {
+    if (!project) return;
+    const MAX_BYTES = 4 * 1024 * 1024; // Graph simple-upload / function payload ceiling
+    const all = Array.from(fileList || []);
+    const oversized = all.filter((f) => f.size > MAX_BYTES).map((f) => f.name);
+    const files = all.filter((f) => f.size <= MAX_BYTES);
+    if (files.length === 0) {
+      setProjectFilesErr(
+        oversized.length
+          ? `Too large (max 4 MB): ${oversized.join(', ')} — add these directly in OneDrive.`
+          : '',
+      );
+      if (projectFilesInputRef.current) projectFilesInputRef.current.value = '';
+      return;
+    }
+    setProjectFilesBusy(true);
+    setProjectFilesErr('');
+    setProjectFilesProgress({ done: 0, total: files.length });
+    try {
+      const token = await getOneDriveToken();
+      if (!token) throw new Error('Not signed in to OneDrive.');
+      const driveId = await resolveCorporateDriveId(token);
+
+      const won = project.status === 'won';
+      let folderId = won ? project.executionFolderId : project.proposalFolderId;
+      if (!folderId) {
+        const ref = won
+          ? await ensureExecutionFolder(token, project)
+          : await ensureProposalFolder(token, project);
+        folderId = ref.id;
+        await updateProject(
+          project.id,
+          won
+            ? { executionFolderId: ref.id, executionFolderUrl: ref.webUrl }
+            : { proposalFolderId: ref.id, proposalFolderUrl: ref.webUrl },
+        );
+      }
+
+      const taken: DriveItemRef[] = await listChildrenById(token, driveId, folderId);
+      const done: { name: string; url?: string }[] = [];
+      const failed: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const name = dedupeFilename(file.name, taken);
+        try {
+          const up = await uploadFileToFolderById(token, driveId, folderId, name, file);
+          taken.push({ id: up.id, name, webUrl: up.webUrl });
+          done.push({ name, url: up.webUrl || undefined });
+        } catch (err) {
+          failed.push(file.name);
+          // eslint-disable-next-line no-console
+          console.warn('[OneDrive] project file upload failed', file.name, err);
+        }
+        setProjectFilesProgress({ done: i + 1, total: files.length });
+      }
+      if (done.length > 0) setUploadedProjectFiles((prev) => [...done, ...prev].slice(0, 50));
+      const problems = [
+        ...failed.map((n) => `${n} (upload failed)`),
+        ...oversized.map((n) => `${n} (over 4 MB)`),
+      ];
+      if (problems.length) setProjectFilesErr(`Skipped: ${problems.join(', ')}`);
+    } catch (e) {
+      setProjectFilesErr(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setProjectFilesBusy(false);
+      setProjectFilesProgress(null);
+      if (projectFilesInputRef.current) projectFilesInputRef.current.value = '';
     }
   };
 
@@ -1343,6 +1425,108 @@ export default function ProjectDetail() {
                   <IconButton size="small" onClick={() => setPoDeleteTarget(po)}>
                     <DeleteOutlineIcon fontSize="small" />
                   </IconButton>
+                </Stack>
+              ))}
+            </Stack>
+          )}
+        </Paper>
+      )}
+
+      {isCorporateOneDriveConfigured() && (
+        <Paper
+          variant="outlined"
+          sx={{
+            p: 2,
+            transition: 'border-color .15s, background-color .15s',
+            ...(projectFilesDragOver && oneDriveSignedIn
+              ? { borderColor: 'primary.main', bgcolor: 'action.hover' }
+              : null),
+          }}
+          onDragEnter={(e) => {
+            if (!oneDriveSignedIn || !e.dataTransfer.types?.includes('Files')) return;
+            e.preventDefault(); e.stopPropagation(); setProjectFilesDragOver(true);
+          }}
+          onDragOver={(e) => {
+            if (!oneDriveSignedIn || !e.dataTransfer.types?.includes('Files')) return;
+            e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy';
+          }}
+          onDragLeave={(e) => {
+            if (!e.dataTransfer.types?.includes('Files')) return;
+            e.preventDefault(); e.stopPropagation(); setProjectFilesDragOver(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault(); e.stopPropagation(); setProjectFilesDragOver(false);
+            if (!oneDriveSignedIn || projectFilesBusy) return;
+            void uploadProjectFiles(e.dataTransfer.files);
+          }}
+        >
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1} sx={{ mb: 1 }}>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Project files</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Uploads straight into the {project.status === 'won' ? 'project' : 'proposal'} folder on OneDrive.
+              </Typography>
+            </Box>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<UploadFileIcon />}
+              disabled={!oneDriveSignedIn || projectFilesBusy}
+              onClick={() => projectFilesInputRef.current?.click()}
+            >
+              {projectFilesBusy ? 'Uploading…' : 'Upload files'}
+            </Button>
+            <input
+              ref={projectFilesInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => { void uploadProjectFiles(e.target.files); }}
+            />
+          </Stack>
+
+          {!oneDriveSignedIn ? (
+            <Typography variant="caption" color="text.secondary">
+              Sign in to OneDrive above to upload files.
+            </Typography>
+          ) : projectFilesProgress ? (
+            <Box sx={{ my: 1 }}>
+              <LinearProgress
+                variant="determinate"
+                value={(projectFilesProgress.done / Math.max(1, projectFilesProgress.total)) * 100}
+              />
+              <Typography variant="caption" color="text.secondary">
+                Uploading {projectFilesProgress.done} / {projectFilesProgress.total}…
+              </Typography>
+            </Box>
+          ) : (
+            <Typography variant="caption" color="text.secondary">
+              Drag &amp; drop files here, or use the button. Max 4&nbsp;MB per file — add larger files directly in OneDrive.
+            </Typography>
+          )}
+
+          {projectFilesErr && (
+            <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.5 }}>
+              {projectFilesErr}
+            </Typography>
+          )}
+
+          {uploadedProjectFiles.length > 0 && (
+            <Stack spacing={0.5} sx={{ mt: 1 }}>
+              <Typography variant="caption" color="success.main">Uploaded this session:</Typography>
+              {uploadedProjectFiles.map((f, i) => (
+                <Stack key={`${f.name}-${i}`} direction="row" alignItems="center" spacing={1}>
+                  <DescriptionIcon fontSize="small" color="action" />
+                  <Typography
+                    variant="body2"
+                    component={f.url ? 'a' : 'span'}
+                    href={f.url || undefined}
+                    target={f.url ? '_blank' : undefined}
+                    rel={f.url ? 'noopener' : undefined}
+                    sx={{ textDecoration: f.url ? 'underline' : 'none', color: f.url ? 'primary.main' : 'text.primary' }}
+                  >
+                    {f.name}
+                  </Typography>
                 </Stack>
               ))}
             </Stack>
