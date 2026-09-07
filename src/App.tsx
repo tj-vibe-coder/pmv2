@@ -135,7 +135,15 @@ const theme = createTheme({
 // Hydrates the Calcsheet store from the API once on mount
 const CalcsheetInit: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const init = useQuotationStore((s) => s.init);
-  React.useEffect(() => { init(); }, [init]);
+  const { user } = useAuth();
+  React.useEffect(() => {
+    if (user?.role !== 'tax_filer') {
+      init();
+    }
+  }, [init, user?.role]);
+  if (user?.role === 'tax_filer') {
+    return <Navigate to="/finance/tax-ledger" replace />;
+  }
   return <>{children}</>;
 };
 
@@ -225,8 +233,14 @@ const LastPageTracker: React.FC = () => {
 };
 
 // Root "/" lands on whatever page the user last had open, falling back to
-// the Dashboard when nothing is saved yet (first visit, or after logout).
-const RootRedirect: React.FC = () => <Navigate to={getLastPage() ?? '/dashboard'} replace />;
+// the role default when nothing is saved yet (first visit, or after logout).
+const RootRedirect: React.FC = () => {
+  const { user } = useAuth();
+  const defaultPage = (user?.role === 'user' || user?.role === 'viewer')
+    ? '/employee'
+    : (user?.role === 'tax_filer' ? '/finance/tax-ledger' : '/dashboard');
+  return <Navigate to={getLastPage() ?? defaultPage} replace />;
+};
 
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -283,9 +297,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <AnalyticsStudioPage domainScope="projects" />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <AnalyticsStudioPage domainScope="projects" />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -295,9 +311,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <AnalyticsStudioPage domainScope="sales" />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <AnalyticsStudioPage domainScope="sales" />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -307,9 +325,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <AnalyticsStudioPage domainScope="finance" />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <AnalyticsStudioPage domainScope="finance" />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -319,9 +339,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <ProjectMonitoringApp />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ProjectMonitoringApp />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -331,9 +353,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <ProjectMonitoringApp />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ProjectMonitoringApp />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -342,9 +366,11 @@ function App() {
               path="/location-analysis" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ProjectLocationDashboard />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <ProjectLocationDashboard />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -352,9 +378,11 @@ function App() {
               path="/expense-monitoring" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ExpenseMonitoring />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <ExpenseMonitoring />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             >
@@ -375,9 +403,11 @@ function App() {
               path="/clients" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ClientsPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <ClientsPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -385,9 +415,11 @@ function App() {
               path="/material-request" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <MaterialRequestFormPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <MaterialRequestFormPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -396,9 +428,11 @@ function App() {
               path="/delivery" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <DeliveryPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <DeliveryPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -406,9 +440,11 @@ function App() {
               path="/suppliers" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <SuppliersPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <SuppliersPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -416,9 +452,11 @@ function App() {
               path="/purchase-order" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <PurchaseOrderPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <PurchaseOrderPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -426,9 +464,11 @@ function App() {
               path="/estimates" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <EstimatesPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <EstimatesPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -437,9 +477,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <ReportsPage />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ReportsPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -530,9 +572,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <SoaDashboardPage />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <SoaDashboardPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -542,9 +586,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <SoaDetailView />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <SoaDetailView />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -554,11 +600,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <TaxFilerBlock>
-                        <InvestmentTrackerPage />
-                      </TaxFilerBlock>
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <InvestmentTrackerPage />
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -568,13 +612,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <TaxFilerBlock>
-                        <PayrollGuard>
-                          <PayrollDashboard />
-                        </PayrollGuard>
-                      </TaxFilerBlock>
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <PayrollGuard>
+                        <PayrollDashboard />
+                      </PayrollGuard>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -585,9 +627,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <ExpenseMonitoring />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ExpenseMonitoring />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -610,11 +654,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <TaxFilerBlock>
-                        <ReimbursementDashboard />
-                      </TaxFilerBlock>
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <ReimbursementDashboard />
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -624,9 +666,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <ProjectExpenseReport />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ProjectExpenseReport />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -636,9 +680,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <PurchaseOrderPage />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <PurchaseOrderPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -648,9 +694,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <OverheadExpensesPage />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <OverheadExpensesPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -700,11 +748,13 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <CalcsheetInit>
-                        <SalesHomePage />
-                      </CalcsheetInit>
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <CalcsheetInit>
+                          <SalesHomePage />
+                        </CalcsheetInit>
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -713,11 +763,13 @@ function App() {
               path="/sales/calcsheet"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <CalcsheetInit>
-                      <Navigate to="/sales/calcsheet/projects" replace />
-                    </CalcsheetInit>
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <CalcsheetInit>
+                        <Navigate to="/sales/calcsheet/projects" replace />
+                      </CalcsheetInit>
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -725,11 +777,13 @@ function App() {
               path="/sales/calcsheet/projects"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <CalcsheetInit>
-                      <CalcsheetProjects />
-                    </CalcsheetInit>
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <CalcsheetInit>
+                        <CalcsheetProjects />
+                      </CalcsheetInit>
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -831,9 +885,11 @@ function App() {
               path="/sales/pricelists"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <PricelistBrowser />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <PricelistBrowser />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -842,9 +898,11 @@ function App() {
               path="/sales/clients"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ClientsPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <ClientsPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -852,9 +910,11 @@ function App() {
               path="/sales/material-request"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <MaterialRequestFormPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <MaterialRequestFormPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -862,9 +922,11 @@ function App() {
               path="/sales/delivery"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <DeliveryPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <DeliveryPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -872,9 +934,11 @@ function App() {
               path="/sales/suppliers"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <SuppliersPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <SuppliersPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -882,9 +946,11 @@ function App() {
               path="/sales/purchase-order"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <PurchaseOrderPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <PurchaseOrderPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -892,9 +958,11 @@ function App() {
               path="/sales/estimates"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <EstimatesPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <EstimatesPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />

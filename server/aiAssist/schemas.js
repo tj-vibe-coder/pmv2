@@ -52,9 +52,12 @@ const TOOL_ARG_SHAPES = {
   search_clients: {
     search: { type: 'string', required: true },
   },
+  get_payroll_summary: {
+    year: { type: 'integer' },
+  },
   query_analytics: {
-    domain: { type: 'enum', values: ['projects', 'quotations', 'expenses', 'sales_pipeline'], required: true },
-    groupBy: { type: 'enum', values: ['category', 'year', 'status', 'client', 'grade', 'forecast_monthly', 'forecast_recurring', 'forecast_category'] },
+    domain: { type: 'enum', values: ['projects', 'quotations', 'expenses', 'sales_pipeline', 'payroll'], required: true },
+    groupBy: { type: 'enum', values: ['category', 'year', 'status', 'client', 'grade', 'forecast_monthly', 'forecast_recurring', 'forecast_category', 'employee', 'forecast_payroll'] },
     metric: { type: 'enum', values: ['total_amount', 'count', 'average_amount', 'balance_amount', 'recurring_runrate'] },
     year: { type: 'integer' },
   },

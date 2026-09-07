@@ -38,6 +38,7 @@ import { EditableTable } from './EditableTable';
 import type { Column } from './EditableTable';
 import DuplicateQuotationDialog from './DuplicateQuotationDialog';
 import { exportQuotationPdf } from '../../utils/calcsheet/pdfExport';
+import { compactLayoutAvailability, type QuotationPdfLayout } from '../../utils/calcsheet/quotationPdfLayout';
 import { exportQuotationXlsx } from '../../utils/calcsheet/xlsxExport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -950,10 +951,10 @@ export default function QuotationEditor() {
   // corporate config present + signed in + project has a folder linked).
   // (Hook declarations live higher up to satisfy rules-of-hooks ordering.)
 
-  const exportPdf = async () => {
+  const exportPdf = async (layout: QuotationPdfLayout = 'standard') => {
     try {
       const { blob, filename } = await exportQuotationPdf(
-        quotation, project, recipient ?? null, customer ?? null, effectiveSalesContacts,
+        quotation, project, recipient ?? null, customer ?? null, effectiveSalesContacts, { layout },
       );
 
       // Use whichever folder is current. After promotion to 'won', the move
@@ -992,6 +993,9 @@ export default function QuotationEditor() {
   };
 
   const exportXlsx = () => exportQuotationXlsx(quotation, project, recipient ?? null, customer ?? null);
+  const compactPdf = compactLayoutAvailability(
+    quotation.generalReqts.length + quotation.components.length + quotation.services.length,
+  );
 
   // Each category's share of the VAT-EX subtotal — helps sanity-check the
   // cost mix (e.g. is Labor too thin relative to Product) while nudging
@@ -1073,12 +1077,24 @@ export default function QuotationEditor() {
           <Button
             startIcon={<PictureAsPdfIcon />}
             variant={isLegacy ? 'contained' : 'outlined'}
-            onClick={exportPdf}
+            onClick={() => exportPdf()}
             disabled={isDirty}
             title={isDirty ? 'Save changes before exporting' : undefined}
           >
             Export PDF
           </Button>
+          {!isLegacy && compactPdf.available && (
+            <Button
+              startIcon={<PictureAsPdfIcon />}
+              variant="contained"
+              color="primary"
+              onClick={() => exportPdf('compact')}
+              disabled={isDirty}
+              title={isDirty ? 'Save changes before exporting' : 'Tighter print layout for a short quotation'}
+            >
+              Compact PDF (1 page)
+            </Button>
+          )}
           <Button
             startIcon={<GridOnIcon />}
             variant="outlined"

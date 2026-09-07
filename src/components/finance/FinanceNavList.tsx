@@ -113,27 +113,29 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
         </Tooltip>
       </ListItem>
 
-      <ListItem disablePadding sx={{ mb: 0.5 }}>
-        <Tooltip title={isExpanded ? '' : 'Finance Analytics'} placement="right" arrow>
-          <ListItemButton
-            selected={location.pathname === '/finance/analytics' || location.pathname === '/analytics/finance'}
-            onClick={() => navigate('/finance/analytics')}
-            sx={navBtnSx(location.pathname === '/finance/analytics' || location.pathname === '/analytics/finance')}
-          >
-            <ListItemIcon sx={iconSx()}>
-              <AutoAwesomeIcon />
-            </ListItemIcon>
-            {isExpanded && (
-              <ListItemText
-                primary="Finance Analytics"
-                secondary="Expense forecasting & formulation"
-                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                sx={{ color: 'white' }}
-              />
-            )}
-          </ListItemButton>
-        </Tooltip>
-      </ListItem>
+      {user?.role !== 'tax_filer' && (
+        <ListItem disablePadding sx={{ mb: 0.5 }}>
+          <Tooltip title={isExpanded ? '' : 'Finance Analytics'} placement="right" arrow>
+            <ListItemButton
+              selected={location.pathname === '/finance/analytics' || location.pathname === '/analytics/finance'}
+              onClick={() => navigate('/finance/analytics')}
+              sx={navBtnSx(location.pathname === '/finance/analytics' || location.pathname === '/analytics/finance')}
+            >
+              <ListItemIcon sx={iconSx()}>
+                <AutoAwesomeIcon />
+              </ListItemIcon>
+              {isExpanded && (
+                <ListItemText
+                  primary="Finance Analytics"
+                  secondary="Expense forecasting & formulation"
+                  secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                  sx={{ color: 'white' }}
+                />
+              )}
+            </ListItemButton>
+          </Tooltip>
+        </ListItem>
+      )}
 
       {/* --- INFLOW & RECEIVABLES --- */}
       {renderSectionHeader('Inflow & Receivables')}
@@ -160,168 +162,21 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
         </Tooltip>
       </ListItem>
 
-      <ListItem disablePadding sx={{ mb: 0.5 }}>
-        <Tooltip title={isExpanded ? '' : 'Statements of Account'} placement="right" arrow>
-          <ListItemButton
-            selected={location.pathname === '/finance/soa' || location.pathname.startsWith('/finance/soa/')}
-            onClick={() => navigate('/finance/soa')}
-            sx={navBtnSx(location.pathname === '/finance/soa' || location.pathname.startsWith('/finance/soa/'))}
-          >
-            <ListItemIcon sx={iconSx()}>
-              <SoaIcon />
-            </ListItemIcon>
-            {isExpanded && (
-              <ListItemText
-                primary="Statements of Account"
-                secondary="Partner (ACTI) & client SOAs"
-                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                sx={{ color: 'white' }}
-              />
-            )}
-          </ListItemButton>
-        </Tooltip>
-      </ListItem>
-
-
-
-      {/* --- OUTFLOW & EXPENSES --- */}
-      {renderSectionHeader('Outflow & Expenses')}
-
-      <ListItem disablePadding sx={{ mb: 0.5 }}>
-        <Tooltip title={isExpanded ? '' : 'Expense Monitoring'} placement="right" arrow>
-          <ListItemButton
-            onClick={() => setExpenseOpen((open) => !open)}
-            sx={navBtnSx(false)}
-          >
-            <ListItemIcon sx={iconSx()}>
-              <ExpenseWalletIcon />
-            </ListItemIcon>
-            {isExpanded && (
-              <>
-                <ListItemText
-                  primary="Expense Monitoring"
-                  secondary="Expenses, CA, liquidation, labor"
-                  secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                  sx={{ color: 'white' }}
-                />
-                {expenseOpen ? <ExpandLessIcon sx={{ color: 'white' }} /> : <ExpandMoreIcon sx={{ color: 'white' }} />}
-              </>
-            )}
-          </ListItemButton>
-        </Tooltip>
-      </ListItem>
-      <Collapse in={expenseOpen && isExpanded} timeout="auto" unmountOnExit>
-        <List component="div" disablePadding sx={{ pl: 2 }}>
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <ListItemButton
-              selected={location.pathname === '/finance/expense-monitoring'}
-              onClick={() => navigate('/finance/expense-monitoring')}
-              sx={navBtnSx(location.pathname === '/finance/expense-monitoring', true)}
-            >
-              <ListItemIcon sx={iconSx(true)}>
-                <ExpenseRegisterIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText
-                primary="Expense Register"
-                primaryTypographyProps={{ fontSize: '0.875rem' }}
-                sx={{ color: 'white' }}
-              />
-            </ListItemButton>
-          </ListItem>
-          {user?.role !== 'tax_filer' && (
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <ListItemButton
-              selected={location.pathname === '/finance/expense-monitoring/ca-form'}
-              onClick={() => navigate('/finance/expense-monitoring/ca-form')}
-              sx={navBtnSx(location.pathname === '/finance/expense-monitoring/ca-form', true)}
-            >
-              <ListItemIcon sx={iconSx(true)}>
-                <CaIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText
-                primary="Cash Advances (CA)"
-                primaryTypographyProps={{ fontSize: '0.875rem' }}
-                sx={{ color: 'white' }}
-              />
-            </ListItemButton>
-          </ListItem>
-          )}
-          {user?.role !== 'tax_filer' && (
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <ListItemButton
-              selected={location.pathname === '/finance/expense-monitoring/liquidation-form'}
-              onClick={() => navigate('/finance/expense-monitoring/liquidation-form')}
-              sx={navBtnSx(location.pathname === '/finance/expense-monitoring/liquidation-form', true)}
-            >
-              <ListItemIcon sx={iconSx(true)}>
-                <LiquidationIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText
-                primary="Liquidation Form"
-                primaryTypographyProps={{ fontSize: '0.875rem' }}
-                sx={{ color: 'white' }}
-              />
-            </ListItemButton>
-          </ListItem>
-          )}
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <ListItemButton
-              selected={location.pathname === '/finance/expense-monitoring/direct-labor'}
-              onClick={() => navigate('/finance/expense-monitoring/direct-labor')}
-              sx={navBtnSx(location.pathname === '/finance/expense-monitoring/direct-labor', true)}
-            >
-              <ListItemIcon sx={iconSx(true)}>
-                <LaborIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText
-                primary="Direct Labor"
-                primaryTypographyProps={{ fontSize: '0.875rem' }}
-                sx={{ color: 'white' }}
-              />
-            </ListItemButton>
-          </ListItem>
-        </List>
-      </Collapse>
-
-      {/* Purchase Orders */}
-      <ListItem disablePadding sx={{ mb: 0.5 }}>
-        <Tooltip title={isExpanded ? '' : 'Purchase Orders'} placement="right" arrow>
-          <ListItemButton
-            selected={location.pathname === '/finance/purchase-order'}
-            onClick={() => navigate('/finance/purchase-order')}
-            sx={navBtnSx(location.pathname === '/finance/purchase-order')}
-          >
-            <ListItemIcon sx={iconSx()}>
-              <PoIcon />
-            </ListItemIcon>
-            {isExpanded && (
-              <ListItemText
-                primary="Purchase Orders"
-                secondary="Supplier POs & procurement"
-                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                sx={{ color: 'white' }}
-              />
-            )}
-          </ListItemButton>
-        </Tooltip>
-      </ListItem>
-
-      {/* Reimbursements — admin / superadmin */}
-      {isAdmin && (
+      {user?.role !== 'tax_filer' && (
         <ListItem disablePadding sx={{ mb: 0.5 }}>
-          <Tooltip title={isExpanded ? '' : 'Reimbursements'} placement="right" arrow>
+          <Tooltip title={isExpanded ? '' : 'Statements of Account'} placement="right" arrow>
             <ListItemButton
-              selected={location.pathname === '/finance/reimbursements'}
-              onClick={() => navigate('/finance/reimbursements')}
-              sx={navBtnSx(location.pathname === '/finance/reimbursements')}
+              selected={location.pathname === '/finance/soa' || location.pathname.startsWith('/finance/soa/')}
+              onClick={() => navigate('/finance/soa')}
+              sx={navBtnSx(location.pathname === '/finance/soa' || location.pathname.startsWith('/finance/soa/'))}
             >
               <ListItemIcon sx={iconSx()}>
-                <ReimbursementIcon />
+                <SoaIcon />
               </ListItemIcon>
               {isExpanded && (
                 <ListItemText
-                  primary="Reimbursements"
-                  secondary="Review & payout claims"
+                  primary="Statements of Account"
+                  secondary="Partner (ACTI) & client SOAs"
                   secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                   sx={{ color: 'white' }}
                 />
@@ -329,6 +184,153 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
             </ListItemButton>
           </Tooltip>
         </ListItem>
+      )}
+
+      {/* --- OUTFLOW & EXPENSES --- */}
+      {user?.role !== 'tax_filer' && (
+        <>
+          {renderSectionHeader('Outflow & Expenses')}
+
+          <ListItem disablePadding sx={{ mb: 0.5 }}>
+            <Tooltip title={isExpanded ? '' : 'Expense Monitoring'} placement="right" arrow>
+              <ListItemButton
+                onClick={() => setExpenseOpen((open) => !open)}
+                sx={navBtnSx(false)}
+              >
+                <ListItemIcon sx={iconSx()}>
+                  <ExpenseWalletIcon />
+                </ListItemIcon>
+                {isExpanded && (
+                  <>
+                    <ListItemText
+                      primary="Expense Monitoring"
+                      secondary="Expenses, CA, liquidation, labor"
+                      secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                      sx={{ color: 'white' }}
+                    />
+                    {expenseOpen ? <ExpandLessIcon sx={{ color: 'white' }} /> : <ExpandMoreIcon sx={{ color: 'white' }} />}
+                  </>
+                )}
+              </ListItemButton>
+            </Tooltip>
+          </ListItem>
+          <Collapse in={expenseOpen && isExpanded} timeout="auto" unmountOnExit>
+            <List component="div" disablePadding sx={{ pl: 2 }}>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/finance/expense-monitoring'}
+                  onClick={() => navigate('/finance/expense-monitoring')}
+                  sx={navBtnSx(location.pathname === '/finance/expense-monitoring', true)}
+                >
+                  <ListItemIcon sx={iconSx(true)}>
+                    <ExpenseRegisterIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Expense Register"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/finance/expense-monitoring/ca-form'}
+                  onClick={() => navigate('/finance/expense-monitoring/ca-form')}
+                  sx={navBtnSx(location.pathname === '/finance/expense-monitoring/ca-form', true)}
+                >
+                  <ListItemIcon sx={iconSx(true)}>
+                    <CaIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Cash Advances (CA)"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/finance/expense-monitoring/liquidation-form'}
+                  onClick={() => navigate('/finance/expense-monitoring/liquidation-form')}
+                  sx={navBtnSx(location.pathname === '/finance/expense-monitoring/liquidation-form', true)}
+                >
+                  <ListItemIcon sx={iconSx(true)}>
+                    <LiquidationIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Liquidation Form"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={location.pathname === '/finance/expense-monitoring/direct-labor'}
+                  onClick={() => navigate('/finance/expense-monitoring/direct-labor')}
+                  sx={navBtnSx(location.pathname === '/finance/expense-monitoring/direct-labor', true)}
+                >
+                  <ListItemIcon sx={iconSx(true)}>
+                    <LaborIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Direct Labor"
+                    primaryTypographyProps={{ fontSize: '0.875rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+            </List>
+          </Collapse>
+
+          {/* Purchase Orders */}
+          <ListItem disablePadding sx={{ mb: 0.5 }}>
+            <Tooltip title={isExpanded ? '' : 'Purchase Orders'} placement="right" arrow>
+              <ListItemButton
+                selected={location.pathname === '/finance/purchase-order'}
+                onClick={() => navigate('/finance/purchase-order')}
+                sx={navBtnSx(location.pathname === '/finance/purchase-order')}
+              >
+                <ListItemIcon sx={iconSx()}>
+                  <PoIcon />
+                </ListItemIcon>
+                {isExpanded && (
+                  <ListItemText
+                    primary="Purchase Orders"
+                    secondary="Supplier POs & procurement"
+                    secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                )}
+              </ListItemButton>
+            </Tooltip>
+          </ListItem>
+
+          {/* Reimbursements — admin / superadmin */}
+          {isAdmin && (
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <Tooltip title={isExpanded ? '' : 'Reimbursements'} placement="right" arrow>
+                <ListItemButton
+                  selected={location.pathname === '/finance/reimbursements'}
+                  onClick={() => navigate('/finance/reimbursements')}
+                  sx={navBtnSx(location.pathname === '/finance/reimbursements')}
+                >
+                  <ListItemIcon sx={iconSx()}>
+                    <ReimbursementIcon />
+                  </ListItemIcon>
+                  {isExpanded && (
+                    <ListItemText
+                      primary="Reimbursements"
+                      secondary="Review & payout claims"
+                      secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                      sx={{ color: 'white' }}
+                    />
+                  )}
+                </ListItemButton>
+              </Tooltip>
+            </ListItem>
+          )}
+        </>
       )}
 
       {/* --- COMPLIANCE & ACCOUNTING --- */}
