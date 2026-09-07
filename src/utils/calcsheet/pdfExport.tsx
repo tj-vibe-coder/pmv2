@@ -10,6 +10,7 @@ import {
 } from './calc';
 import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
 import { quotationRefNo } from './codes';
+import { quotationPdfScale, type QuotationPdfLayout } from './quotationPdfLayout';
 
 // ─── Branding ────────────────────────────────────────────────────────────────
 const PRIMARY = '#2c5aa0';
@@ -240,17 +241,6 @@ function buildStyles(scale: number) {
   });
 }
 
-// Picks a compaction tier from how much content the quotation actually has —
-// item row count plus a rough terms-text length estimate. Few rows and short
-// terms → shrink more aggressively; a normal multi-line quotation stays at
-// full size (scale 1) since it likely spans multiple pages anyway.
-function compactionScale(totalRows: number, termsCharCount: number): number {
-  if (totalRows <= 3 && termsCharCount < 900) return 0.82;
-  if (totalRows <= 6 && termsCharCount < 1200) return 0.9;
-  if (totalRows <= 10 && termsCharCount < 1500) return 0.96;
-  return 1;
-}
-
 // Component description cell: item name as the main line, brand + part number
 // as a muted sub-line underneath (reads like a hand-written spec sheet, not a
 // dash-joined string).
@@ -270,9 +260,10 @@ interface Props {
   recipient: Client | null;
   customer: Client | null;
   salesContacts: SalesContact[];
+  layout: QuotationPdfLayout;
 }
 
-function QuotationDoc({ quotation, project, recipient, customer, salesContacts }: Props) {
+function QuotationDoc({ quotation, project, recipient, customer, salesContacts, layout }: Props) {
   const totals = computeTotals(quotation);
   const issuer = ISSUER_INFO[quotation.kind];
 
@@ -281,7 +272,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
   const termsCharCount = [
     to0.scopeOfWork, to0.exclusions, to0.basisOfProposal, to0.deliveryLines, to0.warrantyExclusion,
   ].reduce((sum, t) => sum + (t?.length || 0), 0);
-  const scale = compactionScale(totalRows, termsCharCount);
+  const scale = quotationPdfScale({ totalRows, termsCharCount, layout });
   const styles = buildStyles(scale);
   const refNo = quotationRefNo(project.code, recipient?.code, quotation.revision);
   const logoUrl = typeof window !== 'undefined' ? `${window.location.origin}${issuer.logo}` : issuer.logo;
@@ -825,7 +816,7 @@ export async function exportQuotationPdf(
   recipient: Client | null,
   customer: Client | null,
   salesContacts: SalesContact[],
-  options: { save?: boolean } = {},
+  options: { save?: boolean; layout?: QuotationPdfLayout } = {},
 ): Promise<{ blob: Blob; filename: string }> {
   const blob = await pdf(
     <QuotationDoc
@@ -834,6 +825,7 @@ export async function exportQuotationPdf(
       recipient={recipient}
       customer={customer}
       salesContacts={salesContacts}
+      layout={options.layout ?? 'standard'}
     />,
   ).toBlob();
 

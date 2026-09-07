@@ -1,5 +1,11 @@
 # Task Log
 
+## 2026-09-07 — Compact one-page quotation export
+
+Added an explicit **Compact PDF (1 page)** action to the Calcsheet quotation editor. It is available for editable quotations with six or fewer item lines and sends the quotation renderer a tighter print-layout request; normal PDF export remains available and long quotations keep their readable standard layout. The threshold and scale selection are covered by `src/utils/calcsheet/quotationPdfLayout.test.ts`.
+
+Verification: focused layout tests passed (3/3) and `npx tsc --noEmit` passed. The full suite ran with 301 passing tests, but the three existing `CollectionsDashboard.test.tsx` cases fail because their component is rendered outside `AuthProvider`. 
+
 ## 2026-08-28 — Tax Filer Role Scope Isolation & Dedicated Compliance Surface
 
 Restricted the `tax_filer` role to dedicated Compliance & Accounting surfaces (Tax Filer Ledger, Sales EWT / 2307, Collections & Settled Ledger) and completely removed Projects, Sales, SOAs, Analytics, and Outflow & Expense operations:
