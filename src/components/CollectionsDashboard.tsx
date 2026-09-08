@@ -85,6 +85,12 @@ const STATUS_LABELS: Record<InvoiceStatus, string> = {
 
 const TODAY = (): string => new Date().toISOString().slice(0, 10);
 
+const fmtEpochDate = (v: number | null | undefined): string => {
+  if (!v) return '—';
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
 // ─── form types ───────────────────────────────────────────────────────────────
 interface InvoiceForm {
   project_id: string;
@@ -775,6 +781,7 @@ export default function CollectionsDashboard() {
         <TableHead>
           <TableRow>
             <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project</TableCell>
+            <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project completed</TableCell>
             <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Customer PO (to ACTI)</TableCell>
             <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>ACTI PO (to IOCT)</TableCell>
             <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>ACTI SI to customer</TableCell>
@@ -798,6 +805,11 @@ export default function CollectionsDashboard() {
                     {[p.project_no, p.project_name].filter(Boolean).join(' · ')}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">{p.account_name}</Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                    {fmtEpochDate(p.updated_completion_date ?? p.completion_date)}
+                  </Typography>
                 </TableCell>
                 <TableCell>
                   <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>{p.po_number || '—'}</Typography>
