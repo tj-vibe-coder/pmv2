@@ -15,6 +15,10 @@ export interface ScheduleTask {
   /** Finish-to-start predecessor task ids. A task with predecessors is
    *  auto-scheduled to start the day after its latest predecessor ends. */
   predecessors?: string[];
+  /** Parent (summary) task id for WBS hierarchy. Null/absent = top level.
+   *  A task that is some other task's parent is a summary — its dates and
+   *  progress roll up from its children and aren't edited directly. */
+  parentId?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

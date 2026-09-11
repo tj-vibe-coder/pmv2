@@ -18,6 +18,7 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import FolderIcon from '@mui/icons-material/Folder';
 import CloudIcon from '@mui/icons-material/Cloud';
 import CloudOffIcon from '@mui/icons-material/CloudOff';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
 import { blurNumberInputOnWheel, parseLenientFloat } from '../../utils/calcsheet/numberInput';
@@ -81,6 +82,21 @@ export default function ProjectDetail() {
   const [poErr, setPoErr] = useState('');
   const [poDeleteTarget, setPoDeleteTarget] = useState<CustomerPO | null>(null);
   const [poDeleteBusy, setPoDeleteBusy] = useState(false);
+
+  // Ad-hoc "drop any file into the project folder" uploads
+  const projectFilesInputRef = useRef<HTMLInputElement | null>(null);
+  const [projectFilesBusy, setProjectFilesBusy] = useState(false);
+  const [projectFilesProgress, setProjectFilesProgress] = useState<{ done: number; total: number } | null>(null);
+  const [projectFilesErr, setProjectFilesErr] = useState('');
+  const [projectFilesDragOver, setProjectFilesDragOver] = useState(false);
+  const [uploadedProjectFiles, setUploadedProjectFiles] = useState<{ name: string; url?: string }[]>([]);
+
+  // In-app OneDrive folder browser (read-only, navigable into subfolders)
+  const [fbOpen, setFbOpen] = useState(false);
+  const [fbStack, setFbStack] = useState<{ id: string; name: string }[]>([]);
+  const [fbItems, setFbItems] = useState<DriveItemRef[]>([]);
+  const [fbLoading, setFbLoading] = useState(false);
+  const [fbErr, setFbErr] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Quotation | null>(null);
   const [duplicateTarget, setDuplicateTarget] = useState<Quotation | null>(null);
   // Non-error info message shown next to the OneDrive buttons. Used to tell the
@@ -294,6 +310,82 @@ export default function ProjectDetail() {
       setPoDeleteTarget(null);
     } finally {
       setPoDeleteBusy(false);
+    }
+  };
+
+  // Upload arbitrary files straight into the project's active OneDrive folder
+  // (proposal folder while the project is open; project/execution folder once
+  // it's won). Creates the folder on the fly if it doesn't exist yet. Files land
+  // at the folder root so the user can organise them from OneDrive afterwards.
+  const uploadProjectFiles = async (fileList: FileList | File[] | null) => {
+    if (!project) return;
+    const MAX_BYTES = 4 * 1024 * 1024; // Graph simple-upload / function payload ceiling
+    const all = Array.from(fileList || []);
+    const oversized = all.filter((f) => f.size > MAX_BYTES).map((f) => f.name);
+    const files = all.filter((f) => f.size <= MAX_BYTES);
+    if (files.length === 0) {
+      setProjectFilesErr(
+        oversized.length
+          ? `Too large (max 4 MB): ${oversized.join(', ')} — add these directly in OneDrive.`
+          : '',
+      );
+      if (projectFilesInputRef.current) projectFilesInputRef.current.value = '';
+      return;
+    }
+    setProjectFilesBusy(true);
+    setProjectFilesErr('');
+    setProjectFilesProgress({ done: 0, total: files.length });
+    try {
+      const token = await getOneDriveToken();
+      if (!token) throw new Error('Not signed in to OneDrive.');
+      const driveId = await resolveCorporateDriveId(token);
+
+      const won = project.status === 'won';
+      let folderId = won ? project.executionFolderId : project.proposalFolderId;
+      if (!folderId) {
+        const ref = won
+          ? await ensureExecutionFolder(token, project)
+          : await ensureProposalFolder(token, project);
+        folderId = ref.id;
+        await updateProject(
+          project.id,
+          won
+            ? { executionFolderId: ref.id, executionFolderUrl: ref.webUrl }
+            : { proposalFolderId: ref.id, proposalFolderUrl: ref.webUrl },
+        );
+      }
+
+      const taken: DriveItemRef[] = await listChildrenById(token, driveId, folderId);
+      const done: { name: string; url?: string }[] = [];
+      const failed: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const name = dedupeFilename(file.name, taken);
+        try {
+          const up = await uploadFileToFolderById(token, driveId, folderId, name, file);
+          taken.push({ id: up.id, name, webUrl: up.webUrl });
+          done.push({ name, url: up.webUrl || undefined });
+        } catch (err) {
+          failed.push(file.name);
+          // eslint-disable-next-line no-console
+          console.warn('[OneDrive] project file upload failed', file.name, err);
+        }
+        setProjectFilesProgress({ done: i + 1, total: files.length });
+      }
+      if (done.length > 0) setUploadedProjectFiles((prev) => [...done, ...prev].slice(0, 50));
+      // Refresh the folder browser if it's open at the root (where uploads land).
+      if (done.length > 0 && fbOpen && fbStack.length === 1) void fbLoad(fbStack);
+      const problems = [
+        ...failed.map((n) => `${n} (upload failed)`),
+        ...oversized.map((n) => `${n} (over 4 MB)`),
+      ];
+      if (problems.length) setProjectFilesErr(`Skipped: ${problems.join(', ')}`);
+    } catch (e) {
+      setProjectFilesErr(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setProjectFilesBusy(false);
+      setProjectFilesProgress(null);
+      if (projectFilesInputRef.current) projectFilesInputRef.current.value = '';
     }
   };
 
@@ -618,6 +710,52 @@ export default function ProjectDetail() {
 
   const hasIoct = quotations.some((q) => q.kind === 'IOCT');
   const hasActi = quotations.some((q) => q.kind === 'ACTI');
+
+  // ── In-app OneDrive folder browser ───────────────────────────────────────
+  // Root is the project's active folder: proposal folder while quoting, the
+  // project/execution folder once won. Read-only — files open in OneDrive.
+  const activeRootFolderId = project.status === 'won' ? project.executionFolderId : project.proposalFolderId;
+  const activeRootFolderLabel = project.status === 'won' ? 'Project folder' : 'Proposal folder';
+
+  const fbLoad = async (stack: { id: string; name: string }[]) => {
+    const target = stack[stack.length - 1];
+    if (!target) return;
+    setFbLoading(true);
+    setFbErr('');
+    try {
+      const token = await getOneDriveToken();
+      if (!token) throw new Error('Not signed in to OneDrive.');
+      const driveId = await resolveCorporateDriveId(token);
+      const items = await listChildrenById(token, driveId, target.id);
+      items.sort((a, b) => {
+        if (!!a.isFolder !== !!b.isFolder) return a.isFolder ? -1 : 1;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      setFbItems(items);
+      setFbStack(stack);
+    } catch (e) {
+      setFbErr(e instanceof Error ? e.message : 'Failed to load folder');
+    } finally {
+      setFbLoading(false);
+    }
+  };
+
+  const openFileBrowser = () => {
+    if (!activeRootFolderId) return;
+    setFbOpen(true);
+    void fbLoad([{ id: activeRootFolderId, name: activeRootFolderLabel }]);
+  };
+  const fbEnter = (item: DriveItemRef) => {
+    if (!item.isFolder || fbLoading) return;
+    void fbLoad([...fbStack, { id: item.id, name: item.name || '…' }]);
+  };
+  const fbGoTo = (index: number) => {
+    if (fbLoading || index === fbStack.length - 1) return;
+    void fbLoad(fbStack.slice(0, index + 1));
+  };
+  const fbRefresh = () => {
+    if (!fbLoading && fbStack.length) void fbLoad(fbStack);
+  };
 
   const openEdit = () => {
     setEditForm({
@@ -1346,6 +1484,249 @@ export default function ProjectDetail() {
                 </Stack>
               ))}
             </Stack>
+          )}
+        </Paper>
+      )}
+
+      {isCorporateOneDriveConfigured() && (
+        <Paper
+          variant="outlined"
+          sx={{
+            p: 2,
+            transition: 'border-color .15s, background-color .15s',
+            ...(projectFilesDragOver && oneDriveSignedIn
+              ? { borderColor: 'primary.main', bgcolor: 'action.hover' }
+              : null),
+          }}
+          onDragEnter={(e) => {
+            if (!oneDriveSignedIn || !e.dataTransfer.types?.includes('Files')) return;
+            e.preventDefault(); e.stopPropagation(); setProjectFilesDragOver(true);
+          }}
+          onDragOver={(e) => {
+            if (!oneDriveSignedIn || !e.dataTransfer.types?.includes('Files')) return;
+            e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy';
+          }}
+          onDragLeave={(e) => {
+            if (!e.dataTransfer.types?.includes('Files')) return;
+            e.preventDefault(); e.stopPropagation(); setProjectFilesDragOver(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault(); e.stopPropagation(); setProjectFilesDragOver(false);
+            if (!oneDriveSignedIn || projectFilesBusy) return;
+            void uploadProjectFiles(e.dataTransfer.files);
+          }}
+        >
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1} sx={{ mb: 1 }}>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Project files</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Uploads straight into the {project.status === 'won' ? 'project' : 'proposal'} folder on OneDrive.
+              </Typography>
+            </Box>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<UploadFileIcon />}
+              disabled={!oneDriveSignedIn || projectFilesBusy}
+              onClick={() => projectFilesInputRef.current?.click()}
+            >
+              {projectFilesBusy ? 'Uploading…' : 'Upload files'}
+            </Button>
+            <input
+              ref={projectFilesInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => { void uploadProjectFiles(e.target.files); }}
+            />
+          </Stack>
+
+          {!oneDriveSignedIn ? (
+            <Typography variant="caption" color="text.secondary">
+              Sign in to OneDrive above to upload files.
+            </Typography>
+          ) : projectFilesProgress ? (
+            <Box sx={{ my: 1 }}>
+              <LinearProgress
+                variant="determinate"
+                value={(projectFilesProgress.done / Math.max(1, projectFilesProgress.total)) * 100}
+              />
+              <Typography variant="caption" color="text.secondary">
+                Uploading {projectFilesProgress.done} / {projectFilesProgress.total}…
+              </Typography>
+            </Box>
+          ) : (
+            <Typography variant="caption" color="text.secondary">
+              Drag &amp; drop files here, or use the button. Max 4&nbsp;MB per file — add larger files directly in OneDrive.
+            </Typography>
+          )}
+
+          {projectFilesErr && (
+            <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.5 }}>
+              {projectFilesErr}
+            </Typography>
+          )}
+
+          {uploadedProjectFiles.length > 0 && (
+            <Stack spacing={0.5} sx={{ mt: 1 }}>
+              <Typography variant="caption" color="success.main">Uploaded this session:</Typography>
+              {uploadedProjectFiles.map((f, i) => (
+                <Stack key={`${f.name}-${i}`} direction="row" alignItems="center" spacing={1}>
+                  <DescriptionIcon fontSize="small" color="action" />
+                  <Typography
+                    variant="body2"
+                    component={f.url ? 'a' : 'span'}
+                    href={f.url || undefined}
+                    target={f.url ? '_blank' : undefined}
+                    rel={f.url ? 'noopener' : undefined}
+                    sx={{ textDecoration: f.url ? 'underline' : 'none', color: f.url ? 'primary.main' : 'text.primary' }}
+                  >
+                    {f.name}
+                  </Typography>
+                </Stack>
+              ))}
+            </Stack>
+          )}
+
+          {oneDriveSignedIn && (
+            activeRootFolderId ? (
+              <Box sx={{ mt: 1.5 }}>
+                <Stack direction="row" alignItems="center" spacing={0.5}>
+                  <Button
+                    size="small"
+                    variant="text"
+                    startIcon={<FolderIcon />}
+                    onClick={() => (fbOpen ? setFbOpen(false) : openFileBrowser())}
+                  >
+                    {fbOpen ? 'Hide folder contents' : 'Browse folder contents'}
+                  </Button>
+                  {fbOpen && (
+                    <Tooltip title="Refresh">
+                      <span>
+                        <IconButton size="small" onClick={fbRefresh} disabled={fbLoading}>
+                          <RefreshIcon fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
+                </Stack>
+
+                {fbOpen && (
+                  <Paper variant="outlined" sx={{ p: 1, mt: 0.5 }}>
+                    <Stack direction="row" spacing={0.25} alignItems="center" flexWrap="wrap" sx={{ rowGap: 0.25, mb: 0.5 }}>
+                      {fbStack.map((crumb, i) => (
+                        <Box key={crumb.id} sx={{ display: 'flex', alignItems: 'center' }}>
+                          {i > 0 && (
+                            <Typography variant="caption" color="text.disabled" sx={{ mx: 0.25 }}>/</Typography>
+                          )}
+                          <Button
+                            size="small"
+                            variant="text"
+                            onClick={() => fbGoTo(i)}
+                            disabled={fbLoading || i === fbStack.length - 1}
+                            sx={{
+                              minWidth: 0,
+                              px: 0.5,
+                              py: 0,
+                              textTransform: 'none',
+                              fontWeight: i === fbStack.length - 1 ? 700 : 400,
+                              color: i === fbStack.length - 1 ? 'text.primary' : 'primary.main',
+                            }}
+                          >
+                            {crumb.name}
+                          </Button>
+                        </Box>
+                      ))}
+                    </Stack>
+
+                    {fbLoading && <LinearProgress />}
+                    {fbErr && (
+                      <Typography variant="caption" color="error.main" sx={{ display: 'block', pl: 0.5 }}>
+                        {fbErr}
+                      </Typography>
+                    )}
+                    {!fbLoading && !fbErr && fbItems.length === 0 && (
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', pl: 0.5, py: 0.5 }}>
+                        This folder is empty.
+                      </Typography>
+                    )}
+
+                    <Stack>
+                      {fbItems.map((item) => (
+                        <Stack
+                          key={item.id}
+                          direction="row"
+                          alignItems="center"
+                          spacing={1}
+                          sx={{ py: 0.5, px: 0.5, borderRadius: 1, '&:hover': { bgcolor: 'action.hover' } }}
+                        >
+                          {item.isFolder ? (
+                            <FolderIcon fontSize="small" sx={{ color: 'warning.main' }} />
+                          ) : (
+                            <DescriptionIcon fontSize="small" color="action" />
+                          )}
+                          {item.isFolder ? (
+                            <Button
+                              variant="text"
+                              size="small"
+                              onClick={() => fbEnter(item)}
+                              disabled={fbLoading}
+                              sx={{
+                                flex: 1,
+                                minWidth: 0,
+                                justifyContent: 'flex-start',
+                                textTransform: 'none',
+                                color: 'text.primary',
+                              }}
+                            >
+                              {item.name}
+                            </Button>
+                          ) : (
+                            <Typography
+                              variant="body2"
+                              component="a"
+                              href={item.webUrl || undefined}
+                              target="_blank"
+                              rel="noopener"
+                              sx={{
+                                flex: 1,
+                                minWidth: 0,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                textDecoration: 'none',
+                                color: 'primary.main',
+                                '&:hover': { textDecoration: 'underline' },
+                              }}
+                            >
+                              {item.name}
+                            </Typography>
+                          )}
+                          <Tooltip title="Open in OneDrive">
+                            <span>
+                              <IconButton
+                                size="small"
+                                component="a"
+                                href={item.webUrl || undefined}
+                                target="_blank"
+                                rel="noopener"
+                                disabled={!item.webUrl}
+                              >
+                                <OpenInNewIcon fontSize="small" />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        </Stack>
+                      ))}
+                    </Stack>
+                  </Paper>
+                )}
+              </Box>
+            ) : (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                Create the {project.status === 'won' ? 'project' : 'proposal'} folder (button above) to browse its contents here.
+              </Typography>
+            )
           )}
         </Paper>
       )}

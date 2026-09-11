@@ -37,6 +37,8 @@ import type {
 import { EditableTable } from './EditableTable';
 import type { Column } from './EditableTable';
 import DuplicateQuotationDialog from './DuplicateQuotationDialog';
+import CopyInclusionsDialog, { type CopiedInclusions } from './CopyInclusionsDialog';
+import LibraryAddIcon from '@mui/icons-material/LibraryAdd';
 import { exportQuotationPdf } from '../../utils/calcsheet/pdfExport';
 import { compactLayoutAvailability, type QuotationPdfLayout } from '../../utils/calcsheet/quotationPdfLayout';
 import { exportQuotationXlsx } from '../../utils/calcsheet/xlsxExport';
@@ -360,6 +362,21 @@ export default function QuotationEditor() {
   // Saved-version history (snapshots captured server-side on every save).
   const [historyOpen, setHistoryOpen] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
+
+  // Append copied inclusions (from another quotation) into the current draft.
+  const handleCopyInclusions = (picked: CopiedInclusions) => {
+    setDraft((d) => d ? {
+      ...d,
+      generalReqts: [...d.generalReqts, ...picked.generalReqts],
+      components: [...d.components, ...picked.components],
+      services: [...d.services, ...picked.services],
+      manpower: [...d.manpower, ...picked.manpower],
+      ...(picked.terms ? { termsOverrides: { ...d.termsOverrides, ...picked.terms } } : {}),
+    } : d);
+    setCopyOpen(false);
+    setToast({ msg: 'Inclusions copied — review and Save.', sev: 'success' });
+  };
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [versions, setVersions] = useState<QuotationVersion[]>([]);
@@ -1113,6 +1130,17 @@ export default function QuotationEditor() {
           >
             Duplicate
           </Button>
+          {!isLegacy && (
+            <Button
+              startIcon={<LibraryAddIcon />}
+              variant="outlined"
+              color="inherit"
+              onClick={() => setCopyOpen(true)}
+              title="Copy general requirements, components, services or manpower from another quotation"
+            >
+              Copy from…
+            </Button>
+          )}
           <Button
             startIcon={<HistoryIcon />}
             variant="outlined"
@@ -1919,6 +1947,13 @@ export default function QuotationEditor() {
           setDuplicateOpen(false);
           navigate(`/sales/calcsheet/quotations/${copy.id}`);
         }}
+      />
+
+      <CopyInclusionsDialog
+        open={copyOpen}
+        currentQuotationId={quotation.id}
+        onClose={() => setCopyOpen(false)}
+        onCopy={handleCopyInclusions}
       />
 
       <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} maxWidth="md" fullWidth>

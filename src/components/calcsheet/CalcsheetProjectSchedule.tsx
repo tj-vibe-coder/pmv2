@@ -16,6 +16,10 @@ import HistoryIcon from '@mui/icons-material/History';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import FormatIndentIncreaseIcon from '@mui/icons-material/FormatIndentIncrease';
+import FormatIndentDecreaseIcon from '@mui/icons-material/FormatIndentDecrease';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { ServiceLine, Quotation } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
@@ -27,6 +31,7 @@ import {
 import { exportScheduleXlsx } from '../../utils/calcsheet/scheduleXlsxExport';
 import { exportSchedulePdf } from '../../utils/calcsheet/schedulePdfExport';
 import { autoSchedule, wouldCycle, criticalPath } from '../../utils/calcsheet/scheduleAuto';
+import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../../utils/calcsheet/scheduleTree';
 import {
   SCHEDULE_CATEGORY_COLORS, SCHEDULE_TASK_CATEGORIES, type ScheduleTask,
 } from '../../types/ScheduleTask';
@@ -69,10 +74,11 @@ interface TaskFormState {
   isMilestone: boolean;
   notes: string;
   predecessors: string[];
+  parentId: string | null;
 }
 
 const emptyForm = (): TaskFormState => ({
-  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', predecessors: [],
+  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', predecessors: [], parentId: null,
 });
 
 // Best-effort category guess from a service line's description, so imported
@@ -150,6 +156,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set()); // empty = all
   const [milestonesOnly, setMilestonesOnly] = useState(false);
   const [showCritical, setShowCritical] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed summary ids
 
   // Working-day calendar: durations & auto-scheduling skip weekends. Persisted per project.
   const [workingDays, setWorkingDays] = useState<boolean>(() => {
@@ -194,14 +201,16 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   );
 
   const range = useMemo(() => {
-    if (sorted.length === 0) {
+    // Span the LEAF tasks (they define the true project extent; summaries roll up within).
+    const leaves = leafTasks(tasks);
+    if (leaves.length === 0) {
       const start = toDate(todayStr());
       const end = new Date(start.getTime() + 27 * MS_PER_DAY);
       return { start, end };
     }
-    let min = toDate(sorted[0].startDate);
-    let max = toDate(sorted[0].endDate);
-    for (const t of sorted) {
+    let min = toDate(leaves[0].startDate);
+    let max = toDate(leaves[0].endDate);
+    for (const t of leaves) {
       const s = toDate(t.startDate);
       const e = toDate(t.endDate);
       if (s < min) min = s;
@@ -211,7 +220,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     min = new Date(min.getTime() - 2 * MS_PER_DAY);
     max = new Date(max.getTime() + 2 * MS_PER_DAY);
     return { start: min, end: max };
-  }, [sorted]);
+  }, [tasks]);
 
   const totalDays = Math.max(1, daysBetween(range.start, range.end));
 
@@ -263,22 +272,29 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     return SCHEDULE_TASK_CATEGORIES.filter((c) => set.has(c));
   }, [tasks]);
 
-  // Rows actually shown, after the category / milestones-only filters.
-  const visible = useMemo(() => sorted.filter((t) => {
-    if (milestonesOnly && !t.isMilestone) return false;
-    if (categoryFilter.size > 0 && !categoryFilter.has(t.category || 'Other')) return false;
-    return true;
-  }), [sorted, milestonesOnly, categoryFilter]);
+  // WBS: summary tasks carry rolled-up dates/progress; rows are the flattened
+  // tree (respecting collapse) after the category / milestones-only filters.
+  const rolledTasks = useMemo(() => rollUp(tasks), [tasks]);
+  const visibleRows = useMemo(() => {
+    const rows = flattenTree(rolledTasks, collapsed);
+    return rows.filter((r) => {
+      if (r.isSummary) return true; // keep structure even if children are filtered
+      if (milestonesOnly && !r.task.isMilestone) return false;
+      if (categoryFilter.size > 0 && !categoryFilter.has(r.task.category || 'Other')) return false;
+      return true;
+    });
+  }, [rolledTasks, collapsed, milestonesOnly, categoryFilter]);
 
-  // Finish-to-start dependency connectors between visible bars (predecessor end → successor start).
+  // Finish-to-start dependency connectors between visible bars.
   const depArrows = useMemo(() => {
-    const idxById = new Map(visible.map((t, i) => [t.id, i]));
+    const idxById = new Map(visibleRows.map((r, i) => [r.task.id, i]));
     const out: { key: string; x1: number; y1: number; x2: number; y2: number; pid: string; sid: string }[] = [];
-    visible.forEach((s, si) => {
+    visibleRows.forEach((row, si) => {
+      const s = row.task;
       (s.predecessors || []).forEach((pid) => {
         const pi = idxById.get(pid);
         if (pi === undefined) return;
-        const p = visible[pi];
+        const p = visibleRows[pi].task;
         const pStartX = daysBetween(range.start, toDate(p.startDate)) * DAY_WIDTH;
         const x1 = p.isMilestone ? pStartX + DAY_WIDTH : pStartX + Math.max(DAY_WIDTH, (daysBetween(toDate(p.startDate), toDate(p.endDate)) + 1) * DAY_WIDTH);
         const sStartX = daysBetween(range.start, toDate(s.startDate)) * DAY_WIDTH;
@@ -287,23 +303,24 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       });
     });
     return out;
-  }, [visible, range]);
+  }, [visibleRows, range]);
 
-  // Critical path (zero-slack tasks). Computed over the whole schedule.
+  // Critical path over LEAF tasks (summaries roll up, aren't scheduled).
   const criticalIds = useMemo(
-    () => (showCritical ? criticalPath(sorted, workingDays) : new Set<string>()),
-    [showCritical, sorted, workingDays],
+    () => (showCritical ? criticalPath(leafTasks(tasks), workingDays) : new Set<string>()),
+    [showCritical, tasks, workingDays],
   );
 
-  // Project-level roll-up (always over ALL tasks, not the filtered view).
+  // Project-level roll-up — over leaf tasks so summaries aren't double-counted.
   const summary = useMemo(() => {
-    if (sorted.length === 0) return null;
-    let minStart = sorted[0].startDate;
-    let maxEnd = sorted[0].endDate;
+    const leaves = leafTasks(tasks);
+    if (leaves.length === 0) return null;
+    let minStart = leaves[0].startDate;
+    let maxEnd = leaves[0].endDate;
     let weightedProgress = 0;
     let weightDays = 0;
     let overdue = 0;
-    for (const t of sorted) {
+    for (const t of leaves) {
       if (t.startDate < minStart) minStart = t.startDate;
       if (t.endDate > maxEnd) maxEnd = t.endDate;
       const dur = t.isMilestone ? 1 : Math.max(1, durationOf(t.startDate, t.endDate));
@@ -318,13 +335,47 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       pctComplete: weightDays > 0 ? Math.round(weightedProgress / weightDays) : 0,
       overdue,
     };
-  }, [sorted]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleCategoryFilter = (c: string) => setCategoryFilter((prev) => {
     const next = new Set(prev);
     if (next.has(c)) next.delete(c); else next.add(c);
     return next;
   });
+
+  // ── WBS hierarchy ───────────────────────────────────────────────────────
+  const toggleCollapse = (id: string) => setCollapsed((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  // Indent: nest under the nearest preceding row at the same depth.
+  const indentTask = async (row: TreeRow) => {
+    const idx = visibleRows.findIndex((r) => r.task.id === row.task.id);
+    let parent: string | null = null;
+    for (let i = idx - 1; i >= 0; i--) {
+      if (visibleRows[i].depth === row.depth) { parent = visibleRows[i].task.id; break; }
+      if (visibleRows[i].depth < row.depth) break;
+    }
+    if (!parent) return;
+    const p = parent;
+    try {
+      await api('PUT', `/api/schedule-tasks/${row.task.id}`, { parentId: p });
+      setTasks((prev) => prev.map((t) => (t.id === row.task.id ? { ...t, parentId: p } : t)));
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Indent failed'); }
+  };
+
+  // Outdent: move up one level (new parent = current grandparent, or top level).
+  const outdentTask = async (row: TreeRow) => {
+    const cur = tasks.find((t) => t.id === row.task.id);
+    if (!cur || !cur.parentId) return;
+    const grand = tasks.find((t) => t.id === cur.parentId)?.parentId ?? null;
+    try {
+      await api('PUT', `/api/schedule-tasks/${row.task.id}`, { parentId: grand });
+      setTasks((prev) => prev.map((t) => (t.id === row.task.id ? { ...t, parentId: grand } : t)));
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Outdent failed'); }
+  };
 
   const openAdd = () => {
     setEditingId(null);
@@ -340,6 +391,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       durationDays: t.isMilestone ? 1 : (t.durationDays ?? workingDaysBetween(t.startDate, t.endDate, workingDays)),
       progressPct: t.progressPct, isMilestone: t.isMilestone, notes: t.notes || '',
       predecessors: t.predecessors || [],
+      parentId: t.parentId ?? null,
     });
     setFormErr('');
     setDialogOpen(true);
@@ -389,7 +441,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     const payload = {
       name: form.name, category: form.category, startDate, endDate, durationDays: duration,
       progressPct: form.progressPct, isMilestone: form.isMilestone, notes: form.notes,
-      predecessors: form.predecessors,
+      predecessors: form.predecessors, parentId: form.parentId,
     };
     setSaving(true);
     setFormErr('');
@@ -511,7 +563,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     setExportBusy('xlsx');
     setExportErr('');
     try {
-      await exportScheduleXlsx({ code, name }, sorted);
+      await exportScheduleXlsx({ code, name }, flattenTree(rolledTasks, new Set()).map((r) => r.task));
     } catch (e) {
       setExportErr(e instanceof Error ? e.message : 'Excel export failed');
     } finally {
@@ -523,7 +575,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     setExportBusy('pdf');
     setExportErr('');
     try {
-      await exportSchedulePdf({ code, name }, sorted);
+      await exportSchedulePdf({ code, name }, flattenTree(rolledTasks, new Set()).map((r) => r.task));
     } catch (e) {
       setExportErr(e instanceof Error ? e.message : 'PDF export failed');
     } finally {
@@ -861,43 +913,55 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         </Paper>
       )}
 
-      {sorted.length > 0 && visible.length === 0 && (
+      {sorted.length > 0 && visibleRows.length === 0 && (
         <Paper sx={{ p: 3, textAlign: 'center' }}>
           <Typography color="text.secondary">No tasks match the current filters.</Typography>
         </Paper>
       )}
 
-      {visible.length > 0 && (
+      {visibleRows.length > 0 && (
         <Paper sx={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-          <Box sx={{ display: 'flex', minWidth: 280 + totalDays * DAY_WIDTH }}>
+          <Box sx={{ display: 'flex', minWidth: 340 + totalDays * DAY_WIDTH }}>
             {/* Task label column */}
-            <Box sx={{ width: 280, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', position: 'sticky', left: 0, bgcolor: 'background.paper', zIndex: 2 }}>
+            <Box sx={{ width: 340, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', position: 'sticky', left: 0, bgcolor: 'background.paper', zIndex: 2 }}>
               <Box sx={{ height: 48, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', px: 1.5 }}>
                 <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>TASK</Typography>
               </Box>
-              {visible.map((t) => (
-                <Box key={t.id} sx={{ height: 44, display: 'flex', alignItems: 'center', px: 1.5, borderBottom: '1px solid', borderColor: 'divider', gap: 0.75 }}>
-                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: SCHEDULE_CATEGORY_COLORS[t.category || 'Other'] || NET_PACIFIC_COLORS.info, flexShrink: 0 }} />
-                  <Tooltip title={isOverdue(t) ? `${t.name} — overdue` : t.name}>
-                    <Typography variant="body2" noWrap sx={{ flex: 1, fontWeight: t.isMilestone ? 700 : 400, color: isOverdue(t) ? 'error.main' : 'inherit' }}>
-                      {t.name}
-                    </Typography>
-                  </Tooltip>
-                  <IconButton size="small" onClick={() => openEdit(t)}><EditIcon sx={{ fontSize: 15 }} /></IconButton>
-                  <IconButton size="small" onClick={() => setDeleteTarget(t)}><DeleteIcon sx={{ fontSize: 15 }} /></IconButton>
-                </Box>
-              ))}
+              {visibleRows.map((row) => {
+                const t = row.task;
+                return (
+                  <Box key={t.id} sx={{ height: 44, display: 'flex', alignItems: 'center', pr: 1, borderBottom: '1px solid', borderColor: 'divider', gap: 0.25, pl: `${8 + row.depth * 16}px` }}>
+                    {row.hasChildren ? (
+                      <IconButton size="small" sx={{ p: 0.25 }} onClick={() => toggleCollapse(t.id)}>
+                        {collapsed.has(t.id) ? <KeyboardArrowRightIcon sx={{ fontSize: 18 }} /> : <KeyboardArrowDownIcon sx={{ fontSize: 18 }} />}
+                      </IconButton>
+                    ) : <Box sx={{ width: 22, flexShrink: 0 }} />}
+                    {!row.isSummary && (
+                      <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: SCHEDULE_CATEGORY_COLORS[t.category || 'Other'] || NET_PACIFIC_COLORS.info, flexShrink: 0 }} />
+                    )}
+                    <Tooltip title={isOverdue(t) ? `${t.name} — overdue` : t.name}>
+                      <Typography variant="body2" noWrap sx={{ flex: 1, fontWeight: (row.isSummary || t.isMilestone) ? 700 : 400, color: isOverdue(t) ? 'error.main' : 'inherit' }}>
+                        {t.name}
+                      </Typography>
+                    </Tooltip>
+                    <Tooltip title="Outdent"><IconButton size="small" sx={{ p: 0.25 }} onClick={() => void outdentTask(row)}><FormatIndentDecreaseIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
+                    <Tooltip title="Indent"><IconButton size="small" sx={{ p: 0.25 }} onClick={() => void indentTask(row)}><FormatIndentIncreaseIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
+                    <IconButton size="small" sx={{ p: 0.25 }} onClick={() => openEdit(t)}><EditIcon sx={{ fontSize: 15 }} /></IconButton>
+                    <IconButton size="small" sx={{ p: 0.25 }} onClick={() => setDeleteTarget(t)}><DeleteIcon sx={{ fontSize: 15 }} /></IconButton>
+                  </Box>
+                );
+              })}
             </Box>
 
             {/* Timeline */}
             <Box sx={{ position: 'relative' }}>
               {/* Weekend shading (behind the rows) */}
               {weekendOffsets.map((d) => (
-                <Box key={`we-${d}`} sx={{ position: 'absolute', top: 48, left: d * DAY_WIDTH, width: DAY_WIDTH, height: visible.length * 44, bgcolor: 'rgba(0,0,0,0.035)', pointerEvents: 'none', zIndex: 0 }} />
+                <Box key={`we-${d}`} sx={{ position: 'absolute', top: 48, left: d * DAY_WIDTH, width: DAY_WIDTH, height: visibleRows.length * 44, bgcolor: 'rgba(0,0,0,0.035)', pointerEvents: 'none', zIndex: 0 }} />
               ))}
               {/* Today marker (on top, non-interactive) */}
               {todayOffset !== null && (
-                <Box sx={{ position: 'absolute', top: 0, left: todayOffset, width: 2, height: 48 + visible.length * 44, bgcolor: NET_PACIFIC_COLORS.error, pointerEvents: 'none', zIndex: 3 }}>
+                <Box sx={{ position: 'absolute', top: 0, left: todayOffset, width: 2, height: 48 + visibleRows.length * 44, bgcolor: NET_PACIFIC_COLORS.error, pointerEvents: 'none', zIndex: 3 }}>
                   <Box sx={{ position: 'absolute', top: 2, left: 3, px: 0.5, borderRadius: 0.5, bgcolor: NET_PACIFIC_COLORS.error, color: '#fff', fontSize: '0.6rem', fontWeight: 700, lineHeight: 1.4, whiteSpace: 'nowrap' }}>
                     Today
                   </Box>
@@ -906,7 +970,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               {/* Dependency connectors (finish-to-start) */}
               {depArrows.length > 0 && (
                 <svg
-                  style={{ position: 'absolute', top: 48, left: 0, width: totalDays * DAY_WIDTH, height: visible.length * 44, pointerEvents: 'none', zIndex: 2, overflow: 'visible' }}
+                  style={{ position: 'absolute', top: 48, left: 0, width: totalDays * DAY_WIDTH, height: visibleRows.length * 44, pointerEvents: 'none', zIndex: 2, overflow: 'visible' }}
                 >
                   <defs>
                     <marker id="depArrowHead" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
@@ -936,7 +1000,8 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                   </Box>
                 ))}
               </Box>
-              {visible.map((t) => {
+              {visibleRows.map((row) => {
+                const t = row.task;
                 const offset = daysBetween(range.start, toDate(t.startDate)) * DAY_WIDTH;
                 const width = Math.max(DAY_WIDTH, (daysBetween(toDate(t.startDate), toDate(t.endDate)) + 1) * DAY_WIDTH);
                 const overdue = isOverdue(t);
@@ -945,7 +1010,13 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 const isDragging = draggingTaskId === t.id;
                 return (
                   <Box key={t.id} sx={{ height: 44, position: 'relative', borderBottom: '1px solid', borderColor: 'divider' }}>
-                    {t.isMilestone ? (
+                    {row.isSummary ? (
+                      <Tooltip title={`${t.name} — ${fmt(toDate(t.startDate))} to ${fmt(toDate(t.endDate))} (${t.progressPct}%)`}>
+                        <Box sx={{ position: 'absolute', left: offset, top: 17, width, height: 10, bgcolor: '#616161', borderRadius: 0.5, overflow: 'hidden' }}>
+                          <Box sx={{ height: '100%', width: `${Math.min(100, Math.max(0, t.progressPct))}%`, bgcolor: '#2f2f2f' }} />
+                        </Box>
+                      </Tooltip>
+                    ) : t.isMilestone ? (
                       <Tooltip title={isDragging ? '' : `${t.name} — ${fmt(toDate(t.startDate))} · drag to move`}>
                         <Box
                           onMouseDown={(e) => startDrag(e, t, 'move')}
@@ -1033,7 +1104,26 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               </Typography>
             )}
             {(() => {
-              const cands = tasks.filter((t) => t.id !== editingId && (!editingId || !wouldCycle(tasks, editingId, t.id)));
+              // Parent options: any task except self and its own descendants (no cycles).
+              const desc = editingId ? descendantIds(tasks, editingId) : new Set<string>();
+              const parentCands = tasks.filter((t) => t.id !== editingId && !desc.has(t.id));
+              return (
+                <TextField
+                  select fullWidth label="Parent (phase / summary)"
+                  value={form.parentId || ''}
+                  onChange={(e) => setForm((f) => ({ ...f, parentId: e.target.value || null }))}
+                  helperText="Nest this task under a phase — that task becomes a summary and rolls up."
+                >
+                  <MenuItem value=""><em>None (top level)</em></MenuItem>
+                  {parentCands.map((t) => (
+                    <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
+                  ))}
+                </TextField>
+              );
+            })()}
+            {(() => {
+              const summaryIds = new Set(tasks.filter((t) => t.parentId).map((t) => t.parentId));
+              const cands = tasks.filter((t) => t.id !== editingId && !summaryIds.has(t.id) && (!editingId || !wouldCycle(tasks, editingId, t.id)));
               return (
                 <TextField
                   select fullWidth label="Predecessors (finish-to-start)"

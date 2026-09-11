@@ -3969,9 +3969,10 @@ async function copyScheduleTasksToProject(fromProjectId, toProjectId) {
   let batch = db.batch();
   let count = 0;
   for (const it of items) {
-    const { id: _id, projectId: _pid, createdAt: _c, updatedAt: _u, predecessors, ...rest } = it.data;
+    const { id: _id, projectId: _pid, createdAt: _c, updatedAt: _u, predecessors, parentId, ...rest } = it.data;
     const remapped = Array.isArray(predecessors) ? predecessors.map((p) => idMap.get(p)).filter(Boolean) : undefined;
-    batch.set(it.ref, stripUndefinedFields({ ...rest, predecessors: remapped, projectId: String(toProjectId), createdAt: now, updatedAt: now }));
+    const newParent = parentId ? (idMap.get(parentId) || null) : null;
+    batch.set(it.ref, stripUndefinedFields({ ...rest, predecessors: remapped, parentId: newParent, projectId: String(toProjectId), createdAt: now, updatedAt: now }));
     count += 1;
     if (count % 400 === 0) { await batch.commit(); batch = db.batch(); }
   }
@@ -3989,10 +3990,13 @@ async function syncScheduleProgressToMonitoringProject(projectId) {
   if (!projDoc.exists) return;
   const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
   if (snap.empty) return;
+  // Only leaf tasks contribute — WBS summary tasks roll up and would double-count.
+  const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const parents = new Set(rows.filter((t) => t.parentId).map((t) => String(t.parentId)));
+  const leaves = rows.filter((t) => !parents.has(String(t.id)));
   let weighted = 0;
   let weight = 0;
-  for (const d of snap.docs) {
-    const t = d.data();
+  for (const t of leaves) {
     const start = new Date(t.startDate).getTime();
     const end = new Date(t.endDate).getTime();
     const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
@@ -4564,9 +4568,10 @@ app.post('/api/schedule-versions/:id/restore', async (req, res) => {
     const items = (v.tasks || []).map((t) => ({ t, ref: db.collection('calcsheet_schedule_tasks').doc() }));
     const idMap = new Map(items.filter((it) => it.t.id).map((it) => [it.t.id, it.ref.id]));
     items.forEach(({ t, ref }) => {
-      const { id: _i, projectId: _p, createdAt: _c, updatedAt: _u, predecessors, ...rest } = t;
+      const { id: _i, projectId: _p, createdAt: _c, updatedAt: _u, predecessors, parentId, ...rest } = t;
       const remapped = Array.isArray(predecessors) ? predecessors.map((p) => idMap.get(p)).filter(Boolean) : undefined;
-      batch.set(ref, stripUndefinedFields({ ...rest, predecessors: remapped, projectId, createdAt: now, updatedAt: now }));
+      const newParent = parentId ? (idMap.get(parentId) || null) : null;
+      batch.set(ref, stripUndefinedFields({ ...rest, predecessors: remapped, parentId: newParent, projectId, createdAt: now, updatedAt: now }));
     });
     await batch.commit();
     await syncScheduleProgressToMonitoringProject(projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
