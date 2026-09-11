@@ -179,6 +179,8 @@ export default function CAFormPage() {
   const [error, setError] = useState<string | null>(null);
   const [snackbar, setSnackbar] = useState<string | null>(null);
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
+  const [onBehalfUsers, setOnBehalfUsers] = useState<{ id: string; full_name?: string; username?: string }[]>([]);
+  const [onBehalfUserId, setOnBehalfUserId] = useState('');
   const [purpose, setPurpose] = useState('');
   const [dateRequested, setDateRequested] = useState(() => new Date().toISOString().slice(0, 10));
   const [breakdown, setBreakdown] = useState<BreakdownItem[]>([{ _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
@@ -275,6 +277,15 @@ export default function CAFormPage() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const token = localStorage.getItem('netpacific_token');
+    fetch(`${API_BASE}/api/users`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then((res) => res.json())
+      .then((data) => { if (data.success && Array.isArray(data.users)) setOnBehalfUsers(data.users); })
+      .catch(() => {});
+  }, [isAdmin]);
 
   const handleFundingInvestorChange = async (investor: string) => {
     setFundingInvestor(investor);
@@ -744,6 +755,7 @@ export default function CAFormPage() {
           date_requested: dateRequested || undefined,
           breakdown: items.length > 0 ? items : undefined,
           ...(fundingSource ? { fundingSource } : {}),
+          ...(isAdmin && onBehalfUserId ? { on_behalf_of_user_id: onBehalfUserId } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -754,6 +766,7 @@ export default function CAFormPage() {
         setDateRequested(new Date().toISOString().slice(0, 10));
         setSelectedProject(null);
         setPurpose('');
+        setOnBehalfUserId('');
         setBreakdown([{ _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
         setFundingType('corporate_bank');
         setFundingInvestor('');
@@ -912,6 +925,25 @@ export default function CAFormPage() {
             />
           )}
         </Box>
+
+        {isAdmin && (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'flex-start', mb: 2 }}>
+            <TextField
+              select
+              size="small"
+              label="Requesting for"
+              value={onBehalfUserId}
+              onChange={(e) => setOnBehalfUserId(e.target.value)}
+              helperText="Leave as yourself unless submitting on behalf of another employee"
+              sx={{ minWidth: 260 }}
+            >
+              <MenuItem value="">Myself ({user?.full_name || user?.username})</MenuItem>
+              {onBehalfUsers.filter((u) => String(u.id) !== String(user?.id)).map((u) => (
+                <MenuItem key={u.id} value={u.id}>{u.full_name || u.username}</MenuItem>
+              ))}
+            </TextField>
+          </Box>
+        )}
 
         {isAdmin && (
           <>

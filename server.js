@@ -1733,28 +1733,13 @@ app.post('/api/overhead-expenses/:id/promote-to-liquidation', promoteExpenseToLi
 
 function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// Human-readable CA reference number. Per-project sequence when the CA is tied
-// to a project with a project_no (e.g. IOCT2606001-CA01); otherwise a global
-// monthly fallback (e.g. CA2606-001) for out-of-project / prospect CAs.
+// Human-readable CA reference number: a single global monthly sequence
+// (e.g. CA2606-001) for every CA regardless of project. Project traceability
+// lives on the record itself (project_id/project_no/project_name), not in
+// the number, so the sequence stays gapless/auditable per type+period.
 // Scan-max with no transaction — same approach as nextIoctProjectNo() and
 // /api/liquidations/next-form-no; volume is low and `id` stays the real key.
-async function nextCaNo(projectId, dateLike) {
-  let projectNo = null;
-  if (projectId) {
-    const pDoc = await db.collection('projects').doc(String(projectId)).get();
-    if (pDoc.exists) projectNo = String(pDoc.data().project_no || '').trim().toUpperCase() || null;
-  }
-  if (projectNo) {
-    const snap = await db.collection('cash_advances')
-      .where('project_id', '==', String(projectId)).select('ca_no').get();
-    const re = new RegExp(`^${escapeRegExp(projectNo)}-CA(\\d+)$`);
-    let max = 0;
-    for (const d of snap.docs) {
-      const m = String(d.data().ca_no || '').trim().toUpperCase().match(re);
-      if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > max) max = n; }
-    }
-    return `${projectNo}-CA${String(max + 1).padStart(2, '0')}`;
-  }
+async function nextCaNo(dateLike) {
   const prefix = `CA${phYearMonth(dateLike)}-`;
   const snap = await db.collection('cash_advances').select('ca_no').get();
   const re = new RegExp(`^${escapeRegExp(prefix)}(\\d{3})$`);
@@ -1826,9 +1811,17 @@ app.post('/api/cash-advances', async (req, res) => {
   // PATCH /api/cash-advances/:id/funding.
   const isAdminRequester = user.role === 'superadmin' || user.role === 'admin';
   const fundingSource = isAdminRequester ? normalizeFundingSource(req.body.fundingSource) : null;
+  // Only an admin/superadmin may attribute the CA to someone other than themselves.
+  let ownerId = user.id;
+  const onBehalfOfUserId = req.body.on_behalf_of_user_id != null ? String(req.body.on_behalf_of_user_id).trim() : '';
+  if (isAdminRequester && onBehalfOfUserId && onBehalfOfUserId !== user.id) {
+    const targetDoc = await db.collection('users').doc(onBehalfOfUserId).get();
+    if (!targetDoc.exists) return res.status(400).json({ success: false, error: 'Selected employee not found' });
+    ownerId = onBehalfOfUserId;
+  }
   try {
-    const caNo = await nextCaNo(projectId, new Date(requestedAt * 1000));
-    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt, ...(fundingSource ? { fundingSource } : {}) });
+    const caNo = await nextCaNo(new Date(requestedAt * 1000));
+    const ref = await db.collection('cash_advances').add({ user_id: ownerId, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_by: ownerId !== user.id ? user.id : null, created_at: requestedAt, updated_at: requestedAt, ...(fundingSource ? { fundingSource } : {}) });
     res.status(201).json({ success: true, id: ref.id, ca_no: caNo, message: `Cash advance ${caNo} requested` });
   } catch (err) {
     console.error('Error creating cash advance:', err);
