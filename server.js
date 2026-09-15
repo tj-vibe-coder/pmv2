@@ -4423,6 +4423,63 @@ app.delete('/api/calcsheet/presets/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to delete preset' }); }
 });
 
+// ── Scope Library (reusable inclusion bundles) ───────────────────────────────
+// Team-shared named sets of general requirements / components / services /
+// manpower (+ optional scope/exclusions text) that can be inserted into any
+// quotation. Mirrors the presets CRUD. Collection: calcsheet_scope_library.
+app.get('/api/calcsheet/scope-library', async (req, res) => {
+  try {
+    const snap = await db.collection('calcsheet_scope_library').get();
+    // Spread data first so a stray stored `id` can't clobber the doc id; sort
+    // newest-first in memory (avoids requiring an `updatedAt` field/index on
+    // every doc, matching the version-history read pattern).
+    const bundles = snap.docs
+      .map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; })
+      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    res.json({ success: true, bundles });
+  } catch (err) { res.status(500).json({ error: 'Failed to get scope library' }); }
+});
+
+app.post('/api/calcsheet/scope-library', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    // Strip any client-supplied `id`, and stamp attribution + timestamps
+    // server-side so the created bundle's id is the canonical Firestore ref.id.
+    const { id: _ignored, ...data } = req.body || {};
+    const now = new Date().toISOString();
+    const doc = {
+      ...data,
+      createdBy: user.id || null,
+      createdByName: user.full_name || user.username || null,
+      createdAt: data.createdAt || now,
+      updatedAt: now,
+    };
+    const ref = await db.collection('calcsheet_scope_library').add(doc);
+    res.json({ success: true, bundle: { ...doc, id: ref.id } });
+  } catch (err) { res.status(500).json({ error: 'Failed to save scope bundle' }); }
+});
+
+app.put('/api/calcsheet/scope-library/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { id: _ignored, ...patch } = req.body || {};
+    await db.collection('calcsheet_scope_library').doc(req.params.id)
+      .update({ ...patch, updatedAt: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update scope bundle' }); }
+});
+
+app.delete('/api/calcsheet/scope-library/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    await db.collection('calcsheet_scope_library').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete scope bundle' }); }
+});
+
 // ── Project work schedule (Gantt) tasks ───────────────────────────────────────
 // Equality-only filter on projectId, sorted in memory — no composite index
 // needed (see project_expenses above for why that matters on this repo's

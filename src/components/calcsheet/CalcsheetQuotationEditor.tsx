@@ -38,7 +38,9 @@ import { EditableTable } from './EditableTable';
 import type { Column } from './EditableTable';
 import DuplicateQuotationDialog from './DuplicateQuotationDialog';
 import CopyInclusionsDialog, { type CopiedInclusions } from './CopyInclusionsDialog';
+import ScopeLibraryDialog from './ScopeLibraryDialog';
 import LibraryAddIcon from '@mui/icons-material/LibraryAdd';
+import BookmarksIcon from '@mui/icons-material/Bookmarks';
 import { exportQuotationPdf } from '../../utils/calcsheet/pdfExport';
 import { compactLayoutAvailability, type QuotationPdfLayout } from '../../utils/calcsheet/quotationPdfLayout';
 import { exportQuotationXlsx } from '../../utils/calcsheet/xlsxExport';
@@ -363,9 +365,11 @@ export default function QuotationEditor() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
   const [copyOpen, setCopyOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
 
-  // Append copied inclusions (from another quotation) into the current draft.
-  const handleCopyInclusions = (picked: CopiedInclusions) => {
+  // Merge picked inclusions (from another quotation, or the Scope Library) into
+  // the current draft. Lines already carry fresh ids from the source dialog.
+  const appendInclusions = (picked: CopiedInclusions) => {
     setDraft((d) => d ? {
       ...d,
       generalReqts: [...d.generalReqts, ...picked.generalReqts],
@@ -374,8 +378,20 @@ export default function QuotationEditor() {
       manpower: [...d.manpower, ...picked.manpower],
       ...(picked.terms ? { termsOverrides: { ...d.termsOverrides, ...picked.terms } } : {}),
     } : d);
+  };
+
+  // Append copied inclusions (from another quotation) into the current draft.
+  const handleCopyInclusions = (picked: CopiedInclusions) => {
+    appendInclusions(picked);
     setCopyOpen(false);
     setToast({ msg: 'Inclusions copied — review and Save.', sev: 'success' });
+  };
+
+  // Insert inclusions chosen from the Scope Library into the current draft.
+  const handleInsertFromLibrary = (picked: CopiedInclusions) => {
+    appendInclusions(picked);
+    setLibraryOpen(false);
+    setToast({ msg: 'Inserted from library — review and Save.', sev: 'success' });
   };
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -1139,6 +1155,17 @@ export default function QuotationEditor() {
               title="Copy general requirements, components, services or manpower from another quotation"
             >
               Copy from…
+            </Button>
+          )}
+          {!isLegacy && (
+            <Button
+              startIcon={<BookmarksIcon />}
+              variant="outlined"
+              color="inherit"
+              onClick={() => setLibraryOpen(true)}
+              title="Insert reusable scope from the shared library, or save this quotation's scope to it"
+            >
+              Scope Library
             </Button>
           )}
           <Button
@@ -1954,6 +1981,22 @@ export default function QuotationEditor() {
         currentQuotationId={quotation.id}
         onClose={() => setCopyOpen(false)}
         onCopy={handleCopyInclusions}
+      />
+
+      <ScopeLibraryDialog
+        open={libraryOpen}
+        current={{
+          generalReqts: draft?.generalReqts ?? [],
+          components: draft?.components ?? [],
+          services: draft?.services ?? [],
+          manpower: draft?.manpower ?? [],
+          terms: (draft?.termsOverrides?.scopeOfWork || draft?.termsOverrides?.exclusions)
+            ? { scopeOfWork: draft?.termsOverrides?.scopeOfWork, exclusions: draft?.termsOverrides?.exclusions }
+            : undefined,
+        }}
+        onClose={() => setLibraryOpen(false)}
+        onInsert={handleInsertFromLibrary}
+        onSaved={(name) => setToast({ msg: `Saved “${name}” to the Scope Library.`, sev: 'success' })}
       />
 
       <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} maxWidth="md" fullWidth>

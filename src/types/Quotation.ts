@@ -262,6 +262,29 @@ export interface Quotation {
   updatedAt: string;
 }
 
+// A reusable "scope bundle" saved to the shared Scope Library — a named set of
+// inclusions (general requirements, components, services, manpower) plus
+// optional scope-of-work / exclusions text — that can be inserted into any
+// quotation. Team-shared like labor presets; stored in `calcsheet_scope_library`.
+export interface ScopeBundle {
+  id: ID;
+  name: string;
+  category?: string;          // free-text grouping, e.g. "SCADA", "Panel Build", "General Requirements"
+  notes?: string;
+  generalReqts: GeneralReqLine[];
+  components: ComponentLine[];
+  services: ServiceLine[];
+  manpower: ManpowerEntry[];
+  terms?: {
+    scopeOfWork?: string;
+    exclusions?: string;
+  };
+  createdBy?: string | null;
+  createdByName?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // A snapshot of a quotation's state captured server-side just before a save
 // overwrote it. `data` is the full quotation as it existed before that save.
 export interface QuotationVersion {
