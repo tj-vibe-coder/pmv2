@@ -1503,6 +1503,37 @@ export default function QuotationEditor() {
               )}
             </Stack>
           </Stack>
+
+          {/* Delivery fee & minimum-order surcharge (opt-in) */}
+          <Box>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={!!quotation.deliveryTermsEnabled}
+                  onChange={(e) => setField('deliveryTermsEnabled', e.target.checked)}
+                  disabled={isLegacy}
+                />
+              }
+              label={<Typography variant="body2">Charge delivery fee &amp; minimum-order surcharge</Typography>}
+            />
+            {quotation.deliveryTermsEnabled && (
+              <>
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' }, gap: 2, mt: 1 }}>
+                  <NumField label="Delivery Fee (₱)" value={quotation.deliveryFee ?? 0} onChange={(v) => setField('deliveryFee', v)} helperText="Base freight/delivery charge" disabled={isLegacy} sx={{ width: '100%' }} />
+                  <NumField label="Min. order (₱)" value={quotation.minOrderThreshold ?? 50000} onChange={(v) => setField('minOrderThreshold', v)} helperText="Below this, add the surcharge" disabled={isLegacy} sx={{ width: '100%' }} />
+                  <NumField label="Small-order surcharge (₱)" value={quotation.smallOrderFee ?? 5000} onChange={(v) => setField('smallOrderFee', v)} helperText="Added when under minimum" disabled={isLegacy} sx={{ width: '100%' }} />
+                </Box>
+                {totals.subtotal < (quotation.minOrderThreshold ?? 50000) && (
+                  <Alert severity="info" sx={{ mt: 1, py: 0 }}>
+                    Order subtotal {PHP(totals.subtotal)} is below the {PHP(quotation.minOrderThreshold ?? 50000)} minimum —
+                    a {PHP(quotation.smallOrderFee ?? 5000)} small-order surcharge is added to delivery.
+                  </Alert>
+                )}
+              </>
+            )}
+          </Box>
+
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' }, gap: 2 }}>
             <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} helperText="Default for product rows" disabled={isLegacy} sx={{ width: '100%' }} />
@@ -1881,6 +1912,16 @@ export default function QuotationEditor() {
           {quotation.discountPct > 0 && <>
             <Typography variant="body2">Discount ({formatDiscountPct(quotation.discountPct)}%)</Typography>
             <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right', color: 'error.main' }}>− {PHP(totals.discount)}</Typography>
+            <Box />
+          </>}
+          {(totals.deliveryFee ?? 0) > 0 && <>
+            <Typography variant="body2">Delivery Fee</Typography>
+            <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(totals.deliveryFee ?? 0)}</Typography>
+            <Box />
+          </>}
+          {(totals.smallOrderSurcharge ?? 0) > 0 && <>
+            <Typography variant="body2">Small-order surcharge</Typography>
+            <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(totals.smallOrderSurcharge ?? 0)}</Typography>
             <Box />
           </>}
           {quotation.vatPct > 0 && <>

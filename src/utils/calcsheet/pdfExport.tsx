@@ -676,17 +676,29 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
               </View>
             </>
           )}
+          {(totals.deliveryFee ?? 0) > 0 && (
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>DELIVERY FEE</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.deliveryFee ?? 0)}</Text>
+            </View>
+          )}
+          {(totals.smallOrderSurcharge ?? 0) > 0 && (
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>SMALL-ORDER SURCHARGE</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.smallOrderSurcharge ?? 0)}</Text>
+            </View>
+          )}
           {quotation.vatPct > 0 && (
-            <>
-              <View style={styles.sumFooterRow}>
-                <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
-                <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
-              </View>
-              <View style={styles.sumFooterRow}>
-                <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP (VAT-IN)</Text>
-                <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
-              </View>
-            </>
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
+            </View>
+          )}
+          {(quotation.vatPct > 0 || (totals.deliveryTotal ?? 0) > 0) && (
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP{quotation.vatPct > 0 ? ' (VAT-IN)' : ''}</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
+            </View>
           )}
         </View>
 

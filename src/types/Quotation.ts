@@ -227,6 +227,18 @@ export interface Quotation {
   globalContingencyPct: number;
   discountPct: number;
   vatPct: number;
+  // ── Delivery fee & minimum-order surcharge (opt-in per quotation) ──
+  // When `deliveryTermsEnabled` is true, a manual `deliveryFee` (VAT-ex freight
+  // charge) is added to the quote, and orders whose goods+services subtotal
+  // falls below `minOrderThreshold` (default ₱50,000) get an automatic
+  // `smallOrderFee` surcharge (default ₱5,000). Delivery + surcharge are
+  // VAT-able (added before VAT) and do NOT affect margin/budget (pass-through).
+  // Absent/false on every existing quotation, so totals are unchanged until a
+  // user opts in.
+  deliveryTermsEnabled?: boolean;
+  deliveryFee?: number;
+  minOrderThreshold?: number;
+  smallOrderFee?: number;
   generalReqts: GeneralReqLine[];
   components: ComponentLine[];
   services: ServiceLine[];
@@ -318,6 +330,12 @@ export interface QuotationTotals {
 
   subtotal: number;
   discount: number;
+  // Delivery fee & small-order surcharge (0 when the feature is off). Folded
+  // into `grandTotal` before VAT; excluded from `subtotal`/margin/budget.
+  // Optional so frozen legacy snapshots (which predate the feature) still type.
+  deliveryFee?: number;
+  smallOrderSurcharge?: number;
+  deliveryTotal?: number;
   vat: number;
   grandTotal: number;
 }
