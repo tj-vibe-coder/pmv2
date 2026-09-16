@@ -134,8 +134,19 @@ export function computeTotals(q: Quotation): QuotationTotals {
   const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
   const discount = subtotal * ((q.discountPct || 0) / 100);
   const afterDiscount = subtotal - discount;
-  const vat = afterDiscount * ((q.vatPct || 0) / 100);
-  const grandTotal = afterDiscount + vat;
+
+  // Delivery fee + minimum-order surcharge (opt-in). The ₱50k threshold is
+  // tested against the goods+services subtotal (before delivery); the surcharge
+  // applies independently of whether a base delivery fee was entered. Both are
+  // VAT-able (added before VAT) and excluded from margin/budget.
+  const deliveryEnabled = !!q.deliveryTermsEnabled;
+  const minOrderThreshold = q.minOrderThreshold ?? 50000;
+  const deliveryFee = deliveryEnabled ? (q.deliveryFee || 0) : 0;
+  const smallOrderSurcharge = deliveryEnabled && subtotal < minOrderThreshold ? (q.smallOrderFee ?? 5000) : 0;
+  const deliveryTotal = deliveryFee + smallOrderSurcharge;
+
+  const vat = (afterDiscount + deliveryTotal) * ((q.vatPct || 0) / 100);
+  const grandTotal = afterDiscount + deliveryTotal + vat;
 
   return {
     generalReqtsCost,
@@ -150,6 +161,9 @@ export function computeTotals(q: Quotation): QuotationTotals {
     servicesSubtotal: servicesSub,
     subtotal,
     discount,
+    deliveryFee,
+    smallOrderSurcharge,
+    deliveryTotal,
     vat,
     grandTotal,
   };

@@ -3518,7 +3518,15 @@ function quotationGrandTotal(q) {
   const servicesLineSum = () => services.reduce((s, l) => s + num(l.amount), 0);
   const finish = (subtotal) => {
     const afterDiscount = subtotal * (1 - num(q.discountPct) / 100);
-    return afterDiscount * (1 + num(q.vatPct) / 100);
+    // Delivery fee + minimum-order surcharge (opt-in). Mirror calc.ts: tested on
+    // the goods+services subtotal, VAT-able (added before VAT), pass-through.
+    const deliveryEnabled = q.deliveryTermsEnabled === true;
+    const minOrderThreshold = Number.isFinite(Number(q.minOrderThreshold)) ? Number(q.minOrderThreshold) : 50000;
+    const deliveryFee = deliveryEnabled ? num(q.deliveryFee) : 0;
+    const smallOrderFee = Number.isFinite(Number(q.smallOrderFee)) ? Number(q.smallOrderFee) : 5000;
+    const surcharge = deliveryEnabled && subtotal < minOrderThreshold ? smallOrderFee : 0;
+    const deliveryTotal = deliveryFee + surcharge;
+    return (afterDiscount + deliveryTotal) * (1 + num(q.vatPct) / 100);
   };
 
   if (q.formulaVersion === 'legacy') {

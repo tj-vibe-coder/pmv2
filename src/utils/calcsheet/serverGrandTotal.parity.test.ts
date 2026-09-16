@@ -116,6 +116,36 @@ const FIXTURES: Array<[string, Quotation]> = [
     }),
   ],
   [
+    'delivery fee, order above minimum (base fee only, no surcharge)',
+    q({
+      deliveryTermsEnabled: true,
+      deliveryFee: 3000,
+      components: [{ id: 'c1', description: 'PLC', unitCost: 100000, forex: 1, qty: 1, contingencyPct: 0, discountPct: 0 }],
+      productMarkupPct: 0,
+    }),
+  ],
+  [
+    'delivery fee, order below ₱50k minimum (base fee + ₱5k surcharge)',
+    q({
+      deliveryTermsEnabled: true,
+      deliveryFee: 2000,
+      components: [{ id: 'c1', description: 'Small part', unitCost: 10000, forex: 1, qty: 1, contingencyPct: 0, discountPct: 0 }],
+      productMarkupPct: 0,
+    }),
+  ],
+  [
+    'delivery with custom threshold + surcharge, below threshold, with discount',
+    q({
+      deliveryTermsEnabled: true,
+      deliveryFee: 1000,
+      minOrderThreshold: 20000,
+      smallOrderFee: 8000,
+      discountPct: 5,
+      components: [{ id: 'c1', description: 'part', unitCost: 15000, forex: 1, qty: 1, contingencyPct: 0, discountPct: 0 }],
+      productMarkupPct: 0,
+    }),
+  ],
+  [
     'legacy without snapshot (additive contingency-discount, per-role labor contingency)',
     q({
       formulaVersion: 'legacy',

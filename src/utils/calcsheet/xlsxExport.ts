@@ -248,6 +248,8 @@ export async function exportQuotationXlsx(
     ['Subtotal (VAT-EX)', totals.subtotal, true],
   ];
   if (quotation.discountPct > 0) totalsBlock.push([`Discount (${formatDiscountPct(quotation.discountPct)}%)`, -totals.discount]);
+  if ((totals.deliveryFee ?? 0) > 0) totalsBlock.push(['Delivery Fee', totals.deliveryFee ?? 0]);
+  if ((totals.smallOrderSurcharge ?? 0) > 0) totalsBlock.push(['Small-order surcharge', totals.smallOrderSurcharge ?? 0]);
   if (quotation.vatPct > 0) totalsBlock.push([`VAT (${quotation.vatPct}%)`, totals.vat]);
   totalsBlock.push(['GRAND TOTAL (PHP)', totals.grandTotal, true]);
 
