@@ -169,6 +169,8 @@ export interface ComponentLine {
   discountPct: number;
   leadTimeDays?: number;
   group?: string;
+  /** A calculation-neutral label rendered above this contiguous block of items. */
+  subheader?: string;
   markupPct?: number;
   expectedPurchaseDate?: string;
   historicalPriceSource?: HistoricalPriceSource;
@@ -185,6 +187,8 @@ export interface ServiceLine {
   amount: number;
   days?: number;
   group?: string;
+  /** A calculation-neutral label rendered above this contiguous block of items. */
+  subheader?: string;
   markupPct?: number;
 }
 

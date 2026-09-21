@@ -8,6 +8,7 @@ import {
   formatDiscountPct,
 } from './calc';
 import { quotationRefNo } from './codes';
+import { subheaderBefore } from './subheaders';
 
 const PHP_FMT = '"₱" #,##0.00;[Red]"₱" -#,##0.00';
 const QTY_FMT = '#,##0.00';
@@ -101,6 +102,16 @@ export async function exportQuotationXlsx(
     r++;
   };
 
+  const inlineSubheader = (label: string) => {
+    ws.mergeCells(`A${r}:F${r}`);
+    const cell = ws.getCell(`A${r}`);
+    cell.value = label;
+    cell.font = { bold: true, color: { argb: navy } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEAF0F8' } };
+    cell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+    r++;
+  };
+
   // A. General Requirements
   if (quotation.generalReqts.length) {
     sectionHeader('A. GENERAL REQUIREMENTS');
@@ -150,7 +161,9 @@ export async function exportQuotationXlsx(
         compGroups.set(l.group, arr);
       }
     });
-    contractComponents.forEach((l) => {
+    contractComponents.forEach((l, index) => {
+      const subheader = subheaderBefore(contractComponents, index);
+      if (subheader) inlineSubheader(subheader);
       // Item name on the first line; brand + part number on a wrapped
       // second line (mirrors the PDF's two-line description cell).
       const compSub = [l.brand, l.partNo].filter(Boolean).join(', ');
@@ -214,7 +227,9 @@ export async function exportQuotationXlsx(
           groups.set(l.group, arr);
         }
       });
-      quotation.services.forEach((l) => {
+      quotation.services.forEach((l, index) => {
+        const subheader = subheaderBefore(quotation.services, index);
+        if (subheader) inlineSubheader(subheader);
         if (l.group) {
           const members = groups.get(l.group)!;
           const midIdx = Math.max(0, Math.floor((members.length - 1) / 2));
@@ -273,7 +288,9 @@ export async function exportQuotationXlsx(
     r += 1;
     sectionHeader('OPTIONAL ITEMS (NOT INCLUDED IN CONTRACT PRICE)');
     tableHeader(['Code', 'Description', 'Qty', 'UOM', 'Unit Price', 'Total']);
-    optionalComponents.forEach((l) => {
+    optionalComponents.forEach((l, index) => {
+      const subheader = subheaderBefore(optionalComponents, index);
+      if (subheader) inlineSubheader(subheader);
       const compSub = [l.brand, l.partNo].filter(Boolean).join(', ');
       const desc = compSub ? `${l.description}\n${compSub}` : l.description;
       ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct), componentLineTotal(l, quotation.productMarkupPct)];

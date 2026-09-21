@@ -1,5 +1,21 @@
 # Task Log
 
+## 2026-09-21 — Calcsheet quotation inline subheaders
+
+### Completed
+
+- Added calculation-neutral inline subheaders for component and service lines, assigned by selecting one or more rows and choosing **Add subheader**.
+- Rendered each contiguous subheader block in the editable calculation sheet and customer-facing PDF/XLSX quotation exports.
+- Kept subheaders separate from the existing pricing-group / LOT behavior, so quotations retain their totals and prior export semantics.
+
+### Verification
+
+- `CI=true npm test -- --watch=false --runInBand src/utils/calcsheet/subheaders.test.ts` — passed (2 tests).
+- `npx tsc --noEmit` — passed.
+- `git diff --check` — passed.
+- `CI=true npm run build` reached compilation but failed on a pre-existing exhaustive-deps warning in `src/components/analytics/AnalyticsStudioPage.tsx:1115`; this feature did not modify that file.
+
+
 ## 2026-09-07 — Compact one-page quotation export
 
 Added an explicit **Compact PDF (1 page)** action to the Calcsheet quotation editor. It is available for editable quotations with six or fewer item lines and sends the quotation renderer a tighter print-layout request; normal PDF export remains available and long quotations keep their readable standard layout. The threshold and scale selection are covered by `src/utils/calcsheet/quotationPdfLayout.test.ts`.

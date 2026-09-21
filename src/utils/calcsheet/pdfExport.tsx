@@ -11,6 +11,7 @@ import {
 import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
 import { quotationRefNo } from './codes';
 import { quotationPdfScale, type QuotationPdfLayout } from './quotationPdfLayout';
+import { subheaderBefore } from './subheaders';
 
 // ─── Branding ────────────────────────────────────────────────────────────────
 const PRIMARY = '#2c5aa0';
@@ -163,6 +164,10 @@ function buildStyles(scale: number) {
     tr: {
       flexDirection: 'row',
       fontSize: s(8.5),
+    },
+    inlineSubheader: {
+      backgroundColor: SECTION_BG, color: PRIMARY, fontWeight: 700,
+      fontSize: s(8), padding: `${s(2)} ${s(8)}`,
     },
     // Sub-total band — tinted like the table header so the money row stands
     // out from plain item rows without competing with the navy section bars.
@@ -465,7 +470,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                   <Text style={styles.cUnit}>Unit Price</Text>
                   <Text style={styles.cTotal}>Total , PhP</Text>
                 </View>
-                {contractComponents.map((l) => {
+                {contractComponents.map((l, index) => {
+                  const subheader = subheaderBefore(contractComponents, index);
                   if (l.group) {
                     const members = compGroups.get(l.group)!;
                     const midIdx = groupedLotDisplayIndex(members.length);
@@ -478,8 +484,9 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                     // still priced as one combined amount on the middle row, so
                     // no per-unit price is disclosed for the members.
                     const itemized = quotation.componentGroupDisplay?.[l.group] === 'itemized';
-                    return (
-                      <View style={styles.tr} key={l.id}>
+                    return <View key={l.id}>
+                      {subheader && <Text style={styles.inlineSubheader}>{subheader}</Text>}
+                      <View style={styles.tr}>
                         <Text style={styles.cItem}>{isFirst ? codesB.get(l.id) : ''}</Text>
                         <ComponentDesc l={l} styles={styles} />
                         <Text style={styles.cQty}>{itemized ? NUM(l.qty) : (isMid ? NUM(1) : '')}</Text>
@@ -487,10 +494,11 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                         <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
                         <Text style={styles.cTotal}>{isMid ? NUM(groupTotal) : ''}</Text>
                       </View>
-                    );
+                    </View>;
                   }
-                  return (
-                    <View style={styles.tr} key={l.id}>
+                  return <View key={l.id}>
+                    {subheader && <Text style={styles.inlineSubheader}>{subheader}</Text>}
+                    <View style={styles.tr}>
                       <Text style={styles.cItem}>{codesB.get(l.id)}</Text>
                       <ComponentDesc l={l} styles={styles} />
                       <Text style={styles.cQty}>{NUM(l.qty)}</Text>
@@ -498,7 +506,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                       <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
                       <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct))}</Text>
                     </View>
-                  );
+                  </View>;
                 })}
                 </View>
                 <View style={styles.trSub}>
@@ -542,7 +550,9 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                     {/* Render items; grouped items show pricing on the middle row */}
                     {(() => {
                       const rendered: React.ReactNode[] = [];
-                      quotation.services.forEach((l) => {
+                      quotation.services.forEach((l, index) => {
+                        const subheader = subheaderBefore(quotation.services, index);
+                        if (subheader) rendered.push(<Text style={styles.inlineSubheader} key={`subheader-${l.id}`}>{subheader}</Text>);
                         if (l.group) {
                           const members = groups.get(l.group)!;
                           const midIdx = groupedLotDisplayIndex(members.length);
@@ -592,25 +602,31 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                   quotation.services.map((l, i) => {
                     const showLotTotal = i === groupedLotDisplayIndex(quotation.services.length);
                     return (
-                      <View style={styles.tr} key={l.id}>
-                        <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
-                        <Text style={styles.cDesc}>{l.description}</Text>
-                        <Text style={styles.cQty}>{showLotTotal ? NUM(engineeringServicesQty) : ''}</Text>
-                        <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
-                        <Text style={styles.cUnit}>{showLotTotal ? NUM(engineeringServicesUnitPrice) : ''}</Text>
-                        <Text style={styles.cTotal}>{showLotTotal ? NUM(totals.servicesSubtotal) : ''}</Text>
+                      <View key={l.id}>
+                        {subheaderBefore(quotation.services, i) && <Text style={styles.inlineSubheader}>{subheaderBefore(quotation.services, i)}</Text>}
+                        <View style={styles.tr}>
+                          <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
+                          <Text style={styles.cDesc}>{l.description}</Text>
+                          <Text style={styles.cQty}>{showLotTotal ? NUM(engineeringServicesQty) : ''}</Text>
+                          <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
+                          <Text style={styles.cUnit}>{showLotTotal ? NUM(engineeringServicesUnitPrice) : ''}</Text>
+                          <Text style={styles.cTotal}>{showLotTotal ? NUM(totals.servicesSubtotal) : ''}</Text>
+                        </View>
                       </View>
                     );
                   })
                 ) : (
-                  quotation.services.map((l) => (
-                    <View style={styles.tr} key={l.id}>
+                  quotation.services.map((l, index) => (
+                    <View key={l.id}>
+                      {subheaderBefore(quotation.services, index) && <Text style={styles.inlineSubheader}>{subheaderBefore(quotation.services, index)}</Text>}
+                    <View style={styles.tr}>
                       <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
                       <Text style={styles.cDesc}>{l.description}</Text>
                       <Text style={styles.cQty}>{NUM(1)}</Text>
                       <Text style={styles.cUom}>LOT</Text>
                       <Text style={styles.cUnit}>{NUM(l.amount)}</Text>
                       <Text style={styles.cTotal}>{NUM(l.amount)}</Text>
+                    </View>
                     </View>
                   ))
                 )}
@@ -705,14 +721,17 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
               <Text style={styles.cUnit}>Unit Price</Text>
               <Text style={styles.cTotal}>Total , PhP</Text>
             </View>
-            {optionalComponents.map((l) => (
-              <View style={styles.tr} key={l.id}>
+            {optionalComponents.map((l, index) => (
+              <View key={l.id}>
+                {subheaderBefore(optionalComponents, index) && <Text style={styles.inlineSubheader}>{subheaderBefore(optionalComponents, index)}</Text>}
+              <View style={styles.tr}>
                 <Text style={styles.cItem}>{codesOpt.get(l.id)}</Text>
                 <ComponentDesc l={l} styles={styles} />
                 <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                 <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                 <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
                 <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct))}</Text>
+              </View>
               </View>
             ))}
             <View style={styles.trSub}>
