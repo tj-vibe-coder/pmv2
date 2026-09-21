@@ -85,6 +85,18 @@ const STATUS_LABELS: Record<InvoiceStatus, string> = {
 
 const TODAY = (): string => new Date().toISOString().slice(0, 10);
 
+const fmtEpochDate = (v: number | string | null | undefined): string => {
+  if (v == null || v === '') return '—';
+  let ms: number;
+  if (typeof v === 'string') {
+    ms = new Date(v).getTime();
+  } else {
+    // stored as seconds when the magnitude is too small to be a millisecond epoch
+    ms = v < 1e11 ? v * 1000 : v;
+  }
+  return Number.isNaN(ms) ? '—' : new Date(ms).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
 // ─── form types ───────────────────────────────────────────────────────────────
 interface InvoiceForm {
   project_id: string;
@@ -775,6 +787,7 @@ export default function CollectionsDashboard() {
         <TableHead>
           <TableRow>
             <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project</TableCell>
+            <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project completed</TableCell>
             <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Customer PO (to ACTI)</TableCell>
             <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>ACTI PO (to IOCT)</TableCell>
             <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>ACTI SI to customer</TableCell>
@@ -798,6 +811,11 @@ export default function CollectionsDashboard() {
                     {[p.project_no, p.project_name].filter(Boolean).join(' · ')}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">{p.account_name}</Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                    {fmtEpochDate(p.updated_completion_date ?? p.completion_date)}
+                  </Typography>
                 </TableCell>
                 <TableCell>
                   <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>{p.po_number || '—'}</Typography>
@@ -1231,6 +1249,7 @@ export default function CollectionsDashboard() {
                     <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Project</TableCell>
                     <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Invoice No.</TableCell>
                     <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>PB #</TableCell>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>PO Ref</TableCell>
                     <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Bill To</TableCell>
                     <TableCell sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Date Issued</TableCell>
                     <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>Amount</TableCell>
@@ -1246,7 +1265,7 @@ export default function CollectionsDashboard() {
                 <TableBody>
                   {filteredReceivables.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={13} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: '0.875rem' }}>
+                      <TableCell colSpan={14} align="center" sx={{ py: 4, color: 'text.secondary', fontSize: '0.875rem' }}>
                         {enriched.length === 0
                           ? 'No invoices yet. Click "Add Invoice" to get started.'
                           : 'No invoices match the current filters.'}
@@ -1295,6 +1314,17 @@ export default function CollectionsDashboard() {
                           {inv.pb_number
                             ? <Chip label={inv.pb_number} size="small" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
                             : <Typography variant="caption" color="text.disabled">—</Typography>}
+                        </TableCell>
+                        <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                          {(() => {
+                            const proj = projectsById[String(inv.project_id)];
+                            const poRef = isActiInvoice(inv)
+                              ? actiToIoctPoLabel(proj?.commercial_trail)
+                              : (proj?.po_number || '');
+                            return poRef && poRef !== 'Pending' && poRef !== '—'
+                              ? <Typography variant="body2" sx={{ fontSize: '0.8rem', fontFamily: 'monospace' }}>{poRef}</Typography>
+                              : <Typography variant="caption" color="text.disabled">{poRef || '—'}</Typography>;
+                          })()}
                         </TableCell>
                         <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
                           {inv.bill_to === 'acti'

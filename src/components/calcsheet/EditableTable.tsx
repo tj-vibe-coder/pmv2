@@ -1,7 +1,7 @@
 import { Box, IconButton, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
-import type { ReactNode, CSSProperties } from 'react';
+import { Fragment, type ReactNode, type CSSProperties } from 'react';
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors,
 } from '@dnd-kit/core';
@@ -42,6 +42,7 @@ interface Props<T extends { id: string }> {
   footer?: ReactNode;
   draggable?: boolean;
   readOnly?: boolean;
+  subheader?: (row: T, idx: number) => string | undefined;
 }
 
 function NumberCell({
@@ -191,7 +192,7 @@ function SortableRow<T extends { id: string }>({
 }
 
 export function EditableTable<T extends { id: string }>({
-  rows, columns, onChange, onDelete, onReorder, emptyMessage = 'No items', footer, draggable = true, readOnly = false,
+  rows, columns, onChange, onDelete, onReorder, emptyMessage = 'No items', footer, draggable = true, readOnly = false, subheader,
 }: Props<T>) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -228,18 +229,29 @@ export function EditableTable<T extends { id: string }>({
           </TableHead>
           <TableBody>
             <SortableContext items={rows.map((r) => r.id)} strategy={verticalListSortingStrategy}>
-              {rows.map((row, idx) => (
-                <SortableRow
-                  key={row.id}
-                  row={row}
-                  idx={idx}
-                  columns={columns}
-                  draggable={enableDrag}
-                  onChange={onChange}
-                  onDelete={onDelete}
-                  readOnly={readOnly}
-                />
-              ))}
+              {rows.map((row, idx) => {
+                const label = subheader?.(row, idx)?.trim();
+                return (
+                  <Fragment key={row.id}>
+                    {label && (
+                      <TableRow sx={{ bgcolor: 'primary.50' }}>
+                        <TableCell colSpan={colSpan} sx={{ py: 0.6, fontSize: '0.75rem', fontWeight: 700, color: 'primary.dark', letterSpacing: 0.35, textTransform: 'uppercase' }}>
+                          {label}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    <SortableRow
+                      row={row}
+                      idx={idx}
+                      columns={columns}
+                      draggable={enableDrag}
+                      onChange={onChange}
+                      onDelete={onDelete}
+                      readOnly={readOnly}
+                    />
+                  </Fragment>
+                );
+              })}
             </SortableContext>
             {rows.length === 0 && (
               <TableRow>

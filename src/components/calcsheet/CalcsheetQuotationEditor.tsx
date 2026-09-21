@@ -55,6 +55,7 @@ import ComponentTimingDialog, {
   ComponentTimingAction,
 } from './ComponentTimingDialog';
 import { hasInvalidPurchaseTiming } from './purchaseTiming';
+import { subheaderBefore } from '../../utils/calcsheet/subheaders';
 
 const id = () => nanoid(6);
 
@@ -280,6 +281,8 @@ export default function QuotationEditor() {
   const [selectedCompIds, setSelectedCompIds] = useState<Set<string>>(new Set());
   const [groupDialogOpen, setGroupDialogOpen] = useState<'services' | 'components' | false>(false);
   const [groupLabel, setGroupLabel] = useState('');
+  const [subheaderDialogOpen, setSubheaderDialogOpen] = useState<'services' | 'components' | false>(false);
+  const [subheaderLabel, setSubheaderLabel] = useState('');
   const [showFloatingTotals, setShowFloatingTotals] = useState(
     () => localStorage.getItem('calcsheet:floatingTotalsVisible') === '1',
   );
@@ -697,6 +700,11 @@ export default function QuotationEditor() {
             />
           </Tooltip>
         )}
+        {r.subheader && (
+          <Chip label={`Heading: ${r.subheader}`} size="small" color="primary" variant="outlined"
+            onDelete={() => clearComponentSubheader(r.id)} disabled={isLegacy}
+            sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />
+        )}
       </Stack>
     ) },
     { key: 'brand', label: 'Brand', width: 90 },
@@ -782,11 +790,34 @@ export default function QuotationEditor() {
     setGroupDialogOpen(false);
     setGroupLabel('');
   };
+  const applySubheader = () => {
+    const label = subheaderLabel.trim();
+    if (!label) return;
+    if (subheaderDialogOpen === 'services' && selectedSvcIds.size) {
+      setField('services', quotation.services.map((s) =>
+        selectedSvcIds.has(s.id) ? { ...s, subheader: label } : s,
+      ));
+      setSelectedSvcIds(new Set());
+    } else if (subheaderDialogOpen === 'components' && selectedCompIds.size) {
+      setField('components', quotation.components.map((c) =>
+        selectedCompIds.has(c.id) ? { ...c, subheader: label } : c,
+      ));
+      setSelectedCompIds(new Set());
+    }
+    setSubheaderDialogOpen(false);
+    setSubheaderLabel('');
+  };
   const ungroupSvc = (svcId: string) => {
     setField('services', quotation.services.map((s) => s.id === svcId ? { ...s, group: undefined } : s));
   };
   const ungroupComp = (compId: string) => {
     setField('components', quotation.components.map((c) => c.id === compId ? { ...c, group: undefined } : c));
+  };
+  const clearServiceSubheader = (serviceId: string) => {
+    setField('services', quotation.services.map((s) => s.id === serviceId ? { ...s, subheader: undefined } : s));
+  };
+  const clearComponentSubheader = (componentId: string) => {
+    setField('components', quotation.components.map((c) => c.id === componentId ? { ...c, subheader: undefined } : c));
   };
   // Per-group export style. Absent = 'lot' (collapse to a single "1.00 LOT"
   // line priced at the group total); 'itemized' shows each member's own qty
@@ -814,6 +845,7 @@ export default function QuotationEditor() {
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
               inputProps={{ style: { padding: '6px 4px' } }} />
             {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupSvc(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
+            {r.subheader && <Chip label={`Heading: ${r.subheader}`} size="small" color="primary" variant="outlined" onDelete={() => clearServiceSubheader(r.id)} disabled={isLegacy} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
           </Stack>
         ) },
         { key: 'days', label: 'Days', width: 80, type: 'number', align: 'right', min: 0 },
@@ -825,8 +857,18 @@ export default function QuotationEditor() {
     : [
         // No markup column here: lump mode prices from manpower × Labor Markup %,
         // and manual mode's amounts are final prices with no cost basis to mark up.
+        { key: '_select', label: '', width: 36, render: (r) => (
+          <Checkbox size="small" sx={{ p: 0 }} checked={selectedSvcIds.has(r.id)}
+            onChange={(e) => setSelectedSvcIds((prev) => { const n = new Set(prev); e.target.checked ? n.add(r.id) : n.delete(r.id); return n; })} />
+        ) },
         { key: 'code', label: 'Code', width: 90, mono: true },
-        { key: 'description', label: 'Description', multiline: true },
+        { key: 'description', label: 'Description', render: (r, idx) => (
+          <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+            <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)} variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
+              InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }} inputProps={{ style: { padding: '6px 4px' } }} />
+            {r.subheader && <Chip label={`Heading: ${r.subheader}`} size="small" color="primary" variant="outlined" onDelete={() => clearServiceSubheader(r.id)} disabled={isLegacy} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
+          </Stack>
+        ) },
         { key: 'amount', label: 'Amount', width: 150, type: 'number', align: 'right', step: 0.01 },
       ];
 
@@ -1679,11 +1721,22 @@ export default function QuotationEditor() {
       {/* Section B */}
       <Paper sx={{ p: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>B. Supply of Components</Typography>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>B. Supply of Components</Typography>
+            <FormControlLabel
+              control={<Switch size="small" checked={!!quotation.hidePartNumbersInPdf} onChange={(e) => setField('hidePartNumbersInPdf', e.target.checked)} disabled={isLegacy} />}
+              label={<Typography variant="caption">Hide part numbers in PDF</Typography>}
+            />
+          </Stack>
           <Stack direction="row" spacing={1}>
             {selectedCompIds.size >= 2 && !isLegacy && (
               <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen('components')}>
                 Group selected ({selectedCompIds.size})
+              </Button>
+            )}
+            {selectedCompIds.size >= 1 && !isLegacy && (
+              <Button size="small" variant="outlined" onClick={() => setSubheaderDialogOpen('components')}>
+                Add subheader ({selectedCompIds.size})
               </Button>
             )}
             {!isLegacy && (
@@ -1702,6 +1755,7 @@ export default function QuotationEditor() {
           onChange={(idx, key, v) => updateRow('components', idx, key, v)}
           onDelete={(idx) => deleteRow('components', idx)}
           onReorder={(rows) => reorderRows('components', rows)}
+          subheader={(row, index) => subheaderBefore(quotation.components, index)}
           emptyMessage="No components — typical for IOCT services-only quotes"
           readOnly={isLegacy}
           footer={
@@ -1775,6 +1829,11 @@ export default function QuotationEditor() {
                 Group selected ({selectedSvcIds.size})
               </Button>
             )}
+            {selectedSvcIds.size >= 1 && !isLegacy && (
+              <Button size="small" variant="outlined" onClick={() => setSubheaderDialogOpen('services')}>
+                Add subheader ({selectedSvcIds.size})
+              </Button>
+            )}
             {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addService}>Add scope item</Button>}
           </Stack>
         </Stack>
@@ -1788,6 +1847,7 @@ export default function QuotationEditor() {
           onChange={(idx, key, v) => updateServiceRow(idx, key as keyof ServiceLine, v)}
           onDelete={(idx) => deleteRow('services', idx)}
           onReorder={(rows) => reorderRows('services', rows)}
+          subheader={(row, index) => subheaderBefore(quotation.services, index)}
           emptyMessage="No scope items — add deliverables (e.g., 'PLC redundancy troubleshooting', 'TIA Portal integration')"
           readOnly={isLegacy}
           footer={
@@ -1889,6 +1949,21 @@ export default function QuotationEditor() {
         <DialogActions>
           <Button onClick={() => { setGroupDialogOpen(false); setGroupLabel(''); }}>Cancel</Button>
           <Button variant="contained" disabled={!groupLabel.trim()} onClick={applyGroup}>Group</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!subheaderDialogOpen} onClose={() => setSubheaderDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Add inline subheader</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            This adds a visible category heading without changing quantities, pricing, or totals.
+          </Typography>
+          <TextField label="Subheader" value={subheaderLabel} onChange={(e) => setSubheaderLabel(e.target.value)} fullWidth autoFocus
+            placeholder="e.g. PLC, SCADA, Computer Components" onKeyDown={(e) => { if (e.key === 'Enter') applySubheader(); }} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setSubheaderDialogOpen(false); setSubheaderLabel(''); }}>Cancel</Button>
+          <Button variant="contained" disabled={!subheaderLabel.trim()} onClick={applySubheader}>Add subheader</Button>
         </DialogActions>
       </Dialog>
 
