@@ -19,6 +19,7 @@ import type { ProjectStatus, Project, OpportunityGrade } from '../../types/Quota
 import { PROJECT_STATUSES, projectStatusLabel, OPPORTUNITY_GRADES, opportunityGradeLabel } from '../../types/Quotation';
 import { format } from 'date-fns';
 import { PHP, computeTotals, ioctMargin } from '../../utils/calcsheet/calc';
+import { salesAccountedTotal } from '../../utils/calcsheet/salesAccounting';
 import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes';
 import { exportProjectListXlsx } from '../../utils/calcsheet/xlsxExport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
@@ -334,7 +335,14 @@ export default function Projects() {
     const customer = clients.find((c) => c.id === p.customerId);
     const partner = clients.find((c) => c.id === p.partnerId);
     const qs = quotations.filter((q) => q.projectId === p.id);
-    const totals = qs.map((q) => ({ kind: q.kind, total: computeTotals(q).grandTotal }));
+    const totals = qs.map((q) => {
+      const quotationTotals = computeTotals(q);
+      return {
+        kind: q.kind,
+        total: salesAccountedTotal(q, quotationTotals),
+        servicesOnly: q.salesValueScope === 'services_only',
+      };
+    });
     const grandTotal = totals.reduce((sum, t) => Math.max(sum, t.total), 0);  // use max kind as the "headline"
     const hasLegacy = qs.some((q) => q.formulaVersion === 'legacy');
     const year = p.date ? new Date(p.date).getFullYear() : 0;
@@ -727,7 +735,7 @@ export default function Projects() {
               <SortHeader k="updatedAt" label="Last edited" />
               <SortHeader k="status" label="Status" />
               <SortHeader k="grade" label="Grade" />
-              <SortHeader k="grandTotal" label="Quotations" align="right" />
+              <SortHeader k="grandTotal" label="Sales" align="right" />
               <SortHeader k="margin" label="IOCT Margin" align="right" />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -880,6 +888,7 @@ export default function Projects() {
                     {totals.map((t, i) => (
                       <Typography key={i} variant="caption" sx={{ fontFamily: 'monospace' }}>
                         <strong>{t.kind}:</strong> {PHP(t.total)}
+                        {t.servicesOnly ? ' · services only' : ''}
                       </Typography>
                     ))}
                     {totals.length === 0 && <Typography variant="caption" color="text.secondary">none</Typography>}
