@@ -1,5 +1,19 @@
 # Task Log
 
+## 2026-09-21 — Hide quotation part numbers in customer PDFs
+
+### Completed
+
+- Added a quotation-level **Hide part numbers in PDF** switch under Supply of Components.
+- The switch hides component part numbers in all customer PDF component sections, including optional items, without deleting part numbers or affecting Excel exports.
+
+### Verification
+
+- `CI=true npm test -- --watch=false --runInBand src/utils/calcsheet/componentExportDetails.test.ts` — passed (2 tests).
+- `npx tsc --noEmit` — passed.
+- `git diff --check` — passed.
+- Production build was not repeated: it is already blocked by the unrelated exhaustive-deps warning in `src/components/analytics/AnalyticsStudioPage.tsx:1115`.
+
 ## 2026-09-21 — Calcsheet quotation inline subheaders
 
 ### Completed

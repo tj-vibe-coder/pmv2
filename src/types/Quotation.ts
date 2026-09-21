@@ -257,6 +257,8 @@ export interface Quotation {
    * member's own qty + UOM while still pricing the group as one combined
    * amount. */
   componentGroupDisplay?: Record<string, 'lot' | 'itemized'>;
+  /** Suppresses component part numbers from the customer-facing PDF only. */
+  hidePartNumbersInPdf?: boolean;
   pageBreakBeforeTerms?: boolean;
   formulaVersion?: FormulaVersion;
   generalReqContingencyMode?: 'standard' | 'baked';

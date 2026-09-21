@@ -12,6 +12,7 @@ import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEF
 import { quotationRefNo } from './codes';
 import { quotationPdfScale, type QuotationPdfLayout } from './quotationPdfLayout';
 import { subheaderBefore } from './subheaders';
+import { componentExportDetails } from './componentExportDetails';
 
 // ─── Branding ────────────────────────────────────────────────────────────────
 const PRIMARY = '#2c5aa0';
@@ -249,8 +250,8 @@ function buildStyles(scale: number) {
 // Component description cell: item name as the main line, brand + part number
 // as a muted sub-line underneath (reads like a hand-written spec sheet, not a
 // dash-joined string).
-function ComponentDesc({ l, styles }: { l: ComponentLine; styles: ReturnType<typeof buildStyles> }) {
-  const sub = [l.brand, l.partNo].filter(Boolean).join(', ');
+function ComponentDesc({ l, styles, hidePartNumbers }: { l: ComponentLine; styles: ReturnType<typeof buildStyles>; hidePartNumbers: boolean }) {
+  const sub = componentExportDetails(l, hidePartNumbers);
   return (
     <View style={styles.cDesc}>
       <Text>{l.description || ''}</Text>
@@ -488,7 +489,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                       {subheader && <Text style={styles.inlineSubheader}>{subheader}</Text>}
                       <View style={styles.tr}>
                         <Text style={styles.cItem}>{isFirst ? codesB.get(l.id) : ''}</Text>
-                        <ComponentDesc l={l} styles={styles} />
+                        <ComponentDesc l={l} styles={styles} hidePartNumbers={!!quotation.hidePartNumbersInPdf} />
                         <Text style={styles.cQty}>{itemized ? NUM(l.qty) : (isMid ? NUM(1) : '')}</Text>
                         <Text style={styles.cUom}>{itemized ? (l.uom ?? '').toUpperCase() : (isMid ? 'LOT' : '')}</Text>
                         <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
@@ -500,7 +501,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                     {subheader && <Text style={styles.inlineSubheader}>{subheader}</Text>}
                     <View style={styles.tr}>
                       <Text style={styles.cItem}>{codesB.get(l.id)}</Text>
-                      <ComponentDesc l={l} styles={styles} />
+                      <ComponentDesc l={l} styles={styles} hidePartNumbers={!!quotation.hidePartNumbersInPdf} />
                       <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                       <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                       <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
@@ -726,7 +727,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                 {subheaderBefore(optionalComponents, index) && <Text style={styles.inlineSubheader}>{subheaderBefore(optionalComponents, index)}</Text>}
               <View style={styles.tr}>
                 <Text style={styles.cItem}>{codesOpt.get(l.id)}</Text>
-                <ComponentDesc l={l} styles={styles} />
+                <ComponentDesc l={l} styles={styles} hidePartNumbers={!!quotation.hidePartNumbersInPdf} />
                 <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                 <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                 <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>

@@ -1663,7 +1663,13 @@ export default function QuotationEditor() {
       {/* Section B */}
       <Paper sx={{ p: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>B. Supply of Components</Typography>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>B. Supply of Components</Typography>
+            <FormControlLabel
+              control={<Switch size="small" checked={!!quotation.hidePartNumbersInPdf} onChange={(e) => setField('hidePartNumbersInPdf', e.target.checked)} disabled={isLegacy} />}
+              label={<Typography variant="caption">Hide part numbers in PDF</Typography>}
+            />
+          </Stack>
           <Stack direction="row" spacing={1}>
             {selectedCompIds.size >= 2 && !isLegacy && (
               <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen('components')}>
