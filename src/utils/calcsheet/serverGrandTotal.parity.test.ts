@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { computeTotals, ioctCostBasis } from './calc';
+import { salesAccountedTotal } from './salesAccounting';
 import type { Quotation } from '../../types/Quotation';
 
 // ── Extract a named function from server.js ───────────────────────────────────
@@ -37,6 +38,7 @@ function extractServerFn(name: string): (q: unknown) => number {
 
 const serverGrandTotal = extractServerFn('quotationGrandTotal');
 const serverCostBasis = extractServerFn('quotationCostBasis');
+const serverSalesAmount = extractServerFn('quotationSalesAmount');
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 const baseQuotation = {
@@ -190,6 +192,21 @@ describe('server.js quotationGrandTotal parity with calc.ts computeTotals', () =
     });
     expect(serverGrandTotal(legacy)).toBe(350000);
     expect(computeTotals(legacy).grandTotal).toBe(350000);
+  });
+});
+
+describe('server.js quotationSalesAmount parity with Sales scope', () => {
+  it('uses only discounted, VAT-adjusted services when materials are client-supplied', () => {
+    const quotation = q({
+      salesValueScope: 'services_only',
+      components: [{ id: 'c1', qty: 2, unitCost: 10000, forex: 1, contingencyPct: 0, discountPct: 0 }],
+      services: [{ id: 's1', amount: 50000 }],
+      servicesFromManpower: false,
+      discountPct: 10,
+      vatPct: 12,
+    });
+
+    expect(serverSalesAmount(quotation)).toBeCloseTo(salesAccountedTotal(quotation, computeTotals(quotation)), 6);
   });
 });
 

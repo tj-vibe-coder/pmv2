@@ -678,7 +678,7 @@ export default function QuotationEditor() {
     { key: 'description', label: 'Description', width: 260, render: (r, idx) => (
       <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
         <TextField value={r.description ?? ''} onChange={(e) => updateRow('components', idx, 'description', e.target.value)}
-          variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
+          variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
           InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
           inputProps={{ style: { padding: '6px 4px' } }} />
         {r.historicalPriceSource && (
@@ -699,11 +699,6 @@ export default function QuotationEditor() {
               sx={{ height: 20, cursor: 'pointer', '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }}
             />
           </Tooltip>
-        )}
-        {r.subheader && (
-          <Chip label={`Heading: ${r.subheader}`} size="small" color="primary" variant="outlined"
-            onDelete={() => clearComponentSubheader(r.id)} disabled={isLegacy}
-            sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />
         )}
       </Stack>
     ) },
@@ -794,13 +789,15 @@ export default function QuotationEditor() {
     const label = subheaderLabel.trim();
     if (!label) return;
     if (subheaderDialogOpen === 'services' && selectedSvcIds.size) {
+      const firstId = quotation.services.find((s) => selectedSvcIds.has(s.id))?.id;
       setField('services', quotation.services.map((s) =>
-        selectedSvcIds.has(s.id) ? { ...s, subheader: label } : s,
+        s.id === firstId ? { ...s, subheader: label } : s,
       ));
       setSelectedSvcIds(new Set());
     } else if (subheaderDialogOpen === 'components' && selectedCompIds.size) {
+      const firstId = quotation.components.find((c) => selectedCompIds.has(c.id))?.id;
       setField('components', quotation.components.map((c) =>
-        selectedCompIds.has(c.id) ? { ...c, subheader: label } : c,
+        c.id === firstId ? { ...c, subheader: label } : c,
       ));
       setSelectedCompIds(new Set());
     }
@@ -813,11 +810,9 @@ export default function QuotationEditor() {
   const ungroupComp = (compId: string) => {
     setField('components', quotation.components.map((c) => c.id === compId ? { ...c, group: undefined } : c));
   };
-  const clearServiceSubheader = (serviceId: string) => {
-    setField('services', quotation.services.map((s) => s.id === serviceId ? { ...s, subheader: undefined } : s));
-  };
-  const clearComponentSubheader = (componentId: string) => {
-    setField('components', quotation.components.map((c) => c.id === componentId ? { ...c, subheader: undefined } : c));
+  const clearSelectedSubheaders = (section: 'components' | 'services') => {
+    const selected = section === 'components' ? selectedCompIds : selectedSvcIds;
+    setField(section, quotation[section].map((line) => selected.has(line.id) ? { ...line, subheader: undefined } : line));
   };
   // Per-group export style. Absent = 'lot' (collapse to a single "1.00 LOT"
   // line priced at the group total); 'itemized' shows each member's own qty
@@ -841,11 +836,10 @@ export default function QuotationEditor() {
         { key: 'description', label: 'Description', render: (r, idx) => (
           <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
             <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)}
-              variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
+              variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
               inputProps={{ style: { padding: '6px 4px' } }} />
             {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupSvc(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
-            {r.subheader && <Chip label={`Heading: ${r.subheader}`} size="small" color="primary" variant="outlined" onDelete={() => clearServiceSubheader(r.id)} disabled={isLegacy} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
           </Stack>
         ) },
         { key: 'days', label: 'Days', width: 80, type: 'number', align: 'right', min: 0 },
@@ -864,9 +858,8 @@ export default function QuotationEditor() {
         { key: 'code', label: 'Code', width: 90, mono: true },
         { key: 'description', label: 'Description', render: (r, idx) => (
           <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
-            <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)} variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
+            <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)} variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }} inputProps={{ style: { padding: '6px 4px' } }} />
-            {r.subheader && <Chip label={`Heading: ${r.subheader}`} size="small" color="primary" variant="outlined" onDelete={() => clearServiceSubheader(r.id)} disabled={isLegacy} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
           </Stack>
         ) },
         { key: 'amount', label: 'Amount', width: 150, type: 'number', align: 'right', step: 0.01 },
@@ -1727,6 +1720,10 @@ export default function QuotationEditor() {
               control={<Switch size="small" checked={!!quotation.hidePartNumbersInPdf} onChange={(e) => setField('hidePartNumbersInPdf', e.target.checked)} disabled={isLegacy} />}
               label={<Typography variant="caption">Hide part numbers in PDF</Typography>}
             />
+            <FormControlLabel
+              control={<Switch size="small" checked={quotation.salesValueScope === 'services_only'} onChange={(e) => setField('salesValueScope', e.target.checked ? 'services_only' : undefined)} disabled={isLegacy} />}
+              label={<Typography variant="caption">Client supplies materials — Sales counts services only</Typography>}
+            />
           </Stack>
           <Stack direction="row" spacing={1}>
             {selectedCompIds.size >= 2 && !isLegacy && (
@@ -1738,6 +1735,9 @@ export default function QuotationEditor() {
               <Button size="small" variant="outlined" onClick={() => setSubheaderDialogOpen('components')}>
                 Add subheader ({selectedCompIds.size})
               </Button>
+            )}
+            {selectedCompIds.size >= 1 && quotation.components.some((c) => selectedCompIds.has(c.id) && c.subheader) && !isLegacy && (
+              <Button size="small" variant="text" onClick={() => clearSelectedSubheaders('components')}>Clear subheader</Button>
             )}
             {!isLegacy && (
               <>
@@ -1833,6 +1833,9 @@ export default function QuotationEditor() {
               <Button size="small" variant="outlined" onClick={() => setSubheaderDialogOpen('services')}>
                 Add subheader ({selectedSvcIds.size})
               </Button>
+            )}
+            {selectedSvcIds.size >= 1 && quotation.services.some((s) => selectedSvcIds.has(s.id) && s.subheader) && !isLegacy && (
+              <Button size="small" variant="text" onClick={() => clearSelectedSubheaders('services')}>Clear subheader</Button>
             )}
             {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addService}>Add scope item</Button>}
           </Stack>

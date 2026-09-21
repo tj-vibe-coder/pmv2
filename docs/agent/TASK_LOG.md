@@ -1,5 +1,20 @@
 # Task Log
 
+## 2026-09-21 — Client-supplied materials Sales scope and heading layout repair
+
+### Completed
+
+- Added **Client supplies materials — Sales counts services only** to the component section of an editable quotation.
+- When enabled, the Sales project list and Calcsheet-to-Project-List contract sync use only Engineering Services, with the quotation’s discount and VAT applied; the quotation and BOM data remain complete.
+- Repaired the inline-subheader layout regression: the long heading label is no longer rendered inside every editable description cell, and headings are anchored to the first selected row. Selected headings can be cleared through the section action.
+
+### Verification
+
+- `CI=true npm test -- --watch=false --runInBand src/utils/calcsheet/salesAccounting.test.ts src/utils/calcsheet/subheaders.test.ts src/utils/calcsheet/serverGrandTotal.parity.test.ts` — passed (24 tests).
+- `npx tsc --noEmit` — passed.
+- `git diff --check` — passed.
+- Production build was not repeated because it remains blocked by the unrelated exhaustive-deps warning in `src/components/analytics/AnalyticsStudioPage.tsx:1115`.
+
 ## 2026-09-21 — Hide quotation part numbers in customer PDFs
 
 ### Completed

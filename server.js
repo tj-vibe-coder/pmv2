@@ -3579,6 +3579,38 @@ function quotationGrandTotal(q) {
   return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
 }
 
+// Sales can be explicitly scoped to services when a partner or client purchases
+// the materials directly. The quotation stays intact; only Sales reporting and
+// the Project List contract amount use this reduced figure.
+function quotationSalesAmount(q) {
+  if (!q || q.salesValueScope !== 'services_only') return quotationGrandTotal(q);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const manpower = Array.isArray(q.manpower) ? q.manpower : [];
+  const services = Array.isArray(q.services) ? q.services : [];
+  const servicesLineSum = () => services.reduce((s, l) => s + num(l.amount), 0);
+  let servicesSub = 0;
+
+  if (q.formulaVersion === 'legacy' && q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.servicesSubtotal))) {
+    servicesSub = Number(q.legacyTotalsSnapshot.servicesSubtotal);
+  } else if (q.servicesFromManpower) {
+    if (q.servicesPerLinePricing) {
+      servicesSub = servicesLineSum();
+    } else {
+      const engineeringServicesQty = Math.max(1, num(q.engineeringServicesQty) || 1);
+      const laborCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0);
+      const contingency = q.formulaVersion === 'legacy' ? num(q.globalContingencyPct) / 100 : 0;
+      const laborWithContingency = q.formulaVersion === 'legacy'
+        ? manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)) * (1 + contingency), 0)
+        : laborCost * engineeringServicesQty;
+      servicesSub = laborWithContingency * (1 + num(q.laborMarkupPct) / 100);
+    }
+  } else {
+    servicesSub = servicesLineSum();
+  }
+
+  return servicesSub * (1 - num(q.discountPct) / 100) * (1 + num(q.vatPct) / 100);
+}
+
 // Spendable Project Budget seeded onto the Project List row at proposal→project
 // handoff. Matches src/utils/calcsheet/calc.ts ioctCostBasis: VAT-ex value minus
 // gross margin (equals total cost when cost fields are real; otherwise VAT-ex
@@ -3729,7 +3761,7 @@ function contractAmountPatchFromSales(mainData, amount, quotation, project, now)
 
 function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
-  const amount = quotationGrandTotal(quotation);
+  const amount = quotationSalesAmount(quotation);
   const budget = quotationCostBasis(quotation);
   const year = Number.isFinite(new Date(project.date || now).getFullYear())
     ? new Date(project.date || now).getFullYear()
@@ -3858,7 +3890,7 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   }
 
   const linkedDoc = await findLinkedMainProject(project);
-  const salesAmount = quotationGrandTotal(selectedQuotation);
+  const salesAmount = quotationSalesAmount(selectedQuotation);
   // Default path when already linked: push Sales contract amount (IOCT/ACTI grand
   // total) without remapping the whole Project List row. Late price settlements
   // and quotation revisions used to leave Projects monitoring stuck on the first
@@ -3952,7 +3984,7 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     projectNo: mapped.project_no || '',
     quotationId: selectedQuotation.id,
     quotationKind: selectedQuotation.kind,
-    amount: quotationGrandTotal(selectedQuotation),
+    amount: quotationSalesAmount(selectedQuotation),
   };
 }
 
@@ -4146,7 +4178,7 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
     const mainPatch = selectedQuotation
       ? contractAmountPatchFromSales(
           mainData,
-          quotationGrandTotal(selectedQuotation),
+          quotationSalesAmount(selectedQuotation),
           selectedQuotation,
           calcsheet,
           now,
@@ -4165,7 +4197,7 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
       ...(selectedQuotation ? {
         quotationId: selectedQuotation.id,
         quotationKind: selectedQuotation.kind,
-        amount: quotationGrandTotal(selectedQuotation),
+        amount: quotationSalesAmount(selectedQuotation),
       } : {}),
     });
   } catch (err) {

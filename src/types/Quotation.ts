@@ -122,6 +122,7 @@ export interface CustomerPO {
 }
 
 export type FormulaVersion = 'legacy' | 'current';
+export type SalesValueScope = 'full_quotation' | 'services_only';
 
 export interface QuotationImportMeta {
   sourceFile: string;
@@ -269,6 +270,8 @@ export interface Quotation {
    * member's own qty + UOM while still pricing the group as one combined
    * amount. */
   componentGroupDisplay?: Record<string, 'lot' | 'itemized'>;
+  /** Controls the value reported in Sales and synced to the Project List. */
+  salesValueScope?: SalesValueScope;
   /** Suppresses component part numbers from the customer-facing PDF only. */
   hidePartNumbersInPdf?: boolean;
   pageBreakBeforeTerms?: boolean;
