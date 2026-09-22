@@ -363,6 +363,15 @@ export default function QuotationEditor() {
   // the version snapshot the server takes of the pre-save state.
   const [remarkDialogOpen, setRemarkDialogOpen] = useState(false);
   const [remarkText, setRemarkText] = useState('');
+  // Terms & Conditions confirmation checkbox — required on both the Save
+  // prompt and before Export PDF, so the team consciously re-checks (esp.
+  // Delivery terms) instead of forgetting to update it. Resets to unchecked
+  // every time either dialog opens — this is a manual "I looked" gate, not a
+  // one-time setting.
+  const [saveTermsConfirmed, setSaveTermsConfirmed] = useState(false);
+  const [exportConfirmOpen, setExportConfirmOpen] = useState(false);
+  const [exportTermsConfirmed, setExportTermsConfirmed] = useState(false);
+  const [pendingExportLayout, setPendingExportLayout] = useState<QuotationPdfLayout>('standard');
 
   // Saved-version history (snapshots captured server-side on every save).
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -454,6 +463,11 @@ export default function QuotationEditor() {
   const customer = clients.find((c) => c.id === project.customerId);
   const issuer = quotation.kind;
   const isLegacy = quotation.formulaVersion === 'legacy';
+  // Shown as a quick preview on the Terms & Conditions confirmation dialogs
+  // (Save / Export PDF) so the team can eyeball the actual Delivery wording —
+  // the thing most often left stale, e.g. after enabling the delivery fee —
+  // without having to open the Terms & Conditions accordion separately.
+  const effectiveDeliveryText = quotation.termsOverrides?.deliveryLines ?? defaultDeliveryText(quotation.deliveryTerms);
   const quotationDate =
     quotation.dateSent
     || quotation.createdAt?.slice(0, 10)
@@ -513,7 +527,21 @@ export default function QuotationEditor() {
       return;
     }
     setRemarkText('');
+    setSaveTermsConfirmed(false);
     setRemarkDialogOpen(true);
+  };
+
+  // Export PDF is gated behind the same Terms & Conditions confirmation —
+  // opens a small dialog instead of exporting immediately.
+  const requestExportPdf = (layout: QuotationPdfLayout = 'standard') => {
+    setPendingExportLayout(layout);
+    setExportTermsConfirmed(false);
+    setExportConfirmOpen(true);
+  };
+
+  const confirmExportPdf = () => {
+    setExportConfirmOpen(false);
+    void exportPdf(pendingExportLayout);
   };
 
   const confirmSave = async (remark: string) => {
@@ -1145,7 +1173,7 @@ export default function QuotationEditor() {
           <Button
             startIcon={<PictureAsPdfIcon />}
             variant={isLegacy ? 'contained' : 'outlined'}
-            onClick={() => exportPdf()}
+            onClick={() => requestExportPdf('standard')}
             disabled={isDirty}
             title={isDirty ? 'Save changes before exporting' : undefined}
           >
@@ -1156,7 +1184,7 @@ export default function QuotationEditor() {
               startIcon={<PictureAsPdfIcon />}
               variant="contained"
               color="primary"
-              onClick={() => exportPdf('compact')}
+              onClick={() => requestExportPdf('compact')}
               disabled={isDirty}
               title={isDirty ? 'Save changes before exporting' : 'Tighter print layout for a short quotation'}
             >
@@ -2203,7 +2231,7 @@ export default function QuotationEditor() {
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            void confirmSave(remarkText);
+            if (saveTermsConfirmed) void confirmSave(remarkText);
           }
         }}
       >
@@ -2222,6 +2250,26 @@ export default function QuotationEditor() {
             value={remarkText}
             onChange={(e) => setRemarkText(e.target.value)}
           />
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+            Current Delivery terms on this quotation:
+          </Typography>
+          <Box sx={{ p: 1, mb: 1.5, bgcolor: 'action.hover', borderRadius: 1, whiteSpace: 'pre-line' }}>
+            <Typography variant="caption" color="text.secondary">{effectiveDeliveryText}</Typography>
+          </Box>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={saveTermsConfirmed}
+                onChange={(e) => setSaveTermsConfirmed(e.target.checked)}
+              />
+            }
+            label={
+              <Typography variant="body2">
+                I've reviewed and confirmed the Terms &amp; Conditions — including Delivery — are correct for this quotation.
+              </Typography>
+            }
+          />
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setRemarkDialogOpen(false)}>Cancel</Button>
@@ -2229,9 +2277,63 @@ export default function QuotationEditor() {
             variant="contained"
             color="primary"
             startIcon={<SaveIcon />}
+            disabled={!saveTermsConfirmed}
             onClick={() => confirmSave(remarkText)}
           >
             Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={exportConfirmOpen}
+        onClose={() => setExportConfirmOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (exportTermsConfirmed) confirmExportPdf();
+          }
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 600 }}>Confirm Terms &amp; Conditions</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Before exporting this quotation to the client, please confirm the Terms &amp; Conditions
+            — especially Delivery — are correct and up to date.
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+            Current Delivery terms on this quotation:
+          </Typography>
+          <Box sx={{ p: 1, mb: 1.5, bgcolor: 'action.hover', borderRadius: 1, whiteSpace: 'pre-line' }}>
+            <Typography variant="caption" color="text.secondary">{effectiveDeliveryText}</Typography>
+          </Box>
+          <FormControlLabel
+            control={
+              <Checkbox
+                autoFocus
+                checked={exportTermsConfirmed}
+                onChange={(e) => setExportTermsConfirmed(e.target.checked)}
+              />
+            }
+            label={
+              <Typography variant="body2">
+                I've reviewed and confirmed the Terms &amp; Conditions — including Delivery — are correct for this quotation.
+              </Typography>
+            }
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setExportConfirmOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<PictureAsPdfIcon />}
+            disabled={!exportTermsConfirmed}
+            onClick={confirmExportPdf}
+          >
+            Confirm &amp; Export
           </Button>
         </DialogActions>
       </Dialog>
