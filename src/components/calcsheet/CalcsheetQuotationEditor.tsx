@@ -261,6 +261,87 @@ function BreakdownCard({ label, color, cost, contingency, contingencyPct, markup
   );
 }
 
+// Shift+click range-select on a row-checkbox column — mirrors OS file-manager
+// selection (Explorer/Finder), but symmetric for checkboxes: a plain click
+// toggles just that row and remembers both the row (the "anchor") and which
+// way it just went (checked or unchecked); a Shift+click replays that SAME
+// action across every row between the anchor and the clicked row — so
+// Shift+click both multi-selects (anchor was just checked) and
+// multi-deselects (anchor was just unchecked). Rows outside the range are
+// never touched.
+//
+// The anchor is remembered by row id, not array position — resolved back to
+// a live index at Shift+click time — so it stays correct even if a row is
+// added, deleted, or drag-reordered in between the two clicks (an index
+// captured at click time would otherwise silently point at the wrong row
+// once the array shifts under it). `rows`/`idx` are the same array/position
+// EditableTable's column `render(row, idx)` already gets, so the range
+// always matches what's on screen.
+function rangeSelectHandler<T extends { id: string }>(
+  rows: T[],
+  selectedIds: Set<string>,
+  anchorRef: React.MutableRefObject<{ id: string; checked: boolean } | null>,
+  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>,
+) {
+  return (idx: number) => (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const anchorIdx = anchorRef.current ? rows.findIndex((r) => r.id === anchorRef.current!.id) : -1;
+    if (e.shiftKey && anchorIdx >= 0) {
+      const { checked } = anchorRef.current!;
+      const from = Math.min(anchorIdx, idx);
+      const to = Math.max(anchorIdx, idx);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (let i = from; i <= to; i++) {
+          if (checked) next.add(rows[i].id); else next.delete(rows[i].id);
+        }
+        return next;
+      });
+      // Anchor stays put — repeated Shift+click from the same starting point
+      // keeps growing/shrinking the same range, matching Explorer/Finder.
+    } else {
+      const rowId = rows[idx].id;
+      const willCheck = !selectedIds.has(rowId);
+      anchorRef.current = { id: rowId, checked: willCheck };
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (willCheck) next.add(rowId); else next.delete(rowId);
+        return next;
+      });
+    }
+  };
+}
+
+// Header "select all / none" checkbox for a row-checkbox column — one click
+// selects every row in the (currently displayed) section, or clears it if
+// everything's already selected; shows the usual indeterminate dash while
+// only some rows are checked. Clears any pending Shift+click anchor so a
+// later range-select starts fresh relative to the bulk action, not a row
+// that may no longer reflect the same context.
+function selectAllHeaderCheckbox<T extends { id: string }>(
+  rows: T[],
+  selectedIds: Set<string>,
+  anchorRef: React.MutableRefObject<{ id: string; checked: boolean } | null>,
+  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>,
+) {
+  const allSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
+  const someSelected = !allSelected && rows.some((r) => selectedIds.has(r.id));
+  return (
+    <Checkbox
+      size="small"
+      sx={{ p: 0 }}
+      checked={allSelected}
+      indeterminate={someSelected}
+      disabled={rows.length === 0}
+      onChange={(e) => {
+        anchorRef.current = null;
+        setSelectedIds(e.target.checked ? new Set(rows.map((r) => r.id)) : new Set());
+      }}
+      title={allSelected ? 'Clear selection' : 'Select all rows'}
+    />
+  );
+}
+
 export default function QuotationEditor() {
   const { id: qid = '' } = useParams();
   const navigate = useNavigate();
@@ -279,6 +360,10 @@ export default function QuotationEditor() {
   const [draft, setDraft] = useState<Quotation | undefined>(saved);
   const [selectedSvcIds, setSelectedSvcIds] = useState<Set<string>>(new Set());
   const [selectedCompIds, setSelectedCompIds] = useState<Set<string>>(new Set());
+  // Last-clicked row (position + resulting checked state) per section, for
+  // Shift+click range-select (rangeSelectHandler above).
+  const svcSelectAnchor = useRef<{ id: string; checked: boolean } | null>(null);
+  const compSelectAnchor = useRef<{ id: string; checked: boolean } | null>(null);
   const [groupDialogOpen, setGroupDialogOpen] = useState<'services' | 'components' | false>(false);
   const [groupLabel, setGroupLabel] = useState('');
   const [subheaderDialogOpen, setSubheaderDialogOpen] = useState<'services' | 'components' | false>(false);
@@ -695,11 +780,16 @@ export default function QuotationEditor() {
     commit('components', [...quotation.components, line] as ComponentLine[]);
   };
 
+  // Shift+click extends the selection across the rows in between (see
+  // rangeSelectHandler above) — bound once per render so every row's
+  // checkbox shares the same anchor.
+  const compSelectClick = rangeSelectHandler(quotation.components, selectedCompIds, compSelectAnchor, setSelectedCompIds);
   const compCols: Column<ComponentLine>[] = [
-    { key: '_select', label: '', width: 36, render: (r) => (
+    { key: '_select', label: selectAllHeaderCheckbox(quotation.components, selectedCompIds, compSelectAnchor, setSelectedCompIds), width: 36, render: (r, idx) => (
       <Checkbox size="small" sx={{ p: 0 }}
         checked={selectedCompIds.has(r.id)}
-        onChange={(e) => setSelectedCompIds((prev) => { const n = new Set(prev); e.target.checked ? n.add(r.id) : n.delete(r.id); return n; })}
+        onClick={compSelectClick(idx)}
+        title="Click to select/deselect · Shift+click to apply to the whole range"
       />
     ) },
     { key: 'code', label: 'Code', width: 90, mono: true },
@@ -852,12 +942,18 @@ export default function QuotationEditor() {
     setField('componentGroupDisplay', { ...(quotation.componentGroupDisplay || {}), [group]: next });
   };
 
+  // Shift+click extends the selection across the rows in between (see
+  // rangeSelectHandler above) — shared by both svcCols variants below since
+  // they select over the same quotation.services array.
+  const svcSelectClick = rangeSelectHandler(quotation.services, selectedSvcIds, svcSelectAnchor, setSelectedSvcIds);
+  const svcSelectAllHeader = selectAllHeaderCheckbox(quotation.services, selectedSvcIds, svcSelectAnchor, setSelectedSvcIds);
   const svcCols: Column<ServiceLine>[] = perLinePricing
     ? [
-        { key: '_select', label: '', width: 36, render: (r) => (
+        { key: '_select', label: svcSelectAllHeader, width: 36, render: (r, idx) => (
           <Checkbox size="small" sx={{ p: 0 }}
             checked={selectedSvcIds.has(r.id)}
-            onChange={(e) => setSelectedSvcIds((prev) => { const n = new Set(prev); e.target.checked ? n.add(r.id) : n.delete(r.id); return n; })}
+            onClick={svcSelectClick(idx)}
+            title="Click to select/deselect · Shift+click to apply to the whole range"
           />
         ) },
         { key: 'code', label: 'Code', width: 90, mono: true },
@@ -879,9 +975,10 @@ export default function QuotationEditor() {
     : [
         // No markup column here: lump mode prices from manpower × Labor Markup %,
         // and manual mode's amounts are final prices with no cost basis to mark up.
-        { key: '_select', label: '', width: 36, render: (r) => (
+        { key: '_select', label: svcSelectAllHeader, width: 36, render: (r, idx) => (
           <Checkbox size="small" sx={{ p: 0 }} checked={selectedSvcIds.has(r.id)}
-            onChange={(e) => setSelectedSvcIds((prev) => { const n = new Set(prev); e.target.checked ? n.add(r.id) : n.delete(r.id); return n; })} />
+            onClick={svcSelectClick(idx)}
+            title="Click to select/deselect · Shift+click to apply to the whole range" />
         ) },
         { key: 'code', label: 'Code', width: 90, mono: true },
         { key: 'description', label: 'Description', render: (r, idx) => (
