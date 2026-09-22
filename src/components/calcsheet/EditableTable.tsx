@@ -15,7 +15,10 @@ import { sanitizeNumericText, parseLenientFloat } from '../../utils/calcsheet/nu
 
 export interface Column<T> {
   key: keyof T | string;
-  label: string;
+  // Usually a plain string; a column that needs interactive header content
+  // (e.g. a "select all" checkbox above a row-checkbox column) can pass a
+  // ReactNode instead.
+  label: ReactNode;
   width?: number | string;
   align?: 'left' | 'right' | 'center';
   type?: 'text' | 'number';
