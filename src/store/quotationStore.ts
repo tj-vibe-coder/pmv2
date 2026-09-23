@@ -209,6 +209,9 @@ const blankQuotation = (
   productContingencyPct: 0,
   laborMarkupPct: 100,
   generalReqMarkupPct: 0,
+  // 5% EWT gross-up on new IOCT quotations only (ACTI quotes never get a
+  // default — see the Quotation.ewtPct doc comment).
+  ewtPct: kind === 'IOCT' ? 5 : undefined,
   globalContingencyPct: 0,
   discountPct: 0,
   vatPct: 0,

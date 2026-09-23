@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 import type { Client, Project, Quotation } from '../../types/Quotation';
 import { PROJECT_STATUSES } from '../../types/Quotation';
 import {
-  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, manpowerCost,
+  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, serviceLineAmount, manpowerCost,
 } from './calc';
 import { quotationRefNo } from './codes';
 
@@ -24,6 +24,9 @@ export async function exportQuotationXlsx(
   wb.created = new Date();
 
   const totals = computeTotals(quotation);
+  // IOCT-only pricing buffer folded into markup — never printed as its own
+  // line/label. See Quotation.ewtPct.
+  const ewtPct = quotation.ewtPct || 0;
   const refNo = quotationRefNo(project.code, recipient?.code, quotation.revision);
   const generalReqtsExportQty = Math.max(1, quotation.generalReqtsExportQty || 1);
   const generalReqtsExportUnitPrice = totals.generalReqtsSubtotal / generalReqtsExportQty;
@@ -172,7 +175,7 @@ export async function exportQuotationXlsx(
         // as one combined amount on the middle row (no per-unit price shown).
         const itemized = quotation.componentGroupDisplay?.[l.group] === 'itemized';
         const groupTotal = isMid
-          ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
+          ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct, ewtPct), 0)
           : 0;
         if (itemized) {
           // Group price shows in both Unit Price and Total on the middle row,
@@ -190,7 +193,7 @@ export async function exportQuotationXlsx(
           ws.getRow(r).values = [l.code, desc, '', '', '', ''];
         }
       } else {
-        ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct), componentLineTotal(l, quotation.productMarkupPct)];
+        ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct, ewtPct), componentLineTotal(l, quotation.productMarkupPct, ewtPct)];
         ws.getCell(r, 5).numFmt = PHP_FMT;
         ws.getCell(r, 6).numFmt = PHP_FMT;
       }
@@ -223,6 +226,11 @@ export async function exportQuotationXlsx(
           groups.set(l.group, arr);
         }
       });
+      // Per-line-pricing-from-manpower amounts already have EWT baked in at
+      // edit time (CalcsheetQuotationEditor's updateServiceRow); manual
+      // lump-sum amounts don't, so it's applied here at display time —
+      // grouping is only reachable in per-line-pricing mode, manual-mode
+      // lines are never grouped (no UI path to set l.group there).
       quotation.services.forEach((l) => {
         if (l.group) {
           const members = groups.get(l.group)!;
@@ -238,7 +246,8 @@ export async function exportQuotationXlsx(
           }
           r++;
         } else {
-          ws.getRow(r).values = [l.code, l.description, 1, 'lot', l.amount, l.amount];
+          const amt = quotation.servicesPerLinePricing ? (l.amount || 0) : serviceLineAmount(l, ewtPct);
+          ws.getRow(r).values = [l.code, l.description, 1, 'lot', amt, amt];
           ws.getCell(r, 5).numFmt = PHP_FMT;
           ws.getCell(r, 6).numFmt = PHP_FMT;
           r++;
@@ -285,7 +294,7 @@ export async function exportQuotationXlsx(
     optionalComponents.forEach((l) => {
       const compSub = [l.brand, l.partNo].filter(Boolean).join(', ');
       const desc = compSub ? `${l.description}\n${compSub}` : l.description;
-      ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct), componentLineTotal(l, quotation.productMarkupPct)];
+      ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct, ewtPct), componentLineTotal(l, quotation.productMarkupPct, ewtPct)];
       if (compSub) ws.getCell(r, 2).alignment = { wrapText: true, vertical: 'top' };
       ws.getCell(r, 5).numFmt = PHP_FMT;
       ws.getCell(r, 6).numFmt = PHP_FMT;

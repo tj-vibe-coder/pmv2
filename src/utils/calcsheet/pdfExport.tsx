@@ -5,7 +5,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { Client, ComponentLine, Project, QuotationKind, Quotation, SalesContact } from '../../types/Quotation';
 import { resolveContact } from '../../types/Client';
 import {
-  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP, NUM,
+  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, serviceLineAmount, PHP, NUM,
 } from './calc';
 import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
 import { quotationRefNo } from './codes';
@@ -261,6 +261,9 @@ interface Props {
 
 function QuotationDoc({ quotation, project, recipient, customer, salesContacts }: Props) {
   const totals = computeTotals(quotation);
+  // IOCT-only pricing buffer folded into markup — never printed as its own
+  // line/label. See Quotation.ewtPct.
+  const ewtPct = quotation.ewtPct || 0;
   const issuer = ISSUER_INFO[quotation.kind];
   const refNo = quotationRefNo(project.code, recipient?.code, quotation.revision);
   const logoUrl = typeof window !== 'undefined' ? `${window.location.origin}${issuer.logo}` : issuer.logo;
@@ -468,7 +471,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     const isMid = members[midIdx].id === l.id;
                     const isFirst = members[0].id === l.id;
                     const groupTotal = isMid
-                      ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
+                      ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct, ewtPct), 0)
                       : 0;
                     // 'itemized' shows each member's own qty + UOM; the group is
                     // still priced as one combined amount on the middle row, so
@@ -491,8 +494,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                       <ComponentDesc l={l} />
                       <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                       <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
-                      <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
-                      <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct))}</Text>
+                      <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct, ewtPct))}</Text>
+                      <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct, ewtPct))}</Text>
                     </View>
                   );
                 })}
@@ -605,8 +608,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                       <Text style={styles.cDesc}>{l.description}</Text>
                       <Text style={styles.cQty}>{NUM(1)}</Text>
                       <Text style={styles.cUom}>LOT</Text>
-                      <Text style={styles.cUnit}>{NUM(l.amount)}</Text>
-                      <Text style={styles.cTotal}>{NUM(l.amount)}</Text>
+                      <Text style={styles.cUnit}>{NUM(serviceLineAmount(l, ewtPct))}</Text>
+                      <Text style={styles.cTotal}>{NUM(serviceLineAmount(l, ewtPct))}</Text>
                     </View>
                   ))
                 )}
@@ -706,8 +709,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                 <ComponentDesc l={l} />
                 <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                 <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
-                <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
-                <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct))}</Text>
+                <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct, ewtPct))}</Text>
+                <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct, ewtPct))}</Text>
               </View>
             ))}
             <View style={styles.trSub}>

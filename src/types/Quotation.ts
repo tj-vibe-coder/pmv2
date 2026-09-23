@@ -170,6 +170,9 @@ export interface ComponentLine {
   leadTimeDays?: number;
   group?: string;
   markupPct?: number;
+  /** Per-line EWT override — same resolution pattern as markupPct (falls
+   * back to Quotation.ewtPct when unset). See Quotation.ewtPct. */
+  ewtPct?: number;
   expectedPurchaseDate?: string;
   historicalPriceSource?: HistoricalPriceSource;
   /** Optional item: priced for reference but NOT included in the contract
@@ -228,6 +231,13 @@ export interface Quotation {
   productContingencyPct?: number;
   laborMarkupPct: number;
   generalReqMarkupPct: number;
+  /** Expanded Withholding Tax gross-up (IOCT quotations). Layered invisibly
+   * onto the existing markup for General Requirements, Supply of Components
+   * and Engineering Services — never printed as its own line/label on the
+   * PDF or Excel export. New IOCT quotations default to 5%; ACTI quotations
+   * and quotations created before this field existed read as 0 (unaffected)
+   * unless set explicitly. */
+  ewtPct?: number;
   globalContingencyPct: number;
   discountPct: number;
   vatPct: number;
