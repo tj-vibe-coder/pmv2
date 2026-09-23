@@ -176,6 +176,10 @@ export interface ComponentLine {
    * cost/subtotal/grand total. Listed in a separate "Optional Items" section
    * on exports so the client can add it if they avail. */
   optional?: boolean;
+  /** Section-header row: a label-only line (uses `description`) inserted to
+   * break the BOM into named sections on screen and on export. Carries no
+   * qty/cost and is excluded from every totals calculation. */
+  isHeader?: boolean;
 }
 
 export interface ServiceLine {

@@ -152,6 +152,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     fontSize: 8.5,
   },
+  // Section-header row inside a table (BOM sub-heading) — a plain tinted bar
+  // spanning the full row, no item number / qty / price columns.
+  trHeader: {
+    flexDirection: 'row',
+    backgroundColor: SECTION_BG,
+    borderTop: `0.5px solid ${BORDER}`,
+    borderBottom: `0.5px solid ${BORDER}`,
+    padding: '3 8',
+  },
+  cHeaderLabel: { fontSize: 8.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3 },
   // Sub-total band — tinted like the table header so the money row stands
   // out from plain item rows without competing with the navy section bars.
   trSub: {
@@ -284,7 +294,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
   // and listed in their own "Optional Items" section (not in the contract total).
   const contractComponents = quotation.components.filter((l) => !l.optional);
   const optionalComponents = quotation.components.filter((l) => l.optional);
-  const codesB = autoNumber('B', contractComponents);
+  // Header rows are label-only dividers — never numbered, never priced.
+  const codesB = autoNumber('B', contractComponents.filter((l) => !l.isHeader));
   const codesOpt = autoNumber('OP', optionalComponents);
 
   // Section presence
@@ -444,6 +455,13 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   <Text style={styles.cTotal}>Total , PhP</Text>
                 </View>
                 {contractComponents.map((l) => {
+                  if (l.isHeader) {
+                    return (
+                      <View style={styles.trHeader} key={l.id}>
+                        <Text style={styles.cHeaderLabel}>{l.description}</Text>
+                      </View>
+                    );
+                  }
                   if (l.group) {
                     const members = compGroups.get(l.group)!;
                     const midIdx = groupedLotDisplayIndex(members.length);

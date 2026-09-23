@@ -33,7 +33,7 @@ import type {
   ComponentLine, GeneralReqLine, HistoricalPriceSource, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
 } from '../../types/Quotation';
 import { EditableTable } from './EditableTable';
-import type { Column } from './EditableTable';
+import type { Column, ContextMenuItem } from './EditableTable';
 import DuplicateQuotationDialog from './DuplicateQuotationDialog';
 import { exportQuotationPdf } from '../../utils/calcsheet/pdfExport';
 import { exportQuotationXlsx } from '../../utils/calcsheet/xlsxExport';
@@ -734,6 +734,41 @@ export default function QuotationEditor() {
   };
   const ungroupComp = (compId: string) => {
     setField('components', quotation.components.map((c) => c.id === compId ? { ...c, group: undefined } : c));
+  };
+
+  // Section-header rows — label-only lines that break the BOM into named
+  // sections (e.g. "FIELD INSTRUMENTS") on screen and on export. Carry no
+  // qty/cost and are excluded from every totals calculation (see calc.ts).
+  const insertHeaderComponent = (idx: number, position: 'above' | 'below') => {
+    const insertAt = position === 'above' ? idx : idx + 1;
+    const list = [...quotation.components];
+    list.splice(insertAt, 0, {
+      id: id(), code: '', description: '', brand: '', partNo: '',
+      qty: 0, uom: '', unitCost: 0, forex: 1, contingencyPct: 0, discountPct: 0,
+      isHeader: true,
+    } as ComponentLine);
+    commit('components', list);
+  };
+
+  const getComponentContextMenu = (row: ComponentLine, idx: number): ContextMenuItem[] => {
+    if (isLegacy) return [];
+    const items: ContextMenuItem[] = [];
+    if (!row.isHeader) {
+      items.push({
+        label: `Group selected (${selectedCompIds.size})`,
+        disabled: selectedCompIds.size < 2,
+        onClick: () => setGroupDialogOpen('components'),
+      });
+      if (row.group) {
+        items.push({ label: 'Ungroup this row', onClick: () => ungroupComp(row.id) });
+      }
+    }
+    items.push(
+      { label: 'Insert header above', dividerBefore: true, onClick: () => insertHeaderComponent(idx, 'above') },
+      { label: 'Insert header below', onClick: () => insertHeaderComponent(idx, 'below') },
+    );
+    items.push({ label: 'Delete row', dividerBefore: true, danger: true, onClick: () => deleteRow('components', idx) });
+    return items;
   };
   // Per-group export style. Absent = 'lot' (collapse to a single "1.00 LOT"
   // line priced at the group total); 'itemized' shows each member's own qty
@@ -1554,6 +1589,8 @@ export default function QuotationEditor() {
           onReorder={(rows) => reorderRows('components', rows)}
           emptyMessage="No components — typical for IOCT services-only quotes"
           readOnly={isLegacy}
+          isHeaderRow={(r) => !!r.isHeader}
+          getContextMenu={getComponentContextMenu}
           footer={
             <>
               {/* colSpan = columns.length so amount lands under Total (drag + data cols except Total) */}

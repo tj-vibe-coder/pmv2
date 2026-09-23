@@ -150,6 +150,16 @@ export async function exportQuotationXlsx(
       }
     });
     contractComponents.forEach((l) => {
+      if (l.isHeader) {
+        ws.mergeCells(`A${r}:F${r}`);
+        const c = ws.getCell(`A${r}`);
+        c.value = l.description;
+        c.font = { bold: true };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: grayBg } };
+        c.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+        r++;
+        return;
+      }
       // Item name on the first line; brand + part number on a wrapped
       // second line (mirrors the PDF's two-line description cell).
       const compSub = [l.brand, l.partNo].filter(Boolean).join(', ');

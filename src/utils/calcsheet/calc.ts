@@ -89,8 +89,8 @@ export function computeTotals(q: Quotation): QuotationTotals {
   // Components: raw cost → per-line contingency → markup.
   // Optional items are excluded from every contract figure (cost/subtotal/
   // grand total) and reported separately via componentsOptionalSubtotal.
-  const contractComponents = q.components.filter((l) => !l.optional);
-  const optionalComponents = q.components.filter((l) => l.optional);
+  const contractComponents = q.components.filter((l) => !l.optional && !l.isHeader);
+  const optionalComponents = q.components.filter((l) => l.optional && !l.isHeader);
   const componentsSubtotal = contractComponents.reduce(
     (s, l) => s + componentLineTotal(l, q.productMarkupPct),
     0,
