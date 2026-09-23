@@ -170,7 +170,11 @@ function mergeSalesContactsWithUsers(
       merged[idx] = {
         ...merged[idx],
         position: patch.position || merged[idx].position,
-        email: patch.email || merged[idx].email,
+        // Email is the opposite priority from position/phone: a hand-curated
+        // seed email (e.g. tj@iocontroltech.com) is the deliberate signing
+        // identity for PDFs and must win over whatever's on the person's
+        // Firestore user account (which may be a personal/login address).
+        email: merged[idx].email || patch.email,
         phone: patch.phone || merged[idx].phone,
       };
     } else {
