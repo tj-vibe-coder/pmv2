@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Typography, Grid, Card, CardContent, Paper, Button, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
@@ -6,6 +6,16 @@ import {
   DialogContentText, DialogActions, TextField, MenuItem,
 } from '@mui/material';
 import { API_BASE } from '../config/api';
+import { useLocation, useNavigate } from 'react-router-dom';
+import MoneyTrailButton from './finance/MoneyTrailButton';
+import { getFinanceTrace } from '../services/financeTraceService';
+import { useFinanceRowFocus } from '../hooks/useFinanceRowFocus';
+import { financeFocusToken, financeFocusUrl, parseFinanceFocus } from '../utils/financeTraceFocus';
+import {
+  cashAdvanceOrigin,
+  reimbursementOrigin,
+  reimbursementSummaryFromTrace,
+} from '../utils/financeModuleOrigins';
 
 const NET_PACIFIC_COLORS = {
   primary: '#2c5aa0', secondary: '#1e4a72', accent1: '#4f7bc8', accent2: '#3c6ba5',
@@ -41,8 +51,8 @@ interface Reimbursement {
   fundingSource: FundingSource | null;
   paidAt: number | null;
   paidBy: string | null;
-  createdAt: number;
-  updatedAt: number;
+  createdAt: number | string;
+  updatedAt: number | string;
   username?: string;
   full_name?: string | null;
 }
@@ -65,12 +75,18 @@ type PayDialogContext =
   | { kind: 'batch-reimb'; ids: string[] };
 
 const ReimbursementDashboard: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [reimbursements, setReimbursements] = useState<Reimbursement[]>([]);
   const [cashAdvances, setCashAdvances] = useState<CashAdvanceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [focusedHistorical, setFocusedHistorical] = useState<Reimbursement | null>(null);
+  const [focusLoading, setFocusLoading] = useState(false);
+  const [focusLoadError, setFocusLoadError] = useState('');
+  const financeRowRefs = useRef(new Map<string, HTMLElement>());
 
   const [payDialog, setPayDialog] = useState<PayDialogContext | null>(null);
   const [payFundingType, setPayFundingType] = useState<'corporate_bank' | 'investor_outofpocket'>('corporate_bank');
@@ -103,6 +119,68 @@ const ReimbursementDashboard: React.FC = () => {
   };
 
   useEffect(() => { fetchData(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const rawFinanceFocus = new URLSearchParams(location.search).get('focus') || '';
+  const focusedOrigin = parseFinanceFocus(rawFinanceFocus);
+  useEffect(() => {
+    if (focusedOrigin?.type !== 'reimbursement') {
+      setFocusedHistorical(null);
+      setFocusLoadError('');
+      return;
+    }
+    if (reimbursements.some((row) => row.id === focusedOrigin.id)) return;
+    let cancelled = false;
+    setFocusLoading(true);
+    setFocusLoadError('');
+    getFinanceTrace(focusedOrigin)
+      .then((trace) => {
+        if (cancelled) return;
+        const summary = reimbursementSummaryFromTrace(trace);
+        if (!summary) {
+          setFocusLoadError('The linked reimbursement could not be found.');
+          return;
+        }
+        setFocusedHistorical({
+          id: summary.id,
+          liquidationId: summary.liquidationId,
+          formNo: summary.formNo,
+          employeeId: '',
+          employeeName: summary.employeeName,
+          origin: summary.caId ? 'ca_excess' : 'no_ca',
+          amount: summary.amount,
+          caId: summary.caId,
+          status: summary.status === 'paid' ? 'paid' : 'pending',
+          fundingSource: null,
+          paidAt: null,
+          paidBy: null,
+          createdAt: summary.createdAt,
+          updatedAt: summary.createdAt,
+        });
+      })
+      .catch((caught) => {
+        if (!cancelled) setFocusLoadError(caught instanceof Error ? caught.message : 'Failed to load reimbursement.');
+      })
+      .finally(() => {
+        if (!cancelled) setFocusLoading(false);
+      });
+    return () => { cancelled = true; };
+    // The URL token and pending-list refresh are the only reload triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawFinanceFocus, reimbursements]);
+
+  const displayedReimbursements = useMemo(() => {
+    if (!focusedHistorical || reimbursements.some((row) => row.id === focusedHistorical.id)) {
+      return reimbursements;
+    }
+    return [focusedHistorical, ...reimbursements];
+  }, [focusedHistorical, reimbursements]);
+
+  const financeFocus = useFinanceRowFocus({
+    records: displayedReimbursements,
+    originForRecord: reimbursementOrigin,
+    loading: loading || focusLoading,
+    rowRefs: financeRowRefs,
+  });
 
   const held = useMemo(
     () => cashAdvances.filter(ca => ca.status === 'approved' && Number(ca.balance_remaining) > 0),
@@ -204,6 +282,23 @@ const ReimbursementDashboard: React.FC = () => {
 
       {error && <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setError('')}>{error}</Alert>}
 
+      {(financeFocus.focusedKey || financeFocus.focusError || focusLoadError) && (
+        <Alert
+          severity={(financeFocus.focusError || focusLoadError) ? 'warning' : 'info'}
+          sx={{ mb: 1.5 }}
+          action={(
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              {financeFocus.hasBackSource && <Button color="inherit" size="small" onClick={financeFocus.backToSource}>Back to source</Button>}
+              <Button color="inherit" size="small" onClick={financeFocus.clearFocus}>Clear focus</Button>
+            </Box>
+          )}
+        >
+          {focusLoading
+            ? 'Loading the exact reimbursement…'
+            : focusLoadError || financeFocus.focusError || 'Showing the exact reimbursement from the money trail.'}
+        </Alert>
+      )}
+
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
         <Grid size={{ xs: 6, sm: 3 }}>
           <Card sx={{ background: 'linear-gradient(135deg, #e53935 0%, #ef9a9a 100%)', color: 'white' }}>
@@ -247,7 +342,7 @@ const ReimbursementDashboard: React.FC = () => {
         <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2 }}>
           <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
-              Reimbursement Claims ({reimbursements.length})
+              Reimbursement Claims ({displayedReimbursements.length})
             </Typography>
             <Button
               variant="contained"
@@ -282,31 +377,78 @@ const ReimbursementDashboard: React.FC = () => {
               <TableBody>
                 {loading ? (
                   <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4 }}><CircularProgress size={28} /></TableCell></TableRow>
-                ) : reimbursements.length === 0 ? (
+                ) : displayedReimbursements.length === 0 ? (
                   <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>No pending reimbursement claims.</TableCell></TableRow>
-                ) : reimbursements.map(r => (
-                  <TableRow key={r.id} hover selected={selectedIds.includes(r.id)} sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' } }}>
+                ) : displayedReimbursements.map(r => {
+                  const origin = reimbursementOrigin(r);
+                  const rowToken = financeFocusToken(origin);
+                  const focused = financeFocus.isFocused(origin);
+                  const historical = r.status !== 'pending';
+                  return (
+                  <TableRow
+                    key={r.id}
+                    hover
+                    selected={selectedIds.includes(r.id)}
+                    ref={(element: HTMLTableRowElement | null) => {
+                      if (element) financeRowRefs.current.set(rowToken, element);
+                      else financeRowRefs.current.delete(rowToken);
+                    }}
+                    aria-current={focused ? 'true' : undefined}
+                    sx={{
+                      '&:nth-of-type(odd)': { backgroundColor: focused ? 'rgba(44,90,160,0.14)' : 'rgba(0,0,0,0.02)' },
+                      ...(focused ? { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px' } : {}),
+                    }}
+                  >
                     <TableCell padding="checkbox">
-                      <Checkbox checked={selectedIds.includes(r.id)} onChange={() => toggleOne(r.id)} />
+                      <Checkbox checked={selectedIds.includes(r.id)} onChange={() => toggleOne(r.id)} disabled={historical} />
                     </TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{r.formNo || '—'}</TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem' }}>
+                      {r.liquidationId ? (
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          color="warning"
+                          label={r.formNo || 'Open liquidation'}
+                          onClick={() => navigate(financeFocusUrl(
+                            { type: 'liquidation', id: r.liquidationId, rowId: '__form__' },
+                            `${location.pathname}${location.search}`,
+                          ))}
+                          sx={{ cursor: 'pointer' }}
+                        />
+                      ) : '—'}
+                    </TableCell>
                     <TableCell sx={{ fontSize: '0.8rem' }}>{r.employeeName || r.full_name || r.username || '—'}</TableCell>
                     <TableCell sx={{ fontSize: '0.8rem' }}>
                       <Chip
                         size="small"
-                        label={r.origin === 'ca_excess' ? 'CA Excess' : 'Out-of-pocket'}
-                        color={r.origin === 'ca_excess' ? 'warning' : 'info'}
+                        label={historical ? 'Paid · historical' : r.origin === 'ca_excess' ? 'CA Excess' : 'Out-of-pocket'}
+                        color={historical ? 'success' : r.origin === 'ca_excess' ? 'warning' : 'info'}
                       />
+                      {r.caId && (
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label="Open CA"
+                          onClick={() => navigate(financeFocusUrl(
+                            cashAdvanceOrigin({ id: r.caId as string }),
+                            `${location.pathname}${location.search}`,
+                          ))}
+                          sx={{ ml: 0.5, cursor: 'pointer' }}
+                        />
+                      )}
                     </TableCell>
                     <TableCell sx={{ fontSize: '0.8rem' }}>{formatDate(r.createdAt)}</TableCell>
                     <TableCell sx={{ fontSize: '0.8rem' }} align="right">{formatPHP(Number(r.amount) || 0)}</TableCell>
                     <TableCell align="right">
-                      <Button size="small" onClick={() => openPayDialog({ kind: 'single-reimb', reimb: r })} sx={{ color: NET_PACIFIC_COLORS.primary }}>
-                        Pay
-                      </Button>
+                      {!historical && (
+                        <Button size="small" onClick={() => openPayDialog({ kind: 'single-reimb', reimb: r })} sx={{ color: NET_PACIFIC_COLORS.primary }}>
+                          Pay
+                        </Button>
+                      )}
+                      <MoneyTrailButton origin={origin} compact onResolved={fetchData} />
                     </TableCell>
                   </TableRow>
-                ))}
+                );})}
               </TableBody>
             </Table>
           </TableContainer>

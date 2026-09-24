@@ -19,8 +19,10 @@ import {
 } from '@mui/material';
 import { Save as SaveIcon, Edit as EditIcon } from '@mui/icons-material';
 import dataService from '../services/dataService';
-import { Project } from '../types/Project';
+import { Project, CommercialTrail, ActiToIoctPoStatus } from '../types/Project';
 import { Client } from '../types/Client';
+import { applyBackToBackExpectedDates, stripCommercialTrail } from '../utils/commercialTrail';
+import { PAYMENT_TERMS_OPTIONS } from '../types/Invoice';
 
 const API_BASE = '/api';
 
@@ -78,6 +80,18 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
     with_acti: false,
     partner_id: null as string | null,
     partner_name: '',
+    acti_to_ioct_po_number: '',
+    acti_to_ioct_po_date: '',
+    acti_to_ioct_po_status: 'pending' as ActiToIoctPoStatus,
+    coc_served_date: '',
+    coc_approved_date: '',
+    partner_si_no: '',
+    partner_si_date: '',
+    partner_si_terms_days: 60,
+    partner_si_expected_collection_date: '',
+    ioct_expected_invoice_date: '',
+    ioct_expected_collection_date: '',
+    trail_notes: '',
   });
 
   useEffect(() => {
@@ -119,6 +133,18 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
         with_acti: !!project.with_acti,
         partner_id: project.partner_id ?? null,
         partner_name: project.partner_name || '',
+        acti_to_ioct_po_number: project.commercial_trail?.acti_to_ioct_po_number || '',
+        acti_to_ioct_po_date: project.commercial_trail?.acti_to_ioct_po_date || '',
+        acti_to_ioct_po_status: project.commercial_trail?.acti_to_ioct_po_status || 'pending',
+        coc_served_date: project.commercial_trail?.coc_served_date || '',
+        coc_approved_date: project.commercial_trail?.coc_approved_date || '',
+        partner_si_no: project.commercial_trail?.partner_si_no || '',
+        partner_si_date: project.commercial_trail?.partner_si_date || '',
+        partner_si_terms_days: project.commercial_trail?.partner_si_terms_days ?? 60,
+        partner_si_expected_collection_date: project.commercial_trail?.partner_si_expected_collection_date || '',
+        ioct_expected_invoice_date: project.commercial_trail?.ioct_expected_invoice_date || '',
+        ioct_expected_collection_date: project.commercial_trail?.ioct_expected_collection_date || '',
+        trail_notes: project.commercial_trail?.notes || '',
       });
     }
   }, [open, project]);
@@ -164,7 +190,7 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
     setFormData((prev) => ({
       ...prev,
       [field]:
-        field.includes('amount') || field.includes('percent') || field === 'duration_days' || field === 'year'
+        field.includes('amount') || field.includes('percent') || field === 'duration_days' || field === 'year' || field === 'partner_si_terms_days'
           ? Number(value) || 0
           : value,
     }));
@@ -232,6 +258,30 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
         partner_id: formData.with_acti ? formData.partner_id : null,
         partner_name: formData.with_acti ? formData.partner_name : '',
       };
+      if (formData.with_acti) {
+        const trail: CommercialTrail = applyBackToBackExpectedDates({
+          acti_to_ioct_po_number: formData.acti_to_ioct_po_number.trim() || undefined,
+          acti_to_ioct_po_date: formData.acti_to_ioct_po_date || undefined,
+          acti_to_ioct_po_status: formData.acti_to_ioct_po_number.trim()
+            ? 'received'
+            : formData.acti_to_ioct_po_status,
+          coc_served_date: formData.coc_served_date || undefined,
+          coc_approved_date: formData.coc_approved_date || undefined,
+          partner_si_no: formData.partner_si_no.trim() || undefined,
+          partner_si_date: formData.partner_si_date || undefined,
+          partner_si_terms_days: Number.isFinite(Number(formData.partner_si_terms_days))
+            ? Number(formData.partner_si_terms_days)
+            : undefined,
+          partner_si_expected_collection_date: formData.partner_si_expected_collection_date || undefined,
+          ioct_expected_invoice_date: formData.ioct_expected_invoice_date || undefined,
+          ioct_expected_collection_date: formData.ioct_expected_collection_date || undefined,
+          notes: formData.trail_notes.trim() || undefined,
+        });
+        const stripped = stripCommercialTrail(trail);
+        if (stripped) payload.commercial_trail = stripped;
+      } else if (project.commercial_trail) {
+        payload.commercial_trail = project.commercial_trail;
+      }
 
       const result = await dataService.updateProject(project.id, payload);
 
@@ -431,7 +481,15 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
           </Typography>
           <Grid container spacing={2}>
             <Grid size={{ xs: 12, md: 6 }}>
-              <TextField fullWidth label="PO Number" value={formData.po_number} onChange={handleInputChange('po_number')} variant="outlined" size="small" />
+              <TextField
+                fullWidth
+                label={formData.with_acti ? 'Customer PO (to ACTI)' : 'PO Number'}
+                value={formData.po_number}
+                onChange={handleInputChange('po_number')}
+                variant="outlined"
+                size="small"
+                helperText={formData.with_acti ? 'End-user PO issued to ACTI, not ACTI’s PO to IOCT' : 'End-user PO issued to IOCT'}
+              />
             </Grid>
             <Grid size={{ xs: 12, md: 6 }}>
               <TextField fullWidth label="PO Date (Project Start)" type="date" value={formData.po_date} onChange={handleInputChange('po_date')} variant="outlined" size="small" InputLabelProps={{ shrink: true }} />
@@ -440,6 +498,96 @@ const EditProjectDialog: React.FC<EditProjectDialogProps> = ({ open, project, on
               <TextField fullWidth label="Client Approver" value={formData.client_approver} onChange={handleInputChange('client_approver')} variant="outlined" size="small" />
             </Grid>
           </Grid>
+
+          {formData.with_acti && (
+            <>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600, color: '#1a202c' }}>
+                ACTI commercial trail
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
+                Coordination only — these dates do not create an IOCT invoice or change Collections AR.
+              </Typography>
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, md: 4 }}>
+                  <TextField
+                    fullWidth
+                    label="ACTI PO (to IOCT)"
+                    value={formData.acti_to_ioct_po_number}
+                    onChange={handleInputChange('acti_to_ioct_po_number')}
+                    variant="outlined"
+                    size="small"
+                    placeholder="Pending"
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, md: 4 }}>
+                  <TextField
+                    fullWidth
+                    label="ACTI PO date"
+                    type="date"
+                    value={formData.acti_to_ioct_po_date}
+                    onChange={handleInputChange('acti_to_ioct_po_date')}
+                    variant="outlined"
+                    size="small"
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, md: 4 }}>
+                  <TextField
+                    fullWidth
+                    select
+                    label="ACTI PO status"
+                    value={formData.acti_to_ioct_po_number.trim() ? 'received' : formData.acti_to_ioct_po_status}
+                    onChange={handleInputChange('acti_to_ioct_po_status')}
+                    variant="outlined"
+                    size="small"
+                  >
+                    <MenuItem value="pending">Pending</MenuItem>
+                    <MenuItem value="received">Received</MenuItem>
+                  </TextField>
+                </Grid>
+                <Grid size={{ xs: 12, md: 6 }}>
+                  <TextField fullWidth label="COC served" type="date" value={formData.coc_served_date} onChange={handleInputChange('coc_served_date')} variant="outlined" size="small" InputLabelProps={{ shrink: true }} />
+                </Grid>
+                <Grid size={{ xs: 12, md: 6 }}>
+                  <TextField fullWidth label="COC approved" type="date" value={formData.coc_approved_date} onChange={handleInputChange('coc_approved_date')} variant="outlined" size="small" InputLabelProps={{ shrink: true }} />
+                </Grid>
+                <Grid size={{ xs: 12, md: 4 }}>
+                  <TextField fullWidth label="ACTI SI to customer" value={formData.partner_si_no} onChange={handleInputChange('partner_si_no')} variant="outlined" size="small" placeholder="e.g. SI#0076" />
+                </Grid>
+                <Grid size={{ xs: 12, md: 4 }}>
+                  <TextField fullWidth label="ACTI SI date" type="date" value={formData.partner_si_date} onChange={handleInputChange('partner_si_date')} variant="outlined" size="small" InputLabelProps={{ shrink: true }} />
+                </Grid>
+                <Grid size={{ xs: 12, md: 4 }}>
+                  <TextField
+                    fullWidth
+                    select
+                    label="ACTI SI terms"
+                    value={formData.partner_si_terms_days}
+                    onChange={handleInputChange('partner_si_terms_days')}
+                    variant="outlined"
+                    size="small"
+                  >
+                    {PAYMENT_TERMS_OPTIONS.map((opt) => (
+                      <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
+                <Grid size={{ xs: 12, md: 4 }}>
+                  <TextField fullWidth label="ACTI expected collection" type="date" value={formData.partner_si_expected_collection_date} onChange={handleInputChange('partner_si_expected_collection_date')} variant="outlined" size="small" InputLabelProps={{ shrink: true }} helperText="Defaults to SI date + terms" />
+                </Grid>
+                <Grid size={{ xs: 12, md: 4 }}>
+                  <TextField fullWidth label="IOCT expected invoice" type="date" value={formData.ioct_expected_invoice_date} onChange={handleInputChange('ioct_expected_invoice_date')} variant="outlined" size="small" InputLabelProps={{ shrink: true }} />
+                </Grid>
+                <Grid size={{ xs: 12, md: 4 }}>
+                  <TextField fullWidth label="IOCT expected collection" type="date" value={formData.ioct_expected_collection_date} onChange={handleInputChange('ioct_expected_collection_date')} variant="outlined" size="small" InputLabelProps={{ shrink: true }} />
+                </Grid>
+                <Grid size={{ xs: 12 }}>
+                  <TextField fullWidth label="Trail notes" value={formData.trail_notes} onChange={handleInputChange('trail_notes')} variant="outlined" size="small" multiline rows={2} />
+                </Grid>
+              </Grid>
+            </>
+          )}
         </Box>
       </DialogContent>
 

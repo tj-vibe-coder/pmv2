@@ -7,6 +7,8 @@ import {
 } from '@mui/material';
 import { API_BASE } from '../../config/api';
 import { normalizeExpenseCategory } from '../../data/financeCategories';
+import type { Project as CalcsheetProject, Quotation } from '../../types/Quotation';
+import { resolveCalcsheetBudget } from '../../utils/calcsheetBudget';
 
 const NET_PACIFIC_COLORS = {
   primary: '#2c5aa0', secondary: '#1e4a72', accent1: '#4f7bc8', accent2: '#3c6ba5',
@@ -41,21 +43,7 @@ interface OpsProject {
   id: string;
   project_name?: string;
   project_no?: string;
-}
-
-interface CalcsheetProject {
-  id: string;
-  code?: string;
-  name?: string;
-  mainProjectId?: string;
-  mainProjectNo?: string;
-}
-
-interface CalcsheetQuotation {
-  id: string;
-  projectId: string;
-  kind: 'IOCT' | 'ACTI';
-  legacyTotalsSnapshot?: { grandTotal: number };
+  project_budget?: number;
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -116,34 +104,16 @@ const ProjectExpenseReport: React.FC = () => {
         const found = projects.find(p => p.id === projectId) || null;
         setOpsProject(found);
 
-        // Resolve budget from calcsheet
+        // Resolve budget from calcsheet: IOCT quotation value minus margin (cost).
         const csProjects: CalcsheetProject[] = csProjectsData?.projects || [];
-        const csQuotations: CalcsheetQuotation[] = csQuotationsData?.quotations || [];
-
-        let cp = csProjects.find(p => p.mainProjectId === projectId);
-        if (!cp && found) {
-          const pno = found.project_no;
-          cp = csProjects.find(p => p.code === pno || p.mainProjectNo === pno);
-        }
-
-        if (cp) {
-          // Only consider IOCT quotations that actually carry a frozen total — a
-          // matched quotation with no snapshot must NOT collapse the budget to 0
-          // (that would render a misleading negative "Remaining").
-          const iocts = csQuotations.filter(
-            q => q.projectId === cp!.id && q.kind === 'IOCT'
-              && typeof q.legacyTotalsSnapshot?.grandTotal === 'number'
-          );
-          if (iocts.length > 0) {
-            const best = iocts.reduce((top, q) =>
-              (q.legacyTotalsSnapshot!.grandTotal) > (top.legacyTotalsSnapshot!.grandTotal) ? q : top
-            , iocts[0]);
-            setBudget(best.legacyTotalsSnapshot!.grandTotal);
-          } else {
-            setBudget(null);
-          }
+        const csQuotations: Quotation[] = csQuotationsData?.quotations || [];
+        const ops = found || { id: projectId || '', project_no: undefined };
+        const persisted = Number(found?.project_budget ?? 0);
+        if (persisted > 0) {
+          setBudget(persisted);
         } else {
-          setBudget(null);
+          const resolved = resolveCalcsheetBudget(ops, csProjects, csQuotations);
+          setBudget(resolved ? resolved.amount : null);
         }
       })
       .catch(() => setError('Failed to load project expense data.'))
@@ -246,7 +216,7 @@ const ProjectExpenseReport: React.FC = () => {
               <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                 {loading ? '—' : budget !== null ? formatPHP(budget) : 'No IOCT quotation linked'}
               </Typography>
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>IOCT quotation total</Typography>
+              <Typography variant="caption" sx={{ opacity: 0.8 }}>Quotation value − margin</Typography>
             </CardContent>
           </Card>
         </Grid>

@@ -12,6 +12,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import EditIcon from '@mui/icons-material/Edit';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import HistoryIcon from '@mui/icons-material/History';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import FolderIcon from '@mui/icons-material/Folder';
@@ -20,6 +21,7 @@ import CloudOffIcon from '@mui/icons-material/CloudOff';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
+import { blurNumberInputOnWheel, parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import type { ProjectStatus, Quotation, QuotationKind, OpportunityGrade } from '../../types/Quotation';
 import { PROJECT_STATUSES, projectStatusLabel, OPPORTUNITY_GRADES, opportunityGradeLabel } from '../../types/Quotation';
 import { parseLegacyWorkbook } from '../../utils/calcsheet/legacyImport';
@@ -31,8 +33,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import {
   ensureProposalFolder,
+  ensureWonExecutionLayout,
   ensureExecutionFolder,
-  moveProposalToExecution,
   resolveCorporateDriveId,
   verifyDriveItem,
   resolveSharingUrl,
@@ -163,15 +165,27 @@ export default function ProjectDetail() {
     setMainSyncErr('');
     setMainSyncInfo('');
     try {
+      // Default (force=false): push Sales contract amount to Project List without
+      // wiping status/billing. force=true full-remaps the Project List row.
       const result = await syncMainProject(project.id, { force });
-      const verb = result.action === 'linked-existing'
-        ? 'Linked existing Project List record'
-        : result.action === 'recreated'
-          ? 'Recreated Project List record'
-          : result.action === 'updated'
-            ? 'Updated Project List record'
-            : 'Created Project List record';
-      setMainSyncInfo(`${verb} using ${result.quotationKind} quotation (${PHP(result.amount)}).`);
+      const verb = result.action === 'amount-synced'
+        ? 'Synced contract amount to Project List'
+        : result.action === 'linked-existing'
+          ? 'Linked existing Project List record'
+          : result.action === 'recreated'
+            ? 'Recreated Project List record'
+            : result.action === 'updated'
+              ? 'Updated Project List record'
+              : 'Created Project List record';
+      const prevNote =
+        result.action === 'amount-synced' &&
+        result.previousAmount != null &&
+        Math.abs((result.previousAmount || 0) - (result.amount || 0)) > 1
+          ? ` (was ${PHP(result.previousAmount)})`
+          : '';
+      setMainSyncInfo(
+        `${verb} from ${result.quotationKind} quotation: ${PHP(result.amount)}${prevNote}.`,
+      );
       return result;
     } catch (e) {
       setMainSyncErr(e instanceof Error ? e.message : 'Failed to sync Project List record');
@@ -599,65 +613,27 @@ export default function ProjectDetail() {
         setOneDriveErr('Not signed in to OneDrive.');
         return;
       }
-      // Preferred path: move the existing proposal folder so files travel with the
-      // project (single source of truth). Fallback: create a fresh execution folder
-      // when there's no proposal folder to move OR when the stored proposal folder
-      // has been deleted externally (the move would 404).
-      let proposalGone = !project.proposalFolderId;
-      if (project.proposalFolderId) {
-        try {
-          const driveId = await resolveCorporateDriveId(token);
-          proposalGone = !(await verifyDriveItem(token, driveId, project.proposalFolderId));
-        } catch {
-          // If verify itself errors, optimistically try the move; moveItem will
-          // throw a clearer error if the source is genuinely gone.
-          proposalGone = false;
-        }
+      // Uses IOCT naming when mainProjectNo is set:
+      // `IOCT2605001-LBI RCS Plaridel Troubleshooting`. Renames an existing
+      // PCS-named execution folder if needed; otherwise promotes/creates.
+      const { executionFolder, proposalFolder } = await ensureWonExecutionLayout(token, project);
+      await updateProject(project.id, {
+        ...(proposalFolder?.webUrl ? { proposalFolderUrl: proposalFolder.webUrl } : {}),
+        executionFolderId: executionFolder.id,
+        executionFolderUrl: executionFolder.webUrl,
+      });
+      if (project.mainProjectId) {
+        await fetch(`/api/projects/${project.mainProjectId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            executionFolderId: executionFolder.id,
+            executionFolderUrl: executionFolder.webUrl,
+          }),
+        }).catch(() => {});
       }
-
-      if (!proposalGone && project.proposalFolderId) {
-        const { executionFolder, proposalFolder } = await moveProposalToExecution(token, {
-          code: project.code,
-          name: project.name,
-          proposalFolderId: project.proposalFolderId,
-          executionFolderName: project.mainProjectNo,
-        });
-        await updateProject(project.id, {
-          proposalFolderUrl: proposalFolder.webUrl,
-          executionFolderId: executionFolder.id,
-          executionFolderUrl: executionFolder.webUrl,
-        });
-        if (project.mainProjectId) {
-          await fetch(`/api/projects/${project.mainProjectId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ executionFolderId: executionFolder.id, executionFolderUrl: executionFolder.webUrl }),
-          }).catch(() => {});
-        }
-      } else {
-        // Either no proposal folder ever existed, or it was deleted out-of-band.
-        // Create a fresh execution folder and clear any stale proposal refs so
-        // future clicks don't try to re-promote a ghost.
-        const executionProject = project.mainProjectNo
-          ? { code: project.mainProjectNo, name: '' }
-          : project;
-        const ref = await ensureExecutionFolder(token, executionProject);
-        await updateProject(project.id, {
-          proposalFolderId: '',
-          proposalFolderUrl: '',
-          executionFolderId: ref.id,
-          executionFolderUrl: ref.webUrl,
-        });
-        if (project.mainProjectId) {
-          await fetch(`/api/projects/${project.mainProjectId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ executionFolderId: ref.id, executionFolderUrl: ref.webUrl }),
-          }).catch(() => {});
-        }
-        if (ref.matchedExisting) {
-          setOneDriveInfo(`Linked to existing folder: "${ref.folderName}"`);
-        }
+      if (executionFolder.name) {
+        setOneDriveInfo(`Execution folder: "${executionFolder.name}"`);
       }
     } catch (e) {
       setOneDriveErr(e instanceof Error ? e.message : 'Failed to create execution folder');
@@ -1259,9 +1235,10 @@ export default function ProjectDetail() {
               variant="text"
               size="small"
               disabled={mainSyncBusy}
-              onClick={() => { void syncToMainProject(true); }}
+              onClick={() => { void syncToMainProject(false); }}
+              title="Push latest Sales (IOCT) quotation total to Project List contract amount. Does not reset status or billing."
             >
-              {mainSyncBusy ? 'Syncing...' : 'Resync'}
+              {mainSyncBusy ? 'Syncing...' : 'Sync contract from Sales'}
             </Button>
           </>
         ) : project.status === 'won' ? (
@@ -1757,6 +1734,15 @@ export default function ProjectDetail() {
       <Stack direction="row" alignItems="center" justifyContent="space-between">
         <Typography variant="h5" sx={{ fontWeight: 600 }}>Quotations</Typography>
         <Stack direction="row" spacing={1}>
+          <Button
+            component={Link}
+            to={`/sales/calcsheet/projects/${project.id}/schedule`}
+            variant="outlined"
+            startIcon={<CalendarMonthIcon />}
+            size="small"
+          >
+            Gantt Chart
+          </Button>
           {quotations.length >= 2 && (
             <Button
               component={Link}
@@ -2227,6 +2213,7 @@ export default function ProjectDetail() {
                   size="small"
                   value={pdfForm.validityDays}
                   onChange={(e) => setPdfForm((f) => ({ ...f, validityDays: parseInt(e.target.value, 10) || 30 }))}
+                  onWheel={blurNumberInputOnWheel}
                   sx={{ width: 120 }}
                 />
                 <TextField
@@ -2235,6 +2222,7 @@ export default function ProjectDetail() {
                   size="small"
                   value={pdfForm.warrantyMonths}
                   onChange={(e) => setPdfForm((f) => ({ ...f, warrantyMonths: parseInt(e.target.value, 10) || 12 }))}
+                  onWheel={blurNumberInputOnWheel}
                   sx={{ width: 120 }}
                 />
               </Stack>
@@ -2244,26 +2232,29 @@ export default function ProjectDetail() {
                 <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap>
                   <TextField
                     label="A. General Reqts"
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     size="small"
                     value={pdfForm.sectionA}
-                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionA: parseFloat(e.target.value) || 0 }))}
+                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionA: parseLenientFloat(e.target.value) }))}
                     sx={{ width: 160 }}
                   />
                   <TextField
                     label="B. Components"
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     size="small"
                     value={pdfForm.sectionB}
-                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionB: parseFloat(e.target.value) || 0 }))}
+                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionB: parseLenientFloat(e.target.value) }))}
                     sx={{ width: 160 }}
                   />
                   <TextField
                     label="C. Eng. Services"
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     size="small"
                     value={pdfForm.sectionC}
-                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionC: parseFloat(e.target.value) || 0 }))}
+                    onChange={(e) => setPdfForm((f) => ({ ...f, sectionC: parseLenientFloat(e.target.value) }))}
                     sx={{ width: 160 }}
                   />
                 </Stack>
@@ -2281,10 +2272,11 @@ export default function ProjectDetail() {
                   </TextField>
                   <TextField
                     label="Grand Total (PHP)"
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     size="small"
                     value={pdfForm.grandTotal}
-                    onChange={(e) => setPdfForm((f) => ({ ...f, grandTotal: parseFloat(e.target.value) || 0 }))}
+                    onChange={(e) => setPdfForm((f) => ({ ...f, grandTotal: parseLenientFloat(e.target.value) }))}
                     sx={{ flex: 1, '& input': { fontWeight: 600 } }}
                   />
                 </Stack>
@@ -2376,6 +2368,12 @@ export default function ProjectDetail() {
             <Typography variant="body2">
               This can create or link a record in the original Project List module using the latest IOCT quotation amount. If no IOCT quotation exists, ACTI is used as the fallback.
             </Typography>
+            <Alert severity="info" variant="outlined">
+              OneDrive execution folder is named like{' '}
+              <strong>IOCT2605001-LBI Project Name</strong> when a Project List
+              number is linked. Prefer &quot;Create Project&quot; or &quot;Link to Existing&quot;
+              so the folder gets the IOCT number (not the PCS proposal code).
+            </Alert>
             <Alert severity="info" variant="outlined">
               Changing the status back later will not delete the Project List record. You can unlink or edit it separately.
             </Alert>

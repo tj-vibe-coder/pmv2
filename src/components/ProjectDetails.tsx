@@ -42,19 +42,24 @@ import {
   Add as AddIcon,
   Delete as DeleteIcon,
   Description as DescriptionIcon,
+  CalendarMonth as CalendarMonthIcon,
 } from '@mui/icons-material';
 import { Project } from '../types/Project';
+import { actiToIoctPoLabel, isActiInvolved } from '../utils/commercialTrail';
 import type { ProjectInvoice, BillingMilestone, BillToKind } from '../types/Invoice';
-import { getInvoiceStatus, computeDueDate, PAYMENT_TERMS_OPTIONS, BILL_TO_OPTIONS } from '../types/Invoice';
+import { getInvoiceStatus, computeDueDate, PAYMENT_TERMS_OPTIONS, BILL_TO_OPTIONS, invoiceCash, invoiceOutstanding } from '../types/Invoice';
 import dataService from '../services/dataService';
 import EditProjectDialog from './EditProjectDialog';
 import UpdateProgressDialog from './UpdateProgressDialog';
 import { getBudget, setBudget } from '../utils/projectBudgetStorage';
+import { resolveCalcsheetBudget } from '../utils/calcsheetBudget';
+import { useQuotationStore } from '../store/quotationStore';
 import { ResponsiveContainer, BarChart, CartesianGrid, XAxis, YAxis, Bar, Cell, Tooltip as RechartsTooltip } from 'recharts';
 import { ORDER_TRACKER_STORAGE_KEY } from './OrderTrackerPage';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import { ensureExecutionFolder, resolveSharingUrl } from '../services/onedriveFolderService';
+import { getSoasByProject } from '../services/soaService';
 
 const PROJECT_EXPENSES_KEY = 'projectExpenses';
 const MATERIAL_REQUESTS_KEY = 'materialRequests';
@@ -541,7 +546,21 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [progressDialogOpen, setProgressDialogOpen] = useState(false);
   const [budgetAmount, setBudgetAmount] = useState(0);
+  const csProjects = useQuotationStore((s) => s.projects);
+  const quotations = useQuotationStore((s) => s.quotations);
+  const calcsheetBudget = useMemo(
+    () => resolveCalcsheetBudget(project, csProjects, quotations),
+    [project, csProjects, quotations],
+  );
+  const storedBudget = getBudget(project.id);
+  const persistedBudget = Number(project.project_budget ?? 0);
+  const budgetIsOverride = Boolean(
+    calcsheetBudget
+    && ((persistedBudget > 0 && Math.abs(persistedBudget - calcsheetBudget.amount) > 0.5)
+      || (persistedBudget <= 0 && storedBudget > 0 && Math.abs(storedBudget - calcsheetBudget.amount) > 0.5)),
+  );
   const [projectInvoices, setProjectInvoices] = useState<ProjectInvoice[]>([]);
+  const [hasSchedule, setHasSchedule] = useState(false);
   const navigate = useNavigate();
 
   // Billing schedule state
@@ -624,8 +643,20 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   };
 
   useEffect(() => {
-    setBudgetAmount(getBudget(project.id));
-  }, [project.id]);
+    const stored = getBudget(project.id);
+    const persisted = Number(project.project_budget ?? 0);
+    if (persisted > 0) {
+      setBudgetAmount(persisted);
+    } else if (stored > 0) {
+      setBudgetAmount(stored);
+    } else if (calcsheetBudget) {
+      setBudgetAmount(calcsheetBudget.amount);
+    } else {
+      setBudgetAmount(0);
+    }
+  }, [project.id, project.project_budget, calcsheetBudget]);
+
+  const [projectSoas, setProjectSoas] = useState<Array<{ id: string; soaNo: string; date: string; status: string; recipientName: string; matchingItems: any[] }>>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -635,20 +666,38 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
         if (!cancelled) setProjectInvoices(Array.isArray(invs) ? invs : []);
       })
       .catch(() => {});
+
+    getSoasByProject(String(project.id))
+      .then(soas => {
+        if (!cancelled) setProjectSoas(soas);
+      })
+      .catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [project.id]);
+
+  // Does this project have a Work Schedule? (drives the Update-Progress heads-up)
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/schedule-tasks?projectId=${encodeURIComponent(String(project.id))}`)
+      .then(r => r.json())
+      .then((res: { tasks?: unknown[] }) => {
+        if (!cancelled) setHasSchedule(Array.isArray(res?.tasks) && res.tasks.length > 0);
+      })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [project.id]);
 
   const arSummary = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     const totalInvoiced = projectInvoices.reduce((s, i) => s + i.amount, 0);
-    const totalCollected = projectInvoices.reduce((s, i) => s + (i.amount_collected || 0), 0);
-    const outstanding = projectInvoices.filter(i => (i.amount - (i.amount_collected || 0)) > 0)
-      .reduce((s, i) => s + Math.max(0, i.amount - (i.amount_collected || 0)), 0);
+    const totalCollected = projectInvoices.reduce((s, i) => s + invoiceCash(i), 0);
+    const outstanding = projectInvoices.reduce((s, i) => s + invoiceOutstanding(i), 0);
     const overdueList = projectInvoices.filter(i => {
-      const rem = i.amount - (i.amount_collected || 0);
+      const rem = invoiceOutstanding(i);
       return rem > 0 && i.due_date && i.due_date < today;
     });
-    return { totalInvoiced, totalCollected, outstanding, overdueCount: overdueList.length, overdueAmount: overdueList.reduce((s, i) => s + Math.max(0, i.amount - (i.amount_collected || 0)), 0) };
+    return { totalInvoiced, totalCollected, outstanding, overdueCount: overdueList.length, overdueAmount: overdueList.reduce((s, i) => s + invoiceOutstanding(i), 0) };
   }, [projectInvoices]);
 
   // Map pb_number → invoice for milestone matching
@@ -823,9 +872,12 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     }
   };
 
-  const handleBudgetChange = (value: number) => {
+  const persistBudget = (value: number) => {
     setBudgetAmount(value);
     setBudget(project.id, value);
+    dataService.updateProject(project.id, { project_budget: value }).then((result) => {
+      if (result.success) onProjectUpdated?.({ ...project, project_budget: value });
+    });
   };
 
   const backlogsAmount = dataService.getUnbilled(project);
@@ -841,7 +893,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   }, [project.id]);
 
   const projectHealthColor = useMemo(() => {
-    const budget = getBudget(project.id);
+    const budget = budgetAmount;
     const expenses = loadProjectExpenses().filter((e) => e.projectId === project.id);
     const spent = expenses.reduce((sum, e) => sum + e.amount, 0);
     const remaining = budget - spent;
@@ -850,7 +902,6 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     if (remaining < 0) return '#f44336';
     if (remainingPct <= 20) return '#ff9800';
     return '#4caf50';
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- budgetAmount triggers re-run when user changes budget
   }, [project.id, budgetAmount]);
 
 
@@ -943,6 +994,15 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
           </Stack>
         )}
         <Button
+          variant="outlined"
+          size="small"
+          startIcon={<CalendarMonthIcon />}
+          onClick={() => navigate(`/projects/${project.id}/schedule`)}
+          sx={{ ml: 1 }}
+        >
+          Gantt Chart
+        </Button>
+        <Button
           variant="contained"
           size="small"
           onClick={() => setProgressDialogOpen(true)}
@@ -963,6 +1023,84 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
           Edit Project
         </Button>
       </Box>
+
+      {isActiInvolved(project) && (
+        <Paper
+          sx={{
+            p: 3,
+            mb: 3,
+            border: `1px solid ${NET_PACIFIC_COLORS.accent1}`,
+            background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+          }}
+        >
+          <Typography variant="h6" sx={{ color: NET_PACIFIC_COLORS.primary, fontWeight: 600, mb: 0.5 }}>
+            ACTI commercial trail
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Coordination with ACTI only. Expected invoice dates do not create Collections AR.
+          </Typography>
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI PO (to IOCT)</Typography>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+                <Typography variant="body1">{actiToIoctPoLabel(project.commercial_trail)}</Typography>
+                <Chip
+                  size="small"
+                  label={project.commercial_trail?.acti_to_ioct_po_number ? 'Received' : (project.commercial_trail?.acti_to_ioct_po_status === 'received' ? 'Received' : 'Pending')}
+                  color={project.commercial_trail?.acti_to_ioct_po_number ? 'success' : 'default'}
+                  variant="outlined"
+                />
+              </Stack>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI PO date</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.acti_to_ioct_po_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">COC served</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.coc_served_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">COC approved</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.coc_approved_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI SI to customer</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.partner_si_no || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI SI date</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.partner_si_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI SI terms</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>
+                {project.commercial_trail?.partner_si_terms_days != null
+                  ? `${project.commercial_trail.partner_si_terms_days} days`
+                  : '—'}
+              </Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">ACTI expected collection</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.partner_si_expected_collection_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">IOCT expected invoice</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.ioct_expected_invoice_date || '—'}</Typography>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <Typography variant="subtitle2" color="textSecondary">IOCT expected collection</Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>{project.commercial_trail?.ioct_expected_collection_date || '—'}</Typography>
+            </Grid>
+            {project.commercial_trail?.notes && (
+              <Grid size={{ xs: 12 }}>
+                <Typography variant="subtitle2" color="textSecondary">Notes</Typography>
+                <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>{project.commercial_trail.notes}</Typography>
+              </Grid>
+            )}
+          </Grid>
+        </Paper>
+      )}
 
       {(oneDriveErr || oneDriveInfo) && (
         <Alert severity={oneDriveErr ? 'error' : 'success'} sx={{ mb: 2 }} onClose={() => { setOneDriveErr(''); setOneDriveInfo(''); }}>
@@ -1010,6 +1148,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
       <UpdateProgressDialog
         open={progressDialogOpen}
         project={project}
+        hasSchedule={hasSchedule}
         onClose={() => setProgressDialogOpen(false)}
         onSaved={(updated) => {
           onProjectUpdated?.(updated);
@@ -1059,7 +1198,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
                 <Typography variant="subtitle2" color="textSecondary">
-                  PO Number
+                  {isActiInvolved(project) ? 'Customer PO (to ACTI)' : 'PO Number'}
                 </Typography>
                 <Typography variant="body1" sx={{ mb: 2 }}>
                   {project.po_number || '—'}
@@ -1181,16 +1320,38 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
               <Typography variant="subtitle2" color="textSecondary" gutterBottom>
                 Project Budget
               </Typography>
-              <TextField
-                type="number"
-                size="small"
-                value={budgetAmount || ''}
-                onChange={(e) => handleBudgetChange(Number(e.target.value) || 0)}
-                placeholder="Set budget"
-                inputProps={{ min: 0, step: 0.01 }}
-                sx={{ width: 200 }}
-                helperText="Budget for this project (used in Expense Monitoring)"
-              />
+              <Stack direction="row" spacing={1} alignItems="flex-start">
+                <TextField
+                  type="number"
+                  size="small"
+                  value={budgetAmount || ''}
+                  onChange={(e) => setBudgetAmount(Number(e.target.value) || 0)}
+                  onBlur={() => persistBudget(budgetAmount)}
+                  placeholder="Set budget"
+                  inputProps={{ min: 0, step: 0.01 }}
+                  sx={{ width: 260 }}
+                  helperText={
+                    calcsheetBudget
+                      ? (budgetIsOverride
+                          ? `Manual override · calcsheet cost is ${dataService.formatCurrency(calcsheetBudget.amount)}`
+                          : calcsheetBudget.hasMargin
+                            ? `From calcsheet${calcsheetBudget.calcsheetCode ? ` (${calcsheetBudget.calcsheetCode})` : ''}: ${dataService.formatCurrency(calcsheetBudget.value)} − margin ${dataService.formatCurrency(calcsheetBudget.margin)}`
+                            : `From calcsheet quotation${calcsheetBudget.calcsheetCode ? ` (${calcsheetBudget.calcsheetCode})` : ''} (no cost/margin on file)`)
+                      : 'Budget for this project (used in Expense Monitoring). Link a calcsheet quotation to auto-fill.'
+                  }
+                />
+                {budgetIsOverride && calcsheetBudget && (
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      persistBudget(calcsheetBudget.amount);
+                    }}
+                    sx={{ mt: 0.5, whiteSpace: 'nowrap' }}
+                  >
+                    Use calcsheet
+                  </Button>
+                )}
+              </Stack>
             </Box>
             <Divider sx={{ my: 2 }} />
             <Box sx={{ mb: 2 }}>
@@ -1597,8 +1758,8 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                                   <Typography variant="caption" color="text.disabled">—</Typography>
                                 )}
                               </TableCell>
-                              <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: (linkedInvoice?.amount_collected ?? 0) > 0 ? 'success.main' : 'text.secondary' }}>
-                                {linkedInvoice ? PHP_FMT.format(linkedInvoice.amount_collected || 0) : '—'}
+                              <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', color: linkedInvoice && invoiceCash(linkedInvoice) > 0 ? 'success.main' : 'text.secondary' }}>
+                                {linkedInvoice ? PHP_FMT.format(invoiceCash(linkedInvoice)) : '—'}
                               </TableCell>
                               <TableCell>
                                 {invoiceStatus ? (
@@ -1684,16 +1845,79 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                   </Box>
                 )}
 
-                {/* Empty state */}
-                {!scheduleEditMode && schedule.length === 0 && (
-                  <Box sx={{ py: 4, textAlign: 'center' }}>
-                    <ReceiptIcon sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                      No billing schedule set up for this project.
-                    </Typography>
-                    <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={openScheduleEdit}>
-                      Set Up Billing Schedule
-                    </Button>
+                {/* Statements of Account (SOA) Link Section */}
+                {(projectSoas.length > 0 || project.with_acti) && (
+                  <Box sx={{ mt: 3, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+                        Statements of Account (SOA)
+                      </Typography>
+                      <Button
+                        size="small"
+                        variant="text"
+                        endIcon={<OpenInNewIcon fontSize="small" />}
+                        onClick={() => navigate('/finance/soa')}
+                        sx={{ fontSize: '0.75rem' }}
+                      >
+                        Open SOA Module
+                      </Button>
+                    </Box>
+
+                    {projectSoas.length > 0 ? (
+                      <Stack spacing={1}>
+                        {projectSoas.map((s) => (
+                          <Box
+                            key={s.id}
+                            onClick={() => navigate(`/finance/soa/${s.id}`)}
+                            sx={{
+                              p: 1.5,
+                              borderRadius: 1,
+                              bgcolor: '#f8fafc',
+                              border: '1px solid #e2e8f0',
+                              cursor: 'pointer',
+                              '&:hover': { bgcolor: '#edf2f7' },
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              flexWrap: 'wrap',
+                              gap: 1,
+                            }}
+                          >
+                            <Box>
+                              <Typography variant="body2" sx={{ fontWeight: 700, fontFamily: 'monospace', color: NET_PACIFIC_COLORS.primary }}>
+                                {s.soaNo}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {s.recipientName} · Issued {s.date}
+                              </Typography>
+                            </Box>
+                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                              {s.matchingItems.map((it, idx) => (
+                                <Chip
+                                  key={idx}
+                                  size="small"
+                                  label={it.hasPo ? `PO: ${it.poNumber}` : 'Pending PO'}
+                                  color={it.hasPo ? 'success' : 'warning'}
+                                  variant="outlined"
+                                  sx={{ fontSize: '0.7rem' }}
+                                />
+                              ))}
+                              <Chip
+                                size="small"
+                                label={s.status.replace(/_/g, ' ').toUpperCase()}
+                                sx={{ fontSize: '0.7rem', fontWeight: 600 }}
+                              />
+                            </Box>
+                          </Box>
+                        ))}
+                      </Stack>
+                    ) : (
+                      <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: '#f8fafc', border: '1px dashed #cbd5e1' }}>
+                        <Typography variant="caption" color="text.secondary">
+                          This project is marked for ACTI subcontractor execution. No statement of account has been issued for it yet.
+                        </Typography>
+                      </Box>
+                    )}
                   </Box>
                 )}
               </Paper>

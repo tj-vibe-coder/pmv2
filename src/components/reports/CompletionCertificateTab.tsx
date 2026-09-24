@@ -272,7 +272,15 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     doc.setFontSize(11);
     doc.text(`Project Title: ${projectTitle}`, margin, y);
     y += lineHeight;
-    doc.text(`PO Number: ${poNumber}`, margin, y);
+    const actiTrail = project.with_acti || /advance controle|\bacti\b/i.test(project.partner_name || '');
+    if (actiTrail) {
+      doc.text(`Customer PO (to ACTI): ${poNumber}`, margin, y);
+      y += lineHeight;
+      const actiPo = project.commercial_trail?.acti_to_ioct_po_number || 'Pending';
+      doc.text(`ACTI PO (to IOCT): ${actiPo}`, margin, y);
+    } else {
+      doc.text(`PO Number: ${poNumber}`, margin, y);
+    }
     y += lineHeight;
     doc.text(`Client: ${clientName}`, margin, y);
     y += lineHeight;

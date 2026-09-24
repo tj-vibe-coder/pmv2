@@ -5,6 +5,15 @@ const path = require('path');
 const crypto = require('crypto');
 const { createProductHistoryRouter } = require('./server/calcsheetProductHistoryRouter');
 const { validateQuotationPurchaseTiming } = require('./server/calcsheetPurchaseTiming');
+const { loadAiAssistConfig } = require('./server/aiAssist/config');
+const { createAiAssistRouter } = require('./server/aiAssist/router');
+const { createToolRegistry: createAiAssistToolRegistry } = require('./server/aiAssist/tools');
+const { buildTextSystemInstruction } = require('./server/aiAssist/prompt');
+const { createAssistChatClient } = require('./server/aiAssist/providers');
+const { GoogleGenAI: AiAssistGoogleGenAI } = require('@google/genai');
+const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
+const { createBackupsRouter } = require('./server/backups/router');
+const { createSoaRouter } = require('./server/soa/soaRouter');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -113,14 +122,33 @@ function primaryClientContact(client) {
   return contacts.find((c) => c.isPrimary) || contacts[0] || null;
 }
 
+// Login sessions live in `auth_sessions`, doc id = the bearer token itself: a
+// crypto-random 256-bit value the server generates (see mintAuthSession) and
+// can look up but never has to decode. This replaces an earlier scheme where
+// the token was an unsigned base64(userId:username:timestamp) string that
+// anyone who learned/guessed a user's Firestore doc id could forge by hand,
+// with no expiry ever enforced. See docs/agent/PROJECT_STATE.md 2026-08-17.
+const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days, absolute
+
+async function mintAuthSession(userId, username) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await db.collection('auth_sessions').doc(token).set({
+    userId,
+    username,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + AUTH_SESSION_TTL_MS,
+  });
+  return token;
+}
+
 // Helper: get current user from Bearer token
 async function getCurrentUser(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.substring(7);
   try {
-    // Scanner (QR-paired) sessions use 'scan_'-prefixed tokens. Standard base64
-    // login tokens never contain '_', so this prefix is unambiguous.
+    // Scanner (QR-paired) sessions use 'scan_'-prefixed tokens; everything
+    // else is a login session minted by mintAuthSession.
     if (token.startsWith('scan_')) {
       const sessSnap = await db.collection('scanner_sessions').doc(token).get();
       if (!sessSnap.exists) return null;
@@ -130,15 +158,42 @@ async function getCurrentUser(req) {
       if (!su.exists) return null;
       return { id: su.id, ...su.data(), scannerScope: true };
     }
-    const decoded = Buffer.from(token, 'base64').toString();
-    const [userId] = decoded.split(':');
-    if (!userId) return null;
-    const userDoc = await db.collection('users').doc(userId).get();
+    const sessSnap = await db.collection('auth_sessions').doc(token).get();
+    if (!sessSnap.exists) return null;
+    const sess = sessSnap.data();
+    if (!sess || Date.now() > sess.expiresAt) return null;
+    const userDoc = await db.collection('users').doc(sess.userId).get();
     if (!userDoc.exists) return null;
     return { id: userDoc.id, ...userDoc.data() };
   } catch (e) {
     return null;
   }
+}
+
+// Liquidation form numbers append the submitter's initials, e.g. LQ26-022-RJR.
+// Prefer an explicit `initials` field on the user doc (set for accounts whose
+// username isn't already initials-style, e.g. Renzel/Kim/Nylle); fall back to
+// username for accounts where it already is (TJC, RJR, ...).
+function formSubmitterInitials(user) {
+  const raw = (user && (user.initials || user.username)) ? String(user.initials || user.username) : '';
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '') || 'NA';
+}
+
+// LQ<YY>-<###>-<INITIALS>, e.g. LQ26-022-RJR — 22nd liquidation submitted in 2026 by RJR.
+// Sequence resets each calendar year (Philippine business date, same convention as
+// nextCaNo/nextIoctProjectNo); only form numbers already carrying that year's prefix count.
+async function nextLiquidationFormNo(user) {
+  const yy = phYearMonth(new Date()).slice(0, 2);
+  const snap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
+  const re = new RegExp(`^LQ${yy}-(\\d{3})-`);
+  let maxNum = 0;
+  for (const d of snap.docs) {
+    const fn = d.data().form_no;
+    if (typeof fn !== 'string') continue;
+    const m = fn.match(re);
+    if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > maxNum) maxNum = n; }
+  }
+  return `LQ${yy}-${String(maxNum + 1).padStart(3, '0')}-${formSubmitterInitials(user)}`;
 }
 
 function isActiveUser(user) {
@@ -250,12 +305,30 @@ app.post('/api/auth/login', async (req, res) => {
     const user = userDoc.data();
     const approved = user.approved === 1 || user.approved === true;
     if (!approved && user.role !== 'superadmin') return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
-    const token = Buffer.from(`${userDoc.id}:${user.username}:${Date.now()}`).toString('base64');
+    const token = await mintAuthSession(userDoc.id, user.username);
     res.json({ success: true, user: userResponse(userDoc.id, user), token });
   } catch (err) {
     console.error('Database error during login:', err);
     res.json({ success: false, error: 'Database error' });
   }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    // Best-effort revocation: not scanner-scoped (those expire on their own
+    // short TTL), never let a delete failure block the client from logging
+    // out locally.
+    if (!token.startsWith('scan_')) {
+      try {
+        await db.collection('auth_sessions').doc(token).delete();
+      } catch (e) {
+        console.error('Error revoking session on logout:', e.message);
+      }
+    }
+  }
+  res.json({ success: true });
 });
 
 app.post('/api/auth/register', async (req, res) => {
@@ -286,6 +359,40 @@ app.get('/api/auth/me', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user || !isActiveUser(user)) return res.status(401).json({ success: false, error: 'Invalid token' });
   res.json({ success: true, user: userResponse(user.id, user) });
+});
+
+// Public: a user who can't sign in asks a superadmin to reset their password.
+// There is no email channel, so this just files an in-app request that admins
+// action from the User Approvals page. The response is deliberately generic so
+// it can't be used to probe which usernames/emails exist.
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const identifier = String((req.body && req.body.identifier) || '').trim();
+  const generic = { success: true, message: 'If that account exists, an administrator has been notified to reset your password.' };
+  if (!identifier) return res.status(400).json({ success: false, error: 'Enter your username or email.' });
+  try {
+    let snap = await db.collection('users').where('username', '==', identifier).limit(1).get();
+    if (snap.empty) snap = await db.collection('users').where('email', '==', identifier).limit(1).get();
+    if (snap.empty) return res.json(generic); // unknown account — say nothing
+    const userDoc = snap.docs[0];
+    const u = userDoc.data();
+    const now = Math.floor(Date.now() / 1000);
+    // Coalesce repeat requests: bump the existing pending one instead of piling up.
+    const existing = await db.collection('password_reset_requests')
+      .where('user_id', '==', userDoc.id).where('status', '==', 'pending').limit(1).get();
+    if (!existing.empty) {
+      await existing.docs[0].ref.update({ requested_at: now, request_count: FieldValue.increment(1) });
+    } else {
+      await db.collection('password_reset_requests').add({
+        user_id: userDoc.id, username: u.username || '', email: u.email || '',
+        status: 'pending', requested_at: now, request_count: 1, resolved_by: null, resolved_at: null,
+      });
+    }
+    console.log(`Password reset requested for ${u.username}`);
+    res.json(generic);
+  } catch (err) {
+    console.error('Error creating password reset request:', err);
+    res.json(generic); // never leak details on the public endpoint
+  }
 });
 
 // ========== USERS ROUTES ==========
@@ -389,6 +496,55 @@ usersRouter.get('/pending', async (req, res) => {
     res.json({ success: true, users });
   } catch (err) {
     console.error('Error fetching pending users:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Superadmin: list pending password-reset requests (see /api/auth/forgot-password).
+usersRouter.get('/reset-requests', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  try {
+    const snap = await db.collection('password_reset_requests').where('status', '==', 'pending').get();
+    const requests = snap.docs
+      .map(doc => { const d = doc.data(); return { id: doc.id, user_id: d.user_id, username: d.username, email: d.email, requested_at: d.requested_at, request_count: d.request_count || 1 }; })
+      .sort((a, b) => (b.requested_at || 0) - (a.requested_at || 0));
+    res.json({ success: true, requests });
+  } catch (err) {
+    console.error('Error fetching reset requests:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Superadmin: resolve a reset request — set a new password (status 'resolved')
+// or dismiss it without changing anything (status 'dismissed').
+usersRouter.post('/reset-requests/:id/resolve', async (req, res) => {
+  const reqId = req.params.id;
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
+  const { password } = req.body || {};
+  try {
+    const ref = db.collection('password_reset_requests').doc(reqId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Request not found' });
+    const reqData = doc.data();
+    const now = Math.floor(Date.now() / 1000);
+    let status = 'dismissed';
+    if (password !== undefined && String(password).length > 0) {
+      const nextPassword = String(password);
+      if (nextPassword.length < 6) return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long' });
+      const userRef = db.collection('users').doc(String(reqData.user_id));
+      const userDoc = await userRef.get();
+      if (!userDoc.exists) return res.status(404).json({ success: false, error: 'User no longer exists' });
+      await userRef.update({ password_hash: Buffer.from(nextPassword).toString('base64'), updated_at: now });
+      status = 'resolved';
+    }
+    await ref.update({ status, resolved_by: user.username, resolved_at: now });
+    res.json({ success: true, status, message: status === 'resolved' ? 'Password reset' : 'Request dismissed' });
+  } catch (err) {
+    console.error('Error resolving reset request:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
 });
@@ -1415,16 +1571,21 @@ app.post('/api/project-expenses/backfill-liquidation-receipts', async (req, res)
 });
 
 // Superadmin-only: reclassify a manually-entered / receipt-scanned project expense as an
-// employee out-of-pocket claim instead of a company-paid one. Creates a submitted liquidation
-// for the chosen employee (optionally against one of their approved CAs) and removes the
-// original project_expense in one batch, so the cost is never counted twice.
+// employee out-of-pocket claim instead of a company-paid one. By default creates a new
+// submitted liquidation for the chosen employee (optionally against one of their approved
+// CAs); passing targetLiquidationId instead appends the row to one of that employee's
+// existing DRAFT liquidations (submitted ones go through the revision-approval flow, not
+// this endpoint, since they've already affected CA balance/reimbursement tracking). Either
+// way the original project_expense/overhead_expense is removed in the same batch, so the
+// cost is never counted twice, and the expense's attached receipt (if any) carries over
+// onto the new row instead of being silently dropped.
 // Shared by project_expenses and overhead_expenses — an overhead receipt an
 // employee paid out-of-pocket is just as promotable as a project one.
 const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
-  const { userId, caId } = req.body || {};
+  const { userId, caId, targetLiquidationId } = req.body || {};
   if (!userId) return res.status(400).json({ success: false, error: 'userId is required' });
   try {
     const expenseRef = db.collection(collectionName).doc(req.params.id);
@@ -1438,62 +1599,129 @@ const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
     if (!targetUserSnap.exists) return res.status(404).json({ success: false, error: 'Employee not found' });
     const targetUser = targetUserSnap.data();
 
-    let caRef = null;
-    if (caId) {
-      caRef = db.collection('cash_advances').doc(String(caId));
-      const caSnap = await caRef.get();
-      if (!caSnap.exists || caSnap.data().user_id !== String(userId) || caSnap.data().status !== 'approved') {
-        return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance for this employee' });
-      }
-      const bal = parseFloat(caSnap.data().balance_remaining) || 0;
-      if ((Number(expense.amount) || 0) > bal) {
-        return res.status(400).json({ success: false, error: `Expense (₱${Number(expense.amount).toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
-      }
-    }
-
-    // Same LQ-#### numbering scheme as /api/liquidations/next-form-no.
-    const formNoSnap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
-    const formNos = formNoSnap.docs.map(d => d.data().form_no).filter(fn => fn && typeof fn === 'string' && fn.startsWith('LQ-'));
-    let nextNum = 1;
-    if (formNos.length > 0) {
-      const nums = formNos.map(fn => { const m = fn.match(/LQ-0*(\d+)/); return m ? parseInt(m[1], 10) : 0; }).filter(n => n > 0);
-      if (nums.length > 0) nextNum = Math.max(...nums) + 1;
-    }
-    const formNo = `LQ-${String(nextNum).padStart(4, '0')}`;
-
     const now = Math.floor(Date.now() / 1000);
     const nowIso = new Date().toISOString();
-    const liquidationRef = db.collection('liquidations').doc();
-    const rows = [{ category: expense.category || 'Others', description: expense.description || '', amount: Number(expense.amount) || 0 }];
+    const rowId = `row-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const newRow = {
+      id: rowId,
+      date: expense.date || nowIso.slice(0, 10),
+      category: expense.category || 'Others',
+      projectId: '',
+      projectName: '',
+      projectNo: '',
+      particulars: expense.description || '',
+      amount: Number(expense.amount) || 0,
+      remarks: expense.remarks || '',
+      deductible: typeof expense.deductible === 'boolean' ? expense.deductible : true,
+      deductibleReason: expense.deductibleReason || null,
+      supplier: expense.supplier || '',
+      invoiceNo: expense.invoiceNo || '',
+      customerInfoIssues: [],
+    };
+    const newReceipts = (expense.receiptRef && (expense.receiptRef.oneDriveId || expense.receiptRef.webUrl))
+      ? [{
+          id: `rcpt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          rowId,
+          filename: expense.receiptRef.filename || 'receipt',
+          oneDriveId: expense.receiptRef.oneDriveId || null,
+          webUrl: expense.receiptRef.webUrl || null,
+        }]
+      : [];
 
     const batch = db.batch();
-    batch.set(liquidationRef, {
-      user_id: String(userId),
-      form_no: formNo,
-      date_of_submission: nowIso.slice(0, 10),
-      employee_name: targetUser.full_name || targetUser.username || null,
-      employee_number: null,
-      rows_json: JSON.stringify(rows),
-      receipts_json: '[]',
-      total_amount: Number(expense.amount) || 0,
-      ca_id: caId || null,
-      status: 'submitted',
-      reimbursement_status: caId ? null : 'pending',
-      reimbursed_at: null,
-      reimbursed_by: null,
-      promotedFromExpenseId: req.params.id,
-      created_at: now,
-      updated_at: now,
-    });
-    if (caRef) {
-      batch.update(caRef, { balance_remaining: FieldValue.increment(-(Number(expense.amount) || 0)), updated_at: now });
-    }
-    batch.delete(expenseRef);
-    // Clean up any linked out-of-pocket investment row — the expense is no longer company-paid.
-    batch.delete(db.collection('investments').doc(`expense_sync_${req.params.id}`));
-    await batch.commit();
+    let liquidationId, formNo;
+    // Set when the append went through applyLiquidationRevision (submitted target) —
+    // that call already committed its own writes, so the expense/investment cleanup
+    // below needs a second, separate commit instead of joining the batch above.
+    let revisionAlreadyApplied = false;
 
-    res.json({ success: true, liquidationId: liquidationRef.id, formNo });
+    if (targetLiquidationId) {
+      const targetRef = db.collection('liquidations').doc(String(targetLiquidationId));
+      const targetSnap = await targetRef.get();
+      if (!targetSnap.exists) return res.status(404).json({ success: false, error: 'Target liquidation not found' });
+      const target = targetSnap.data();
+      if (target.user_id !== String(userId)) return res.status(400).json({ success: false, error: 'Target liquidation does not belong to this employee' });
+      if (target.status !== 'draft' && target.status !== 'submitted') {
+        return res.status(400).json({ success: false, error: 'Target liquidation must be a draft or a submitted liquidation' });
+      }
+      const existingRows = parseLiqRows(target.rows_json);
+      const existingReceipts = parseLiqRows(target.receipts_json);
+      const updatedRows = [...existingRows, newRow];
+      const updatedTotal = updatedRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+      if (target.status === 'draft') {
+        batch.update(targetRef, {
+          rows_json: JSON.stringify(updatedRows),
+          receipts_json: JSON.stringify([...existingReceipts, ...newReceipts]),
+          total_amount: updatedTotal,
+          updated_at: now,
+        });
+      } else {
+        // Submitted liquidations go through the same revision machinery as
+        // "Edit (applies immediately)" so CA balance / reimbursement / the
+        // project_expenses-or-overhead_expenses sync all stay consistent.
+        const revision = {
+          rows_json: JSON.stringify(updatedRows),
+          receipts_json: JSON.stringify([...existingReceipts, ...newReceipts]),
+          total_amount: updatedTotal,
+          employee_name: target.employee_name ?? null,
+          date_of_submission: target.date_of_submission ?? null,
+          note: `Promoted expense (${collectionName}/${req.params.id}) added as a new row`,
+          proposed_by: user.id,
+          proposed_by_name: user.full_name || user.username || null,
+          proposed_at: now,
+        };
+        await applyLiquidationRevision(targetRef.id, target, revision, user);
+        revisionAlreadyApplied = true;
+      }
+      liquidationId = targetRef.id;
+      formNo = target.form_no;
+    } else {
+      let caRef = null;
+      if (caId) {
+        caRef = db.collection('cash_advances').doc(String(caId));
+        const caSnap = await caRef.get();
+        if (!caSnap.exists || caSnap.data().user_id !== String(userId) || caSnap.data().status !== 'approved') {
+          return res.status(400).json({ success: false, error: 'Invalid or unauthorized cash advance for this employee' });
+        }
+        const bal = parseFloat(caSnap.data().balance_remaining) || 0;
+        if ((Number(expense.amount) || 0) > bal) {
+          return res.status(400).json({ success: false, error: `Expense (₱${Number(expense.amount).toFixed(2)}) exceeds CA balance remaining (₱${bal.toFixed(2)})` });
+        }
+      }
+      // Same LQ<YY><###>-<INITIALS> numbering scheme as /api/liquidations/next-form-no.
+      formNo = await nextLiquidationFormNo(targetUser);
+      const liquidationRef = db.collection('liquidations').doc();
+      batch.set(liquidationRef, {
+        user_id: String(userId),
+        form_no: formNo,
+        date_of_submission: nowIso.slice(0, 10),
+        employee_name: targetUser.full_name || targetUser.username || null,
+        employee_number: null,
+        rows_json: JSON.stringify([newRow]),
+        receipts_json: JSON.stringify(newReceipts),
+        total_amount: Number(expense.amount) || 0,
+        ca_id: caId || null,
+        status: 'submitted',
+        reimbursement_status: caId ? null : 'pending',
+        reimbursed_at: null,
+        reimbursed_by: null,
+        promotedFromExpenseId: req.params.id,
+        created_at: now,
+        updated_at: now,
+      });
+      if (caRef) {
+        batch.update(caRef, { balance_remaining: FieldValue.increment(-(Number(expense.amount) || 0)), updated_at: now });
+      }
+      liquidationId = liquidationRef.id;
+    }
+
+    const cleanupBatch = revisionAlreadyApplied ? db.batch() : batch;
+    cleanupBatch.delete(expenseRef);
+    // Clean up any linked out-of-pocket investment row — the expense is no longer company-paid.
+    cleanupBatch.delete(db.collection('investments').doc(`expense_sync_${req.params.id}`));
+    await cleanupBatch.commit();
+
+    res.json({ success: true, liquidationId, formNo });
   } catch (err) {
     console.error(`Error promoting ${collectionName} row to liquidation:`, err);
     res.status(500).json({ success: false, error: 'Database error' });
@@ -1507,28 +1735,13 @@ app.post('/api/overhead-expenses/:id/promote-to-liquidation', promoteExpenseToLi
 
 function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// Human-readable CA reference number. Per-project sequence when the CA is tied
-// to a project with a project_no (e.g. IOCT2606001-CA01); otherwise a global
-// monthly fallback (e.g. CA2606-001) for out-of-project / prospect CAs.
+// Human-readable CA reference number: a single global monthly sequence
+// (e.g. CA2606-001) for every CA regardless of project. Project traceability
+// lives on the record itself (project_id/project_no/project_name), not in
+// the number, so the sequence stays gapless/auditable per type+period.
 // Scan-max with no transaction — same approach as nextIoctProjectNo() and
 // /api/liquidations/next-form-no; volume is low and `id` stays the real key.
-async function nextCaNo(projectId, dateLike) {
-  let projectNo = null;
-  if (projectId) {
-    const pDoc = await db.collection('projects').doc(String(projectId)).get();
-    if (pDoc.exists) projectNo = String(pDoc.data().project_no || '').trim().toUpperCase() || null;
-  }
-  if (projectNo) {
-    const snap = await db.collection('cash_advances')
-      .where('project_id', '==', String(projectId)).select('ca_no').get();
-    const re = new RegExp(`^${escapeRegExp(projectNo)}-CA(\\d+)$`);
-    let max = 0;
-    for (const d of snap.docs) {
-      const m = String(d.data().ca_no || '').trim().toUpperCase().match(re);
-      if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > max) max = n; }
-    }
-    return `${projectNo}-CA${String(max + 1).padStart(2, '0')}`;
-  }
+async function nextCaNo(dateLike) {
   const prefix = `CA${phYearMonth(dateLike)}-`;
   const snap = await db.collection('cash_advances').select('ca_no').get();
   const re = new RegExp(`^${escapeRegExp(prefix)}(\\d{3})$`);
@@ -1600,9 +1813,17 @@ app.post('/api/cash-advances', async (req, res) => {
   // PATCH /api/cash-advances/:id/funding.
   const isAdminRequester = user.role === 'superadmin' || user.role === 'admin';
   const fundingSource = isAdminRequester ? normalizeFundingSource(req.body.fundingSource) : null;
+  // Only an admin/superadmin may attribute the CA to someone other than themselves.
+  let ownerId = user.id;
+  const onBehalfOfUserId = req.body.on_behalf_of_user_id != null ? String(req.body.on_behalf_of_user_id).trim() : '';
+  if (isAdminRequester && onBehalfOfUserId && onBehalfOfUserId !== user.id) {
+    const targetDoc = await db.collection('users').doc(onBehalfOfUserId).get();
+    if (!targetDoc.exists) return res.status(400).json({ success: false, error: 'Selected employee not found' });
+    ownerId = onBehalfOfUserId;
+  }
   try {
-    const caNo = await nextCaNo(projectId, new Date(requestedAt * 1000));
-    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt, ...(fundingSource ? { fundingSource } : {}) });
+    const caNo = await nextCaNo(new Date(requestedAt * 1000));
+    const ref = await db.collection('cash_advances').add({ user_id: ownerId, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_by: ownerId !== user.id ? user.id : null, created_at: requestedAt, updated_at: requestedAt, ...(fundingSource ? { fundingSource } : {}) });
     res.status(201).json({ success: true, id: ref.id, ca_no: caNo, message: `Cash advance ${caNo} requested` });
   } catch (err) {
     console.error('Error creating cash advance:', err);
@@ -1806,14 +2027,8 @@ app.get('/api/liquidations/next-form-no', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   try {
-    const snap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
-    const formNos = snap.docs.map(d => d.data().form_no).filter(fn => fn && typeof fn === 'string' && fn.startsWith('LQ-'));
-    let nextNum = 1;
-    if (formNos.length > 0) {
-      const nums = formNos.map(fn => { const m = fn.match(/LQ-0*(\d+)/); return m ? parseInt(m[1], 10) : 0; }).filter(n => n > 0);
-      if (nums.length > 0) nextNum = Math.max(...nums) + 1;
-    }
-    res.json({ success: true, form_no: `LQ-${String(nextNum).padStart(4, '0')}` });
+    const form_no = await nextLiquidationFormNo(user);
+    res.json({ success: true, form_no });
   } catch (err) {
     console.error('Error fetching next form number:', err);
     res.status(500).json({ success: false, error: 'Database error' });
@@ -2217,17 +2432,28 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
     await caRef.update({ balance_remaining: FieldValue.increment(-caDelta), updated_at: now });
   }
 
-  // project_expenses re-sync: update/delete docs previously synced from this
-  // liquidation, and create docs only for rows that are new in the revision.
-  // Rows that were never synced (older filings predate the client-side sync)
-  // stay unsynced so applying a fix doesn't retroactively inject historical
-  // costs into the P&L.
+  // project_expenses / overhead_expenses re-sync: a row with a project goes to
+  // project_expenses, a row with an amount but no project goes to overhead_expenses
+  // (e.g. software subscriptions liquidated without a project). Existing synced
+  // docs are updated/deleted/moved to match the revision. Brand-new (never
+  // previously synced) PROJECT rows only sync if they're new in this revision —
+  // older filings that predate the sync feature stay unsynced as project costs so
+  // applying an unrelated fix doesn't retroactively inject historical project
+  // costs into the P&L. That conservatism doesn't apply to OVERHEAD: an
+  // unassigned row was always meant to be an overhead cost, so any row lacking a
+  // project auto-syncs to overhead_expenses on revision, old or new — this is
+  // exactly how a legacy liquidation missing its project assignment gets fixed.
   const liqDescription = (row) => liq.form_no
     ? `Liquidation ${liq.form_no}: ${(row.particulars || '').trim() || 'Liquidation'}`
     : ((row.particulars || '').trim() || 'Liquidation');
-  const expSnap = await db.collection('project_expenses').where('sourceLiquidationId', '==', liqId).get();
+  const [expSnap, ohSnap] = await Promise.all([
+    db.collection('project_expenses').where('sourceLiquidationId', '==', liqId).get(),
+    db.collection('overhead_expenses').where('sourceLiquidationId', '==', liqId).get(),
+  ]);
   const expByRowId = new Map();
   expSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) expByRowId.set(rid, d); });
+  const ohByRowId = new Map();
+  ohSnap.docs.forEach(d => { const rid = d.data().sourceLiquidationRowId; if (rid) ohByRowId.set(rid, d); });
   const oldRowIds = new Set(oldRows.map(r => r.id));
   const newById = new Map(newRows.map(r => [r.id, r]));
   const revisedFiledBy = (revision.employee_name ?? liq.employee_name) || null;
@@ -2255,31 +2481,74 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
       liquidationFiledAt: revisedFiledAt || FieldValue.delete(),
     });
   }
-  for (const row of newRows) {
-    if (oldRowIds.has(row.id) || expByRowId.has(row.id)) continue;
-    if (!row.projectId || !(Number(row.amount) > 0)) continue;
-    const doc = {
-      projectId: String(row.projectId),
-      projectName: (row.projectName || '').trim() || '—',
+  for (const [rowId, ohDoc] of ohByRowId) {
+    const row = newById.get(rowId);
+    if (!row || row.projectId || !(Number(row.amount) > 0)) { batch.delete(ohDoc.ref); continue; }
+    const receiptRef = receiptByRowId.get(rowId);
+    batch.update(ohDoc.ref, {
       description: liqDescription(row),
       amount: Number(row.amount) || 0,
-      date: row.date || new Date().toISOString().slice(0, 10),
+      date: row.date || ohDoc.data().date || null,
       category: (row.category || '').trim() || 'Others',
-      createdAt: new Date().toISOString(),
-      createdBy: revision.proposed_by || approver.id,
-      sourceType: 'liquidation_sync',
-      sourceLiquidationId: liqId,
-      sourceLiquidationRowId: row.id,
-    };
-    if (revisedFiledBy) doc.liquidationFiledBy = revisedFiledBy;
-    if (revisedFiledAt) doc.liquidationFiledAt = revisedFiledAt;
-    if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
-    if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
-    if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
-    if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+      receiptRef: receiptRef || FieldValue.delete(),
+      liquidationFiledBy: revisedFiledBy || FieldValue.delete(),
+      liquidationFiledAt: revisedFiledAt || FieldValue.delete(),
+    });
+  }
+  for (const row of newRows) {
+    const amt = Number(row.amount);
+    if (!(amt > 0)) continue;
     const receiptRef = receiptByRowId.get(row.id);
-    if (receiptRef) doc.receiptRef = receiptRef;
-    batch.set(db.collection('project_expenses').doc(), doc);
+    if (row.projectId) {
+      if (expByRowId.has(row.id)) continue; // already updated above
+      // Only a genuinely new-in-revision row, or one that just moved here from
+      // overhead (already counted once), may newly sync as a project cost.
+      if (oldRowIds.has(row.id) && !ohByRowId.has(row.id)) continue;
+      const doc = {
+        projectId: String(row.projectId),
+        projectName: (row.projectName || '').trim() || '—',
+        description: liqDescription(row),
+        amount: amt,
+        date: row.date || new Date().toISOString().slice(0, 10),
+        category: (row.category || '').trim() || 'Others',
+        createdAt: new Date().toISOString(),
+        createdBy: revision.proposed_by || approver.id,
+        sourceType: 'liquidation_sync',
+        sourceLiquidationId: liqId,
+        sourceLiquidationRowId: row.id,
+      };
+      if (revisedFiledBy) doc.liquidationFiledBy = revisedFiledBy;
+      if (revisedFiledAt) doc.liquidationFiledAt = revisedFiledAt;
+      if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
+      if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
+      if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
+      if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+      if (receiptRef) doc.receiptRef = receiptRef;
+      batch.set(db.collection('project_expenses').doc(), doc);
+    } else {
+      if (ohByRowId.has(row.id)) continue; // already updated above
+      // Unassigned rows always auto-sync to overhead, old or new — this is what
+      // fixes a legacy liquidation that predates the sync feature entirely.
+      const doc = {
+        description: liqDescription(row),
+        amount: amt,
+        date: row.date || new Date().toISOString().slice(0, 10),
+        category: (row.category || '').trim() || 'Others',
+        createdAt: new Date().toISOString(),
+        createdBy: revision.proposed_by || approver.id,
+        sourceType: 'liquidation_sync',
+        sourceLiquidationId: liqId,
+        sourceLiquidationRowId: row.id,
+      };
+      if (revisedFiledBy) doc.liquidationFiledBy = revisedFiledBy;
+      if (revisedFiledAt) doc.liquidationFiledAt = revisedFiledAt;
+      if (liq.ca_id) doc.sourceCaId = String(liq.ca_id);
+      if ((row.supplier || '').trim()) doc.supplier = row.supplier.trim();
+      if ((row.invoiceNo || '').trim()) doc.invoiceNo = row.invoiceNo.trim();
+      if (typeof row.deductible === 'boolean') doc.deductible = row.deductible;
+      if (receiptRef) doc.receiptRef = receiptRef;
+      batch.set(db.collection('overhead_expenses').doc(), doc);
+    }
   }
   await batch.commit();
 
@@ -3244,7 +3513,15 @@ function quotationGrandTotal(q) {
   const servicesLineSum = () => services.reduce((s, l) => s + num(l.amount), 0);
   const finish = (subtotal) => {
     const afterDiscount = subtotal * (1 - num(q.discountPct) / 100);
-    return afterDiscount * (1 + num(q.vatPct) / 100);
+    // Delivery fee + minimum-order surcharge (opt-in). Mirror calc.ts: tested on
+    // the goods+services subtotal, VAT-able (added before VAT), pass-through.
+    const deliveryEnabled = q.deliveryTermsEnabled === true;
+    const minOrderThreshold = Number.isFinite(Number(q.minOrderThreshold)) ? Number(q.minOrderThreshold) : 50000;
+    const deliveryFee = deliveryEnabled ? num(q.deliveryFee) : 0;
+    const smallOrderFee = Number.isFinite(Number(q.smallOrderFee)) ? Number(q.smallOrderFee) : 5000;
+    const surcharge = deliveryEnabled && subtotal < minOrderThreshold ? smallOrderFee : 0;
+    const deliveryTotal = deliveryFee + surcharge;
+    return (afterDiscount + deliveryTotal) * (1 + num(q.vatPct) / 100);
   };
 
   if (q.formulaVersion === 'legacy') {
@@ -3304,15 +3581,190 @@ function quotationGrandTotal(q) {
   return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
 }
 
+// Sales can be explicitly scoped to services when a partner or client purchases
+// the materials directly. The quotation stays intact; only Sales reporting and
+// the Project List contract amount use this reduced figure.
+function quotationSalesAmount(q) {
+  if (!q || q.salesValueScope !== 'services_only') return quotationGrandTotal(q);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const manpower = Array.isArray(q.manpower) ? q.manpower : [];
+  const services = Array.isArray(q.services) ? q.services : [];
+  const servicesLineSum = () => services.reduce((s, l) => s + num(l.amount), 0);
+  let servicesSub = 0;
+
+  if (q.formulaVersion === 'legacy' && q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.servicesSubtotal))) {
+    servicesSub = Number(q.legacyTotalsSnapshot.servicesSubtotal);
+  } else if (q.servicesFromManpower) {
+    if (q.servicesPerLinePricing) {
+      servicesSub = servicesLineSum();
+    } else {
+      const engineeringServicesQty = Math.max(1, num(q.engineeringServicesQty) || 1);
+      const laborCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0);
+      const contingency = q.formulaVersion === 'legacy' ? num(q.globalContingencyPct) / 100 : 0;
+      const laborWithContingency = q.formulaVersion === 'legacy'
+        ? manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)) * (1 + contingency), 0)
+        : laborCost * engineeringServicesQty;
+      servicesSub = laborWithContingency * (1 + num(q.laborMarkupPct) / 100);
+    }
+  } else {
+    servicesSub = servicesLineSum();
+  }
+
+  return servicesSub * (1 - num(q.discountPct) / 100) * (1 + num(q.vatPct) / 100);
+}
+
+// Spendable Project Budget seeded onto the Project List row at proposal→project
+// handoff. Matches src/utils/calcsheet/calc.ts ioctCostBasis: VAT-ex value minus
+// gross margin (equals total cost when cost fields are real; otherwise VAT-ex
+// net). Keep brace-free string literals so the parity test can extract this.
+function quotationCostBasis(q) {
+  if (!q) return 0;
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const generalReqts = Array.isArray(q.generalReqts) ? q.generalReqts : [];
+  const components = Array.isArray(q.components) ? q.components : [];
+  const manpower = Array.isArray(q.manpower) ? q.manpower : [];
+  const services = Array.isArray(q.services) ? q.services : [];
+  const lineGeneralTotal = (l) => num(l.unitPrice) * num(l.qty);
+  const finishCost = (generalReqtsCost, componentsCost, laborCost, generalReqtsSubtotal, componentsSubtotal, servicesSub, discountAmt) => {
+    const net = generalReqtsSubtotal + componentsSubtotal + servicesSub - discountAmt;
+    if (net <= 0) return 0;
+    const totalCost = generalReqtsCost + componentsCost + laborCost;
+    const totalSubtotals = generalReqtsSubtotal + componentsSubtotal + servicesSub;
+    if (Math.abs(totalCost - totalSubtotals) < 0.01) return net;
+    return totalCost;
+  };
+
+  if (q.formulaVersion === 'legacy') {
+    const snap = q.legacyTotalsSnapshot;
+    if (snap) {
+      const fromSnap = finishCost(
+        num(snap.generalReqtsCost),
+        num(snap.componentsCost),
+        num(snap.laborCost),
+        num(snap.generalReqtsSubtotal),
+        num(snap.componentsSubtotal),
+        num(snap.servicesSubtotal),
+        num(snap.discount),
+      );
+      if (fromSnap > 0) return fromSnap;
+      const net = num(snap.subtotal) - num(snap.discount);
+      if (net > 0) return net;
+      return num(snap.grandTotal);
+    }
+    const cont = num(q.globalContingencyPct) / 100;
+    const generalReqtsCost = generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0);
+    const generalReqtsWithContingency = q.generalReqContingencyMode === 'baked'
+      ? generalReqtsCost
+      : generalReqtsCost * (1 + cont);
+    const generalReqtsSubtotal = generalReqtsWithContingency * (1 + num(q.generalReqMarkupPct) / 100);
+    const componentsCost = components.reduce((s, l) => {
+      const base = num(l.unitCost) * (num(l.forex) || 1);
+      const adjusted = base * (1 + num(l.contingencyPct) / 100 - num(l.discountPct) / 100);
+      return s + adjusted * num(l.qty);
+    }, 0);
+    const componentsSubtotal = components.reduce((s, l) => {
+      const base = num(l.unitCost) * (num(l.forex) || 1);
+      const adjusted = base * (1 + num(l.contingencyPct) / 100 - num(l.discountPct) / 100);
+      return s + adjusted * (1 + num(q.productMarkupPct) / 100) * num(l.qty);
+    }, 0);
+    let laborCost;
+    let servicesSub;
+    if (q.servicesFromManpower) {
+      laborCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0);
+      const laborWithContingency = manpower.reduce((s, m) => {
+        const unit = (num(m.dailyRate) + num(m.allowance)) * (1 + cont);
+        return s + num(m.headcount) * num(m.mandays) * unit;
+      }, 0);
+      servicesSub = laborWithContingency * (1 + num(q.laborMarkupPct) / 100);
+    } else {
+      servicesSub = services.reduce((s, l) => s + num(l.amount), 0);
+      laborCost = servicesSub;
+    }
+    const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
+    const discountAmt = subtotal * (num(q.discountPct) / 100);
+    return finishCost(generalReqtsCost, componentsCost, laborCost, generalReqtsSubtotal, componentsSubtotal, servicesSub, discountAmt);
+  }
+
+  const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, num(q.generalReqtsExportQty) || 1) : 1;
+  const engineeringServicesQty = q.servicesFromManpower ? Math.max(1, num(q.engineeringServicesQty) || 1) : 1;
+  const generalReqtsCost = generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty;
+  const hasPerLineGenMarkup = generalReqts.some((l) => l.markupPct != null);
+  const generalReqtsSubtotal = hasPerLineGenMarkup
+    ? generalReqts.reduce((s, l) => {
+        const markup = l.markupPct != null ? num(l.markupPct) : num(q.generalReqMarkupPct);
+        return s + lineGeneralTotal(l) * (1 + markup / 100);
+      }, 0) * generalReqtsQty
+    : generalReqtsCost * (1 + num(q.generalReqMarkupPct) / 100);
+  const contractComponents = components.filter((l) => !l.optional);
+  const componentsCost = contractComponents.reduce((s, l) => {
+    const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
+    return s + costUnit * num(l.qty);
+  }, 0);
+  const componentsSubtotal = contractComponents.reduce((s, l) => {
+    const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
+    const adjusted = costUnit * (1 + num(l.contingencyPct) / 100);
+    const markup = l.markupPct != null ? num(l.markupPct) : num(q.productMarkupPct);
+    return s + adjusted * (1 + markup / 100) * num(l.qty);
+  }, 0);
+  let laborCost;
+  let servicesSub;
+  if (q.servicesFromManpower) {
+    if (q.servicesPerLinePricing) {
+      const dailyRate = manpower.reduce((s, m) => s + num(m.headcount) * (num(m.dailyRate) + num(m.allowance)), 0);
+      laborCost = services.reduce((s, l) => s + num(l.days) * dailyRate, 0);
+      servicesSub = services.reduce((s, l) => s + num(l.amount), 0);
+    } else {
+      laborCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0) * engineeringServicesQty;
+      servicesSub = laborCost * (1 + num(q.laborMarkupPct) / 100);
+    }
+  } else {
+    servicesSub = services.reduce((s, l) => s + num(l.amount), 0);
+    laborCost = servicesSub;
+  }
+  const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
+  const discountAmt = subtotal * (num(q.discountPct) / 100);
+  return finishCost(generalReqtsCost, componentsCost, laborCost, generalReqtsSubtotal, componentsSubtotal, servicesSub, discountAmt);
+}
+
 function clientApproverFromClient(client) {
   const contacts = Array.isArray(client?.contacts) ? client.contacts : [];
   const primary = contacts.find((c) => c.isPrimary) || contacts[0];
   return primary ? [primary.name, primary.position].filter(Boolean).join(' – ') : '';
 }
 
+/**
+ * Safe Sales → Project List contract patch.
+ * Source of truth: latest IOCT quotation grand total (ACTI only if no IOCT).
+ * Updates amount/WIP/balance fields only — never wipes status, billing progress,
+ * or site progress (those can already be in flight when price is settled late).
+ */
+function contractAmountPatchFromSales(mainData, amount, quotation, project, now) {
+  const billed = Number(mainData.amount_contract_billed_net) || 0;
+  const safeAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0;
+  const balance = Math.max(0, safeAmount - billed);
+  const balPct = safeAmount > 0 ? balance / safeAmount : 0;
+  return {
+    contract_amount: safeAmount,
+    updated_contract_amount: safeAmount,
+    work_in_progress_ap: safeAmount,
+    work_in_progress_ep: safeAmount,
+    total_contract_balance: balance,
+    updated_contract_balance_net: balance,
+    updated_contract_balance_percent: balPct,
+    updated_contract_balance_net_percent: balPct,
+    calcsheet_project_id: project.id,
+    calcsheet_code: project.code || '',
+    calcsheet_quotation_id: quotation?.id || null,
+    source_module: 'calcsheet',
+    qtn_no: project.code || mainData.qtn_no || '',
+    updated_at: now,
+  };
+}
+
 function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
-  const amount = quotationGrandTotal(quotation);
+  const amount = quotationSalesAmount(quotation);
+  const budget = quotationCostBasis(quotation);
   const year = Number.isFinite(new Date(project.date || now).getFullYear())
     ? new Date(project.date || now).getFullYear()
     : new Date().getFullYear();
@@ -3378,6 +3830,7 @@ function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, p
     calcsheet_code: project.code || '',
     calcsheet_quotation_id: quotation?.id || null,
     source_module: 'calcsheet',
+    project_budget: budget || 0,
     executionFolderId: project.executionFolderId || '',
     executionFolderUrl: project.executionFolderUrl || '',
     with_acti: !!withActi,
@@ -3439,8 +3892,29 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   }
 
   const linkedDoc = await findLinkedMainProject(project);
+  const salesAmount = quotationSalesAmount(selectedQuotation);
+  // Default path when already linked: push Sales contract amount (IOCT/ACTI grand
+  // total) without remapping the whole Project List row. Late price settlements
+  // and quotation revisions used to leave Projects monitoring stuck on the first
+  // seed amount — Resync / sync-main now corrects that. Use force:true only when
+  // you intentionally want a full field remap (resets status/billing defaults).
   if (linkedDoc && !options.force) {
     const linkedData = linkedDoc.data() || {};
+    const amountPatch = contractAmountPatchFromSales(
+      linkedData,
+      salesAmount,
+      selectedQuotation,
+      project,
+      now,
+    );
+    // Fill Project Budget from IOCT cost (value − margin) when the linked
+    // row still has none — never clobber a budget someone already typed.
+    const budgetSource = ioct || selectedQuotation;
+    const seededBudget = quotationCostBasis(budgetSource);
+    if (!(Number(linkedData.project_budget) > 0) && seededBudget > 0) {
+      amountPatch.project_budget = seededBudget;
+    }
+    await linkedDoc.ref.update(amountPatch);
     await projectRef.update({
       mainProjectId: linkedDoc.id,
       mainProjectNo: linkedData.project_no || '',
@@ -3453,12 +3927,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
       mainProjectStatusSyncedAt: now,
     });
     return {
-      action: 'linked-existing',
+      action: 'amount-synced',
       mainProjectId: linkedDoc.id,
       projectNo: linkedData.project_no || '',
       quotationId: selectedQuotation.id,
       quotationKind: selectedQuotation.kind,
-      amount: quotationGrandTotal(selectedQuotation),
+      amount: salesAmount,
+      previousAmount: Number(linkedData.updated_contract_amount) || Number(linkedData.contract_amount) || 0,
     };
   }
 
@@ -3493,14 +3968,114 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     mainProjectStatusSyncedAt: now,
   });
 
+  // Carry the proposal's Work Schedule over to the awarded project (copy, so the
+  // proposal keeps its baseline). Only on first creation, and copyScheduleTasks…
+  // itself no-ops if the target already has a schedule — a re-sync never clobbers
+  // edits made during execution.
+  if (action === 'created' || action === 'recreated') {
+    try {
+      const copied = await copyScheduleTasksToProject(projectId, mainProjectId);
+      // Freeze the awarded plan as the project's first baseline version.
+      if (copied > 0) await snapshotScheduleVersion(mainProjectId, 'Baseline (at award)', 'System');
+    } catch (e) { console.error('Schedule carry-over failed:', e.message); }
+  }
+
   return {
     action,
     mainProjectId,
     projectNo: mapped.project_no || '',
     quotationId: selectedQuotation.id,
     quotationKind: selectedQuotation.kind,
-    amount: quotationGrandTotal(selectedQuotation),
+    amount: quotationSalesAmount(selectedQuotation),
   };
+}
+
+// Copy schedule tasks from one projectId to another (proposal → awarded project).
+// No-ops when the destination already has any tasks, so it never duplicates.
+async function copyScheduleTasksToProject(fromProjectId, toProjectId) {
+  const destSnap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(toProjectId)).limit(1).get();
+  if (!destSnap.empty) return 0;
+  const srcSnap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(fromProjectId)).get();
+  if (srcSnap.empty) return 0;
+  const now = new Date().toISOString();
+  // Pre-allocate new refs so predecessor ids can be remapped source → copy.
+  const items = srcSnap.docs.map((doc) => ({ data: doc.data(), ref: db.collection('calcsheet_schedule_tasks').doc(), srcId: doc.id }));
+  const idMap = new Map(items.map((it) => [it.srcId, it.ref.id]));
+  let batch = db.batch();
+  let count = 0;
+  for (const it of items) {
+    const { id: _id, projectId: _pid, createdAt: _c, updatedAt: _u, predecessors, parentId, ...rest } = it.data;
+    const remapped = Array.isArray(predecessors) ? predecessors.map((p) => idMap.get(p)).filter(Boolean) : undefined;
+    const newParent = parentId ? (idMap.get(parentId) || null) : null;
+    batch.set(it.ref, stripUndefinedFields({ ...rest, predecessors: remapped, parentId: newParent, projectId: String(toProjectId), createdAt: now, updatedAt: now }));
+    count += 1;
+    if (count % 400 === 0) { await batch.commit(); batch = db.batch(); }
+  }
+  await batch.commit();
+  console.log(`Carried over ${count} schedule task(s) to project ${toProjectId}`);
+  return count;
+}
+
+// When a MONITORING project's schedule changes, mirror the progress-weighted
+// overall % into its actual_site_progress_percent (this drives progress billing).
+// No-op for calcsheet projects (no doc in `projects`) or when there are no tasks.
+async function syncScheduleProgressToMonitoringProject(projectId) {
+  if (!projectId) return;
+  const projDoc = await db.collection('projects').doc(String(projectId)).get();
+  if (!projDoc.exists) return;
+  const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
+  if (snap.empty) return;
+  // Only leaf tasks contribute — WBS summary tasks roll up and would double-count.
+  const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const parents = new Set(rows.filter((t) => t.parentId).map((t) => String(t.parentId)));
+  const leaves = rows.filter((t) => !parents.has(String(t.id)));
+  let weighted = 0;
+  let weight = 0;
+  for (const t of leaves) {
+    const start = new Date(t.startDate).getTime();
+    const end = new Date(t.endDate).getTime();
+    const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
+    weighted += (Number(t.progressPct) || 0) * days;
+    weight += days;
+  }
+  if (weight <= 0) return;
+  const pct = Math.max(0, Math.min(100, Math.round(weighted / weight)));
+  const status = pct <= 0 ? 'Not Started' : pct >= 100 ? 'Completed' : 'In Progress';
+  await projDoc.ref.update({ actual_site_progress_percent: pct, project_status: status, updated_at: new Date().toISOString() });
+}
+
+// Progress-weighted overall % across a task array (milestones weigh 1 day).
+function scheduleTasksOverallProgress(tasks) {
+  let weighted = 0;
+  let weight = 0;
+  for (const t of tasks) {
+    const start = new Date(t.startDate).getTime();
+    const end = new Date(t.endDate).getTime();
+    const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
+    weighted += (Number(t.progressPct) || 0) * days;
+    weight += days;
+  }
+  return weight > 0 ? Math.max(0, Math.min(100, Math.round(weighted / weight))) : 0;
+}
+
+// Freeze a project's whole Gantt (all tasks) into a named version snapshot.
+async function snapshotScheduleVersion(projectId, label, savedBy) {
+  const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
+  // Keep each task's id so predecessor links can be remapped on restore.
+  const tasks = snap.docs.map((dd) => { const { id: _i, ...rest } = dd.data(); return { ...rest, id: dd.id }; });
+  const now = new Date().toISOString();
+  const doc = {
+    projectId: String(projectId),
+    savedAt: now,
+    savedBy: savedBy || null,
+    label: (label && String(label).trim()) || null,
+    taskCount: tasks.length,
+    overallProgress: scheduleTasksOverallProgress(tasks),
+    tasks,
+  };
+  const ref = await db.collection('calcsheet_schedule_versions').add(doc);
+  const { tasks: _t, ...meta } = doc;
+  return { ...meta, id: ref.id };
 }
 
 // ── Projects ─────────────────────────────────────────────────────────────────
@@ -3601,13 +4176,21 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
       mainProjectCompletionDate: mainData.completion_date || null,
       mainProjectStatusSyncedAt: now,
     });
-    const mainPatch = {
-      calcsheet_project_id: req.params.id,
-      calcsheet_code: calcsheet.code || '',
-      source_module: 'calcsheet',
-      updated_at: now,
-      ...(selectedQuotation ? { calcsheet_quotation_id: selectedQuotation.id } : {}),
-    };
+    // Sales is source of truth for contract value when linking.
+    const mainPatch = selectedQuotation
+      ? contractAmountPatchFromSales(
+          mainData,
+          quotationSalesAmount(selectedQuotation),
+          selectedQuotation,
+          calcsheet,
+          now,
+        )
+      : {
+          calcsheet_project_id: req.params.id,
+          calcsheet_code: calcsheet.code || '',
+          source_module: 'calcsheet',
+          updated_at: now,
+        };
     await mainDoc.ref.update(mainPatch);
     res.json({
       success: true,
@@ -3616,7 +4199,7 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
       ...(selectedQuotation ? {
         quotationId: selectedQuotation.id,
         quotationKind: selectedQuotation.kind,
-        amount: quotationGrandTotal(selectedQuotation),
+        amount: quotationSalesAmount(selectedQuotation),
       } : {}),
     });
   } catch (err) {
@@ -3668,6 +4251,11 @@ app.delete('/api/calcsheet/projects/:id', async (req, res) => {
 app.use(
   '/api/calcsheet/product-history',
   createProductHistoryRouter({ db, requireActiveUser }),
+);
+
+app.use(
+  '/api/finance-trace',
+  createFinanceTraceRouter({ db, getCurrentUser, FieldValue }),
 );
 
 app.get('/api/calcsheet/quotations', async (req, res) => {
@@ -3868,6 +4456,234 @@ app.delete('/api/calcsheet/presets/:id', async (req, res) => {
     await db.collection('calcsheet_presets').doc(req.params.id).delete();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete preset' }); }
+});
+
+// ── Scope Library (reusable inclusion bundles) ───────────────────────────────
+// Team-shared named sets of general requirements / components / services /
+// manpower (+ optional scope/exclusions text) that can be inserted into any
+// quotation. Mirrors the presets CRUD. Collection: calcsheet_scope_library.
+app.get('/api/calcsheet/scope-library', async (req, res) => {
+  try {
+    const snap = await db.collection('calcsheet_scope_library').get();
+    // Spread data first so a stray stored `id` can't clobber the doc id; sort
+    // newest-first in memory (avoids requiring an `updatedAt` field/index on
+    // every doc, matching the version-history read pattern).
+    const bundles = snap.docs
+      .map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; })
+      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    res.json({ success: true, bundles });
+  } catch (err) { res.status(500).json({ error: 'Failed to get scope library' }); }
+});
+
+app.post('/api/calcsheet/scope-library', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    // Strip any client-supplied `id`, and stamp attribution + timestamps
+    // server-side so the created bundle's id is the canonical Firestore ref.id.
+    const { id: _ignored, ...data } = req.body || {};
+    const now = new Date().toISOString();
+    const doc = {
+      ...data,
+      createdBy: user.id || null,
+      createdByName: user.full_name || user.username || null,
+      createdAt: data.createdAt || now,
+      updatedAt: now,
+    };
+    const ref = await db.collection('calcsheet_scope_library').add(doc);
+    res.json({ success: true, bundle: { ...doc, id: ref.id } });
+  } catch (err) { res.status(500).json({ error: 'Failed to save scope bundle' }); }
+});
+
+app.put('/api/calcsheet/scope-library/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { id: _ignored, ...patch } = req.body || {};
+    await db.collection('calcsheet_scope_library').doc(req.params.id)
+      .update({ ...patch, updatedAt: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update scope bundle' }); }
+});
+
+app.delete('/api/calcsheet/scope-library/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    await db.collection('calcsheet_scope_library').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete scope bundle' }); }
+});
+
+// ── Project work schedule (Gantt) tasks ───────────────────────────────────────
+// Equality-only filter on projectId, sorted in memory — no composite index
+// needed (see project_expenses above for why that matters on this repo's
+// deploy pipeline: an index create 409 aborts firestore+functions+hosting).
+app.get('/api/schedule-tasks', async (req, res) => {
+  try {
+    const { projectId } = req.query;
+    if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
+    const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
+    const tasks = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+    tasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.startDate || '').localeCompare(String(b.startDate || '')));
+    res.json({ success: true, tasks });
+  } catch (err) {
+    console.error('Error fetching schedule tasks:', err);
+    res.status(500).json({ success: false, error: 'Failed to get schedule tasks' });
+  }
+});
+
+app.post('/api/schedule-tasks', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { projectId, name, startDate, endDate } = req.body || {};
+    if (!projectId || !name || !startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'projectId, name, startDate, endDate are required' });
+    }
+    const { id: _ignored, ...body } = req.body;
+    const data = stripUndefinedFields({
+      ...body,
+      progressPct: Number(body.progressPct) || 0,
+      order: Number(body.order) || 0,
+      isMilestone: !!body.isMilestone,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const ref = await db.collection('calcsheet_schedule_tasks').add(data);
+    await syncScheduleProgressToMonitoringProject(data.projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
+    res.json({ success: true, task: { ...data, id: ref.id } });
+  } catch (err) {
+    console.error('Error creating schedule task:', err);
+    res.status(500).json({ success: false, error: 'Failed to create schedule task' });
+  }
+});
+
+app.put('/api/schedule-tasks/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { id: _ignored, ...body } = req.body || {};
+    const data = stripUndefinedFields({ ...body, updatedAt: new Date().toISOString() });
+    const ref = db.collection('calcsheet_schedule_tasks').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Schedule task not found' });
+    await ref.update(data);
+    await syncScheduleProgressToMonitoringProject(doc.data().projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
+    res.json({ success: true, task: { ...doc.data(), ...data, id: ref.id } });
+  } catch (err) {
+    console.error('Error updating schedule task:', err);
+    res.status(500).json({ success: false, error: 'Failed to update schedule task' });
+  }
+});
+
+app.delete('/api/schedule-tasks/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const ref = db.collection('calcsheet_schedule_tasks').doc(req.params.id);
+    const doc = await ref.get();
+    const projectId = doc.exists ? doc.data().projectId : null;
+    await ref.delete();
+    if (projectId) await syncScheduleProgressToMonitoringProject(projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting schedule task:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete schedule task' });
+  }
+});
+
+// ── Gantt schedule version history ───────────────────────────────────────────
+// A "version" freezes the whole schedule (all tasks) for a project — a named
+// snapshot / baseline. Same collection pattern as calcsheet_quotation_versions.
+app.post('/api/schedule-versions', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { projectId, label } = req.body || {};
+    if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
+    const version = await snapshotScheduleVersion(projectId, label, user.full_name || user.username || null);
+    res.json({ success: true, version });
+  } catch (err) {
+    console.error('Error saving schedule version:', err);
+    res.status(500).json({ success: false, error: 'Failed to save schedule version' });
+  }
+});
+
+app.get('/api/schedule-versions', async (req, res) => {
+  try {
+    const { projectId } = req.query;
+    if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
+    const snap = await db.collection('calcsheet_schedule_versions').where('projectId', '==', String(projectId)).get();
+    // Omit the heavy `tasks` array from the list — restore reads the doc directly.
+    const versions = snap.docs.map((dd) => {
+      const { id: _i, tasks: _t, ...meta } = dd.data();
+      return { ...meta, id: dd.id };
+    }).sort((a, b) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')));
+    res.json({ success: true, versions });
+  } catch (err) {
+    console.error('Error fetching schedule versions:', err);
+    res.status(500).json({ success: false, error: 'Failed to get schedule versions' });
+  }
+});
+
+// Full version incl. its task array (the list endpoint strips tasks for weight).
+app.get('/api/schedule-versions/:id', async (req, res) => {
+  try {
+    const doc = await db.collection('calcsheet_schedule_versions').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Version not found' });
+    const { id: _i, ...data } = doc.data();
+    res.json({ success: true, version: { ...data, id: doc.id } });
+  } catch (err) {
+    console.error('Error fetching schedule version:', err);
+    res.status(500).json({ success: false, error: 'Failed to get schedule version' });
+  }
+});
+
+// Restore a version: replace the project's current tasks with the snapshot's.
+// Non-destructive — snapshots the current state first, so a restore is undoable.
+app.post('/api/schedule-versions/:id/restore', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const vref = db.collection('calcsheet_schedule_versions').doc(req.params.id);
+    const vdoc = await vref.get();
+    if (!vdoc.exists) return res.status(404).json({ success: false, error: 'Version not found' });
+    const v = vdoc.data();
+    const projectId = String(v.projectId);
+    await snapshotScheduleVersion(projectId, 'Before restore', user.full_name || user.username || null);
+    const cur = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', projectId).get();
+    const now = new Date().toISOString();
+    const batch = db.batch();
+    cur.docs.forEach((dd) => batch.delete(dd.ref));
+    // Pre-allocate refs and remap predecessor ids (snapshot id → new id).
+    const items = (v.tasks || []).map((t) => ({ t, ref: db.collection('calcsheet_schedule_tasks').doc() }));
+    const idMap = new Map(items.filter((it) => it.t.id).map((it) => [it.t.id, it.ref.id]));
+    items.forEach(({ t, ref }) => {
+      const { id: _i, projectId: _p, createdAt: _c, updatedAt: _u, predecessors, parentId, ...rest } = t;
+      const remapped = Array.isArray(predecessors) ? predecessors.map((p) => idMap.get(p)).filter(Boolean) : undefined;
+      const newParent = parentId ? (idMap.get(parentId) || null) : null;
+      batch.set(ref, stripUndefinedFields({ ...rest, predecessors: remapped, parentId: newParent, projectId, createdAt: now, updatedAt: now }));
+    });
+    await batch.commit();
+    await syncScheduleProgressToMonitoringProject(projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error restoring schedule version:', err);
+    res.status(500).json({ success: false, error: 'Failed to restore schedule version' });
+  }
+});
+
+app.delete('/api/schedule-versions/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    await db.collection('calcsheet_schedule_versions').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting schedule version:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete schedule version' });
+  }
 });
 
 // ── Calcsheet settings (default job titles, etc.) ────────────────────────────
@@ -5099,6 +5915,39 @@ app.post('/api/onedrive/move', async (req, res) => {
   }
 });
 
+// 6b. Rename a drive item in place (same parent). Used to fix execution folders
+// that were promoted under a PCS name before the IOCT project number was known.
+app.post('/api/onedrive/rename', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { itemId, name } = req.body || {};
+  if (!itemId || !name || typeof name !== 'string') {
+    return res.status(400).json({ error: 'itemId and name are required' });
+  }
+  const safeName = String(name).replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+  if (!safeName) return res.status(400).json({ error: 'name is empty after sanitization' });
+  try {
+    const token = await getGraphAppToken();
+    const driveId = await resolveCorporateDriveId(token);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(itemId)}`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: safeName }),
+      }
+    );
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Rename failed (${r.status}): ${t.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl, name: data.name || safeName });
+  } catch (err) {
+    res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
+  }
+});
+
 // Upload a file directly into a folder identified by its drive item id.
 app.post('/api/onedrive/upload-by-id', async (req, res) => {
   const user = await getCurrentUser(req);
@@ -6026,8 +6875,30 @@ app.post('/api/overhead-expenses', async (req, res) => {
     const body = req.body;
     const now = new Date().toISOString();
     if (Array.isArray(body.expenses)) {
-      const toInsert = body.expenses.filter(e => Number(e.amount) > 0);
+      let toInsert = body.expenses.filter(e => Number(e.amount) > 0);
       if (toInsert.length === 0) return res.status(400).json({ success: false, error: 'No valid expenses in array' });
+      // Server-side dedup for liquidation-sourced rows, mirroring project-expenses —
+      // prevents duplicates when a liquidation is re-synced (e.g. re-proposing an edit).
+      const hasLiqRows = toInsert.some(e => e.sourceLiquidationId);
+      if (hasLiqRows) {
+        const liqKey = (e) => e.sourceLiquidationId && e.sourceLiquidationRowId ? `liq:${e.sourceLiquidationId}:${e.sourceLiquidationRowId}` : null;
+        const liqIds = [...new Set(toInsert.filter(e => e.sourceLiquidationId).map(e => String(e.sourceLiquidationId)))];
+        const existingKeys = new Set();
+        for (let i = 0; i < liqIds.length; i += 10) {
+          const chunkIds = liqIds.slice(i, i + 10);
+          const snap = await db.collection('overhead_expenses')
+            .where('sourceType', '==', 'liquidation_sync')
+            .where('sourceLiquidationId', 'in', chunkIds).get();
+          snap.docs.forEach(d => { const k = liqKey(d.data()); if (k) existingKeys.add(k); });
+        }
+        toInsert = toInsert.filter(e => {
+          const k = liqKey(e);
+          return !k || !existingKeys.has(k);
+        });
+        if (toInsert.length === 0) {
+          return res.status(200).json({ success: true, count: 0, expenses: [], message: 'All expenses already synced' });
+        }
+      }
       const inserted = [];
       for (let i = 0; i < toInsert.length; i += 499) {
         const chunk = toInsert.slice(i, i + 499);
@@ -6043,6 +6914,11 @@ app.post('/api/overhead-expenses', async (req, res) => {
             createdBy: user.id,
             sourceType: exp.sourceType || 'manual',
           };
+          if (exp.sourceLiquidationId) doc.sourceLiquidationId = exp.sourceLiquidationId;
+          if (exp.sourceLiquidationRowId) doc.sourceLiquidationRowId = exp.sourceLiquidationRowId;
+          if (exp.liquidationFiledBy) doc.liquidationFiledBy = String(exp.liquidationFiledBy);
+          if (exp.liquidationFiledAt) doc.liquidationFiledAt = String(exp.liquidationFiledAt);
+          if (exp.sourceCaId) doc.sourceCaId = exp.sourceCaId;
           if (exp.receiptRef) doc.receiptRef = exp.receiptRef;
           if (exp.remarks) doc.remarks = String(exp.remarks);
           if (exp.supplier) doc.supplier = String(exp.supplier);
@@ -6065,6 +6941,7 @@ app.post('/api/overhead-expenses', async (req, res) => {
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
     const { description, remarks, amount, date, category, sourceType, receiptRef,
+            sourceLiquidationId, sourceLiquidationRowId, liquidationFiledBy, liquidationFiledAt, sourceCaId,
             supplier, invoiceNo, invoiceType, vat, tin, imageHash, deductible, deductibleReason, fundingSource } = body;
     if (!amount) return res.status(400).json({ success: false, error: 'amount is required' });
     const doc = {
@@ -6076,6 +6953,11 @@ app.post('/api/overhead-expenses', async (req, res) => {
       createdBy: user.id,
       sourceType: sourceType || 'manual',
     };
+    if (sourceLiquidationId) doc.sourceLiquidationId = sourceLiquidationId;
+    if (sourceLiquidationRowId) doc.sourceLiquidationRowId = sourceLiquidationRowId;
+    if (liquidationFiledBy) doc.liquidationFiledBy = String(liquidationFiledBy);
+    if (liquidationFiledAt) doc.liquidationFiledAt = String(liquidationFiledAt);
+    if (sourceCaId) doc.sourceCaId = sourceCaId;
     if (receiptRef) doc.receiptRef = receiptRef;
     if (remarks) doc.remarks = String(remarks);
     if (supplier) doc.supplier = String(supplier);
@@ -6261,6 +7143,48 @@ app.post('/api/project-expenses/:id/convert-to-overhead', async (req, res) => {
   }
 });
 // ========== END OVERHEAD EXPENSES ==========
+
+// ========== AI ASSIST (read-only chat/voice, RJR/TJC only, off by default) ==========
+const aiAssistConfig = loadAiAssistConfig(process.env);
+app.use('/api/ai-assist', createAiAssistRouter({
+  db,
+  getCurrentUser,
+  config: aiAssistConfig,
+  createChatClient: (config) => {
+    const registry = createAiAssistToolRegistry({ db });
+    const toolDeclarations = [...registry.values()].map((tool) => tool.declaration);
+    return createAssistChatClient({
+      config,
+      apiKey: process.env.GEMINI_API_KEY,
+      systemInstruction: buildTextSystemInstruction(config),
+      toolDeclarations,
+    });
+  },
+  createLiveClient: (apiKey) => new AiAssistGoogleGenAI({ apiKey }),
+  geminiApiKey: process.env.GEMINI_API_KEY,
+}));
+// ========== END AI ASSIST ==========
+
+// ========== SYSTEM BACKUPS (Firestore recursive backup + OneDrive export, Admin only) ==========
+app.use('/api/backups', createBackupsRouter({
+  db,
+  admin,
+  getCurrentUser,
+  getGraphAppToken,
+  resolveCorporateDriveId,
+  ensureFolderByPath,
+}));
+// ========== END SYSTEM BACKUPS ==========
+
+// ========== STATEMENTS OF ACCOUNT (SOA Subcontractor & Client Billings) ==========
+app.use('/api/soa', createSoaRouter({
+  db,
+  getCurrentUser,
+  getGraphAppToken,
+  resolveCorporateDriveId,
+  ensureFolderByPath,
+}));
+// ========== END STATEMENTS OF ACCOUNT ==========
 
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {

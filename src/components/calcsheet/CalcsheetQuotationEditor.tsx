@@ -25,9 +25,11 @@ import { useQuotationStore } from '../../store/quotationStore';
 import {
   PHP, computeTotals, componentLineTotal,
   componentSellingUnit, lineGeneralTotal, manpowerCost, manpowerTotalCost, manpowerDailyRate,
+  formatDiscountPct, discountPctFromAmount, discountPctFromTargetNet,
 } from '../../utils/calcsheet/calc';
 import { ISSUER_NAMES, DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from '../../utils/calcsheet/defaultTerms';
 import { quotationRefNo } from '../../utils/calcsheet/codes';
+import { sanitizeNumericText, parseLenientFloat, parseLenientInt } from '../../utils/calcsheet/numberInput';
 import { FloatingTotalsWidget } from './FloatingTotalsWidget';
 import type {
   ComponentLine, GeneralReqLine, HistoricalPriceSource, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
@@ -35,7 +37,12 @@ import type {
 import { EditableTable } from './EditableTable';
 import type { Column, ContextMenuItem } from './EditableTable';
 import DuplicateQuotationDialog from './DuplicateQuotationDialog';
+import CopyInclusionsDialog, { type CopiedInclusions } from './CopyInclusionsDialog';
+import ScopeLibraryDialog from './ScopeLibraryDialog';
+import LibraryAddIcon from '@mui/icons-material/LibraryAdd';
+import BookmarksIcon from '@mui/icons-material/Bookmarks';
 import { exportQuotationPdf } from '../../utils/calcsheet/pdfExport';
+import { compactLayoutAvailability, type QuotationPdfLayout } from '../../utils/calcsheet/quotationPdfLayout';
 import { exportQuotationXlsx } from '../../utils/calcsheet/xlsxExport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -48,6 +55,7 @@ import ComponentTimingDialog, {
   ComponentTimingAction,
 } from './ComponentTimingDialog';
 import { hasInvalidPurchaseTiming } from './purchaseTiming';
+import { subheaderBefore } from '../../utils/calcsheet/subheaders';
 
 const id = () => nanoid(6);
 
@@ -169,10 +177,16 @@ function NumField({
 }: { label: string; value: number; onChange: (v: number) => void; integer?: boolean; sx?: any; helperText?: string; disabled?: boolean }) {
   const [text, setText] = useState(() => (value === 0 ? '' : String(value)));
   const lastEmitted = useRef(value);
+  const focused = useRef(false);
 
   useEffect(() => {
     // Only resync from outside (e.g. another control writing the same field, or a reset) —
     // not from the onChange we just fired ourselves, which would clobber in-progress typing.
+    // Some callers pass a `value` derived by round-tripping through other math (e.g. a peso
+    // discount recomputed from a stored percentage) rather than echoing what was typed —
+    // that round trip rarely lands on the exact same float, so skip resyncing while the
+    // field is focused or we'd stomp on the user's keystrokes mid-type.
+    if (focused.current) return;
     if (value !== lastEmitted.current) {
       setText(value === 0 ? '' : String(value));
       lastEmitted.current = value;
@@ -183,18 +197,29 @@ function NumField({
     <TextField
       label={label}
       size="small"
-      type="number"
+      type="text"
+      inputMode="decimal"
       value={text}
       placeholder="0"
       onChange={(e) => {
-        const raw = e.target.value;
+        // type="number" can't parse thousands separators and browsers are
+        // inconsistent (sometimes outright buggy) about pasted comma-formatted
+        // figures like "503,170.08" copied from Excel/a PDF — so this is a
+        // plain text field and we sanitize+parse pasted/typed input ourselves.
+        const raw = sanitizeNumericText(e.target.value);
         setText(raw);
-        const parsed = integer ? parseInt(raw, 10) : parseFloat(raw);
-        const num = Number.isFinite(parsed) ? parsed : 0;
-        lastEmitted.current = num;
-        onChange(num);
+        const parsed = integer ? parseLenientInt(raw) : parseLenientFloat(raw);
+        lastEmitted.current = parsed;
+        onChange(parsed);
       }}
-      onFocus={(e) => e.target.select()}
+      onFocus={(e) => { focused.current = true; e.target.select(); }}
+      onBlur={() => {
+        focused.current = false;
+        if (value !== lastEmitted.current) {
+          setText(value === 0 ? '' : String(value));
+          lastEmitted.current = value;
+        }
+      }}
       disabled={disabled}
       sx={sx}
       helperText={helperText}
@@ -236,6 +261,87 @@ function BreakdownCard({ label, color, cost, contingency, contingencyPct, markup
   );
 }
 
+// Shift+click range-select on a row-checkbox column — mirrors OS file-manager
+// selection (Explorer/Finder), but symmetric for checkboxes: a plain click
+// toggles just that row and remembers both the row (the "anchor") and which
+// way it just went (checked or unchecked); a Shift+click replays that SAME
+// action across every row between the anchor and the clicked row — so
+// Shift+click both multi-selects (anchor was just checked) and
+// multi-deselects (anchor was just unchecked). Rows outside the range are
+// never touched.
+//
+// The anchor is remembered by row id, not array position — resolved back to
+// a live index at Shift+click time — so it stays correct even if a row is
+// added, deleted, or drag-reordered in between the two clicks (an index
+// captured at click time would otherwise silently point at the wrong row
+// once the array shifts under it). `rows`/`idx` are the same array/position
+// EditableTable's column `render(row, idx)` already gets, so the range
+// always matches what's on screen.
+function rangeSelectHandler<T extends { id: string }>(
+  rows: T[],
+  selectedIds: Set<string>,
+  anchorRef: React.MutableRefObject<{ id: string; checked: boolean } | null>,
+  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>,
+) {
+  return (idx: number) => (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const anchorIdx = anchorRef.current ? rows.findIndex((r) => r.id === anchorRef.current!.id) : -1;
+    if (e.shiftKey && anchorIdx >= 0) {
+      const { checked } = anchorRef.current!;
+      const from = Math.min(anchorIdx, idx);
+      const to = Math.max(anchorIdx, idx);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (let i = from; i <= to; i++) {
+          if (checked) next.add(rows[i].id); else next.delete(rows[i].id);
+        }
+        return next;
+      });
+      // Anchor stays put — repeated Shift+click from the same starting point
+      // keeps growing/shrinking the same range, matching Explorer/Finder.
+    } else {
+      const rowId = rows[idx].id;
+      const willCheck = !selectedIds.has(rowId);
+      anchorRef.current = { id: rowId, checked: willCheck };
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (willCheck) next.add(rowId); else next.delete(rowId);
+        return next;
+      });
+    }
+  };
+}
+
+// Header "select all / none" checkbox for a row-checkbox column — one click
+// selects every row in the (currently displayed) section, or clears it if
+// everything's already selected; shows the usual indeterminate dash while
+// only some rows are checked. Clears any pending Shift+click anchor so a
+// later range-select starts fresh relative to the bulk action, not a row
+// that may no longer reflect the same context.
+function selectAllHeaderCheckbox<T extends { id: string }>(
+  rows: T[],
+  selectedIds: Set<string>,
+  anchorRef: React.MutableRefObject<{ id: string; checked: boolean } | null>,
+  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>,
+) {
+  const allSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
+  const someSelected = !allSelected && rows.some((r) => selectedIds.has(r.id));
+  return (
+    <Checkbox
+      size="small"
+      sx={{ p: 0 }}
+      checked={allSelected}
+      indeterminate={someSelected}
+      disabled={rows.length === 0}
+      onChange={(e) => {
+        anchorRef.current = null;
+        setSelectedIds(e.target.checked ? new Set(rows.map((r) => r.id)) : new Set());
+      }}
+      title={allSelected ? 'Clear selection' : 'Select all rows'}
+    />
+  );
+}
+
 export default function QuotationEditor() {
   const { id: qid = '' } = useParams();
   const navigate = useNavigate();
@@ -254,8 +360,14 @@ export default function QuotationEditor() {
   const [draft, setDraft] = useState<Quotation | undefined>(saved);
   const [selectedSvcIds, setSelectedSvcIds] = useState<Set<string>>(new Set());
   const [selectedCompIds, setSelectedCompIds] = useState<Set<string>>(new Set());
+  // Last-clicked row (position + resulting checked state) per section, for
+  // Shift+click range-select (rangeSelectHandler above).
+  const svcSelectAnchor = useRef<{ id: string; checked: boolean } | null>(null);
+  const compSelectAnchor = useRef<{ id: string; checked: boolean } | null>(null);
   const [groupDialogOpen, setGroupDialogOpen] = useState<'services' | 'components' | false>(false);
   const [groupLabel, setGroupLabel] = useState('');
+  const [subheaderDialogOpen, setSubheaderDialogOpen] = useState<'services' | 'components' | false>(false);
+  const [subheaderLabel, setSubheaderLabel] = useState('');
   const [showFloatingTotals, setShowFloatingTotals] = useState(
     () => localStorage.getItem('calcsheet:floatingTotalsVisible') === '1',
   );
@@ -340,10 +452,48 @@ export default function QuotationEditor() {
   // the version snapshot the server takes of the pre-save state.
   const [remarkDialogOpen, setRemarkDialogOpen] = useState(false);
   const [remarkText, setRemarkText] = useState('');
+  // Terms & Conditions confirmation checkbox — required on both the Save
+  // prompt and before Export PDF, so the team consciously re-checks (esp.
+  // Delivery terms) instead of forgetting to update it. Resets to unchecked
+  // every time either dialog opens — this is a manual "I looked" gate, not a
+  // one-time setting.
+  const [saveTermsConfirmed, setSaveTermsConfirmed] = useState(false);
+  const [exportConfirmOpen, setExportConfirmOpen] = useState(false);
+  const [exportTermsConfirmed, setExportTermsConfirmed] = useState(false);
+  const [pendingExportLayout, setPendingExportLayout] = useState<QuotationPdfLayout>('standard');
 
   // Saved-version history (snapshots captured server-side on every save).
   const [historyOpen, setHistoryOpen] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+
+  // Merge picked inclusions (from another quotation, or the Scope Library) into
+  // the current draft. Lines already carry fresh ids from the source dialog.
+  const appendInclusions = (picked: CopiedInclusions) => {
+    setDraft((d) => d ? {
+      ...d,
+      generalReqts: [...d.generalReqts, ...picked.generalReqts],
+      components: [...d.components, ...picked.components],
+      services: [...d.services, ...picked.services],
+      manpower: [...d.manpower, ...picked.manpower],
+      ...(picked.terms ? { termsOverrides: { ...d.termsOverrides, ...picked.terms } } : {}),
+    } : d);
+  };
+
+  // Append copied inclusions (from another quotation) into the current draft.
+  const handleCopyInclusions = (picked: CopiedInclusions) => {
+    appendInclusions(picked);
+    setCopyOpen(false);
+    setToast({ msg: 'Inclusions copied — review and Save.', sev: 'success' });
+  };
+
+  // Insert inclusions chosen from the Scope Library into the current draft.
+  const handleInsertFromLibrary = (picked: CopiedInclusions) => {
+    appendInclusions(picked);
+    setLibraryOpen(false);
+    setToast({ msg: 'Inserted from library — review and Save.', sev: 'success' });
+  };
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [versions, setVersions] = useState<QuotationVersion[]>([]);
@@ -402,6 +552,11 @@ export default function QuotationEditor() {
   const customer = clients.find((c) => c.id === project.customerId);
   const issuer = quotation.kind;
   const isLegacy = quotation.formulaVersion === 'legacy';
+  // Shown as a quick preview on the Terms & Conditions confirmation dialogs
+  // (Save / Export PDF) so the team can eyeball the actual Delivery wording —
+  // the thing most often left stale, e.g. after enabling the delivery fee —
+  // without having to open the Terms & Conditions accordion separately.
+  const effectiveDeliveryText = quotation.termsOverrides?.deliveryLines ?? defaultDeliveryText(quotation.deliveryTerms);
   const quotationDate =
     quotation.dateSent
     || quotation.createdAt?.slice(0, 10)
@@ -461,7 +616,21 @@ export default function QuotationEditor() {
       return;
     }
     setRemarkText('');
+    setSaveTermsConfirmed(false);
     setRemarkDialogOpen(true);
+  };
+
+  // Export PDF is gated behind the same Terms & Conditions confirmation —
+  // opens a small dialog instead of exporting immediately.
+  const requestExportPdf = (layout: QuotationPdfLayout = 'standard') => {
+    setPendingExportLayout(layout);
+    setExportTermsConfirmed(false);
+    setExportConfirmOpen(true);
+  };
+
+  const confirmExportPdf = () => {
+    setExportConfirmOpen(false);
+    void exportPdf(pendingExportLayout);
   };
 
   const confirmSave = async (remark: string) => {
@@ -615,18 +784,23 @@ export default function QuotationEditor() {
     commit('components', [...quotation.components, line] as ComponentLine[]);
   };
 
+  // Shift+click extends the selection across the rows in between (see
+  // rangeSelectHandler above) — bound once per render so every row's
+  // checkbox shares the same anchor.
+  const compSelectClick = rangeSelectHandler(quotation.components, selectedCompIds, compSelectAnchor, setSelectedCompIds);
   const compCols: Column<ComponentLine>[] = [
-    { key: '_select', label: '', width: 36, render: (r) => (
+    { key: '_select', label: selectAllHeaderCheckbox(quotation.components, selectedCompIds, compSelectAnchor, setSelectedCompIds), width: 36, render: (r, idx) => (
       <Checkbox size="small" sx={{ p: 0 }}
         checked={selectedCompIds.has(r.id)}
-        onChange={(e) => setSelectedCompIds((prev) => { const n = new Set(prev); e.target.checked ? n.add(r.id) : n.delete(r.id); return n; })}
+        onClick={compSelectClick(idx)}
+        title="Click to select/deselect · Shift+click to apply to the whole range"
       />
     ) },
     { key: 'code', label: 'Code', width: 90, mono: true },
     { key: 'description', label: 'Description', width: 260, render: (r, idx) => (
       <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
         <TextField value={r.description ?? ''} onChange={(e) => updateRow('components', idx, 'description', e.target.value)}
-          variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
+          variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
           InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
           inputProps={{ style: { padding: '6px 4px' } }} />
         {r.historicalPriceSource && (
@@ -739,6 +913,25 @@ export default function QuotationEditor() {
     setGroupDialogOpen(false);
     setGroupLabel('');
   };
+  const applySubheader = () => {
+    const label = subheaderLabel.trim();
+    if (!label) return;
+    if (subheaderDialogOpen === 'services' && selectedSvcIds.size) {
+      const firstId = quotation.services.find((s) => selectedSvcIds.has(s.id))?.id;
+      setField('services', quotation.services.map((s) =>
+        s.id === firstId ? { ...s, subheader: label } : s,
+      ));
+      setSelectedSvcIds(new Set());
+    } else if (subheaderDialogOpen === 'components' && selectedCompIds.size) {
+      const firstId = quotation.components.find((c) => selectedCompIds.has(c.id))?.id;
+      setField('components', quotation.components.map((c) =>
+        c.id === firstId ? { ...c, subheader: label } : c,
+      ));
+      setSelectedCompIds(new Set());
+    }
+    setSubheaderDialogOpen(false);
+    setSubheaderLabel('');
+  };
   const ungroupSvc = (svcId: string) => {
     setField('services', quotation.services.map((s) => s.id === svcId ? { ...s, group: undefined } : s));
   };
@@ -758,6 +951,11 @@ export default function QuotationEditor() {
       isHeader: true,
     } as ComponentLine);
     commit('components', list);
+  };
+
+  const clearSelectedSubheaders = (section: 'components' | 'services') => {
+    const selected = section === 'components' ? selectedCompIds : selectedSvcIds;
+    setField(section, quotation[section].map((line) => selected.has(line.id) ? { ...line, subheader: undefined } : line));
   };
 
   const getComponentContextMenu = (row: ComponentLine, idx: number): ContextMenuItem[] => {
@@ -790,19 +988,25 @@ export default function QuotationEditor() {
     setField('componentGroupDisplay', { ...(quotation.componentGroupDisplay || {}), [group]: next });
   };
 
+  // Shift+click extends the selection across the rows in between (see
+  // rangeSelectHandler above) — shared by both svcCols variants below since
+  // they select over the same quotation.services array.
+  const svcSelectClick = rangeSelectHandler(quotation.services, selectedSvcIds, svcSelectAnchor, setSelectedSvcIds);
+  const svcSelectAllHeader = selectAllHeaderCheckbox(quotation.services, selectedSvcIds, svcSelectAnchor, setSelectedSvcIds);
   const svcCols: Column<ServiceLine>[] = perLinePricing
     ? [
-        { key: '_select', label: '', width: 36, render: (r) => (
+        { key: '_select', label: svcSelectAllHeader, width: 36, render: (r, idx) => (
           <Checkbox size="small" sx={{ p: 0 }}
             checked={selectedSvcIds.has(r.id)}
-            onChange={(e) => setSelectedSvcIds((prev) => { const n = new Set(prev); e.target.checked ? n.add(r.id) : n.delete(r.id); return n; })}
+            onClick={svcSelectClick(idx)}
+            title="Click to select/deselect · Shift+click to apply to the whole range"
           />
         ) },
         { key: 'code', label: 'Code', width: 90, mono: true },
         { key: 'description', label: 'Description', render: (r, idx) => (
           <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
             <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)}
-              variant="standard" fullWidth disabled={isLegacy} multiline minRows={1}
+              variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
               inputProps={{ style: { padding: '6px 4px' } }} />
             {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupSvc(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
@@ -817,8 +1021,18 @@ export default function QuotationEditor() {
     : [
         // No markup column here: lump mode prices from manpower × Labor Markup %,
         // and manual mode's amounts are final prices with no cost basis to mark up.
+        { key: '_select', label: svcSelectAllHeader, width: 36, render: (r, idx) => (
+          <Checkbox size="small" sx={{ p: 0 }} checked={selectedSvcIds.has(r.id)}
+            onClick={svcSelectClick(idx)}
+            title="Click to select/deselect · Shift+click to apply to the whole range" />
+        ) },
         { key: 'code', label: 'Code', width: 90, mono: true },
-        { key: 'description', label: 'Description', multiline: true },
+        { key: 'description', label: 'Description', render: (r, idx) => (
+          <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+            <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)} variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
+              InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }} inputProps={{ style: { padding: '6px 4px' } }} />
+          </Stack>
+        ) },
         { key: 'amount', label: 'Amount', width: 150, type: 'number', align: 'right', step: 0.01 },
       ];
 
@@ -976,10 +1190,10 @@ export default function QuotationEditor() {
   // corporate config present + signed in + project has a folder linked).
   // (Hook declarations live higher up to satisfy rules-of-hooks ordering.)
 
-  const exportPdf = async () => {
+  const exportPdf = async (layout: QuotationPdfLayout = 'standard') => {
     try {
       const { blob, filename } = await exportQuotationPdf(
-        quotation, project, recipient ?? null, customer ?? null, effectiveSalesContacts,
+        quotation, project, recipient ?? null, customer ?? null, effectiveSalesContacts, { layout },
       );
 
       // Use whichever folder is current. After promotion to 'won', the move
@@ -1018,6 +1232,9 @@ export default function QuotationEditor() {
   };
 
   const exportXlsx = () => exportQuotationXlsx(quotation, project, recipient ?? null, customer ?? null);
+  const compactPdf = compactLayoutAvailability(
+    quotation.generalReqts.length + quotation.components.length + quotation.services.length,
+  );
 
   // Each category's share of the VAT-EX subtotal — helps sanity-check the
   // cost mix (e.g. is Labor too thin relative to Product) while nudging
@@ -1099,12 +1316,24 @@ export default function QuotationEditor() {
           <Button
             startIcon={<PictureAsPdfIcon />}
             variant={isLegacy ? 'contained' : 'outlined'}
-            onClick={exportPdf}
+            onClick={() => requestExportPdf('standard')}
             disabled={isDirty}
             title={isDirty ? 'Save changes before exporting' : undefined}
           >
             Export PDF
           </Button>
+          {!isLegacy && compactPdf.available && (
+            <Button
+              startIcon={<PictureAsPdfIcon />}
+              variant="contained"
+              color="primary"
+              onClick={() => requestExportPdf('compact')}
+              disabled={isDirty}
+              title={isDirty ? 'Save changes before exporting' : 'Tighter print layout for a short quotation'}
+            >
+              Compact PDF (1 page)
+            </Button>
+          )}
           <Button
             startIcon={<GridOnIcon />}
             variant="outlined"
@@ -1123,6 +1352,28 @@ export default function QuotationEditor() {
           >
             Duplicate
           </Button>
+          {!isLegacy && (
+            <Button
+              startIcon={<LibraryAddIcon />}
+              variant="outlined"
+              color="inherit"
+              onClick={() => setCopyOpen(true)}
+              title="Copy general requirements, components, services or manpower from another quotation"
+            >
+              Copy from…
+            </Button>
+          )}
+          {!isLegacy && (
+            <Button
+              startIcon={<BookmarksIcon />}
+              variant="outlined"
+              color="inherit"
+              onClick={() => setLibraryOpen(true)}
+              title="Insert reusable scope from the shared library, or save this quotation's scope to it"
+            >
+              Scope Library
+            </Button>
+          )}
           <Button
             startIcon={<HistoryIcon />}
             variant="outlined"
@@ -1458,13 +1709,55 @@ export default function QuotationEditor() {
               )}
             </Stack>
           </Stack>
+
+          {/* Delivery fee & minimum-order surcharge (opt-in) */}
+          <Box>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={!!quotation.deliveryTermsEnabled}
+                  onChange={(e) => setField('deliveryTermsEnabled', e.target.checked)}
+                  disabled={isLegacy}
+                />
+              }
+              label={<Typography variant="body2">Charge delivery fee &amp; minimum-order surcharge</Typography>}
+            />
+            {quotation.deliveryTermsEnabled && (
+              <>
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' }, gap: 2, mt: 1 }}>
+                  <NumField label="Delivery Fee (₱)" value={quotation.deliveryFee ?? 0} onChange={(v) => setField('deliveryFee', v)} helperText="Base freight/delivery charge" disabled={isLegacy} sx={{ width: '100%' }} />
+                  <NumField label="Min. order (₱)" value={quotation.minOrderThreshold ?? 50000} onChange={(v) => setField('minOrderThreshold', v)} helperText="Below this, add the surcharge" disabled={isLegacy} sx={{ width: '100%' }} />
+                  <NumField label="Small-order surcharge (₱)" value={quotation.smallOrderFee ?? 5000} onChange={(v) => setField('smallOrderFee', v)} helperText="Added when under minimum" disabled={isLegacy} sx={{ width: '100%' }} />
+                </Box>
+                {totals.subtotal < (quotation.minOrderThreshold ?? 50000) && (
+                  <Alert severity="info" sx={{ mt: 1, py: 0 }}>
+                    Order subtotal {PHP(totals.subtotal)} is below the {PHP(quotation.minOrderThreshold ?? 50000)} minimum —
+                    a {PHP(quotation.smallOrderFee ?? 5000)} small-order surcharge is added to delivery.
+                  </Alert>
+                )}
+              </>
+            )}
+          </Box>
+
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' }, gap: 2 }}>
             <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} helperText="Default for product rows" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="General Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = (1 + (((s.markupPct ?? v) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100)); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={isLegacy} sx={{ width: '100%' }} />
-            <NumField label="Discount %" value={quotation.discountPct} onChange={(v) => setField('discountPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
+            <NumField
+              label="Discount %"
+              value={quotation.discountPct}
+              onChange={(v) => setField('discountPct', v)}
+              helperText={
+                quotation.discountPct > 0
+                  ? `Client PDF shows ${formatDiscountPct(quotation.discountPct)}% (rounded)`
+                  : 'Or use Discount ₱ / Target net below'
+              }
+              disabled={isLegacy}
+              sx={{ width: '100%' }}
+            />
             <NumField
               label="EWT %"
               value={quotation.ewtPct ?? 0}
@@ -1508,10 +1801,28 @@ export default function QuotationEditor() {
               value={totals ? Math.round(totals.discount * 100) / 100 : 0}
               onChange={(v) => {
                 if (!totals || totals.subtotal <= 0) return;
-                const pct = (v / totals.subtotal) * 100;
-                setField('discountPct', Math.min(100, Math.max(0, pct)));
+                setField('discountPct', discountPctFromAmount(totals.subtotal, v));
               }}
-              helperText={totals && totals.subtotal > 0 ? 'Enter an exact peso discount — % above updates to match' : 'Add line items first'}
+              helperText={
+                totals && totals.subtotal > 0
+                  ? 'Exact peso off the subtotal (e.g. negotiated cut)'
+                  : 'Add line items first'
+              }
+              disabled={isLegacy || !totals || totals.subtotal <= 0}
+              sx={{ width: '100%' }}
+            />
+            <NumField
+              label="Target net total (VAT-ex ₱)"
+              value={totals ? Math.round((totals.subtotal - totals.discount) * 100) / 100 : 0}
+              onChange={(v) => {
+                if (!totals || totals.subtotal <= 0) return;
+                setField('discountPct', discountPctFromTargetNet(totals.subtotal, v));
+              }}
+              helperText={
+                totals && totals.subtotal > 0
+                  ? 'Type the figure you want to charge (e.g. 532000 for 14 × 38000)'
+                  : 'Add line items first'
+              }
               disabled={isLegacy || !totals || totals.subtotal <= 0}
               sx={{ width: '100%' }}
             />
@@ -1591,12 +1902,30 @@ export default function QuotationEditor() {
       {/* Section B */}
       <Paper sx={{ p: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>B. Supply of Components</Typography>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>B. Supply of Components</Typography>
+            <FormControlLabel
+              control={<Switch size="small" checked={!!quotation.hidePartNumbersInPdf} onChange={(e) => setField('hidePartNumbersInPdf', e.target.checked)} disabled={isLegacy} />}
+              label={<Typography variant="caption">Hide part numbers in PDF</Typography>}
+            />
+            <FormControlLabel
+              control={<Switch size="small" checked={quotation.salesValueScope === 'services_only'} onChange={(e) => setField('salesValueScope', e.target.checked ? 'services_only' : undefined)} disabled={isLegacy} />}
+              label={<Typography variant="caption">Client supplies materials — Sales counts services only</Typography>}
+            />
+          </Stack>
           <Stack direction="row" spacing={1}>
             {selectedCompIds.size >= 2 && !isLegacy && (
               <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen('components')}>
                 Group selected ({selectedCompIds.size})
               </Button>
+            )}
+            {selectedCompIds.size >= 1 && !isLegacy && (
+              <Button size="small" variant="outlined" onClick={() => setSubheaderDialogOpen('components')}>
+                Add subheader ({selectedCompIds.size})
+              </Button>
+            )}
+            {selectedCompIds.size >= 1 && quotation.components.some((c) => selectedCompIds.has(c.id) && c.subheader) && !isLegacy && (
+              <Button size="small" variant="text" onClick={() => clearSelectedSubheaders('components')}>Clear subheader</Button>
             )}
             {!isLegacy && (
               <>
@@ -1614,6 +1943,7 @@ export default function QuotationEditor() {
           onChange={(idx, key, v) => updateRow('components', idx, key, v)}
           onDelete={(idx) => deleteRow('components', idx)}
           onReorder={(rows) => reorderRows('components', rows)}
+          subheader={(row, index) => subheaderBefore(quotation.components, index)}
           emptyMessage="No components — typical for IOCT services-only quotes"
           readOnly={isLegacy}
           isHeaderRow={(r) => !!r.isHeader}
@@ -1689,6 +2019,14 @@ export default function QuotationEditor() {
                 Group selected ({selectedSvcIds.size})
               </Button>
             )}
+            {selectedSvcIds.size >= 1 && !isLegacy && (
+              <Button size="small" variant="outlined" onClick={() => setSubheaderDialogOpen('services')}>
+                Add subheader ({selectedSvcIds.size})
+              </Button>
+            )}
+            {selectedSvcIds.size >= 1 && quotation.services.some((s) => selectedSvcIds.has(s.id) && s.subheader) && !isLegacy && (
+              <Button size="small" variant="text" onClick={() => clearSelectedSubheaders('services')}>Clear subheader</Button>
+            )}
             {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addService}>Add scope item</Button>}
           </Stack>
         </Stack>
@@ -1702,6 +2040,7 @@ export default function QuotationEditor() {
           onChange={(idx, key, v) => updateServiceRow(idx, key as keyof ServiceLine, v)}
           onDelete={(idx) => deleteRow('services', idx)}
           onReorder={(rows) => reorderRows('services', rows)}
+          subheader={(row, index) => subheaderBefore(quotation.services, index)}
           emptyMessage="No scope items — add deliverables (e.g., 'PLC redundancy troubleshooting', 'TIA Portal integration')"
           readOnly={isLegacy}
           footer={
@@ -1806,6 +2145,21 @@ export default function QuotationEditor() {
         </DialogActions>
       </Dialog>
 
+      <Dialog open={!!subheaderDialogOpen} onClose={() => setSubheaderDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Add inline subheader</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            This adds a visible category heading without changing quantities, pricing, or totals.
+          </Typography>
+          <TextField label="Subheader" value={subheaderLabel} onChange={(e) => setSubheaderLabel(e.target.value)} fullWidth autoFocus
+            placeholder="e.g. PLC, SCADA, Computer Components" onKeyDown={(e) => { if (e.key === 'Enter') applySubheader(); }} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setSubheaderDialogOpen(false); setSubheaderLabel(''); }}>Cancel</Button>
+          <Button variant="contained" disabled={!subheaderLabel.trim()} onClick={applySubheader}>Add subheader</Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Totals */}
       <Paper sx={{ p: 2.5, bgcolor: 'grey.50' }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1.5 }}>Totals</Typography>
@@ -1824,8 +2178,18 @@ export default function QuotationEditor() {
           <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right', fontWeight: 600 }}>{PHP(totals.subtotal)}</Typography>
           <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right', minWidth: 44 }}>100%</Typography>
           {quotation.discountPct > 0 && <>
-            <Typography variant="body2">Discount ({quotation.discountPct}%)</Typography>
+            <Typography variant="body2">Discount ({formatDiscountPct(quotation.discountPct)}%)</Typography>
             <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right', color: 'error.main' }}>− {PHP(totals.discount)}</Typography>
+            <Box />
+          </>}
+          {(totals.deliveryFee ?? 0) > 0 && <>
+            <Typography variant="body2">Delivery Fee</Typography>
+            <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(totals.deliveryFee ?? 0)}</Typography>
+            <Box />
+          </>}
+          {(totals.smallOrderSurcharge ?? 0) > 0 && <>
+            <Typography variant="body2">Small-order surcharge</Typography>
+            <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(totals.smallOrderSurcharge ?? 0)}</Typography>
             <Box />
           </>}
           {quotation.vatPct > 0 && <>
@@ -1927,6 +2291,29 @@ export default function QuotationEditor() {
         }}
       />
 
+      <CopyInclusionsDialog
+        open={copyOpen}
+        currentQuotationId={quotation.id}
+        onClose={() => setCopyOpen(false)}
+        onCopy={handleCopyInclusions}
+      />
+
+      <ScopeLibraryDialog
+        open={libraryOpen}
+        current={{
+          generalReqts: draft?.generalReqts ?? [],
+          components: draft?.components ?? [],
+          services: draft?.services ?? [],
+          manpower: draft?.manpower ?? [],
+          terms: (draft?.termsOverrides?.scopeOfWork || draft?.termsOverrides?.exclusions)
+            ? { scopeOfWork: draft?.termsOverrides?.scopeOfWork, exclusions: draft?.termsOverrides?.exclusions }
+            : undefined,
+        }}
+        onClose={() => setLibraryOpen(false)}
+        onInsert={handleInsertFromLibrary}
+        onSaved={(name) => setToast({ msg: `Saved “${name}” to the Scope Library.`, sev: 'success' })}
+      />
+
       <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
           Version history — {quotationRefNo(project.code, recipient?.code, quotation.revision)} ({quotation.kind})
@@ -2012,7 +2399,7 @@ export default function QuotationEditor() {
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            void confirmSave(remarkText);
+            if (saveTermsConfirmed) void confirmSave(remarkText);
           }
         }}
       >
@@ -2031,6 +2418,26 @@ export default function QuotationEditor() {
             value={remarkText}
             onChange={(e) => setRemarkText(e.target.value)}
           />
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+            Current Delivery terms on this quotation:
+          </Typography>
+          <Box sx={{ p: 1, mb: 1.5, bgcolor: 'action.hover', borderRadius: 1, whiteSpace: 'pre-line' }}>
+            <Typography variant="caption" color="text.secondary">{effectiveDeliveryText}</Typography>
+          </Box>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={saveTermsConfirmed}
+                onChange={(e) => setSaveTermsConfirmed(e.target.checked)}
+              />
+            }
+            label={
+              <Typography variant="body2">
+                I've reviewed and confirmed the Terms &amp; Conditions — including Delivery — are correct for this quotation.
+              </Typography>
+            }
+          />
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setRemarkDialogOpen(false)}>Cancel</Button>
@@ -2038,9 +2445,63 @@ export default function QuotationEditor() {
             variant="contained"
             color="primary"
             startIcon={<SaveIcon />}
+            disabled={!saveTermsConfirmed}
             onClick={() => confirmSave(remarkText)}
           >
             Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={exportConfirmOpen}
+        onClose={() => setExportConfirmOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (exportTermsConfirmed) confirmExportPdf();
+          }
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 600 }}>Confirm Terms &amp; Conditions</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Before exporting this quotation to the client, please confirm the Terms &amp; Conditions
+            — especially Delivery — are correct and up to date.
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+            Current Delivery terms on this quotation:
+          </Typography>
+          <Box sx={{ p: 1, mb: 1.5, bgcolor: 'action.hover', borderRadius: 1, whiteSpace: 'pre-line' }}>
+            <Typography variant="caption" color="text.secondary">{effectiveDeliveryText}</Typography>
+          </Box>
+          <FormControlLabel
+            control={
+              <Checkbox
+                autoFocus
+                checked={exportTermsConfirmed}
+                onChange={(e) => setExportTermsConfirmed(e.target.checked)}
+              />
+            }
+            label={
+              <Typography variant="body2">
+                I've reviewed and confirmed the Terms &amp; Conditions — including Delivery — are correct for this quotation.
+              </Typography>
+            }
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setExportConfirmOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<PictureAsPdfIcon />}
+            disabled={!exportTermsConfirmed}
+            onClick={confirmExportPdf}
+          >
+            Confirm &amp; Export
           </Button>
         </DialogActions>
       </Dialog>

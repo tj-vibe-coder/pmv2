@@ -40,11 +40,16 @@ const PayslipCard: React.FC<Props> = ({ payslip: s, onBack, canSeeRate = true })
     : `₱${fmt(emp.monthlyRate ?? 0)}/mo`;
 
   const dayWord = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
+  const mealIsMonthly = (emp.mealAllowanceBasis ?? 'DAILY') === 'MONTHLY';
   // Show the day / hour basis behind each earning so the figures are auditable.
   const basicSub = isDaily
     ? `${dayWord(s.workingDays)} · ${s.regularHours} hrs${canSeeRate ? ` × ₱${fmt(emp.dailyRate ?? 0)}/day` : ''}`
     : 'Semi-monthly';
-  const mealSub = `${dayWord(s.workingDays)}${canSeeRate ? ` × ₱${fmt(emp.mealAllowance ?? 0)}/day` : ''}`;
+  const mealSub = mealIsMonthly
+    ? (canSeeRate
+      ? `Fixed ₱${fmt(emp.mealAllowance ?? 0)}/mo · ${emp.payFrequency.replace('_', '-').toLowerCase()}`
+      : 'Fixed monthly')
+    : `${dayWord(s.workingDays)}${canSeeRate ? ` × ₱${fmt(emp.mealAllowance ?? 0)}/day` : ''}`;
 
   const totalOT = s.otPayRegular + s.otPayRestDay + s.otPayRegularHoliday;
   const earningSubtotal = s.basicPay + s.mealAllowance + totalOT + s.nightDifferential +
@@ -112,7 +117,9 @@ const PayslipCard: React.FC<Props> = ({ payslip: s, onBack, canSeeRate = true })
             {canSeeRate && (
               <Box>
                 <Typography variant="caption" color="text.secondary">MEAL ALLOW.</Typography>
-                <Typography fontWeight={600}>₱{fmt(emp.mealAllowance ?? 0)}/day</Typography>
+                <Typography fontWeight={600}>
+                  ₱{fmt(emp.mealAllowance ?? 0)}/{mealIsMonthly ? 'mo' : 'day'}
+                </Typography>
               </Box>
             )}
           </Box>

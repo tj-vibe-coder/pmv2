@@ -122,6 +122,7 @@ export interface CustomerPO {
 }
 
 export type FormulaVersion = 'legacy' | 'current';
+export type SalesValueScope = 'full_quotation' | 'services_only';
 
 export interface QuotationImportMeta {
   sourceFile: string;
@@ -169,6 +170,8 @@ export interface ComponentLine {
   discountPct: number;
   leadTimeDays?: number;
   group?: string;
+  /** A calculation-neutral label rendered above this contiguous block of items. */
+  subheader?: string;
   markupPct?: number;
   /** Per-line EWT override — same resolution pattern as markupPct (falls
    * back to Quotation.ewtPct when unset). See Quotation.ewtPct. */
@@ -192,6 +195,8 @@ export interface ServiceLine {
   amount: number;
   days?: number;
   group?: string;
+  /** A calculation-neutral label rendered above this contiguous block of items. */
+  subheader?: string;
   markupPct?: number;
 }
 
@@ -241,6 +246,18 @@ export interface Quotation {
   globalContingencyPct: number;
   discountPct: number;
   vatPct: number;
+  // ── Delivery fee & minimum-order surcharge (opt-in per quotation) ──
+  // When `deliveryTermsEnabled` is true, a manual `deliveryFee` (VAT-ex freight
+  // charge) is added to the quote, and orders whose goods+services subtotal
+  // falls below `minOrderThreshold` (default ₱50,000) get an automatic
+  // `smallOrderFee` surcharge (default ₱5,000). Delivery + surcharge are
+  // VAT-able (added before VAT) and do NOT affect margin/budget (pass-through).
+  // Absent/false on every existing quotation, so totals are unchanged until a
+  // user opts in.
+  deliveryTermsEnabled?: boolean;
+  deliveryFee?: number;
+  minOrderThreshold?: number;
+  smallOrderFee?: number;
   generalReqts: GeneralReqLine[];
   components: ComponentLine[];
   services: ServiceLine[];
@@ -267,11 +284,38 @@ export interface Quotation {
    * member's own qty + UOM while still pricing the group as one combined
    * amount. */
   componentGroupDisplay?: Record<string, 'lot' | 'itemized'>;
+  /** Controls the value reported in Sales and synced to the Project List. */
+  salesValueScope?: SalesValueScope;
+  /** Suppresses component part numbers from the customer-facing PDF only. */
+  hidePartNumbersInPdf?: boolean;
   pageBreakBeforeTerms?: boolean;
   formulaVersion?: FormulaVersion;
   generalReqContingencyMode?: 'standard' | 'baked';
   importedFrom?: QuotationImportMeta;
   legacyTotalsSnapshot?: QuotationTotals;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// A reusable "scope bundle" saved to the shared Scope Library — a named set of
+// inclusions (general requirements, components, services, manpower) plus
+// optional scope-of-work / exclusions text — that can be inserted into any
+// quotation. Team-shared like labor presets; stored in `calcsheet_scope_library`.
+export interface ScopeBundle {
+  id: ID;
+  name: string;
+  category?: string;          // free-text grouping, e.g. "SCADA", "Panel Build", "General Requirements"
+  notes?: string;
+  generalReqts: GeneralReqLine[];
+  components: ComponentLine[];
+  services: ServiceLine[];
+  manpower: ManpowerEntry[];
+  terms?: {
+    scopeOfWork?: string;
+    exclusions?: string;
+  };
+  createdBy?: string | null;
+  createdByName?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -309,6 +353,12 @@ export interface QuotationTotals {
 
   subtotal: number;
   discount: number;
+  // Delivery fee & small-order surcharge (0 when the feature is off). Folded
+  // into `grandTotal` before VAT; excluded from `subtotal`/margin/budget.
+  // Optional so frozen legacy snapshots (which predate the feature) still type.
+  deliveryFee?: number;
+  smallOrderSurcharge?: number;
+  deliveryTotal?: number;
   vat: number;
   grandTotal: number;
 }

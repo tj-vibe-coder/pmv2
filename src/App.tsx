@@ -5,6 +5,9 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { Box } from '@mui/material';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
+import AiAssistHost from './components/ai/AiAssistHost';
+import AiAssistPage from './components/ai/AiAssistPage';
+import AnalyticsStudioPage from './components/analytics/AnalyticsStudioPage';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
@@ -24,6 +27,7 @@ import UtilitiesPage from './components/UtilitiesPage';
 import EHSPage from './components/EHSPage';
 import IDGeneratorPage from './components/IDGeneratorPage';
 import AcknowledgementReceiptPage from './components/AcknowledgementReceiptPage';
+import SystemBackupsPage from './components/SystemBackupsPage';
 import DirectLaborPage from './components/DirectLaborPage';
 import UserApprovalsPage from './components/UserApprovalsPage';
 import UsersPage from './components/UsersPage';
@@ -37,6 +41,9 @@ import ProjectExpenseReport from './components/finance/ProjectExpenseReport';
 import OverheadExpensesPage from './components/OverheadExpensesPage';
 import CompanyPnLPage from './components/finance/CompanyPnLPage';
 import TaxFilerLedgerPage from './components/finance/TaxFilerLedgerPage';
+import SalesEwtRegisterPage from './components/finance/SalesEwtRegisterPage';
+import SoaDashboardPage from './components/finance/soa/SoaDashboardPage';
+import SoaDetailView from './components/finance/soa/SoaDetailView';
 import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
 import DTRPage from './components/employee/DTRPage';
@@ -48,6 +55,8 @@ import CalcsheetLegacyImport from './components/calcsheet/CalcsheetLegacyImport'
 import CalcsheetProjectDetail from './components/calcsheet/CalcsheetProjectDetail';
 import CalcsheetQuotationEditor from './components/calcsheet/CalcsheetQuotationEditor';
 import CalcsheetCompareView from './components/calcsheet/CalcsheetCompareView';
+import CalcsheetProjectSchedule from './components/calcsheet/CalcsheetProjectSchedule';
+import ProjectSchedulePage from './components/ProjectSchedulePage';
 import CalcsheetClients from './components/calcsheet/CalcsheetClients';
 import CalcsheetPresets from './components/calcsheet/CalcsheetPresets';
 import PricelistBrowser from './components/pricelists/PricelistBrowser';
@@ -126,7 +135,15 @@ const theme = createTheme({
 // Hydrates the Calcsheet store from the API once on mount
 const CalcsheetInit: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const init = useQuotationStore((s) => s.init);
-  React.useEffect(() => { init(); }, [init]);
+  const { user } = useAuth();
+  React.useEffect(() => {
+    if (user?.role !== 'tax_filer') {
+      init();
+    }
+  }, [init, user?.role]);
+  if (user?.role === 'tax_filer') {
+    return <Navigate to="/finance/tax-ledger" replace />;
+  }
   return <>{children}</>;
 };
 
@@ -149,6 +166,15 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 const SuperadminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
   if (user?.role !== 'superadmin') {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <>{children}</>;
+};
+
+// Admin & Superadmin route: redirect to dashboard if neither admin nor superadmin
+const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
+  if (user?.role !== 'superadmin' && user?.role !== 'admin') {
     return <Navigate to="/dashboard" replace />;
   }
   return <>{children}</>;
@@ -207,10 +233,15 @@ const LastPageTracker: React.FC = () => {
 };
 
 // Root "/" lands on whatever page the user last had open, falling back to
-// the Dashboard when nothing is saved yet (first visit, or after logout).
-const RootRedirect: React.FC = () => <Navigate to={getLastPage() ?? '/dashboard'} replace />;
+// the role default when nothing is saved yet (first visit, or after logout).
+const RootRedirect: React.FC = () => {
+  const { user } = useAuth();
+  const defaultPage = (user?.role === 'user' || user?.role === 'viewer')
+    ? '/employee'
+    : (user?.role === 'tax_filer' ? '/finance/tax-ledger' : '/dashboard');
+  return <Navigate to={getLastPage() ?? defaultPage} replace />;
+};
 
-// Main App Layout component
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   return (
@@ -240,17 +271,93 @@ function App() {
         <CssBaseline />
         <Router>
           <LastPageTracker />
+          <AiAssistHost>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/scan" element={<ScanPage />} />
+            <Route
+              path="/assist"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <AiAssistPage />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/analytics" element={<Navigate to="/projects/analytics" replace />} />
+            <Route path="/analytics/studio" element={<Navigate to="/projects/analytics" replace />} />
+            <Route path="/analytics/projects" element={<Navigate to="/projects/analytics" replace />} />
+            <Route path="/analytics/sales" element={<Navigate to="/sales/analytics" replace />} />
+            <Route path="/analytics/finance" element={<Navigate to="/finance/analytics" replace />} />
+            <Route
+              path="/projects/analytics"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <AnalyticsStudioPage domainScope="projects" />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/analytics"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <AnalyticsStudioPage domainScope="sales" />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/analytics"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <AnalyticsStudioPage domainScope="finance" />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/dashboard"
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <ProjectMonitoringApp />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ProjectMonitoringApp />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/projects/:projectId"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ProjectMonitoringApp />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -259,9 +366,11 @@ function App() {
               path="/location-analysis" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ProjectLocationDashboard />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <ProjectLocationDashboard />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -269,9 +378,11 @@ function App() {
               path="/expense-monitoring" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ExpenseMonitoring />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <ExpenseMonitoring />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             >
@@ -292,9 +403,11 @@ function App() {
               path="/clients" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ClientsPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <ClientsPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -302,9 +415,11 @@ function App() {
               path="/material-request" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <MaterialRequestFormPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <MaterialRequestFormPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -313,9 +428,11 @@ function App() {
               path="/delivery" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <DeliveryPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <DeliveryPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -323,9 +440,11 @@ function App() {
               path="/suppliers" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <SuppliersPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <SuppliersPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -333,9 +452,11 @@ function App() {
               path="/purchase-order" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <PurchaseOrderPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <PurchaseOrderPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -343,9 +464,11 @@ function App() {
               path="/estimates" 
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <EstimatesPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <EstimatesPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               } 
             />
@@ -354,9 +477,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <ReportsPage />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ReportsPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -377,6 +502,7 @@ function App() {
               <Route path="ehs/:tab?" element={<EHSPage />} />
               <Route path="id-generator" element={<IDGeneratorPage />} />
               <Route path="acknowledgement-receipt" element={<AcknowledgementReceiptPage />} />
+              <Route path="backups" element={<AdminRoute><SystemBackupsPage /></AdminRoute>} />
             </Route>
             <Route path="/id-generator" element={<Navigate to="/utilities/id-generator" replace />} />
             <Route 
@@ -416,6 +542,7 @@ function App() {
             <Route path="/investment-tracker" element={<RedirectWithSearch to="/finance/investment-tracker" />} />
             <Route path="/payroll" element={<RedirectWithSearch to="/finance/payroll" />} />
             <Route path="/collections" element={<RedirectWithSearch to="/finance/collections" />} />
+            <Route path="/soa" element={<RedirectWithSearch to="/finance/soa" />} />
             <Route
               path="/finance"
               element={
@@ -441,15 +568,41 @@ function App() {
               }
             />
             <Route
+              path="/finance/soa"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <SoaDashboardPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/soa/:id"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <SoaDetailView />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/finance/investment-tracker"
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <TaxFilerBlock>
-                        <InvestmentTrackerPage />
-                      </TaxFilerBlock>
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <InvestmentTrackerPage />
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -459,13 +612,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <TaxFilerBlock>
-                        <PayrollGuard>
-                          <PayrollDashboard />
-                        </PayrollGuard>
-                      </TaxFilerBlock>
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <PayrollGuard>
+                        <PayrollDashboard />
+                      </PayrollGuard>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -476,9 +627,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <ExpenseMonitoring />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ExpenseMonitoring />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -501,11 +654,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <TaxFilerBlock>
-                        <ReimbursementDashboard />
-                      </TaxFilerBlock>
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <ReimbursementDashboard />
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -515,9 +666,25 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <ProjectExpenseReport />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ProjectExpenseReport />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/purchase-order"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <PurchaseOrderPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -527,9 +694,11 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <OverheadExpensesPage />
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <OverheadExpensesPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -558,6 +727,18 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            <Route
+              path="/finance/ewt-2307"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <AppLayout>
+                      <SalesEwtRegisterPage />
+                    </AppLayout>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
             {/* ===== SALES WORKSPACE ===== */}
             {/* Legacy calcsheet paths redirect into the workspace, preserving params, query, and hash */}
             <Route path="/calcsheet/*" element={<RedirectCalcsheet />} />
@@ -567,11 +748,13 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EmployeeGuard>
-                    <AppLayout>
-                      <CalcsheetInit>
-                        <SalesHomePage />
-                      </CalcsheetInit>
-                    </AppLayout>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <CalcsheetInit>
+                          <SalesHomePage />
+                        </CalcsheetInit>
+                      </AppLayout>
+                    </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
               }
@@ -580,11 +763,13 @@ function App() {
               path="/sales/calcsheet"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <CalcsheetInit>
-                      <Navigate to="/sales/calcsheet/projects" replace />
-                    </CalcsheetInit>
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <CalcsheetInit>
+                        <Navigate to="/sales/calcsheet/projects" replace />
+                      </CalcsheetInit>
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -592,11 +777,13 @@ function App() {
               path="/sales/calcsheet/projects"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <CalcsheetInit>
-                      <CalcsheetProjects />
-                    </CalcsheetInit>
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <CalcsheetInit>
+                        <CalcsheetProjects />
+                      </CalcsheetInit>
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -632,6 +819,28 @@ function App() {
                     <CalcsheetInit>
                       <CalcsheetCompareView />
                     </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sales/calcsheet/projects/:id/schedule"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <CalcsheetInit>
+                      <CalcsheetProjectSchedule />
+                    </CalcsheetInit>
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/projects/:id/schedule"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <ProjectSchedulePage />
                   </AppLayout>
                 </ProtectedRoute>
               }
@@ -676,9 +885,11 @@ function App() {
               path="/sales/pricelists"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <PricelistBrowser />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <PricelistBrowser />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -687,9 +898,11 @@ function App() {
               path="/sales/clients"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <ClientsPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <ClientsPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -697,9 +910,11 @@ function App() {
               path="/sales/material-request"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <MaterialRequestFormPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <MaterialRequestFormPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -707,9 +922,11 @@ function App() {
               path="/sales/delivery"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <DeliveryPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <DeliveryPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -717,9 +934,11 @@ function App() {
               path="/sales/suppliers"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <SuppliersPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <SuppliersPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -727,9 +946,11 @@ function App() {
               path="/sales/purchase-order"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <PurchaseOrderPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <PurchaseOrderPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -737,9 +958,11 @@ function App() {
               path="/sales/estimates"
               element={
                 <ProtectedRoute>
-                  <AppLayout>
-                    <EstimatesPage />
-                  </AppLayout>
+                  <TaxFilerBlock>
+                    <AppLayout>
+                      <EstimatesPage />
+                    </AppLayout>
+                  </TaxFilerBlock>
                 </ProtectedRoute>
               }
             />
@@ -831,6 +1054,7 @@ function App() {
               }
             />
           </Routes>
+          </AiAssistHost>
         </Router>
       </ThemeProvider>
       </OneDriveAuthProvider>

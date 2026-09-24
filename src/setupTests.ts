@@ -26,3 +26,11 @@ jest.mock('@react-pdf/renderer', () => ({
   }),
 }));
 
+// Mock @google/genai to avoid ESM parsing issues in node_modules during tests
+// (its browser build ships raw `import` syntax Jest can't transform out of
+// the box). Real usage is server-only (require, CJS) or in src/ai/liveSession.ts,
+// which is intentionally untested here — see that file's header comment.
+jest.mock('@google/genai', () => ({
+  GoogleGenAI: jest.fn(),
+}));
+

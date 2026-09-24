@@ -4,6 +4,24 @@
 
 pmv2 is a web-based operations platform for IOCT (IO Control Technologie OPC), an industrial automation startup. It centralizes project monitoring, expense management, procurement, reporting, utilities, and payroll into a single dashboard with role-based access.
 
+## Operating Context: IOCT–ACTI Commercial Workflow
+
+IOCT and ACTI must be treated as distinct commercial parties in the app, even when they work on the same opportunity or project. The current sales workflow can carry parallel IOCT and ACTI quotations for one opportunity; operational projects are created under IOCT once the work proceeds.
+
+The documented working context is that ACTI may carry the customer-facing quotation while IOCT performs work and invoices ACTI for its subcontracted scope. Therefore, IOCT's internal revenue, receivables, statements of account, invoices, expenses, and project reporting must not automatically be equated with ACTI's customer-facing price or records.
+
+Additionally, projects are frequently awarded to ACTI directly, and IOCT initiates or even completes execution before an IOCT quotation is finalized or an ACTI Purchase Order (PO) is received. Operational workflows (project creation, site execution, expense tracking, invoicing, and statements of account) must therefore support projects in flight or completed without treating upfront PO numbers or pre-existing quotations as hard blocking gates.
+
+Future finance and invoicing work must preserve this distinction:
+
+- Support statements of account from IOCT to ACTI for the relevant billed and collectible IOCT work.
+- Support projects and billing workflows where work progresses or finishes prior to formal quotation submission or PO issuance by ACTI.
+- Reconcile invoices and receivables that were issued, received, or otherwise tracked outside PMV2, without silently omitting them or double-counting them after later capture.
+- Retain clear company attribution, source/evidence, and reconciliation status for cross-company financial records.
+- Keep IOCT-to-ACTI commercial records separate from the end-customer relationship and from either company's own internal bookkeeping.
+
+This is confirmed business context, not yet a finalized accounting workflow or data model. Do not infer legal ownership, tax treatment, payment terms, invoice direction for every case, or consolidation rules until the business process is documented further.
+
 ## Target Users
 
 - **RJR / Reuel (Solutions Manager)** — superadmin, manages users, approvals, quotations, projects, reports, and payroll
@@ -155,3 +173,4 @@ Current production records for `TJC` and `RJR` are approved superadmins.
 - Should supplier management move to incremental CRUD instead of bulk-replace?
 - Is there a need for project cost allocation to track profitability per project?
 - Should payroll be expanded to include 13th month and annualization?
+- What is the complete IOCT-to-ACTI statement-of-account and invoice-reconciliation workflow, including the source evidence, approval, matching, and exception handling for invoices not originally captured in PMV2?

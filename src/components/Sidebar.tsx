@@ -37,9 +37,10 @@ import {
   Cloud as CloudIcon,
   RequestQuote as EstimateIcon,
   HowToReg as HowToRegIcon,
-  AccountBalance as AccountBalanceIcon,
   Badge as BadgeIcon,
   Build as BuildIcon,
+  Backup as BackupIcon,
+  AutoAwesome as AutoAwesomeIcon,
 } from '@mui/icons-material';
 import FinanceNavList from './finance/FinanceNavList';
 import SalesNavList from './sales/SalesNavList';
@@ -49,9 +50,8 @@ const SIDEBAR_WIDTH = 280;
 const SIDEBAR_COLLAPSED_WIDTH = 68;
 
 const SUPPLY_CHAIN_PATHS = ['/material-request', '/delivery', '/suppliers', '/purchase-order', '/estimates'];
-const EXPENSE_MONITORING_PATHS = ['/expense-monitoring', '/expense-monitoring/ca-form', '/expense-monitoring/liquidation-form', '/expense-monitoring/direct-labor'];
 const REPORTS_PATHS = ['/reports/progress', '/reports/service', '/reports/completion', '/reports/attachments'];
-const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator', '/utilities/acknowledgement-receipt'];
+const UTILITIES_PATHS = ['/utilities', '/utilities/ehs', '/utilities/ehs/safety-certificate', '/utilities/ehs/safety-manual', '/utilities/ehs/osh-program', '/utilities/id-generator', '/utilities/acknowledgement-receipt', '/utilities/backups'];
 
 interface SidebarProps {
   /** Mobile: whether the temporary drawer is open. */
@@ -68,7 +68,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
   const { user } = useAuth();
   const isAdminUser = user?.role === 'superadmin' || user?.role === 'admin';
   const isEmployeeWorkspace = location.pathname === '/employee' || location.pathname.startsWith('/employee/');
-  const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
+  const isFinanceWorkspace = user?.role === 'tax_filer' || location.pathname === '/finance' || location.pathname.startsWith('/finance/');
   const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
   const [isHovered, setIsHovered] = useState(false);
   // On mobile the drawer is a full temporary panel (always shows labels); on
@@ -80,9 +80,6 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
   const [reportsOpen, setReportsOpen] = useState(() =>
     REPORTS_PATHS.some((p) => location.pathname.startsWith(p))
   );
-  const [expenseMonitoringOpen, setExpenseMonitoringOpen] = useState(() =>
-    EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)
-  );
   const [utilitiesOpen, setUtilitiesOpen] = useState(() =>
     UTILITIES_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(p))
   );
@@ -93,9 +90,6 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
     }
     if (REPORTS_PATHS.some((p) => location.pathname.startsWith(p))) {
       setReportsOpen(true);
-    }
-    if (EXPENSE_MONITORING_PATHS.some((p) => location.pathname === p)) {
-      setExpenseMonitoringOpen(true);
     }
     if (UTILITIES_PATHS.some((p) => location.pathname === p || location.pathname.startsWith(p))) {
       setUtilitiesOpen(true);
@@ -190,7 +184,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
           toggle, which is hidden on small screens — so surface it in the drawer.
           Admins also get it inside the employee workspace (+ an Employee option)
           so they can reach and leave their own portal on a phone. */}
-      {isMobile && (!isEmployeeWorkspace || isAdminUser) && (
+      {isMobile && user?.role !== 'tax_filer' && (!isEmployeeWorkspace || isAdminUser) && (
         <Box sx={{ px: 2, pb: 1.5 }}>
           <ToggleButtonGroup
             value={isEmployeeWorkspace ? 'employee' : isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects'}
@@ -287,107 +281,40 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
             </Tooltip>
           </ListItem>
 
-          {/* Expense Monitoring (collapsible) */}
+          {/* Projects Analytics Studio (Data Formulator) */}
           <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <Tooltip title={isExpanded ? '' : 'Expense Monitoring'} placement="right" arrow>
+            <Tooltip title={isExpanded ? '' : 'Projects Analytics'} placement="right" arrow>
               <ListItemButton
-                onClick={() => setExpenseMonitoringOpen((open) => !open)}
-                sx={navBtnSx(false)}
+                selected={
+                  location.pathname === '/projects/analytics' ||
+                  location.pathname === '/analytics/projects' ||
+                  location.pathname === '/analytics/studio' ||
+                  location.pathname === '/analytics'
+                }
+                onClick={() => navigate('/projects/analytics')}
+                sx={navBtnSx(
+                  location.pathname === '/projects/analytics' ||
+                  location.pathname === '/analytics/projects' ||
+                  location.pathname === '/analytics/studio' ||
+                  location.pathname === '/analytics'
+                )}
               >
                 <ListItemIcon sx={iconSx()}>
-                  <ReceiptIcon />
+                  <AutoAwesomeIcon />
                 </ListItemIcon>
                 {isExpanded && (
-                  <>
-                    <ListItemText
-                      primary="Expense Monitoring"
-                      secondary="Expenses, CA, liquidation, labor"
-                      secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                      sx={{ color: 'white' }}
-                    />
-                    {expenseMonitoringOpen ? <ExpandLessIcon sx={{ color: 'white' }} /> : <ExpandMoreIcon sx={{ color: 'white' }} />}
-                  </>
+                  <ListItemText
+                    primary="Projects Analytics"
+                    secondary="Visual charts & formulation"
+                    secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                    sx={{ color: 'white' }}
+                  />
                 )}
               </ListItemButton>
             </Tooltip>
           </ListItem>
-          <Collapse in={expenseMonitoringOpen && isExpanded} timeout="auto" unmountOnExit>
-            <List component="div" disablePadding sx={{ pl: 2 }}>
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
-                <ListItemButton
-                  selected={
-                    location.pathname === '/expense-monitoring' &&
-                    !location.pathname.includes('/ca-form') &&
-                    !location.pathname.includes('/liquidation-form') &&
-                    !location.pathname.includes('/direct-labor')
-                  }
-                  onClick={() => navigate('/expense-monitoring')}
-                  sx={navBtnSx(location.pathname === '/expense-monitoring', true)}
-                >
-                  <ListItemIcon sx={iconSx(true)}>
-                    <ReceiptIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Expense Monitoring"
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                </ListItemButton>
-              </ListItem>
-              {user?.role !== 'tax_filer' && (
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
-                <ListItemButton
-                  selected={location.pathname === '/expense-monitoring/ca-form'}
-                  onClick={() => navigate('/expense-monitoring/ca-form')}
-                  sx={navBtnSx(location.pathname === '/expense-monitoring/ca-form', true)}
-                >
-                  <ListItemIcon sx={iconSx(true)}>
-                    <AccountBalanceIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="CA Form"
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                </ListItemButton>
-              </ListItem>
-              )}
-              {user?.role !== 'tax_filer' && (
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
-                <ListItemButton
-                  selected={location.pathname === '/expense-monitoring/liquidation-form'}
-                  onClick={() => navigate('/expense-monitoring/liquidation-form')}
-                  sx={navBtnSx(location.pathname === '/expense-monitoring/liquidation-form', true)}
-                >
-                  <ListItemIcon sx={iconSx(true)}>
-                    <ReceiptIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Liquidation Form"
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                </ListItemButton>
-              </ListItem>
-              )}
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
-                <ListItemButton
-                  selected={location.pathname === '/expense-monitoring/direct-labor'}
-                  onClick={() => navigate('/expense-monitoring/direct-labor')}
-                  sx={navBtnSx(location.pathname === '/expense-monitoring/direct-labor', true)}
-                >
-                  <ListItemIcon sx={iconSx(true)}>
-                    <BuildIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Direct Labor"
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                </ListItemButton>
-              </ListItem>
-            </List>
-          </Collapse>
+
+
 
           {/* Clients */}
           <ListItem disablePadding sx={{ mb: 0.5 }}>
@@ -730,6 +657,24 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
                   />
                 </ListItemButton>
               </ListItem>
+              {isAdminUser && (
+                <ListItem disablePadding sx={{ mb: 0.5 }}>
+                  <ListItemButton
+                    selected={location.pathname === '/utilities/backups'}
+                    onClick={() => navigate('/utilities/backups')}
+                    sx={navBtnSx(location.pathname === '/utilities/backups', true)}
+                  >
+                    <ListItemIcon sx={iconSx(true)}>
+                      <BackupIcon fontSize="small" />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary="System Backups"
+                      primaryTypographyProps={{ fontSize: '0.8125rem' }}
+                      sx={{ color: 'white' }}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              )}
             </List>
           </Collapse>
 

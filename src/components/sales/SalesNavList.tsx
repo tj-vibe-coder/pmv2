@@ -22,6 +22,7 @@ import {
   RequestQuote as EstimateIcon,
   ExpandLess as ExpandLessIcon,
   ExpandMore as ExpandMoreIcon,
+  AutoAwesome as AutoAwesomeIcon,
 } from '@mui/icons-material';
 
 const SALES_SUPPLY_CHAIN_PATHS = [
@@ -69,6 +70,29 @@ const SalesNavList: React.FC<SalesNavListProps> = ({ isExpanded, navBtnSx, iconS
               <ListItemText
                 primary="Sales Home"
                 secondary="Pipeline overview & key figures"
+                secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                sx={{ color: 'white' }}
+              />
+            )}
+          </ListItemButton>
+        </Tooltip>
+      </ListItem>
+
+      {/* Sales Analytics Studio (Data Formulator) */}
+      <ListItem disablePadding sx={{ mb: 0.5 }}>
+        <Tooltip title={isExpanded ? '' : 'Sales Analytics'} placement="right" arrow>
+          <ListItemButton
+            selected={location.pathname === '/sales/analytics' || location.pathname === '/analytics/sales'}
+            onClick={() => navigate('/sales/analytics')}
+            sx={navBtnSx(location.pathname === '/sales/analytics' || location.pathname === '/analytics/sales')}
+          >
+            <ListItemIcon sx={iconSx()}>
+              <AutoAwesomeIcon />
+            </ListItemIcon>
+            {isExpanded && (
+              <ListItemText
+                primary="Sales Analytics"
+                secondary="Pipeline & quote formulation"
                 secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                 sx={{ color: 'white' }}
               />

@@ -177,8 +177,19 @@ export function computeTotals(q: Quotation): QuotationTotals {
   const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
   const discount = subtotal * ((q.discountPct || 0) / 100);
   const afterDiscount = subtotal - discount;
-  const vat = afterDiscount * ((q.vatPct || 0) / 100);
-  const grandTotal = afterDiscount + vat;
+
+  // Delivery fee + minimum-order surcharge (opt-in). The ₱50k threshold is
+  // tested against the goods+services subtotal (before delivery); the surcharge
+  // applies independently of whether a base delivery fee was entered. Both are
+  // VAT-able (added before VAT) and excluded from margin/budget.
+  const deliveryEnabled = !!q.deliveryTermsEnabled;
+  const minOrderThreshold = q.minOrderThreshold ?? 50000;
+  const deliveryFee = deliveryEnabled ? (q.deliveryFee || 0) : 0;
+  const smallOrderSurcharge = deliveryEnabled && subtotal < minOrderThreshold ? (q.smallOrderFee ?? 5000) : 0;
+  const deliveryTotal = deliveryFee + smallOrderSurcharge;
+
+  const vat = (afterDiscount + deliveryTotal) * ((q.vatPct || 0) / 100);
+  const grandTotal = afterDiscount + deliveryTotal + vat;
 
   return {
     generalReqtsCost,
@@ -193,6 +204,9 @@ export function computeTotals(q: Quotation): QuotationTotals {
     servicesSubtotal: servicesSub,
     subtotal,
     discount,
+    deliveryFee,
+    smallOrderSurcharge,
+    deliveryTotal,
     vat,
     grandTotal,
   };
@@ -289,6 +303,16 @@ export function ioctMargin(t: QuotationTotals): { value: number; pct: number } |
   return { value: net - totalCost, pct: ((net - totalCost) / net) * 100 };
 }
 
+/** Spendable project budget from an IOCT quotation: VAT-ex value minus gross margin.
+ *  When cost fields are real this equals total cost; when margin is unknown it
+ *  falls back to the VAT-ex net (so a linked quotation still fills a budget). */
+export function ioctCostBasis(t: QuotationTotals): number | null {
+  const net = t.subtotal - t.discount;
+  if (net <= 0) return null;
+  const m = ioctMargin(t);
+  return net - (m?.value ?? 0);
+}
+
 export const PHP = (n: number): string =>
   'PHP ' +
   (Number.isFinite(n) ? n : 0).toLocaleString('en-PH', {
@@ -304,3 +328,30 @@ export const NUM = (n: number): string =>
   });
 
 export const PCT = (n: number): string => `${(n || 0).toFixed(2)}%`;
+
+/**
+ * Client-facing discount % (no "%" suffix). Rounds to at most 2 decimals so
+ * reverse-engineered peso targets don't print as 10.99243436% on PDFs.
+ * Whole numbers stay whole: 10 → "10", 10.992… → "10.99".
+ */
+export function formatDiscountPct(pct: number): string {
+  if (!Number.isFinite(pct)) return '0';
+  const rounded = Math.round(pct * 100) / 100;
+  if (Math.abs(rounded - Math.round(rounded)) < 1e-9) return String(Math.round(rounded));
+  return rounded.toFixed(2);
+}
+
+/** discountPct to store when the user picks an exact peso discount off a subtotal. */
+export function discountPctFromAmount(subtotal: number, discountAmount: number): number {
+  if (!Number.isFinite(subtotal) || subtotal <= 0) return 0;
+  const amt = Math.min(Math.max(0, Number(discountAmount) || 0), subtotal);
+  // Keep enough precision so peso round-trip stays within ¢1 for typical quotes.
+  return Math.min(100, Math.max(0, Math.round((amt / subtotal) * 1e8) / 1e8));
+}
+
+/** discountPct to store when the user picks a target net total (VAT-ex). */
+export function discountPctFromTargetNet(subtotal: number, targetNet: number): number {
+  if (!Number.isFinite(subtotal) || subtotal <= 0) return 0;
+  const target = Math.min(Math.max(0, Number(targetNet) || 0), subtotal);
+  return discountPctFromAmount(subtotal, subtotal - target);
+}

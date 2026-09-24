@@ -4,7 +4,7 @@
  * SSS Circular 2023-002, PhilHealth Circular 2023-0014, TRAIN Law (R.A. 10963)
  */
 
-import { Employee, DTRInput, Payslip, RateType } from '../types/Payroll';
+import { Employee, DTRInput, Payslip, RateType, MealAllowanceBasis } from '../types/Payroll';
 import { computeSSS, computePhilhealth, computePagibig, toPerPeriod, ContribRates, CONTRIB_DEFAULTS } from './governmentContrib';
 import { annualize, computePerPeriodTax } from './taxTable';
 
@@ -16,6 +16,16 @@ import { annualize, computePerPeriodTax } from './taxTable';
  */
 export function resolveRateType(emp: Pick<Employee, 'rateType' | 'employeeType'>): RateType {
   return emp.rateType ?? (emp.employeeType === 'FIELD' ? 'DAILY' : 'MONTHLY');
+}
+
+/**
+ * Resolve meal-allowance basis. Absent = DAILY so legacy employees (and
+ * pro-rated field hires) keep mealAllowance × workingDays behavior.
+ */
+export function resolveMealAllowanceBasis(
+  emp: Pick<Employee, 'mealAllowanceBasis'>
+): MealAllowanceBasis {
+  return emp.mealAllowanceBasis ?? 'DAILY';
 }
 
 // ─── Basic Pay ───────────────────────────────────────────────────────────────
@@ -135,8 +145,19 @@ export function computeTardinessDeduction(dailyRate: number, tardinessMinutes: n
 
 // ─── Meal Allowance ───────────────────────────────────────────────────────────
 
+/**
+ * Meal allowance for the period.
+ * DAILY:  mealAllowance × workingDays (pro-rated electricians / field).
+ * MONTHLY: fixed monthly amount split by payFrequency (e.g. ₱1,000/mo → ₱500
+ *          semi-monthly). Does not scale with attendance days, and is never
+ *          folded into the OT base (OT always uses basic rate only).
+ */
 export function computeMealAllowance(employee: Employee, workingDays: number): number {
-  return (employee.mealAllowance ?? 0) * workingDays;
+  const amount = employee.mealAllowance ?? 0;
+  if (resolveMealAllowanceBasis(employee) === 'MONTHLY') {
+    return toPerPeriod(amount, employee.payFrequency);
+  }
+  return amount * workingDays;
 }
 
 // ─── Full Payslip Computation ─────────────────────────────────────────────────

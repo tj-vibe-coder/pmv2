@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import * as XLSX from 'xlsx';
 import {
   Box,
   Typography,
@@ -445,27 +446,28 @@ const TaxFilerLedgerPage: React.FC = () => {
     else { setSortKey(key); setSortDir('desc'); }
   };
 
-  const exportCsv = () => {
-    const headers = ['Source', 'Date', 'Description', 'Supplier', 'Invoice No', 'Invoice Type', 'Category', 'Account', 'VAT', 'TIN', 'Amount', 'Deductible', 'Deductible Reason', 'Receipt', 'Status'];
-    const esc = (v: string | number) => {
-      const s = String(v ?? '');
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
+  const exportExcel = () => {
+    const headers = ['Source', 'Date', 'Description', 'Supplier', 'Invoice No', 'Invoice Type', 'Category', 'Account', 'VAT', 'TIN', 'Amount', 'Deductible', 'Deductible Reason', 'Receipt Attached', 'Receipt Link', 'Status'];
     const dedLabel = (d: boolean | null) => (d === true ? 'Yes' : d === false ? 'No' : '');
-    const lines = filtered.map((r) => [
-      SOURCE_LABEL[r.source], r.date, r.description, r.supplier, r.invoiceNo, r.invoiceType,
-      r.category, r.accountCode, r.vat || '', r.tin, r.countInTotal ? r.amount : '',
-      dedLabel(r.deductible), r.deductibleReason,
-      r.receiptRef?.webUrl || r.receiptRef?.oneDriveId || '', r.runStatus || '',
-    ].map(esc).join(','));
-    const csv = [headers.join(','), ...lines].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const hasReceipt = (r: LedgerRow) => !!(r.receiptRef?.oneDriveId || r.receiptRef?.webUrl);
+    const aoa = [
+      headers,
+      ...filtered.map((r) => [
+        SOURCE_LABEL[r.source], r.date, r.description, r.supplier, r.invoiceNo, r.invoiceType,
+        r.category, r.accountCode, r.vat || '', r.tin, r.countInTotal ? r.amount : '',
+        dedLabel(r.deductible), r.deductibleReason,
+        hasReceipt(r) ? 'Yes' : 'No',
+        r.receiptRef?.webUrl || r.receiptRef?.oneDriveId || '', r.runStatus || '',
+      ]),
+    ];
+    const worksheet = XLSX.utils.aoa_to_sheet(aoa);
+    worksheet['!cols'] = headers.map((h, i) => ({
+      wch: Math.max(h.length, ...aoa.slice(1).map((row) => String(row[i] ?? '').length)) + 2,
+    }));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Tax Ledger');
     const periodTag = period === 'all' ? year : `${year}-${period}`;
-    a.download = `tax-ledger-${periodTag}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    XLSX.writeFile(workbook, `tax-ledger-${periodTag}.xlsx`);
   };
 
   // Inline-edit the deductible flag on a project/overhead row (accounting correction).
@@ -569,8 +571,8 @@ const TaxFilerLedgerPage: React.FC = () => {
               {years.map((y) => <MenuItem key={y} value={String(y)}>{y}</MenuItem>)}
             </Select>
           </FormControl>
-          <Button variant="outlined" startIcon={<FileDownloadIcon />} onClick={exportCsv} disabled={!filtered.length}>
-            CSV
+          <Button variant="outlined" startIcon={<FileDownloadIcon />} onClick={exportExcel} disabled={!filtered.length}>
+            Excel
           </Button>
         </Box>
       </Box>

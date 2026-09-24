@@ -17,11 +17,13 @@
 #        scripts/firebase-deploy.sh --only hosting
 #        scripts/firebase-deploy.sh --only functions
 #
-# Requires env: FIREBASE_TOKEN
+# Requires env: GOOGLE_APPLICATION_CREDENTIALS (path to a service account key
+# with Firebase deploy permissions). The old --token flow is deprecated by
+# firebase-tools and increasingly fails on API calls like listing functions.
 set -uo pipefail
 
 log="$(mktemp)"
-npx firebase-tools deploy "$@" --token "$FIREBASE_TOKEN" --project pmv2-851ae --non-interactive 2>&1 | tee "$log"
+npx firebase-tools deploy "$@" --project pmv2-851ae --non-interactive 2>&1 | tee "$log"
 code=${PIPESTATUS[0]}
 
 if [ "$code" -ne 0 ] && grep -q "is the current active version" "$log"; then

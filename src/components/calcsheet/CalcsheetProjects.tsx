@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, FormControl,
+  Alert, Box, Button, Checkbox, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControl,
   IconButton, InputAdornment, InputLabel, LinearProgress, ListItemText, MenuItem, OutlinedInput, Paper,
   Select, Snackbar, Stack, Switch, FormControlLabel,
   Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, TextField, Typography, Tooltip,
@@ -19,11 +19,16 @@ import type { ProjectStatus, Project, OpportunityGrade } from '../../types/Quota
 import { PROJECT_STATUSES, projectStatusLabel, OPPORTUNITY_GRADES, opportunityGradeLabel } from '../../types/Quotation';
 import { format } from 'date-fns';
 import { PHP, computeTotals, ioctMargin } from '../../utils/calcsheet/calc';
+import { salesAccountedTotal } from '../../utils/calcsheet/salesAccounting';
 import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes';
 import { exportProjectListXlsx } from '../../utils/calcsheet/xlsxExport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
-import { ensureProposalFolder, ensureExecutionFolder, moveProposalToExecution } from '../../services/onedriveFolderService';
+import {
+  ensureProposalFolder,
+  ensureWonExecutionLayout,
+  executionProjectFolderName,
+} from '../../services/onedriveFolderService';
 
 const statusColors: Record<ProjectStatus, 'default' | 'primary' | 'success' | 'error' | 'warning' | 'info'> = {
   draft: 'default', for_review: 'info', sent: 'primary', won: 'success', lost: 'error', inactive: 'warning',
@@ -43,27 +48,76 @@ const GRADE_OPTIONS: OpportunityGrade[] = OPPORTUNITY_GRADES;
 type SortKey = 'code' | 'name' | 'customer' | 'date' | 'updatedAt' | 'status' | 'grade' | 'grandTotal' | 'margin';
 type SortDir = 'asc' | 'desc';
 
-// Last-used sort persists per browser so the list reopens the way the user left it
-const SORT_PREF_KEY = 'calcsheet-projects-sort';
+// Last-used sort + filters persist per browser so the list reopens the way the user left it
+const PREFS_KEY = 'calcsheet-projects-prefs';
+const SORT_PREF_KEY = 'calcsheet-projects-sort'; // pre-filter-prefs key, still read for migration
 const SORT_KEYS: SortKey[] = ['code', 'name', 'customer', 'date', 'updatedAt', 'status', 'grade', 'grandTotal', 'margin'];
+const LEGACY_FILTERS = ['all', 'legacy', 'current'] as const;
 
-function loadSortPref(): { key: SortKey; dir: SortDir } {
+type ListPrefs = {
+  sortKey: SortKey;
+  sortDir: SortDir;
+  search: string;
+  statusFilter: ProjectStatus[];
+  customerFilter: string;
+  yearFilter: string;
+  legacyFilter: 'all' | 'legacy' | 'current';
+  ongoingOnly: boolean;
+  hideInactive: boolean;
+};
+
+function defaultListPrefs(): ListPrefs {
+  return {
+    sortKey: 'updatedAt',
+    sortDir: 'desc',
+    search: '',
+    statusFilter: [],
+    customerFilter: 'all',
+    yearFilter: 'all',
+    legacyFilter: 'all',
+    ongoingOnly: false,
+    hideInactive: true,
+  };
+}
+
+function loadListPrefs(): ListPrefs {
+  const defaults = defaultListPrefs();
   try {
-    const raw = localStorage.getItem(SORT_PREF_KEY);
+    const raw = localStorage.getItem(PREFS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      return {
+        sortKey: SORT_KEYS.includes(parsed.sortKey) ? parsed.sortKey : defaults.sortKey,
+        sortDir: parsed.sortDir === 'asc' || parsed.sortDir === 'desc' ? parsed.sortDir : defaults.sortDir,
+        search: typeof parsed.search === 'string' ? parsed.search : '',
+        statusFilter: Array.isArray(parsed.statusFilter)
+          ? parsed.statusFilter.filter((s: string): s is ProjectStatus =>
+              (PROJECT_STATUSES as readonly string[]).includes(s))
+          : [],
+        customerFilter: typeof parsed.customerFilter === 'string' ? parsed.customerFilter : 'all',
+        yearFilter: typeof parsed.yearFilter === 'string' ? parsed.yearFilter : 'all',
+        legacyFilter: (LEGACY_FILTERS as readonly string[]).includes(parsed.legacyFilter)
+          ? parsed.legacyFilter
+          : 'all',
+        ongoingOnly: !!parsed.ongoingOnly,
+        hideInactive: parsed.hideInactive !== false,
+      };
+    }
+    const oldSort = localStorage.getItem(SORT_PREF_KEY);
+    if (oldSort) {
+      const parsed = JSON.parse(oldSort);
       if (SORT_KEYS.includes(parsed.key) && (parsed.dir === 'asc' || parsed.dir === 'desc')) {
-        return { key: parsed.key, dir: parsed.dir };
+        return { ...defaults, sortKey: parsed.key, sortDir: parsed.dir };
       }
     }
   } catch { /* corrupted pref — fall through to default */ }
-  return { key: 'updatedAt', dir: 'desc' }; // most recently edited projects at the top by default
+  return defaults;
 }
 
-function saveSortPref(key: SortKey, dir: SortDir) {
+function saveListPrefs(prefs: ListPrefs) {
   try {
-    localStorage.setItem(SORT_PREF_KEY, JSON.stringify({ key, dir }));
-  } catch { /* storage unavailable (private mode/quota) — sort still works for the session */ }
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch { /* storage unavailable (private mode/quota) */ }
 }
 
 const empty = {
@@ -79,6 +133,7 @@ export default function Projects() {
   const addProject = useQuotationStore((s) => s.addProject);
   const deleteProject = useQuotationStore((s) => s.deleteProject);
   const updateProject = useQuotationStore((s) => s.updateProject);
+  const syncMainProject = useQuotationStore((s) => s.syncMainProject);
 
   // OneDrive bulk auto-link
   const {
@@ -150,31 +205,18 @@ export default function Projects() {
         });
         if (ref.matchedExisting) progress.linked++;
         else progress.created++;
-        // Bonus: if the project is already won, also resolve the execution folder.
-        if (p.status === 'won' && !p.executionFolderId) {
+        // Bonus: if the project is already won, also resolve/rename the execution folder
+        // to the IOCT convention (`IOCT####-CUST Name`) when a project no. is linked.
+        if (p.status === 'won') {
           try {
-              let exId: string;
-            let exUrl: string;
-            let proposalUrl: string | undefined;
-            if (p.mainProjectNo) {
-              const { executionFolder, proposalFolder } = await moveProposalToExecution(token, {
-                code: p.code,
-                name: p.name,
-                proposalFolderId: ref.id,
-                executionFolderName: p.mainProjectNo,
-              });
-              exId = executionFolder.id;
-              exUrl = executionFolder.webUrl;
-              proposalUrl = proposalFolder.webUrl;
-            } else {
-              const exRef = await ensureExecutionFolder(token, p);
-              exId = exRef.id;
-              exUrl = exRef.webUrl;
-            }
+            const { executionFolder, proposalFolder } = await ensureWonExecutionLayout(token, {
+              ...p,
+              proposalFolderId: ref.id,
+            });
             await updateProject(p.id, {
-              executionFolderId: exId,
-              executionFolderUrl: exUrl,
-              ...(proposalUrl ? { proposalFolderUrl: proposalUrl } : {}),
+              executionFolderId: executionFolder.id,
+              executionFolderUrl: executionFolder.webUrl,
+              ...(proposalFolder?.webUrl ? { proposalFolderUrl: proposalFolder.webUrl } : {}),
             });
           } catch (exErr) {
             // Non-fatal — proposal folder still landed.
@@ -200,6 +242,7 @@ export default function Projects() {
   };
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(empty);
+  const [creating, setCreating] = useState(false);
   // tracks whether the location/code fields were auto-filled — so customer
   // changes can replace them, but manual edits lock them in
   const [locationAutoFilled, setLocationAutoFilled] = useState(false);
@@ -218,15 +261,22 @@ export default function Projects() {
   };
 
   // ── filter + sort state ────────────────────────────────────────────────────
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<ProjectStatus[]>([]);
-  const [customerFilter, setCustomerFilter] = useState<string>('all');
-  const [yearFilter, setYearFilter] = useState<string>('all');
-  const [legacyFilter, setLegacyFilter] = useState<'all' | 'legacy' | 'current'>('all');
-  const [ongoingOnly, setOngoingOnly] = useState(false);
-  const [hideInactive, setHideInactive] = useState(true); // hide lost/inactive by default
-  const [sortKey, setSortKey] = useState<SortKey>(() => loadSortPref().key);
-  const [sortDir, setSortDir] = useState<SortDir>(() => loadSortPref().dir);
+  const [initPrefs] = useState(loadListPrefs);
+  const [search, setSearch] = useState(initPrefs.search);
+  const [statusFilter, setStatusFilter] = useState<ProjectStatus[]>(initPrefs.statusFilter);
+  const [customerFilter, setCustomerFilter] = useState<string>(initPrefs.customerFilter);
+  const [yearFilter, setYearFilter] = useState<string>(initPrefs.yearFilter);
+  const [legacyFilter, setLegacyFilter] = useState<'all' | 'legacy' | 'current'>(initPrefs.legacyFilter);
+  const [ongoingOnly, setOngoingOnly] = useState(initPrefs.ongoingOnly);
+  const [hideInactive, setHideInactive] = useState(initPrefs.hideInactive);
+  const [sortKey, setSortKey] = useState<SortKey>(initPrefs.sortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(initPrefs.sortDir);
+
+  useEffect(() => {
+    saveListPrefs({
+      sortKey, sortDir, search, statusFilter, customerFilter, yearFilter, legacyFilter, ongoingOnly, hideInactive,
+    });
+  }, [sortKey, sortDir, search, statusFilter, customerFilter, yearFilter, legacyFilter, ongoingOnly, hideInactive]);
 
   // OneDrive is no longer a hard gate on project creation. When it's configured
   // but the user isn't signed in, we still let them create the project and link
@@ -237,13 +287,19 @@ export default function Projects() {
     setForm(empty);
     setLocationAutoFilled(false);
     setCodeManuallyEdited(false);
+    setCreating(false);
     setOpen(true);
+  };
+  const closeNewDialog = () => {
+    if (creating) return; // don't dismiss mid-create (avoids "did it work?" ambiguity)
+    setOpen(false);
   };
   const save = async () => {
     // Customer is optional at creation — a bare opportunity can be saved before
     // the client is known. Its code is assigned automatically once a customer
     // is set (here or later from the project page).
-    if (!form.name) return;
+    if (!form.name || creating) return;
+    setCreating(true);
     try {
       const saved = await addProject({
         name: form.name,
@@ -256,6 +312,7 @@ export default function Projects() {
         code: form.code || undefined,
       });
       setOpen(false);
+      setCreating(false);
       // If OneDrive is configured but the folder couldn't be created (not signed
       // in, or token unavailable), let the user know the project saved fine and
       // the folder can be linked later from the project page.
@@ -268,6 +325,7 @@ export default function Projects() {
         });
       }
     } catch (err) {
+      setCreating(false);
       setCreateNotice({ severity: 'error', message: err instanceof Error ? err.message : 'Failed to create project.' });
     }
   };
@@ -277,7 +335,14 @@ export default function Projects() {
     const customer = clients.find((c) => c.id === p.customerId);
     const partner = clients.find((c) => c.id === p.partnerId);
     const qs = quotations.filter((q) => q.projectId === p.id);
-    const totals = qs.map((q) => ({ kind: q.kind, total: computeTotals(q).grandTotal }));
+    const totals = qs.map((q) => {
+      const quotationTotals = computeTotals(q);
+      return {
+        kind: q.kind,
+        total: salesAccountedTotal(q, quotationTotals),
+        servicesOnly: q.salesValueScope === 'services_only',
+      };
+    });
     const grandTotal = totals.reduce((sum, t) => Math.max(sum, t.total), 0);  // use max kind as the "headline"
     const hasLegacy = qs.some((q) => q.formulaVersion === 'legacy');
     const year = p.date ? new Date(p.date).getFullYear() : 0;
@@ -356,7 +421,6 @@ export default function Projects() {
       : (key === 'date' || key === 'updatedAt' || key === 'grandTotal' ? 'desc' : 'asc');
     setSortKey(key);
     setSortDir(nextDir);
-    saveSortPref(key, nextDir);
   };
 
   // ── scroll-position memory + last-clicked row highlight ────────────────────
@@ -671,7 +735,7 @@ export default function Projects() {
               <SortHeader k="updatedAt" label="Last edited" />
               <SortHeader k="status" label="Status" />
               <SortHeader k="grade" label="Grade" />
-              <SortHeader k="grandTotal" label="Quotations" align="right" />
+              <SortHeader k="grandTotal" label="Sales" align="right" />
               <SortHeader k="margin" label="IOCT Margin" align="right" />
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -728,7 +792,42 @@ export default function Projects() {
                     <Select
                       size="small"
                       value={p.status}
-                      onChange={(e) => updateProject(p.id, { status: e.target.value as ProjectStatus })}
+                      onChange={(e) => {
+                        const nextStatus = e.target.value as ProjectStatus;
+                        void (async () => {
+                          // Marking won from the list must carry a Project List number so
+                          // OneDrive gets `IOCT####-CUST Name` (not a leftover PCS folder).
+                          if (nextStatus === 'won' && p.status !== 'won') {
+                            try {
+                              let mainProjectId = p.mainProjectId;
+                              let mainProjectNo = p.mainProjectNo;
+                              if (!mainProjectNo) {
+                                const result = await syncMainProject(p.id, { force: false });
+                                mainProjectId = result.mainProjectId;
+                                mainProjectNo = result.projectNo;
+                              }
+                              await updateProject(p.id, {
+                                status: 'won',
+                                ...(mainProjectId ? { mainProjectId } : {}),
+                                ...(mainProjectNo ? { mainProjectNo } : {}),
+                              });
+                              setCreateNotice({
+                                severity: 'info',
+                                message: mainProjectNo
+                                  ? `Marked won · Project List ${mainProjectNo}. OneDrive folder: ${executionProjectFolderName({ code: p.code, name: p.name, mainProjectNo })}`
+                                  : 'Marked won. Link a Project List record so the OneDrive folder can use the IOCT project number.',
+                              });
+                            } catch (err) {
+                              setCreateNotice({
+                                severity: 'error',
+                                message: err instanceof Error ? err.message : 'Failed to mark project as won.',
+                              });
+                            }
+                            return;
+                          }
+                          await updateProject(p.id, { status: nextStatus });
+                        })();
+                      }}
                       sx={{
                         minWidth: 96,
                         '& .MuiSelect-select': { py: 0.25, display: 'flex', alignItems: 'center' },
@@ -789,6 +888,7 @@ export default function Projects() {
                     {totals.map((t, i) => (
                       <Typography key={i} variant="caption" sx={{ fontFamily: 'monospace' }}>
                         <strong>{t.kind}:</strong> {PHP(t.total)}
+                        {t.servicesOnly ? ' · services only' : ''}
                       </Typography>
                     ))}
                     {totals.length === 0 && <Typography variant="caption" color="text.secondary">none</Typography>}
@@ -857,9 +957,21 @@ export default function Projects() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog
+        open={open}
+        onClose={closeNewDialog}
+        maxWidth="sm"
+        fullWidth
+        disableEscapeKeyDown={creating}
+      >
+        {creating && <LinearProgress />}
         <DialogTitle>New project</DialogTitle>
         <DialogContent>
+          {creating && (
+            <Alert severity="info" sx={{ mb: 1 }}>
+              Creating project… this can take a few seconds (especially when linking OneDrive).
+            </Alert>
+          )}
           {oneDriveRequired && !oneDriveSignedIn && (
             <Alert
               severity="info"
@@ -869,7 +981,7 @@ export default function Projects() {
                   color="inherit"
                   size="small"
                   onClick={() => { void oneDriveLogin(); }}
-                  disabled={oneDriveLoading}
+                  disabled={oneDriveLoading || creating}
                 >
                   Sign in
                 </Button>
@@ -880,12 +992,13 @@ export default function Projects() {
             </Alert>
           )}
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mt: 1 }}>
-            <TextField label="Project name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ gridColumn: 'span 2' }} />
+            <TextField label="Project name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ gridColumn: 'span 2' }} disabled={creating} />
             {/* Customer first so location can auto-fill from it */}
             <TextField
               select
               label="Customer (optional)"
               value={form.customerId}
+              disabled={creating}
               helperText="Leave blank to save a draft — no code is assigned until a client is set"
               onChange={(e) => {
                 const newCustomerId = e.target.value;
@@ -903,13 +1016,14 @@ export default function Projects() {
               <MenuItem value="">— none yet —</MenuItem>
               {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
             </TextField>
-            <TextField select label="Partner (optional)" value={form.partnerId} onChange={(e) => setForm({ ...form, partnerId: e.target.value })}>
+            <TextField select label="Partner (optional)" value={form.partnerId} disabled={creating} onChange={(e) => setForm({ ...form, partnerId: e.target.value })}>
               <MenuItem value="">— none —</MenuItem>
               {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
             </TextField>
             <TextField
               label="Location"
               value={form.location}
+              disabled={creating}
               onChange={(e) => { setLocationAutoFilled(false); setForm({ ...form, location: e.target.value }); }}
               sx={{ gridColumn: 'span 2' }}
               helperText={locationAutoFilled ? 'Auto-filled from client — edit freely' : undefined}
@@ -918,6 +1032,7 @@ export default function Projects() {
               label="Date"
               type="date"
               value={form.date}
+              disabled={creating}
               onChange={(e) => {
                 const newDate = e.target.value;
                 const newCode = codeManuallyEdited ? form.code : (form.customerId ? computeCode(form.customerId, newDate) : '');
@@ -925,7 +1040,7 @@ export default function Projects() {
               }}
               InputLabelProps={{ shrink: true }}
             />
-            <TextField select label="Status" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}>
+            <TextField select label="Status" value={form.status} disabled={creating} onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}>
               {STATUS_OPTIONS.map((s) => (
                 <MenuItem key={s} value={s}>{statusLabel(s)}</MenuItem>
               ))}
@@ -934,6 +1049,7 @@ export default function Projects() {
               select
               label="Sales / account contact"
               value={form.salesContactId}
+              disabled={creating}
               onChange={(e) => setForm({ ...form, salesContactId: e.target.value })}
               sx={{ gridColumn: 'span 2' }}
             >
@@ -947,6 +1063,7 @@ export default function Projects() {
             <TextField
               label="Project code (optional)"
               value={form.code}
+              disabled={creating}
               onChange={(e) => { setCodeManuallyEdited(true); setForm({ ...form, code: e.target.value }); }}
               onFocus={() => {
                 // auto-fill on first focus if still empty
@@ -972,8 +1089,15 @@ export default function Projects() {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={save}>Create</Button>
+          <Button onClick={closeNewDialog} disabled={creating}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => { void save(); }}
+            disabled={creating || !form.name || !form.customerId}
+            startIcon={creating ? <CircularProgress size={16} color="inherit" /> : undefined}
+          >
+            {creating ? 'Creating…' : 'Create'}
+          </Button>
         </DialogActions>
       </Dialog>
     </Stack>

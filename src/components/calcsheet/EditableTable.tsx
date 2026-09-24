@@ -1,7 +1,7 @@
 import { Box, Divider, IconButton, Menu, MenuItem, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { ReactNode, CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors,
@@ -12,10 +12,14 @@ import {
   arrayMove, useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { sanitizeNumericText, parseLenientFloat } from '../../utils/calcsheet/numberInput';
 
 export interface Column<T> {
   key: keyof T | string;
-  label: string;
+  // Usually a plain string; a column that needs interactive header content
+  // (e.g. a "select all" checkbox above a row-checkbox column) can pass a
+  // ReactNode instead.
+  label: ReactNode;
   width?: number | string;
   align?: 'left' | 'right' | 'center';
   type?: 'text' | 'number';
@@ -56,6 +60,7 @@ interface Props<T extends { id: string }> {
   isHeaderRow?: (row: T) => boolean;
   // Right-click on any row — return null/[] to suppress the menu for that row.
   getContextMenu?: (row: T, idx: number) => ContextMenuItem[] | null | undefined;
+  subheader?: (row: T, idx: number) => string | undefined;
 }
 
 function NumberCell({
@@ -70,11 +75,16 @@ function NumberCell({
     <TextField
       value={display}
       onChange={(e) => {
-        if (nullable && e.target.value === '') return onChange(undefined);
-        onChange(parseFloat(e.target.value) || 0);
+        // Plain text + manual sanitize/parse — type="number" can't handle
+        // thousands separators and mangles pasted comma-formatted figures
+        // (e.g. "503,170.08" copied from Excel/a PDF).
+        const raw = sanitizeNumericText(e.target.value);
+        if (nullable && raw === '') return onChange(undefined);
+        onChange(parseLenientFloat(raw));
       }}
       onFocus={(e) => e.target.select()}
-      type="number"
+      type="text"
+      inputMode="decimal"
       variant="standard"
       placeholder={placeholder ?? '0'}
       disabled={readOnly}
@@ -242,7 +252,7 @@ function SortableRow<T extends { id: string }>({
 
 export function EditableTable<T extends { id: string }>({
   rows, columns, onChange, onDelete, onReorder, emptyMessage = 'No items', footer, draggable = true, readOnly = false,
-  isHeaderRow, getContextMenu,
+  isHeaderRow, getContextMenu, subheader,
 }: Props<T>) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -288,20 +298,31 @@ export function EditableTable<T extends { id: string }>({
           </TableHead>
           <TableBody>
             <SortableContext items={rows.map((r) => r.id)} strategy={verticalListSortingStrategy}>
-              {rows.map((row, idx) => (
-                <SortableRow
-                  key={row.id}
-                  row={row}
-                  idx={idx}
-                  columns={columns}
-                  draggable={enableDrag}
-                  onChange={onChange}
-                  onDelete={onDelete}
-                  readOnly={readOnly}
-                  isHeader={isHeaderRow?.(row)}
-                  onContextMenu={handleRowContextMenu}
-                />
-              ))}
+              {rows.map((row, idx) => {
+                const label = subheader?.(row, idx)?.trim();
+                return (
+                  <Fragment key={row.id}>
+                    {label && (
+                      <TableRow sx={{ bgcolor: 'primary.50' }}>
+                        <TableCell colSpan={colSpan} sx={{ py: 0.6, fontSize: '0.75rem', fontWeight: 700, color: 'primary.dark', letterSpacing: 0.35, textTransform: 'uppercase' }}>
+                          {label}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    <SortableRow
+                      row={row}
+                      idx={idx}
+                      columns={columns}
+                      draggable={enableDrag}
+                      onChange={onChange}
+                      onDelete={onDelete}
+                      readOnly={readOnly}
+                      isHeader={isHeaderRow?.(row)}
+                      onContextMenu={handleRowContextMenu}
+                    />
+                  </Fragment>
+                );
+              })}
             </SortableContext>
             {rows.length === 0 && (
               <TableRow>

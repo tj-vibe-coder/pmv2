@@ -423,6 +423,26 @@ interface ComponentLine {
 
 `historicalPriceSource` is internal provenance stored with the component line. It is not included in quotation PDF/XLSX exports.
 
+### 2.16 `ai_assist_audit`
+
+Metadata-only usage log for the read-only AI Assist chat/voice feature (`server/aiAssist/`). Written by `server/aiAssist/audit.js`'s `recordAudit()` on every `/api/ai-assist/chat` request (success and error). **Deliberately never contains prompt text, answer text, tool arguments, tool results, or auth material** — the record is re-derived field-by-field from an explicit allowlist (`AUDIT_RECORD_KEYS` in `audit.js`), not spread from caller input, specifically so a bug elsewhere can't leak sensitive content into this collection.
+
+| Field | Type | Notes |
+|---|---|---|
+| `requestId` | string | UUID, also returned to the client in the chat response envelope |
+| `userId` | string | Authenticated user's Firestore doc ID |
+| `username` | string | e.g. `"RJR"`, `"TJC"` — the only two allowlisted accounts as of this writing |
+| `channel` | string | `"text"` \| `"voice"` |
+| `promptVersion` | string | e.g. `"ioct-readonly-v1"` — the versioned system prompt in use |
+| `model` | string | The configured Gemini model ID used for this request |
+| `toolNames` | string[] | Deduplicated list of tool names invoked during the request |
+| `outcome` | string | `"success"` \| `"error"` |
+| `latencyMs` | number \| null | Request duration |
+| `usage` | object \| null | Sanitized token counts only — `{ inputTokens?, outputTokens?, totalTokens? }`, numeric fields only, never a raw provider usage object |
+| `createdAt` | string | ISO 8601 timestamp |
+
+Feature flag `AI_ASSIST_ENABLED` defaults `false`; this collection stays empty until explicitly enabled. Audit writes are best-effort and time-bounded (2s) — a failed or slow write never blocks or alters the user-facing chat response.
+
 ---
 
 ## 3. TypeScript Interfaces

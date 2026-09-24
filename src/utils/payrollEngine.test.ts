@@ -1,4 +1,4 @@
-import { computePayslip, resolveRateType } from './payrollEngine';
+import { computePayslip, resolveRateType, computeMealAllowance, resolveMealAllowanceBasis } from './payrollEngine';
 import { DTRInput } from '../types/Payroll';
 import { CONTRIB_DEFAULTS } from './governmentContrib';
 
@@ -238,5 +238,58 @@ describe('Payroll Engine Unit Tests', () => {
     const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
     expect(payslip.basicPay).toBeCloseTo(10000.00, 2); // 1000 × 10
     expect(payslip.otPayRegular).toBeCloseTo(156.25, 2); // 1000/8 × 1.25
+  });
+
+  // ── Meal allowance basis: DAILY (pro-rated) vs MONTHLY (fixed) ─────────────
+
+  test('16. mealAllowanceBasis defaults to DAILY; explicit MONTHLY wins', () => {
+    expect(resolveMealAllowanceBasis({})).toBe('DAILY');
+    expect(resolveMealAllowanceBasis({ mealAllowanceBasis: 'DAILY' })).toBe('DAILY');
+    expect(resolveMealAllowanceBasis({ mealAllowanceBasis: 'MONTHLY' })).toBe('MONTHLY');
+  });
+
+  test('17. DAILY meal: amount × workingDays (electrician / field default)', () => {
+    const emp = { ...fieldEmp, mealAllowance: 150, mealAllowanceBasis: 'DAILY' as const };
+    expect(computeMealAllowance(emp, 10)).toBeCloseTo(1500.00, 2);
+    expect(computeMealAllowance(emp, 0)).toBeCloseTo(0.00, 2);
+    // Absent basis still multiplies by days (legacy)
+    expect(computeMealAllowance({ ...fieldEmp, mealAllowance: 150 }, 10)).toBeCloseTo(1500.00, 2);
+  });
+
+  test('18. MONTHLY meal: fixed amount split by payFrequency (Kim package)', () => {
+    // TJ intent: ₱15k basic + ₱1k meal/mo = ₱16k take-home package; OT/SSS on basic only.
+    const kim = {
+      ...fieldEmp,
+      employeeType: 'FIELD' as const,
+      rateType: 'MONTHLY' as const,
+      monthlyRate: 15000,
+      dailyRate: 0,
+      mealAllowance: 1000,
+      mealAllowanceBasis: 'MONTHLY' as const,
+      payFrequency: 'SEMI_MONTHLY' as const,
+      applyDeductions: false, // isolate earnings math
+      applyOvertimePay: false,
+    };
+    // Fixed meal does NOT scale with attendance days
+    expect(computeMealAllowance(kim, 13)).toBeCloseTo(500.00, 2);
+    expect(computeMealAllowance(kim, 1)).toBeCloseTo(500.00, 2);
+    expect(computeMealAllowance(kim, 0)).toBeCloseTo(500.00, 2);
+
+    const dtr: DTRInput = { ...baseDtr, employee: kim, workingDays: 13 };
+    const payslip = computePayslip('run-1', dtr, 0, CONTRIB_DEFAULTS);
+    expect(payslip.basicPay).toBeCloseTo(7500.00, 2); // 15000 / 2
+    expect(payslip.mealAllowance).toBeCloseTo(500.00, 2);
+    expect(payslip.grossPay).toBeCloseTo(8000.00, 2); // 8k per cutoff
+  });
+
+  test('19. MONTHLY meal weekly frequency divides by 4.33', () => {
+    const emp = {
+      ...fieldEmp,
+      mealAllowance: 1000,
+      mealAllowanceBasis: 'MONTHLY' as const,
+      payFrequency: 'WEEKLY' as const,
+    };
+    // toPerPeriod weekly: monthly / 4.33 (same divisor gov contrib uses)
+    expect(computeMealAllowance(emp, 5)).toBeCloseTo(1000 / 4.33, 2);
   });
 });

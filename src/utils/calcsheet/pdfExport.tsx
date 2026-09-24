@@ -6,9 +6,13 @@ import type { Client, ComponentLine, Project, QuotationKind, Quotation, SalesCon
 import { resolveContact } from '../../types/Client';
 import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, serviceLineAmount, PHP, NUM,
+  formatDiscountPct,
 } from './calc';
 import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
 import { quotationRefNo } from './codes';
+import { quotationPdfScale, type QuotationPdfLayout } from './quotationPdfLayout';
+import { subheaderBefore } from './subheaders';
+import { componentExportDetails } from './componentExportDetails';
 
 // ─── Branding ────────────────────────────────────────────────────────────────
 const PRIMARY = '#2c5aa0';
@@ -94,155 +98,170 @@ function quotationDate(value: string | undefined): Date {
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
-const styles = StyleSheet.create({
-  page: {
-    paddingTop: 36, paddingBottom: 50, paddingHorizontal: 36,
-    fontSize: 9, fontFamily: 'Helvetica', color: TEXT, lineHeight: 1.3,
-  },
+// Autocompact: short quotations (few item rows) render with a lot of empty
+// vertical space, which can still push the Terms/Signatures block onto a
+// second page depending on how long the terms text is. `buildStyles(scale)`
+// scales font sizes, paddings, and margins down uniformly so the whole
+// document is more likely to fit on a single A4 page. `compactionScale()`
+// below picks the scale tier from the item-row count; 1 = no compaction.
+function buildStyles(scale: number) {
+  // Round to 2dp so react-pdf gets clean numbers, not float noise.
+  const s = (n: number) => Math.round(n * scale * 100) / 100;
 
-  // Header
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
-  headerLeft: { width: '55%' },
-  logo: { width: 64, height: 64, objectFit: 'contain', marginBottom: 0 },
-  brandName: { color: PRIMARY, fontSize: 11, fontWeight: 700, marginBottom: 1 },
-  brandLine: { fontSize: 8.5, color: TEXT, lineHeight: 1.3 },
-  headerRight: { width: '45%', alignItems: 'flex-end' },
-  qTitle: { fontSize: 24, fontWeight: 700, color: TEXT, marginBottom: 14, letterSpacing: 1, lineHeight: 1 },
-  metaRow: { flexDirection: 'row', fontSize: 9, marginBottom: 2 },
-  metaLabel: { width: 56, fontWeight: 700, textAlign: 'right', marginRight: 6, color: TEXT_LIGHT },
-  metaValue: { minWidth: 110, textAlign: 'left' },
+  return StyleSheet.create({
+    page: {
+      paddingTop: s(36), paddingBottom: s(50), paddingHorizontal: s(36),
+      fontSize: s(9), fontFamily: 'Helvetica', color: TEXT, lineHeight: 1.3,
+    },
 
-  // Recipient + project
-  recipient: { marginBottom: 12, marginTop: 4 },
-  recipientName: { fontSize: 10, fontWeight: 700, marginBottom: 1 },
-  recipientLine: { fontSize: 9 },
+    // Header
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: s(12) },
+    headerLeft: { width: '55%' },
+    logo: { width: s(64), height: s(64), objectFit: 'contain', marginBottom: 0 },
+    brandName: { color: PRIMARY, fontSize: s(11), fontWeight: 700, marginBottom: 1 },
+    brandLine: { fontSize: s(8.5), color: TEXT, lineHeight: 1.3 },
+    headerRight: { width: '45%', alignItems: 'flex-end' },
+    qTitle: { fontSize: s(24), fontWeight: 700, color: TEXT, marginBottom: s(14), letterSpacing: 1, lineHeight: 1 },
+    metaRow: { flexDirection: 'row', fontSize: s(9), marginBottom: 2 },
+    metaLabel: { width: s(56), fontWeight: 700, textAlign: 'right', marginRight: 6, color: TEXT_LIGHT },
+    metaValue: { minWidth: s(110), textAlign: 'left' },
 
-  projectRow: { flexDirection: 'row', marginBottom: 10 },
-  projectLabel: { fontSize: 9.5, fontWeight: 700, color: PRIMARY, width: 56 },
-  projectName: { fontSize: 9.5, color: PRIMARY, fontWeight: 700, flex: 1 },
+    // Recipient + project
+    recipient: { marginBottom: s(12), marginTop: s(4) },
+    recipientName: { fontSize: s(10), fontWeight: 700, marginBottom: 1 },
+    recipientLine: { fontSize: s(9) },
 
-  greeting: { fontSize: 9, marginBottom: 4 },
-  intro: { fontSize: 9, marginBottom: 8 },
+    projectRow: { flexDirection: 'row', marginBottom: s(10) },
+    projectLabel: { fontSize: s(9.5), fontWeight: 700, color: PRIMARY, width: s(56) },
+    projectName: { fontSize: s(9.5), color: PRIMARY, fontWeight: 700, flex: 1 },
 
-  // Section bars — solid PRIMARY fill, white text
-  sectionBar: {
-    backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
-    fontSize: 9, padding: '2 8', marginTop: 8,
-  },
-  // Dark-gray variant used for the "Optional Items" header, to visually set it
-  // apart from the contract (navy) sections.
-  sectionBarGray: {
-    backgroundColor: '#4a4f57', color: 'white', fontWeight: 700,
-    fontSize: 9, padding: '2 8', marginTop: 8,
-  },
-  // Summary label — same solid PRIMARY treatment
-  summaryBar: {
-    backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
-    fontSize: 9.5, padding: '2 8',
-  },
+    greeting: { fontSize: s(9), marginBottom: s(4) },
+    intro: { fontSize: s(9), marginBottom: s(8) },
 
-  // Table — clean, no cell borders
-  tableWrap: {},
-  th: {
-    flexDirection: 'row', backgroundColor: SECTION_BG,
-    borderBottom: `0.5px solid ${BORDER}`,
-    fontWeight: 700, fontSize: 8.5,
-  },
-  tr: {
-    flexDirection: 'row',
-    fontSize: 8.5,
-  },
-  // Section-header row inside a table (BOM sub-heading) — a plain tinted bar
-  // spanning the full row, no item number / qty / price columns.
-  trHeader: {
-    flexDirection: 'row',
-    backgroundColor: SECTION_BG,
-    borderTop: `0.5px solid ${BORDER}`,
-    borderBottom: `0.5px solid ${BORDER}`,
-    padding: '3 8',
-  },
-  cHeaderLabel: { fontSize: 8.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3 },
-  // Sub-total band — tinted like the table header so the money row stands
-  // out from plain item rows without competing with the navy section bars.
-  trSub: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    padding: '3 6', fontSize: 8.5,
-    backgroundColor: SECTION_BG,
-    borderTop: `0.5px solid ${BORDER}`,
-  },
+    // Section bars — solid PRIMARY fill, white text
+    sectionBar: {
+      backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
+      fontSize: s(9), padding: `${s(2)} ${s(8)}`, marginTop: s(8),
+    },
+    // Dark-gray variant used for the "Optional Items" header, to visually set it
+    // apart from the contract (navy) sections.
+    sectionBarGray: {
+      backgroundColor: '#4a4f57', color: 'white', fontWeight: 700,
+      fontSize: s(9), padding: `${s(2)} ${s(8)}`, marginTop: s(8),
+    },
+    // Summary label — same solid PRIMARY treatment
+    summaryBar: {
+      backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
+      fontSize: s(9.5), padding: `${s(2)} ${s(8)}`,
+    },
+    // Section-header row inside a table (BOM sub-heading) — a plain tinted bar
+    // spanning the full row, no item number / qty / price columns.
+    trHeader: {
+      flexDirection: 'row',
+      backgroundColor: SECTION_BG,
+      borderTop: `0.5px solid ${BORDER}`,
+      borderBottom: `0.5px solid ${BORDER}`,
+      padding: `${s(3)} ${s(8)}`,
+    },
+    cHeaderLabel: { fontSize: s(8.5), fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3 },
 
-  cItem: { width: '10%', paddingLeft: 4, paddingVertical: 2 },
-  cDesc: { width: '48%', paddingLeft: 8, paddingRight: 2, paddingVertical: 2 },
-  // Muted brand/part-number sub-line under the item name.
-  cDescSub: { fontSize: 7.5, color: TEXT_LIGHT, marginTop: 1 },
-  cQty: { width: '8%', paddingVertical: 2, textAlign: 'center' },
-  cUom: { width: '8%', paddingVertical: 2, textAlign: 'center' },
-  cUnit: { width: '13%', paddingRight: 4, paddingVertical: 2, textAlign: 'right' },
-  cTotal: { width: '13%', paddingRight: 4, paddingVertical: 2, textAlign: 'right' },
+    // Table — clean, no cell borders
+    tableWrap: {},
+    th: {
+      flexDirection: 'row', backgroundColor: SECTION_BG,
+      borderBottom: `0.5px solid ${BORDER}`,
+      fontWeight: 700, fontSize: s(8.5),
+    },
+    tr: {
+      flexDirection: 'row',
+      fontSize: s(8.5),
+    },
+    inlineSubheader: {
+      backgroundColor: SECTION_BG, color: PRIMARY, fontWeight: 700,
+      fontSize: s(8), padding: `${s(2)} ${s(8)}`,
+    },
+    // Sub-total band — tinted like the table header so the money row stands
+    // out from plain item rows without competing with the navy section bars.
+    trSub: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      padding: `${s(3)} ${s(6)}`, fontSize: s(8.5),
+      backgroundColor: SECTION_BG,
+      borderTop: `0.5px solid ${BORDER}`,
+    },
 
-  // Summary
-  summaryBlock: { marginTop: 4 },
-  sumWrap: {},
-  sumTh: {
-    flexDirection: 'row', backgroundColor: SECTION_BG, color: TEXT,
-    borderBottom: `0.5px solid ${BORDER}`,
-    fontWeight: 700, fontSize: 9,
-  },
-  sumRow: {
-    flexDirection: 'row',
-    fontSize: 9,
-  },
-  sumItem: { flex: 1, paddingLeft: 6, paddingVertical: 2 },
-  sumQty: { width: '10%', paddingVertical: 2, textAlign: 'center' },
-  sumUom: { width: '10%', paddingVertical: 2, textAlign: 'center' },
-  sumPrice: { width: '20%', paddingRight: 6, paddingVertical: 2, textAlign: 'right' },
-  sumFooterRow: {
-    flexDirection: 'row', justifyContent: 'flex-end', padding: '3 6', fontSize: 9.5,
-  },
-  sumTotalRow: {
-    borderTop: `0.5px solid ${BORDER}`,
-  },
-  sumFooterLabel: { fontWeight: 700, marginRight: 16 },
-  sumFooterValue: { fontWeight: 700, width: '20%', textAlign: 'right' },
+    cItem: { width: '10%', paddingLeft: s(4), paddingVertical: s(2) },
+    cDesc: { width: '48%', paddingLeft: s(8), paddingRight: s(2), paddingVertical: s(2) },
+    // Muted brand/part-number sub-line under the item name.
+    cDescSub: { fontSize: s(7.5), color: TEXT_LIGHT, marginTop: 1 },
+    cQty: { width: '8%', paddingVertical: s(2), textAlign: 'center' },
+    cUom: { width: '8%', paddingVertical: s(2), textAlign: 'center' },
+    cUnit: { width: '13%', paddingRight: s(4), paddingVertical: s(2), textAlign: 'right' },
+    cTotal: { width: '13%', paddingRight: s(4), paddingVertical: s(2), textAlign: 'right' },
 
-  // Terms
-  terms: { marginTop: 14 },
-  termsTitle: { fontWeight: 700, fontSize: 10, marginBottom: 4 },
-  termSubtitle: { fontWeight: 700, marginTop: 8, marginBottom: 2, fontSize: 9 },
-  termText: { fontSize: 8.5, lineHeight: 1.4, marginTop: 1 },
+    // Summary
+    summaryBlock: { marginTop: s(4) },
+    sumWrap: {},
+    sumTh: {
+      flexDirection: 'row', backgroundColor: SECTION_BG, color: TEXT,
+      borderBottom: `0.5px solid ${BORDER}`,
+      fontWeight: 700, fontSize: s(9),
+    },
+    sumRow: {
+      flexDirection: 'row',
+      fontSize: s(9),
+    },
+    sumItem: { flex: 1, paddingLeft: s(6), paddingVertical: s(2) },
+    sumQty: { width: '10%', paddingVertical: s(2), textAlign: 'center' },
+    sumUom: { width: '10%', paddingVertical: s(2), textAlign: 'center' },
+    sumPrice: { width: '20%', paddingRight: s(6), paddingVertical: s(2), textAlign: 'right' },
+    sumFooterRow: {
+      flexDirection: 'row', justifyContent: 'flex-end', padding: `${s(3)} ${s(6)}`, fontSize: s(9.5),
+    },
+    sumTotalRow: {
+      borderTop: `0.5px solid ${BORDER}`,
+    },
+    sumFooterLabel: { fontWeight: 700, marginRight: s(16) },
+    sumFooterValue: { fontWeight: 700, width: '20%', textAlign: 'right' },
 
-  // Closing
-  closing: { marginTop: 14, fontSize: 9 },
+    // Terms
+    terms: { marginTop: s(14) },
+    termsTitle: { fontWeight: 700, fontSize: s(10), marginBottom: s(4) },
+    termSubtitle: { fontWeight: 700, marginTop: s(8), marginBottom: s(2), fontSize: s(9) },
+    termText: { fontSize: s(8.5), lineHeight: 1.4, marginTop: 1 },
 
-  // Signatures
-  signatures: { flexDirection: 'row', marginTop: 18, gap: 32 },
-  sigBlock: { flex: 1 },
-  sigHeader: { fontWeight: 700, fontSize: 9.5, marginBottom: 30 },
-  sigName: { fontSize: 9, fontWeight: 700 },
-  sigSub: { fontSize: 8.5 },
-  sigEmail: { fontSize: 8.5, color: PRIMARY, textDecoration: 'underline', marginTop: 1 },
+    // Closing
+    closing: { marginTop: s(14), fontSize: s(9) },
 
-  // Footer
-  footerRule: {
-    position: 'absolute', bottom: 40, left: 36, right: 36,
-    borderTop: `0.75px solid ${BORDER}`,
-  },
-  footerLeft: {
-    position: 'absolute', bottom: 27, left: 36, width: 210,
-    fontSize: 8.5, color: TEXT, textAlign: 'left',
-  },
-  footerCenter: {
-    position: 'absolute', bottom: 27, left: 36, right: 36,
-    fontSize: 8.5, color: TEXT, textAlign: 'center',
-  },
-});
+    // Signatures
+    signatures: { flexDirection: 'row', marginTop: s(18), gap: s(32) },
+    sigBlock: { flex: 1 },
+    sigHeader: { fontWeight: 700, fontSize: s(9.5), marginBottom: s(30) },
+    sigName: { fontSize: s(9), fontWeight: 700 },
+    sigSub: { fontSize: s(8.5) },
+    sigEmail: { fontSize: s(8.5), color: PRIMARY, textDecoration: 'underline', marginTop: 1 },
+
+    // Footer
+    footerRule: {
+      position: 'absolute', bottom: 40, left: 36, right: 36,
+      borderTop: `0.75px solid ${BORDER}`,
+    },
+    footerLeft: {
+      position: 'absolute', bottom: 27, left: 36, width: 210,
+      fontSize: 8.5, color: TEXT, textAlign: 'left',
+    },
+    footerCenter: {
+      position: 'absolute', bottom: 27, left: 36, right: 36,
+      fontSize: 8.5, color: TEXT, textAlign: 'center',
+    },
+  });
+}
 
 // Component description cell: item name as the main line, brand + part number
 // as a muted sub-line underneath (reads like a hand-written spec sheet, not a
 // dash-joined string).
-function ComponentDesc({ l }: { l: ComponentLine }) {
-  const sub = [l.brand, l.partNo].filter(Boolean).join(', ');
+function ComponentDesc({ l, styles, hidePartNumbers }: { l: ComponentLine; styles: ReturnType<typeof buildStyles>; hidePartNumbers: boolean }) {
+  const sub = componentExportDetails(l, hidePartNumbers);
   return (
     <View style={styles.cDesc}>
       <Text>{l.description || ''}</Text>
@@ -257,14 +276,23 @@ interface Props {
   recipient: Client | null;
   customer: Client | null;
   salesContacts: SalesContact[];
+  layout: QuotationPdfLayout;
 }
 
-function QuotationDoc({ quotation, project, recipient, customer, salesContacts }: Props) {
+function QuotationDoc({ quotation, project, recipient, customer, salesContacts, layout }: Props) {
   const totals = computeTotals(quotation);
   // IOCT-only pricing buffer folded into markup — never printed as its own
   // line/label. See Quotation.ewtPct.
   const ewtPct = quotation.ewtPct || 0;
   const issuer = ISSUER_INFO[quotation.kind];
+
+  const totalRows = quotation.generalReqts.length + quotation.components.length + quotation.services.length;
+  const to0 = quotation.termsOverrides ?? {};
+  const termsCharCount = [
+    to0.scopeOfWork, to0.exclusions, to0.basisOfProposal, to0.deliveryLines, to0.warrantyExclusion,
+  ].reduce((sum, t) => sum + (t?.length || 0), 0);
+  const scale = quotationPdfScale({ totalRows, termsCharCount, layout });
+  const styles = buildStyles(scale);
   const refNo = quotationRefNo(project.code, recipient?.code, quotation.revision);
   const logoUrl = typeof window !== 'undefined' ? `${window.location.origin}${issuer.logo}` : issuer.logo;
   const dateSent = quotationDate(quotation.dateSent);
@@ -457,7 +485,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   <Text style={styles.cUnit}>Unit Price</Text>
                   <Text style={styles.cTotal}>Total , PhP</Text>
                 </View>
-                {contractComponents.map((l) => {
+                {contractComponents.map((l, index) => {
                   if (l.isHeader) {
                     return (
                       <View style={styles.trHeader} key={l.id}>
@@ -465,6 +493,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                       </View>
                     );
                   }
+                  const subheader = subheaderBefore(contractComponents, index);
                   if (l.group) {
                     const members = compGroups.get(l.group)!;
                     const midIdx = groupedLotDisplayIndex(members.length);
@@ -477,27 +506,29 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     // still priced as one combined amount on the middle row, so
                     // no per-unit price is disclosed for the members.
                     const itemized = quotation.componentGroupDisplay?.[l.group] === 'itemized';
-                    return (
-                      <View style={styles.tr} key={l.id}>
+                    return <View key={l.id}>
+                      {subheader && <Text style={styles.inlineSubheader}>{subheader}</Text>}
+                      <View style={styles.tr}>
                         <Text style={styles.cItem}>{isFirst ? codesB.get(l.id) : ''}</Text>
-                        <ComponentDesc l={l} />
+                        <ComponentDesc l={l} styles={styles} hidePartNumbers={!!quotation.hidePartNumbersInPdf} />
                         <Text style={styles.cQty}>{itemized ? NUM(l.qty) : (isMid ? NUM(1) : '')}</Text>
                         <Text style={styles.cUom}>{itemized ? (l.uom ?? '').toUpperCase() : (isMid ? 'LOT' : '')}</Text>
                         <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
                         <Text style={styles.cTotal}>{isMid ? NUM(groupTotal) : ''}</Text>
                       </View>
-                    );
+                    </View>;
                   }
-                  return (
-                    <View style={styles.tr} key={l.id}>
+                  return <View key={l.id}>
+                    {subheader && <Text style={styles.inlineSubheader}>{subheader}</Text>}
+                    <View style={styles.tr}>
                       <Text style={styles.cItem}>{codesB.get(l.id)}</Text>
-                      <ComponentDesc l={l} />
+                      <ComponentDesc l={l} styles={styles} hidePartNumbers={!!quotation.hidePartNumbersInPdf} />
                       <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                       <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                       <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct, ewtPct))}</Text>
                       <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct, ewtPct))}</Text>
                     </View>
-                  );
+                  </View>;
                 })}
                 </View>
                 <View style={styles.trSub}>
@@ -541,7 +572,9 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                     {/* Render items; grouped items show pricing on the middle row */}
                     {(() => {
                       const rendered: React.ReactNode[] = [];
-                      quotation.services.forEach((l) => {
+                      quotation.services.forEach((l, index) => {
+                        const subheader = subheaderBefore(quotation.services, index);
+                        if (subheader) rendered.push(<Text style={styles.inlineSubheader} key={`subheader-${l.id}`}>{subheader}</Text>);
                         if (l.group) {
                           const members = groups.get(l.group)!;
                           const midIdx = groupedLotDisplayIndex(members.length);
@@ -591,25 +624,31 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
                   quotation.services.map((l, i) => {
                     const showLotTotal = i === groupedLotDisplayIndex(quotation.services.length);
                     return (
-                      <View style={styles.tr} key={l.id}>
-                        <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
-                        <Text style={styles.cDesc}>{l.description}</Text>
-                        <Text style={styles.cQty}>{showLotTotal ? NUM(engineeringServicesQty) : ''}</Text>
-                        <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
-                        <Text style={styles.cUnit}>{showLotTotal ? NUM(engineeringServicesUnitPrice) : ''}</Text>
-                        <Text style={styles.cTotal}>{showLotTotal ? NUM(totals.servicesSubtotal) : ''}</Text>
+                      <View key={l.id}>
+                        {subheaderBefore(quotation.services, i) && <Text style={styles.inlineSubheader}>{subheaderBefore(quotation.services, i)}</Text>}
+                        <View style={styles.tr}>
+                          <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
+                          <Text style={styles.cDesc}>{l.description}</Text>
+                          <Text style={styles.cQty}>{showLotTotal ? NUM(engineeringServicesQty) : ''}</Text>
+                          <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
+                          <Text style={styles.cUnit}>{showLotTotal ? NUM(engineeringServicesUnitPrice) : ''}</Text>
+                          <Text style={styles.cTotal}>{showLotTotal ? NUM(totals.servicesSubtotal) : ''}</Text>
+                        </View>
                       </View>
                     );
                   })
                 ) : (
-                  quotation.services.map((l) => (
-                    <View style={styles.tr} key={l.id}>
+                  quotation.services.map((l, index) => (
+                    <View key={l.id}>
+                      {subheaderBefore(quotation.services, index) && <Text style={styles.inlineSubheader}>{subheaderBefore(quotation.services, index)}</Text>}
+                    <View style={styles.tr}>
                       <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
                       <Text style={styles.cDesc}>{l.description}</Text>
                       <Text style={styles.cQty}>{NUM(1)}</Text>
                       <Text style={styles.cUom}>LOT</Text>
                       <Text style={styles.cUnit}>{NUM(serviceLineAmount(l, ewtPct))}</Text>
                       <Text style={styles.cTotal}>{NUM(serviceLineAmount(l, ewtPct))}</Text>
+                    </View>
                     </View>
                   ))
                 )}
@@ -665,7 +704,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
           {quotation.discountPct > 0 && (
             <>
               <View style={styles.sumFooterRow}>
-                <Text style={styles.sumFooterLabel}>DISCOUNT({quotation.discountPct}%)</Text>
+                {/* Round % for clients — exact discount is the peso amount */}
+                <Text style={styles.sumFooterLabel}>DISCOUNT ({formatDiscountPct(quotation.discountPct)}%)</Text>
                 <Text style={styles.sumFooterValue}>{PHP(totals.discount)}</Text>
               </View>
               <View style={styles.sumFooterRow}>
@@ -674,17 +714,29 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               </View>
             </>
           )}
+          {(totals.deliveryFee ?? 0) > 0 && (
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>DELIVERY FEE</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.deliveryFee ?? 0)}</Text>
+            </View>
+          )}
+          {(totals.smallOrderSurcharge ?? 0) > 0 && (
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>SMALL-ORDER SURCHARGE</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.smallOrderSurcharge ?? 0)}</Text>
+            </View>
+          )}
           {quotation.vatPct > 0 && (
-            <>
-              <View style={styles.sumFooterRow}>
-                <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
-                <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
-              </View>
-              <View style={styles.sumFooterRow}>
-                <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP (VAT-IN)</Text>
-                <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
-              </View>
-            </>
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
+            </View>
+          )}
+          {(quotation.vatPct > 0 || (totals.deliveryTotal ?? 0) > 0) && (
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP{quotation.vatPct > 0 ? ' (VAT-IN)' : ''}</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
+            </View>
           )}
         </View>
 
@@ -703,14 +755,17 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts }
               <Text style={styles.cUnit}>Unit Price</Text>
               <Text style={styles.cTotal}>Total , PhP</Text>
             </View>
-            {optionalComponents.map((l) => (
-              <View style={styles.tr} key={l.id}>
+            {optionalComponents.map((l, index) => (
+              <View key={l.id}>
+                {subheaderBefore(optionalComponents, index) && <Text style={styles.inlineSubheader}>{subheaderBefore(optionalComponents, index)}</Text>}
+              <View style={styles.tr}>
                 <Text style={styles.cItem}>{codesOpt.get(l.id)}</Text>
-                <ComponentDesc l={l} />
+                <ComponentDesc l={l} styles={styles} hidePartNumbers={!!quotation.hidePartNumbersInPdf} />
                 <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                 <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
                 <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct, ewtPct))}</Text>
                 <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct, ewtPct))}</Text>
+              </View>
               </View>
             ))}
             <View style={styles.trSub}>
@@ -814,7 +869,7 @@ export async function exportQuotationPdf(
   recipient: Client | null,
   customer: Client | null,
   salesContacts: SalesContact[],
-  options: { save?: boolean } = {},
+  options: { save?: boolean; layout?: QuotationPdfLayout } = {},
 ): Promise<{ blob: Blob; filename: string }> {
   const blob = await pdf(
     <QuotationDoc
@@ -823,6 +878,7 @@ export async function exportQuotationPdf(
       recipient={recipient}
       customer={customer}
       salesContacts={salesContacts}
+      layout={options.layout ?? 'standard'}
     />,
   ).toBlob();
 
