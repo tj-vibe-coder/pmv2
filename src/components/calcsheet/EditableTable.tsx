@@ -1,7 +1,8 @@
-import { Box, IconButton, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip } from '@mui/material';
+import { Box, Divider, IconButton, Menu, MenuItem, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
-import { Fragment, type ReactNode, type CSSProperties } from 'react';
+import { Fragment, useState } from 'react';
+import type { ReactNode, CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors,
 } from '@dnd-kit/core';
@@ -35,6 +36,15 @@ export interface Column<T> {
   placeholder?: string;
 }
 
+export interface ContextMenuItem {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  /** Renders a divider above this item. */
+  dividerBefore?: boolean;
+  danger?: boolean;
+}
+
 interface Props<T extends { id: string }> {
   rows: T[];
   columns: Column<T>[];
@@ -45,6 +55,11 @@ interface Props<T extends { id: string }> {
   footer?: ReactNode;
   draggable?: boolean;
   readOnly?: boolean;
+  // Row appears as a single spanning, bold label (bound to `description`)
+  // instead of the normal per-column cells — used for BOM section headers.
+  isHeaderRow?: (row: T) => boolean;
+  // Right-click on any row — return null/[] to suppress the menu for that row.
+  getContextMenu?: (row: T, idx: number) => ContextMenuItem[] | null | undefined;
   subheader?: (row: T, idx: number) => string | undefined;
 }
 
@@ -111,10 +126,12 @@ interface SortableRowProps<T extends { id: string }> {
   onChange: (idx: number, key: keyof T, value: any) => void;
   onDelete: (idx: number) => void;
   readOnly?: boolean;
+  isHeader?: boolean;
+  onContextMenu?: (e: ReactMouseEvent, row: T, idx: number) => void;
 }
 
 function SortableRow<T extends { id: string }>({
-  row, idx, columns, draggable, onChange, onDelete, readOnly,
+  row, idx, columns, draggable, onChange, onDelete, readOnly, isHeader, onContextMenu,
 }: SortableRowProps<T>) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: row.id, disabled: readOnly });
   const style: CSSProperties = {
@@ -124,8 +141,47 @@ function SortableRow<T extends { id: string }>({
     backgroundColor: isDragging ? '#F0F4FF' : undefined,
   };
 
+  if (isHeader) {
+    return (
+      <TableRow ref={setNodeRef} style={style} hover onContextMenu={(e) => onContextMenu?.(e, row, idx)}>
+        {draggable && (
+          readOnly ? (
+            <TableCell sx={{ width: 28, p: '0 4px', color: 'text.disabled', opacity: 0.3 }}>
+              <DragIndicatorIcon fontSize="small" />
+            </TableCell>
+          ) : (
+            <TableCell sx={{ width: 28, p: '0 4px', cursor: 'grab', color: 'text.disabled' }} {...attributes} {...listeners}>
+              <DragIndicatorIcon fontSize="small" />
+            </TableCell>
+          )
+        )}
+        <TableCell colSpan={columns.length} sx={{ bgcolor: 'grey.100', p: '4px 8px' }}>
+          <TextField
+            value={(row as any).description ?? ''}
+            onChange={(e) => onChange(idx, 'description' as keyof T, e.target.value)}
+            variant="standard"
+            fullWidth
+            disabled={readOnly}
+            placeholder="Section header"
+            InputProps={{ disableUnderline: true, readOnly, sx: { fontSize: '0.8125rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3 } }}
+            inputProps={{ style: { padding: '6px 4px' } }}
+          />
+        </TableCell>
+        <TableCell align="right" sx={{ p: '0 4px', width: 40 }}>
+          {!readOnly && (
+            <Tooltip title="Delete">
+              <IconButton size="small" onClick={() => onDelete(idx)}>
+                <DeleteIcon fontSize="inherit" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </TableCell>
+      </TableRow>
+    );
+  }
+
   return (
-    <TableRow ref={setNodeRef} style={style} hover>
+    <TableRow ref={setNodeRef} style={style} hover onContextMenu={(e) => onContextMenu?.(e, row, idx)}>
       {draggable && (
         readOnly ? (
           <TableCell sx={{ width: 28, p: '0 4px', color: 'text.disabled', opacity: 0.3 }}>
@@ -195,12 +251,22 @@ function SortableRow<T extends { id: string }>({
 }
 
 export function EditableTable<T extends { id: string }>({
-  rows, columns, onChange, onDelete, onReorder, emptyMessage = 'No items', footer, draggable = true, readOnly = false, subheader,
+  rows, columns, onChange, onDelete, onReorder, emptyMessage = 'No items', footer, draggable = true, readOnly = false,
+  isHeaderRow, getContextMenu, subheader,
 }: Props<T>) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+
+  const [ctxMenu, setCtxMenu] = useState<{ mouseX: number; mouseY: number; items: ContextMenuItem[] } | null>(null);
+  const handleRowContextMenu = (e: ReactMouseEvent, row: T, idx: number) => {
+    if (!getContextMenu || readOnly) return;
+    const items = getContextMenu(row, idx);
+    if (!items || items.length === 0) return;
+    e.preventDefault();
+    setCtxMenu({ mouseX: e.clientX - 2, mouseY: e.clientY - 4, items });
+  };
 
   const handleDragEnd = (e: DragEndEvent) => {
     if (readOnly) return;
@@ -251,6 +317,8 @@ export function EditableTable<T extends { id: string }>({
                       onChange={onChange}
                       onDelete={onDelete}
                       readOnly={readOnly}
+                      isHeader={isHeaderRow?.(row)}
+                      onContextMenu={handleRowContextMenu}
                     />
                   </Fragment>
                 );
@@ -267,6 +335,24 @@ export function EditableTable<T extends { id: string }>({
           </TableBody>
         </Table>
       </DndContext>
+      <Menu
+        open={!!ctxMenu}
+        onClose={() => setCtxMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={ctxMenu ? { top: ctxMenu.mouseY, left: ctxMenu.mouseX } : undefined}
+      >
+        {ctxMenu?.items.map((item, i) => [
+          item.dividerBefore && <Divider key={`d${i}`} />,
+          <MenuItem
+            key={i}
+            disabled={item.disabled}
+            sx={item.danger ? { color: 'error.main' } : undefined}
+            onClick={() => { item.onClick(); setCtxMenu(null); }}
+          >
+            {item.label}
+          </MenuItem>,
+        ])}
+      </Menu>
     </Box>
   );
 }

@@ -173,12 +173,19 @@ export interface ComponentLine {
   /** A calculation-neutral label rendered above this contiguous block of items. */
   subheader?: string;
   markupPct?: number;
+  /** Per-line EWT override — same resolution pattern as markupPct (falls
+   * back to Quotation.ewtPct when unset). See Quotation.ewtPct. */
+  ewtPct?: number;
   expectedPurchaseDate?: string;
   historicalPriceSource?: HistoricalPriceSource;
   /** Optional item: priced for reference but NOT included in the contract
    * cost/subtotal/grand total. Listed in a separate "Optional Items" section
    * on exports so the client can add it if they avail. */
   optional?: boolean;
+  /** Section-header row: a label-only line (uses `description`) inserted to
+   * break the BOM into named sections on screen and on export. Carries no
+   * qty/cost and is excluded from every totals calculation. */
+  isHeader?: boolean;
 }
 
 export interface ServiceLine {
@@ -229,6 +236,13 @@ export interface Quotation {
   productContingencyPct?: number;
   laborMarkupPct: number;
   generalReqMarkupPct: number;
+  /** Expanded Withholding Tax gross-up (IOCT quotations). Layered invisibly
+   * onto the existing markup for General Requirements, Supply of Components
+   * and Engineering Services — never printed as its own line/label on the
+   * PDF or Excel export. New IOCT quotations default to 5%; ACTI quotations
+   * and quotations created before this field existed read as 0 (unaffected)
+   * unless set explicitly. */
+  ewtPct?: number;
   globalContingencyPct: number;
   discountPct: number;
   vatPct: number;

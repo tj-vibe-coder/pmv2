@@ -35,7 +35,7 @@ import type {
   ComponentLine, GeneralReqLine, HistoricalPriceSource, ManpowerEntry, Quotation, QuotationVersion, SalesContact, ServiceLine,
 } from '../../types/Quotation';
 import { EditableTable } from './EditableTable';
-import type { Column } from './EditableTable';
+import type { Column, ContextMenuItem } from './EditableTable';
 import DuplicateQuotationDialog from './DuplicateQuotationDialog';
 import CopyInclusionsDialog, { type CopiedInclusions } from './CopyInclusionsDialog';
 import ScopeLibraryDialog from './ScopeLibraryDialog';
@@ -404,12 +404,16 @@ export default function QuotationEditor() {
     if (!draft || !totals) return null;
     const servicesFromMP = !!draft.servicesFromManpower;
     const componentsWithContingency = totals.componentsWithContingency ?? totals.componentsCost;
+    // Manual lump-sum service lines have no markup step of their own, but
+    // EWT (see Quotation.ewtPct) still applies at display time on top of
+    // whatever was typed — so unlike before, that branch is no longer
+    // unconditionally 0 once EWT is set.
     const markupOnly =
       (totals.generalReqtsSubtotal - totals.generalReqtsWithContingency) +
       (totals.componentsSubtotal - componentsWithContingency) +
       (servicesFromMP
         ? totals.servicesSubtotal - totals.laborWithContingency
-        : 0);
+        : totals.servicesSubtotal - totals.laborCost);
     const contingency =
       (totals.generalReqtsWithContingency - totals.generalReqtsCost) +
       (componentsWithContingency - totals.componentsCost) +
@@ -830,6 +834,10 @@ export default function QuotationEditor() {
     // Shows the global Product markup (greyed) until a per-line override is
     // typed; clearing the cell falls back to the global again.
     { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.productMarkupPct || 0) },
+    // Same pattern as Markup % — shows the quotation's EWT % (greyed) until a
+    // per-line override is typed. IOCT-only in practice (see Quotation.ewtPct);
+    // never printed on the PDF/Excel.
+    { key: 'ewtPct', label: 'EWT %', width: 70, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.ewtPct || 0) },
     { key: 'leadTimeDays', label: 'Lead Time', width: 90, type: 'number', align: 'right', min: 0 },
     {
       key: '_timing',
@@ -856,11 +864,11 @@ export default function QuotationEditor() {
       />
     ) },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
-      render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: r.optional ? 'text.disabled' : undefined }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct))}</Box> },
+      render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: r.optional ? 'text.disabled' : undefined }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct, quotation.ewtPct))}</Box> },
     { key: 'total', label: 'Total', width: 130, align: 'right',
       render: (r) => (
         <Box sx={{ fontFamily: 'monospace', fontWeight: 500, color: r.optional ? 'text.disabled' : undefined, fontStyle: r.optional ? 'italic' : undefined }}>
-          {PHP(componentLineTotal(r, quotation.productMarkupPct))}{r.optional ? ' *' : ''}
+          {PHP(componentLineTotal(r, quotation.productMarkupPct, quotation.ewtPct))}{r.optional ? ' *' : ''}
         </Box>
       ) },
   ];
@@ -879,8 +887,10 @@ export default function QuotationEditor() {
     const row = { ...list[idx], [key]: value };
     // Amount is the single source of truth (calc + PDF/Excel print it directly),
     // so markup edits recompute it: per-line override, else the global Labor Markup %.
+    // EWT (IOCT-only, invisible on the PDF) rides along as an extra factor —
+    // see Quotation.ewtPct.
     if (perLinePricing && (key === 'days' || key === 'markupPct')) {
-      const mult = 1 + (((row.markupPct ?? quotation.laborMarkupPct) || 0) / 100);
+      const mult = (1 + (((row.markupPct ?? quotation.laborMarkupPct) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100));
       row.amount = (row.days || 0) * teamDailyRate * mult;
     }
     list[idx] = row;
@@ -928,9 +938,45 @@ export default function QuotationEditor() {
   const ungroupComp = (compId: string) => {
     setField('components', quotation.components.map((c) => c.id === compId ? { ...c, group: undefined } : c));
   };
+
+  // Section-header rows — label-only lines that break the BOM into named
+  // sections (e.g. "FIELD INSTRUMENTS") on screen and on export. Carry no
+  // qty/cost and are excluded from every totals calculation (see calc.ts).
+  const insertHeaderComponent = (idx: number, position: 'above' | 'below') => {
+    const insertAt = position === 'above' ? idx : idx + 1;
+    const list = [...quotation.components];
+    list.splice(insertAt, 0, {
+      id: id(), code: '', description: '', brand: '', partNo: '',
+      qty: 0, uom: '', unitCost: 0, forex: 1, contingencyPct: 0, discountPct: 0,
+      isHeader: true,
+    } as ComponentLine);
+    commit('components', list);
+  };
+
   const clearSelectedSubheaders = (section: 'components' | 'services') => {
     const selected = section === 'components' ? selectedCompIds : selectedSvcIds;
     setField(section, quotation[section].map((line) => selected.has(line.id) ? { ...line, subheader: undefined } : line));
+  };
+
+  const getComponentContextMenu = (row: ComponentLine, idx: number): ContextMenuItem[] => {
+    if (isLegacy) return [];
+    const items: ContextMenuItem[] = [];
+    if (!row.isHeader) {
+      items.push({
+        label: `Group selected (${selectedCompIds.size})`,
+        disabled: selectedCompIds.size < 2,
+        onClick: () => setGroupDialogOpen('components'),
+      });
+      if (row.group) {
+        items.push({ label: 'Ungroup this row', onClick: () => ungroupComp(row.id) });
+      }
+    }
+    items.push(
+      { label: 'Insert header above', dividerBefore: true, onClick: () => insertHeaderComponent(idx, 'above') },
+      { label: 'Insert header below', onClick: () => insertHeaderComponent(idx, 'below') },
+    );
+    items.push({ label: 'Delete row', dividerBefore: true, danger: true, onClick: () => deleteRow('components', idx) });
+    return items;
   };
   // Per-group export style. Absent = 'lot' (collapse to a single "1.00 LOT"
   // line priced at the group total); 'itemized' shows each member's own qty
@@ -1698,7 +1744,7 @@ export default function QuotationEditor() {
             <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} helperText="Default for product rows" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="General Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
-            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = 1 + (((s.markupPct ?? v) || 0) / 100); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} sx={{ width: '100%' }} />
+            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = (1 + (((s.markupPct ?? v) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100)); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={isLegacy} sx={{ width: '100%' }} />
             <NumField
               label="Discount %"
@@ -1709,6 +1755,23 @@ export default function QuotationEditor() {
                   ? `Client PDF shows ${formatDiscountPct(quotation.discountPct)}% (rounded)`
                   : 'Or use Discount ₱ / Target net below'
               }
+              disabled={isLegacy}
+              sx={{ width: '100%' }}
+            />
+            <NumField
+              label="EWT %"
+              value={quotation.ewtPct ?? 0}
+              onChange={(v) => {
+                setField('ewtPct', v);
+                if (perLinePricing) {
+                  setField('services', quotation.services.map((s) => {
+                    if ((s.days || 0) <= 0) return s;
+                    const mult = (1 + (((s.markupPct ?? quotation.laborMarkupPct) || 0) / 100)) * (1 + ((v || 0) / 100));
+                    return { ...s, amount: (s.days || 0) * teamDailyRate * mult };
+                  }));
+                }
+              }}
+              helperText="IOCT-only gross-up, folded into markup — never printed on the PDF/Excel"
               disabled={isLegacy}
               sx={{ width: '100%' }}
             />
@@ -1883,6 +1946,8 @@ export default function QuotationEditor() {
           subheader={(row, index) => subheaderBefore(quotation.components, index)}
           emptyMessage="No components — typical for IOCT services-only quotes"
           readOnly={isLegacy}
+          isHeaderRow={(r) => !!r.isHeader}
+          getContextMenu={getComponentContextMenu}
           footer={
             <>
               {/* colSpan = columns.length so amount lands under Total (drag + data cols except Total) */}
@@ -2184,12 +2249,18 @@ export default function QuotationEditor() {
             cost={totals.laborCost}
             contingency={quotation.servicesFromManpower ? totals.laborWithContingency - totals.laborCost : null}
             contingencyPct={quotation.servicesFromManpower ? quotation.globalContingencyPct : null}
-            markup={quotation.servicesFromManpower ? totals.servicesSubtotal - totals.laborWithContingency : 0}
+            // Manual lump-sum lines have no markup step of their own (the
+            // typed amount is the final price) — but EWT still rides in at
+            // display time (serviceLineAmount), so the delta here is EWT-only.
+            // Derive it the same way as the per-line-pricing branch below
+            // rather than hardcoding 0, so cost + markup always sums to the
+            // printed subtotal.
+            markup={quotation.servicesFromManpower ? totals.servicesSubtotal - totals.laborWithContingency : totals.servicesSubtotal - totals.laborCost}
             markupPct={quotation.servicesFromManpower
               ? (quotation.servicesPerLinePricing
                 ? (totals.laborCost > 0 ? ((totals.servicesSubtotal - totals.laborCost) / totals.laborCost) * 100 : 0)
                 : quotation.laborMarkupPct)
-              : 0}
+              : (totals.laborCost > 0 ? ((totals.servicesSubtotal - totals.laborCost) / totals.laborCost) * 100 : 0)}
             subtotal={totals.servicesSubtotal}
           />
           <Box sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'grey.50' }}>

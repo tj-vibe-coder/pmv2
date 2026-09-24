@@ -11,10 +11,34 @@ export function lineGeneralTotal(l: GeneralReqLine): number {
   return (l.unitPrice || 0) * (l.qty || 0);
 }
 
-export function componentSellingUnit(l: ComponentLine, productMarkupPct: number): number {
+// ─── EWT gross-up ────────────────────────────────────────────────────────────
+// Expanded Withholding Tax buffer (IOCT quotations only — see Quotation.ewtPct).
+// Combined multiplicatively with the existing markup layer so it rides along
+// invisibly: never its own line, never its own label, just a bit more markup.
+// Every call site that folds it in stays internally consistent (line items
+// still sum to their printed section subtotal) because the same combined
+// percentage is used everywhere that section's sell price is derived.
+export function withEwt(basePct: number | undefined, ewtPct: number | undefined): number {
+  return ((1 + (basePct || 0) / 100) * (1 + (ewtPct || 0) / 100) - 1) * 100;
+}
+
+// Manual (non-manpower) service lines store the amount the user actually
+// typed — EWT is applied only at display/total time so the field stays
+// reversible (zero out ewtPct and the printed figure reverts, nothing was
+// overwritten). Per-line-pricing-from-manpower amounts already have EWT
+// baked in when computed (see CalcsheetQuotationEditor's updateServiceRow),
+// so don't pass this through those — it would double-apply.
+export function serviceLineAmount(l: ServiceLine, ewtPct: number | undefined): number {
+  return (l.amount || 0) * (1 + (ewtPct || 0) / 100);
+}
+
+// `ewtPct` (the quotation-wide default) is overridden by the line's own
+// l.ewtPct when set — same resolution pattern as markup.
+export function componentSellingUnit(l: ComponentLine, productMarkupPct: number, ewtPct: number = 0): number {
   const adjusted = componentCostUnit(l) * (1 + (l.contingencyPct || 0) / 100);
   const markup = l.markupPct != null ? l.markupPct : productMarkupPct;
-  return adjusted * (1 + (markup || 0) / 100);
+  const ewt = l.ewtPct != null ? l.ewtPct : ewtPct;
+  return adjusted * (1 + (markup || 0) / 100) * (1 + (ewt || 0) / 100);
 }
 
 export function componentCostUnit(l: ComponentLine): number {
@@ -26,8 +50,8 @@ export function componentWithContingencyUnit(l: ComponentLine): number {
   return componentCostUnit(l) * (1 + (l.contingencyPct || 0) / 100);
 }
 
-export function componentLineTotal(l: ComponentLine, productMarkupPct: number): number {
-  return componentSellingUnit(l, productMarkupPct) * (l.qty || 0);
+export function componentLineTotal(l: ComponentLine, productMarkupPct: number, ewtPct: number = 0): number {
+  return componentSellingUnit(l, productMarkupPct, ewtPct) * (l.qty || 0);
 }
 
 export function componentLineCost(l: ComponentLine): number {
@@ -72,27 +96,41 @@ export function computeTotals(q: Quotation): QuotationTotals {
   }
   const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, q.generalReqtsExportQty || 1) : 1;
   const engineeringServicesQty = q.servicesFromManpower ? Math.max(1, q.engineeringServicesQty || 1) : 1;
+  // IOCT-only pricing buffer, folded into every section's markup below —
+  // never its own line. See Quotation.ewtPct and the `withEwt`/
+  // `serviceLineAmount` helpers above.
+  const ewtPct = q.ewtPct || 0;
 
-  // General Requirements: cost → per-line or global markup.
+  // General Requirements: cost → per-line or global markup. EWT rides on top
+  // of the whole subtotal — General Requirements already prices markup only
+  // at the subtotal level (per-line PDF rows show raw unitPrice × qty, not
+  // the marked-up figure), so this stays consistent with the existing export.
   const generalReqtsUnitCost = q.generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0);
   const generalReqtsCost = generalReqtsUnitCost * generalReqtsQty;
   const generalReqtsWithContingency = generalReqtsCost;
   const hasPerLineGenMarkup = q.generalReqts.some(l => l.markupPct != null);
-  const generalReqtsSubtotal = hasPerLineGenMarkup
-    ? q.generalReqts.reduce((s, l) => {
-        const base = lineGeneralTotal(l);
-        const markup = l.markupPct != null ? l.markupPct : (q.generalReqMarkupPct || 0);
-        return s + base * (1 + markup / 100);
-      }, 0) * generalReqtsQty
-    : generalReqtsWithContingency * (1 + (q.generalReqMarkupPct || 0) / 100);
+  const generalReqtsSubtotal = (
+    hasPerLineGenMarkup
+      ? q.generalReqts.reduce((s, l) => {
+          const base = lineGeneralTotal(l);
+          const markup = l.markupPct != null ? l.markupPct : (q.generalReqMarkupPct || 0);
+          return s + base * (1 + markup / 100);
+        }, 0) * generalReqtsQty
+      : generalReqtsWithContingency * (1 + (q.generalReqMarkupPct || 0) / 100)
+  ) * (1 + ewtPct / 100);
 
-  // Components: raw cost → per-line contingency → markup.
+  // Components: raw cost → per-line contingency → markup → EWT. Passed as a
+  // 3rd argument to componentSellingUnit/componentLineTotal so it applies
+  // whether the line's markup came from the per-line override or the global
+  // default — every per-line selling price/total shown anywhere (editor,
+  // PDF, Excel) already includes it, so line items still sum to the printed
+  // section subtotal.
   // Optional items are excluded from every contract figure (cost/subtotal/
   // grand total) and reported separately via componentsOptionalSubtotal.
-  const contractComponents = q.components.filter((l) => !l.optional);
-  const optionalComponents = q.components.filter((l) => l.optional);
+  const contractComponents = q.components.filter((l) => !l.optional && !l.isHeader);
+  const optionalComponents = q.components.filter((l) => l.optional && !l.isHeader);
   const componentsSubtotal = contractComponents.reduce(
-    (s, l) => s + componentLineTotal(l, q.productMarkupPct),
+    (s, l) => s + componentLineTotal(l, q.productMarkupPct, ewtPct),
     0,
   );
   const componentsCost = contractComponents.reduce((s, l) => s + componentLineCost(l), 0);
@@ -101,7 +139,7 @@ export function computeTotals(q: Quotation): QuotationTotals {
     0,
   );
   const componentsOptionalSubtotal = optionalComponents.reduce(
-    (s, l) => s + componentLineTotal(l, q.productMarkupPct),
+    (s, l) => s + componentLineTotal(l, q.productMarkupPct, ewtPct),
     0,
   );
 
@@ -115,6 +153,8 @@ export function computeTotals(q: Quotation): QuotationTotals {
       // Per-line pricing: each scope item stores its own amount (auto-computed from
       // days × team daily rate, or manually entered). laborCost is the raw manpower
       // cost based on days for margin calculation.
+      // Per-line amounts already have EWT baked in at edit time (see
+      // CalcsheetQuotationEditor's updateServiceRow), so sum them as-is here.
       const dailyRate = manpowerDailyRate(q.manpower);
       laborCost = q.services.reduce((s, l) => s + ((l.days || 0) * dailyRate), 0);
       laborWithContingency = laborCost;
@@ -122,13 +162,16 @@ export function computeTotals(q: Quotation): QuotationTotals {
     } else {
       laborCost = manpowerTotalCost(q.manpower) * engineeringServicesQty;
       laborWithContingency = laborCost;
-      servicesSub = laborCost * (1 + (q.laborMarkupPct || 0) / 100);
+      servicesSub = laborCost * (1 + (q.laborMarkupPct || 0) / 100) * (1 + ewtPct / 100);
     }
   } else {
-    // Manual lump-sum lines: take amounts as the final subtotal (user already includes their own buffer)
-    servicesSub = q.services.reduce((s, l) => s + (l.amount || 0), 0);
-    laborCost = servicesSub;
-    laborWithContingency = servicesSub;
+    // Manual lump-sum lines: l.amount is the final price the user typed
+    // (pre-EWT); serviceLineAmount folds EWT in at display/total time only,
+    // same as the PDF/Excel per-line rendering, so line items still sum to
+    // the printed subtotal.
+    servicesSub = q.services.reduce((s, l) => s + serviceLineAmount(l, ewtPct), 0);
+    laborCost = q.services.reduce((s, l) => s + (l.amount || 0), 0);
+    laborWithContingency = laborCost;
   }
 
   const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
