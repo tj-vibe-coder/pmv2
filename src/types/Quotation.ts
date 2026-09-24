@@ -2,6 +2,15 @@ export type ID = string;
 
 export type QuotationKind = 'IOCT' | 'ACTI';
 
+// Chosen once at quotation creation (alongside kind/recipient) and fixed for
+// that quotation's life — same convention as `kind` itself, which also can't
+// be changed after creation. Governs which sections are editable in
+// CalcsheetQuotationEditor: 'supply' locks A (General Requirements) and C
+// (Services/Manpower), leaving only B (Components) editable; 'services' locks
+// only B, leaving A and C editable; 'both' (the default, including every
+// quotation created before this field existed) locks nothing.
+export type QuotationScopeCategory = 'supply' | 'services' | 'both';
+
 export type ProjectStatus = 'draft' | 'for_review' | 'sent' | 'won' | 'lost' | 'inactive';
 
 // Single runtime source of truth for the status set, in lifecycle order. Status
@@ -223,6 +232,10 @@ export interface Quotation {
   id: ID;
   projectId: ID;
   kind: QuotationKind;
+  // Absent = 'both' (every quotation created before this field existed, and
+  // the default for new ones). See QuotationScopeCategory for what each value
+  // locks.
+  scopeCategory?: QuotationScopeCategory;
   revision: string;
   recipientId: ID | null;
   contactId?: ID;            // Which contact at the recipient client this quotation addresses

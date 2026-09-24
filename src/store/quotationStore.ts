@@ -7,6 +7,7 @@ import type {
   Project,
   Quotation,
   QuotationKind,
+  QuotationScopeCategory,
   QuotationVersion,
   SalesContact,
   ScopeBundle,
@@ -93,7 +94,7 @@ interface Actions {
   syncMainProject: (id: ID, opts?: { force?: boolean }) => Promise<SyncMainProjectResult>;
 
   // Quotations
-  createQuotation: (projectId: ID, kind: QuotationKind, recipientId: ID | null) => Promise<Quotation>;
+  createQuotation: (projectId: ID, kind: QuotationKind, recipientId: ID | null, scopeCategory?: QuotationScopeCategory) => Promise<Quotation>;
   // `remarks` is an optional changelog note for this save — recorded on the
   // version snapshot the server takes of the pre-save state, not stored on
   // the quotation itself.
@@ -203,10 +204,12 @@ const blankQuotation = (
   // editable inline on the quotation; this only sets the seed value so the
   // PDF "Prepared by:" defaults to the AM without manual intervention.
   defaultSignatoryName: string = '',
+  scopeCategory: QuotationScopeCategory = 'both',
 ): Quotation => ({
   id,
   projectId,
   kind,
+  scopeCategory,
   revision: '00',
   recipientId,
   validityDays: 30,
@@ -223,7 +226,17 @@ const blankQuotation = (
   globalContingencyPct: 0,
   discountPct: 0,
   vatPct: 0,
-  generalReqts: starterGeneralReqts(),
+  // Any scope that can include physical goods (Supply only, or Both) defaults
+  // the delivery fee + minimum-order surcharge on — the team can still switch
+  // it off inline (this is just the starting value, not locked like the
+  // section editability above). Services-only starts off, since there's
+  // nothing to deliver.
+  deliveryTermsEnabled: scopeCategory !== 'services',
+  // Supply-only locks Section A in the editor (see CalcsheetQuotationEditor's
+  // generalReqtsLocked) — seeding it with starter rows there would create a
+  // quotation that's already "stuck": data visible in a section the team can
+  // neither edit nor clear. Every other scope keeps the usual starter rows.
+  generalReqts: scopeCategory === 'supply' ? [] : starterGeneralReqts(),
   components: [],
   services: [],
   manpower: [],
@@ -571,7 +584,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
 
   // ── Quotations ─────────────────────────────────────────────────────────────
 
-  createQuotation: async (projectId, kind, recipientId) => {
+  createQuotation: async (projectId, kind, recipientId, scopeCategory = 'both') => {
     // Resolve the project's account manager (salesContact) name and seed it into
     // both signatory fields. Editor remains editable; this just gives a sensible
     // default so the PDF "Prepared by:" starts populated with the AM.
@@ -580,7 +593,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       ? (get().salesContacts.find((sc) => sc.id === project.salesContactId)?.name ?? '')
       : '';
     const defaultTitle = get().settings.defaultJobTitles?.[kind] || undefined;
-    const q: Quotation = { ...blankQuotation(projectId, kind, recipientId, nanoid(8), amName), preparedByTitle: defaultTitle };
+    const q: Quotation = { ...blankQuotation(projectId, kind, recipientId, nanoid(8), amName, scopeCategory), preparedByTitle: defaultTitle };
     const res = await api<{ quotation: Quotation }>('POST', '/quotations', q);
     const saved = res.quotation ?? q;
     set({ quotations: [...get().quotations, saved] });
