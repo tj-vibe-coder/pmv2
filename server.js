@@ -798,7 +798,7 @@ app.get('/api/clients/:id', async (req, res) => {
 });
 
 app.post('/api/clients', async (req, res) => {
-  const { code, name, address, paymentTerms, am, contacts } = req.body || {};
+  const { code, name, address, plant, paymentTerms, am, contacts } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Client name is required' });
   if (!Array.isArray(contacts) || contacts.length === 0) {
     return res.status(400).json({ error: 'At least one contact is required' });
@@ -809,6 +809,7 @@ app.post('/api/clients', async (req, res) => {
       code: (code || '').trim().toUpperCase().slice(0, 4),
       name: name.trim(),
       address: address || '',
+      plant: (plant || '').trim(),
       paymentTerms: paymentTerms || '',
       am: am || '',
       contacts: contacts.map((c) => ({
@@ -836,7 +837,7 @@ app.post('/api/clients', async (req, res) => {
 
 app.put('/api/clients/:id', async (req, res) => {
   const { id } = req.params;
-  const { code, name, address, paymentTerms, am, contacts } = req.body || {};
+  const { code, name, address, plant, paymentTerms, am, contacts } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Client name is required' });
   if (!Array.isArray(contacts) || contacts.length === 0) {
     return res.status(400).json({ error: 'At least one contact is required' });
@@ -862,6 +863,7 @@ app.put('/api/clients/:id', async (req, res) => {
       code: (code || '').trim().toUpperCase().slice(0, 4),
       name: trimmedName,
       address: address || '',
+      plant: (plant || '').trim(),
       paymentTerms: paymentTerms || '',
       am: am || '',
       contacts: cleanedContacts,

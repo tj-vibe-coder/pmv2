@@ -18,6 +18,7 @@ interface FormData {
   code: string;
   name: string;
   address: string;
+  plant: string;
   paymentTerms: string;
   am: string;
   contacts: ClientContact[];
@@ -27,6 +28,7 @@ const emptyForm: FormData = {
   code: '',
   name: '',
   address: '',
+  plant: '',
   paymentTerms: '',
   am: '',
   contacts: [
@@ -45,6 +47,10 @@ const ClientsPage: React.FC = () => {
   const [formData, setFormData] = useState<FormData>(emptyForm);
   const [error, setError] = useState<string | null>(null);
   const [submitLoading, setSubmitLoading] = useState(false);
+  // Client-side search across name/code/plant/address — the main way to pull
+  // up every buyer company registered at the same physical plant when a
+  // plant has several separate Client records (see Client.plant).
+  const [search, setSearch] = useState('');
 
   const loadClients = async () => {
     setLoading(true);
@@ -78,6 +84,7 @@ const ClientsPage: React.FC = () => {
       code: client.code || '',
       name: client.name || '',
       address: client.address || '',
+      plant: client.plant || '',
       paymentTerms: client.paymentTerms || '',
       am: client.am || '',
       contacts: client.contacts && client.contacts.length > 0
@@ -145,6 +152,7 @@ const ClientsPage: React.FC = () => {
       code: formData.code.trim(),
       name: formData.name.trim(),
       address: formData.address.trim(),
+      plant: formData.plant.trim(),
       paymentTerms: formData.paymentTerms.trim(),
       am: formData.am.trim(),
       contacts: cleanedContacts,
@@ -191,6 +199,16 @@ const ClientsPage: React.FC = () => {
     }
   };
 
+  const q = search.trim().toLowerCase();
+  const filteredClients = q
+    ? clients.filter((c) => {
+        const primary = primaryContact(c);
+        return [c.name, c.code, c.plant, c.address, primary?.name]
+          .some((v) => (v || '').toLowerCase().includes(q));
+      })
+    : clients;
+  const plantMatches = q ? filteredClients.filter((c) => (c.plant || '').toLowerCase().includes(q)) : [];
+
   return (
     <Box sx={{ height: '100%', overflow: 'auto' }}>
       <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -205,6 +223,22 @@ const ClientsPage: React.FC = () => {
         </Button>
       </Box>
 
+      <Box sx={{ mb: 1.5 }}>
+        <TextField
+          size="small"
+          placeholder="Search by name, code, plant/site, or address…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          sx={{ width: { xs: '100%', sm: 360 } }}
+        />
+        {q && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+            {filteredClients.length} of {clients.length} clients match
+            {plantMatches.length > 1 ? ` — ${plantMatches.length} buyer companies share this plant/site` : ''}
+          </Typography>
+        )}
+      </Box>
+
       {error && !dialogOpen && (
         <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert>
       )}
@@ -217,6 +251,7 @@ const ClientsPage: React.FC = () => {
                 <TableCell sx={{ width: 36 }} />
                 <TableCell sx={{ fontWeight: 600, width: 60 }}>Code</TableCell>
                 <TableCell sx={{ fontWeight: 600 }}>Client Name</TableCell>
+                <TableCell sx={{ fontWeight: 600 }}>Plant / Site</TableCell>
                 <TableCell sx={{ fontWeight: 600 }}>Address</TableCell>
                 <TableCell sx={{ fontWeight: 600 }}>Payment Terms</TableCell>
                 <TableCell sx={{ fontWeight: 600 }}>Primary Contact</TableCell>
@@ -228,11 +263,13 @@ const ClientsPage: React.FC = () => {
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={10} align="center">Loading...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} align="center">Loading...</TableCell></TableRow>
               ) : clients.length === 0 ? (
-                <TableRow><TableCell colSpan={10} align="center">No clients yet. Click &quot;Add Client&quot; to add one.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} align="center">No clients yet. Click &quot;Add Client&quot; to add one.</TableCell></TableRow>
+              ) : filteredClients.length === 0 ? (
+                <TableRow><TableCell colSpan={11} align="center">No clients match &quot;{search}&quot;.</TableCell></TableRow>
               ) : (
-                clients.map((client) => {
+                filteredClients.map((client) => {
                   const primary = primaryContact(client);
                   const extraCount = (client.contacts?.length ?? 0) - 1;
                   const open = !!expanded[client.id];
@@ -248,6 +285,7 @@ const ClientsPage: React.FC = () => {
                         </TableCell>
                         <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{client.code || '—'}</TableCell>
                         <TableCell>{client.name}</TableCell>
+                        <TableCell>{client.plant || '—'}</TableCell>
                         <TableCell sx={{ whiteSpace: 'pre-line', maxWidth: 280 }}>{client.address || '—'}</TableCell>
                         <TableCell>{client.paymentTerms || '—'}</TableCell>
                         <TableCell>{primary?.name || '—'}</TableCell>
@@ -261,7 +299,7 @@ const ClientsPage: React.FC = () => {
                       </TableRow>
                       {extraCount > 0 && (
                         <TableRow>
-                          <TableCell sx={{ p: 0 }} colSpan={10}>
+                          <TableCell sx={{ p: 0 }} colSpan={11}>
                             <Collapse in={open} unmountOnExit>
                               <Box sx={{ p: 1.5, pl: 6, backgroundColor: '#fafafa' }}>
                                 <Typography variant="caption" color="text.secondary">Other contacts</Typography>
@@ -312,6 +350,18 @@ const ClientsPage: React.FC = () => {
             </Grid>
             <Grid size={{ xs: 12 }}>
               <TextField fullWidth label="Address" value={formData.address} onChange={(e) => updateField('address', e.target.value)} variant="outlined" size="small" multiline rows={2} />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                fullWidth
+                label="Plant / Site"
+                placeholder="e.g. Amkor Biñan Plant"
+                value={formData.plant}
+                onChange={(e) => updateField('plant', e.target.value)}
+                variant="outlined"
+                size="small"
+                helperText="Use the exact same text on every buyer company at this plant so they show up together in the Clients search"
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 8 }}>
               <TextField fullWidth label="Payment Terms" placeholder="e.g. Net 30" value={formData.paymentTerms} onChange={(e) => updateField('paymentTerms', e.target.value)} variant="outlined" size="small" />
