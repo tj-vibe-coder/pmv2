@@ -278,7 +278,7 @@ const ClientsPage: React.FC = () => {
                       <TableRow hover>
                         <TableCell>
                           {extraCount > 0 ? (
-                            <IconButton size="small" onClick={() => toggleExpand(client.id)} title={open ? 'Hide contacts' : `+${extraCount} more contact(s)`}>
+                            <IconButton size="small" onClick={() => toggleExpand(client.id)} title={open ? 'Hide contacts' : `Show all ${client.contacts.length} contacts`}>
                               {open ? <KeyboardArrowDown fontSize="small" /> : <KeyboardArrowRight fontSize="small" />}
                             </IconButton>
                           ) : null}
@@ -302,10 +302,11 @@ const ClientsPage: React.FC = () => {
                           <TableCell sx={{ p: 0 }} colSpan={11}>
                             <Collapse in={open} unmountOnExit>
                               <Box sx={{ p: 1.5, pl: 6, backgroundColor: '#fafafa' }}>
-                                <Typography variant="caption" color="text.secondary">Other contacts</Typography>
+                                <Typography variant="caption" color="text.secondary">All contacts ({client.contacts.length})</Typography>
                                 <Table size="small" sx={{ mt: 1 }}>
                                   <TableHead>
                                     <TableRow>
+                                      <TableCell sx={{ width: 32 }} />
                                       <TableCell sx={{ fontSize: '0.7rem' }}>Name</TableCell>
                                       <TableCell sx={{ fontSize: '0.7rem' }}>Designation</TableCell>
                                       <TableCell sx={{ fontSize: '0.7rem' }}>Email</TableCell>
@@ -313,8 +314,11 @@ const ClientsPage: React.FC = () => {
                                     </TableRow>
                                   </TableHead>
                                   <TableBody>
-                                    {client.contacts.filter((c) => !c.isPrimary).map((c) => (
+                                    {client.contacts.map((c) => (
                                       <TableRow key={c.id}>
+                                        <TableCell sx={{ p: '0 4px' }}>
+                                          {c.isPrimary && <Tooltip title="Primary contact"><Star fontSize="inherit" color="warning" /></Tooltip>}
+                                        </TableCell>
                                         <TableCell sx={{ fontSize: '0.8rem' }}>{c.name}</TableCell>
                                         <TableCell sx={{ fontSize: '0.8rem' }}>{c.position || '—'}</TableCell>
                                         <TableCell sx={{ fontSize: '0.8rem' }}>{c.email || '—'}</TableCell>
