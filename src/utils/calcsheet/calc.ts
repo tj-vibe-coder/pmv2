@@ -150,13 +150,14 @@ export function computeTotals(q: Quotation): QuotationTotals {
   let laborWithContingency: number;
   if (q.servicesFromManpower) {
     if (q.servicesPerLinePricing) {
-      // Per-line pricing: each scope item stores its own amount (auto-computed from
-      // days × team daily rate, or manually entered). laborCost is the raw manpower
-      // cost based on days for margin calculation.
+      // Per-line pricing: each scope item stores its own amount (auto-computed
+      // from QTY × Unit Price, or manually entered). laborCost is the raw cost
+      // basis for margin calculation — QTY × the line's own Unit Price when
+      // set, else the shared team daily rate (same fallback as the editor).
       // Per-line amounts already have EWT baked in at edit time (see
       // CalcsheetQuotationEditor's updateServiceRow), so sum them as-is here.
       const dailyRate = manpowerDailyRate(q.manpower);
-      laborCost = q.services.reduce((s, l) => s + ((l.days || 0) * dailyRate), 0);
+      laborCost = q.services.reduce((s, l) => s + ((l.qty ?? l.days ?? 0) * (l.unitPrice ?? dailyRate)), 0);
       laborWithContingency = laborCost;
       servicesSub = q.services.reduce((s, l) => s + (l.amount || 0), 0);
     } else {
