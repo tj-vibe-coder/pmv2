@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
-  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, IconButton, LinearProgress, MenuItem, Paper, Slider, Stack, TextField,
-  Tooltip, Typography, Table, TableBody, TableCell, TableHead, TableRow,
+  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
+  FormControlLabel, IconButton, LinearProgress, Menu, MenuItem, Paper, Slider, Stack, TextField,
+  ToggleButton, ToggleButtonGroup, Tooltip, Typography, Table, TableBody, TableCell, TableHead, TableRow,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
-import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import PlaylistAddIcon from '@mui/icons-material/PlaylistAdd';
@@ -16,8 +15,8 @@ import HistoryIcon from '@mui/icons-material/History';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
-import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import FormatIndentIncreaseIcon from '@mui/icons-material/FormatIndentIncrease';
 import FormatIndentDecreaseIcon from '@mui/icons-material/FormatIndentDecrease';
 import { useQuotationStore } from '../../store/quotationStore';
@@ -32,6 +31,7 @@ import { exportScheduleXlsx } from '../../utils/calcsheet/scheduleXlsxExport';
 import { exportSchedulePdf } from '../../utils/calcsheet/schedulePdfExport';
 import { autoSchedule, wouldCycle, criticalPath } from '../../utils/calcsheet/scheduleAuto';
 import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../../utils/calcsheet/scheduleTree';
+import MsProjectGantt, { GANTT_GRID_MAX_W, ZOOM_DAY_WIDTH, type GanttZoom } from './MsProjectGantt';
 import {
   SCHEDULE_CATEGORY_COLORS, SCHEDULE_TASK_CATEGORIES, type ScheduleTask,
 } from '../../types/ScheduleTask';
@@ -62,8 +62,6 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
   }
   return res.json();
 }
-
-const DAY_WIDTH = 28;
 
 interface TaskFormState {
   name: string;
@@ -158,6 +156,23 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const [showCritical, setShowCritical] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed summary ids
 
+  // MS Project-style view state: timescale zoom, grid/chart divider, selected
+  // row, right-click menu, and "Scroll to Task" requests.
+  const [zoom, setZoom] = useState<GanttZoom>(() => {
+    try { const v = localStorage.getItem('gantt-zoom'); return v === 'week' || v === 'month' ? v : 'day'; } catch { return 'day'; }
+  });
+  useEffect(() => { try { localStorage.setItem('gantt-zoom', zoom); } catch { /* ignore */ } }, [zoom]);
+  const dayW = ZOOM_DAY_WIDTH[zoom];
+  const dayWRef = useRef(dayW);
+  useEffect(() => { dayWRef.current = dayW; }, [dayW]);
+  const [gridWidth, setGridWidth] = useState<number>(() => {
+    try { const v = Number(localStorage.getItem('gantt-grid-w')); return v >= 160 && v <= GANTT_GRID_MAX_W ? v : 582; } catch { return 582; }
+  });
+  useEffect(() => { try { localStorage.setItem('gantt-grid-w', String(gridWidth)); } catch { /* ignore */ } }, [gridWidth]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; row: TreeRow } | null>(null);
+  const [scrollReq, setScrollReq] = useState<{ id: string; n: number } | null>(null);
+
   // Working-day calendar: durations & auto-scheduling skip weekends. Persisted per project.
   const [workingDays, setWorkingDays] = useState<boolean>(() => {
     try { const v = localStorage.getItem(`gantt-wd-${id}`); return v === null ? true : v === '1'; } catch { return true; }
@@ -216,51 +231,26 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       if (s < min) min = s;
       if (e > max) max = e;
     }
-    // pad a few days either side so bars don't touch the edges
-    min = new Date(min.getTime() - 2 * MS_PER_DAY);
-    max = new Date(max.getTime() + 2 * MS_PER_DAY);
+    // Snap to whole timescale units (weeks, or months when zoomed out) like MS
+    // Project, with a little lead-in so the first bar doesn't touch the edge,
+    // and run the chart out far enough that it never looks cut short.
+    min = new Date(min.getFullYear(), min.getMonth(), min.getDate() - 2);
+    max = new Date(max.getFullYear(), max.getMonth(), max.getDate() + 2);
+    if (zoom === 'month') {
+      min = new Date(min.getFullYear(), min.getMonth(), 1);
+      max = new Date(max.getFullYear(), max.getMonth() + 1, 0);
+    } else {
+      min = new Date(min.getFullYear(), min.getMonth(), min.getDate() - min.getDay());
+      max = new Date(max.getFullYear(), max.getMonth(), max.getDate() + (6 - max.getDay()));
+    }
+    const minDays = Math.ceil(1400 / ZOOM_DAY_WIDTH[zoom]);
+    if (daysBetween(min, max) < minDays) max = new Date(min.getFullYear(), min.getMonth(), min.getDate() + minDays);
     return { start: min, end: max };
-  }, [tasks]);
+  }, [tasks, zoom]);
 
-  const totalDays = Math.max(1, daysBetween(range.start, range.end));
+  const totalDays = Math.max(1, daysBetween(range.start, range.end) + 1);
 
-  const months = useMemo(() => {
-    const out: { label: string; offsetDays: number; days: number }[] = [];
-    let cursor = new Date(range.start.getFullYear(), range.start.getMonth(), 1);
-    if (cursor < range.start) { /* keep as-is, first segment gets clipped below */ }
-    while (cursor <= range.end) {
-      const segStart = cursor > range.start ? cursor : range.start;
-      const nextMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-      const segEnd = nextMonth < range.end ? nextMonth : range.end;
-      out.push({
-        label: cursor.toLocaleDateString(undefined, { month: 'short', year: 'numeric' }),
-        offsetDays: daysBetween(range.start, segStart),
-        days: Math.max(1, daysBetween(segStart, segEnd)),
-      });
-      cursor = nextMonth;
-    }
-    return out;
-  }, [range]);
-
-  // ── Quick-win derived data ──────────────────────────────────────────────
   const todayDate = useMemo(() => toDate(todayStr()), []);
-  // Pixel offset of the "today" line inside the timeline, or null when today
-  // falls outside the visible range.
-  const todayOffset = useMemo(() => {
-    if (todayDate < range.start || todayDate > range.end) return null;
-    return daysBetween(range.start, todayDate) * DAY_WIDTH;
-  }, [todayDate, range]);
-
-  // Weekend day offsets across the range, for column shading.
-  const weekendOffsets = useMemo(() => {
-    const out: number[] = [];
-    for (let i = 0; i < totalDays; i++) {
-      const d = new Date(range.start.getTime() + i * MS_PER_DAY);
-      const dow = d.getDay();
-      if (dow === 0 || dow === 6) out.push(i);
-    }
-    return out;
-  }, [range, totalDays]);
 
   // A dated (non-milestone) task is overdue when its end date has passed and
   // it isn't finished.
@@ -285,25 +275,12 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     });
   }, [rolledTasks, collapsed, milestonesOnly, categoryFilter]);
 
-  // Finish-to-start dependency connectors between visible bars.
-  const depArrows = useMemo(() => {
-    const idxById = new Map(visibleRows.map((r, i) => [r.task.id, i]));
-    const out: { key: string; x1: number; y1: number; x2: number; y2: number; pid: string; sid: string }[] = [];
-    visibleRows.forEach((row, si) => {
-      const s = row.task;
-      (s.predecessors || []).forEach((pid) => {
-        const pi = idxById.get(pid);
-        if (pi === undefined) return;
-        const p = visibleRows[pi].task;
-        const pStartX = daysBetween(range.start, toDate(p.startDate)) * DAY_WIDTH;
-        const x1 = p.isMilestone ? pStartX + DAY_WIDTH : pStartX + Math.max(DAY_WIDTH, (daysBetween(toDate(p.startDate), toDate(p.endDate)) + 1) * DAY_WIDTH);
-        const sStartX = daysBetween(range.start, toDate(s.startDate)) * DAY_WIDTH;
-        const x2 = s.isMilestone ? sStartX + DAY_WIDTH / 2 : sStartX;
-        out.push({ key: `${pid}-${s.id}`, x1, y1: pi * 44 + 22, x2, y2: si * 44 + 22, pid, sid: s.id });
-      });
-    });
-    return out;
-  }, [visibleRows, range]);
+  // MS Project row IDs: position in the fully expanded outline, so they stay
+  // stable when summaries are collapsed or rows are filtered out.
+  const idNumbers = useMemo(
+    () => new Map(flattenTree(rolledTasks, new Set()).map((r, i) => [r.task.id, i + 1])),
+    [rolledTasks],
+  );
 
   // Critical path over LEAF tasks (summaries roll up, aren't scheduled).
   const criticalIds = useMemo(
@@ -708,7 +685,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       const d = dragRef.current;
       if (!d) return;
       const deltaX = e.clientX - d.startX;
-      const offsetDays = Math.round(deltaX / DAY_WIDTH);
+      const offsetDays = Math.round(deltaX / dayWRef.current);
       if (offsetDays === d.offsetDays) return;
       d.offsetDays = offsetDays;
       setTasks((prev) => prev.map((t) => {
@@ -731,8 +708,10 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       if (!d) return;
       const current = tasksRef.current.find((t) => t.id === d.taskId);
       if (!current) return;
+      // A click without movement just selects the row (double-click opens
+      // Task Information), matching MS Project.
       if (d.offsetDays === 0) {
-        openEdit(current);
+        setSelectedId(current.id);
         return;
       }
       // Resizing changes the duration; recompute it from the new dates so it
@@ -919,146 +898,76 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         </Paper>
       )}
 
-      {visibleRows.length > 0 && (
-        <Paper sx={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-          <Box sx={{ display: 'flex', minWidth: 340 + totalDays * DAY_WIDTH }}>
-            {/* Task label column */}
-            <Box sx={{ width: 340, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', position: 'sticky', left: 0, bgcolor: 'background.paper', zIndex: 2 }}>
-              <Box sx={{ height: 48, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', px: 1.5 }}>
-                <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>TASK</Typography>
-              </Box>
-              {visibleRows.map((row) => {
-                const t = row.task;
-                return (
-                  <Box key={t.id} sx={{ height: 44, display: 'flex', alignItems: 'center', pr: 1, borderBottom: '1px solid', borderColor: 'divider', gap: 0.25, pl: `${8 + row.depth * 16}px` }}>
-                    {row.hasChildren ? (
-                      <IconButton size="small" sx={{ p: 0.25 }} onClick={() => toggleCollapse(t.id)}>
-                        {collapsed.has(t.id) ? <KeyboardArrowRightIcon sx={{ fontSize: 18 }} /> : <KeyboardArrowDownIcon sx={{ fontSize: 18 }} />}
-                      </IconButton>
-                    ) : <Box sx={{ width: 22, flexShrink: 0 }} />}
-                    {!row.isSummary && (
-                      <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: SCHEDULE_CATEGORY_COLORS[t.category || 'Other'] || NET_PACIFIC_COLORS.info, flexShrink: 0 }} />
-                    )}
-                    <Tooltip title={isOverdue(t) ? `${t.name} — overdue` : t.name}>
-                      <Typography variant="body2" noWrap sx={{ flex: 1, fontWeight: (row.isSummary || t.isMilestone) ? 700 : 400, color: isOverdue(t) ? 'error.main' : 'inherit' }}>
-                        {t.name}
-                      </Typography>
-                    </Tooltip>
-                    <Tooltip title="Outdent"><IconButton size="small" sx={{ p: 0.25 }} onClick={() => void outdentTask(row)}><FormatIndentDecreaseIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
-                    <Tooltip title="Indent"><IconButton size="small" sx={{ p: 0.25 }} onClick={() => void indentTask(row)}><FormatIndentIncreaseIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
-                    <IconButton size="small" sx={{ p: 0.25 }} onClick={() => openEdit(t)}><EditIcon sx={{ fontSize: 15 }} /></IconButton>
-                    <IconButton size="small" sx={{ p: 0.25 }} onClick={() => setDeleteTarget(t)}><DeleteIcon sx={{ fontSize: 15 }} /></IconButton>
-                  </Box>
-                );
-              })}
-            </Box>
+      {visibleRows.length > 0 && (() => {
+        const selRow = visibleRows.find((r) => r.task.id === selectedId) || null;
+        const tb = { size: 'small' as const, variant: 'text' as const, sx: { minWidth: 0, px: 1, color: 'text.primary', textTransform: 'none' } };
+        return (
+          <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* Ribbon-style task toolbar, acting on the selected row */}
+            <Stack direction="row" alignItems="center" spacing={0.5} sx={{ px: 1, py: 0.5, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#FAFAFA', flexWrap: 'wrap' }} useFlexGap>
+              <Button {...tb} startIcon={<FormatIndentDecreaseIcon />} disabled={!selRow || !selRow.task.parentId} onClick={() => selRow && void outdentTask(selRow)}>Outdent</Button>
+              <Button {...tb} startIcon={<FormatIndentIncreaseIcon />} disabled={!selRow} onClick={() => selRow && void indentTask(selRow)}>Indent</Button>
+              <Divider orientation="vertical" flexItem />
+              <Button {...tb} startIcon={<InfoOutlinedIcon />} disabled={!selRow} onClick={() => selRow && openEdit(tasks.find((t) => t.id === selRow.task.id) || selRow.task)}>Information</Button>
+              <Button {...tb} startIcon={<CenterFocusStrongIcon />} disabled={!selRow} onClick={() => selRow && setScrollReq((p) => ({ id: selRow.task.id, n: (p?.n ?? 0) + 1 }))}>Scroll to Task</Button>
+              <Button {...tb} startIcon={<DeleteIcon />} disabled={!selRow} onClick={() => selRow && setDeleteTarget(tasks.find((t) => t.id === selRow.task.id) || selRow.task)}>Delete</Button>
+              <Box sx={{ flexGrow: 1 }} />
+              <Typography variant="caption" color="text.secondary" sx={{ mr: 1, display: { xs: 'none', xl: 'block' } }}>
+                Double-click a task to edit · right-click for more
+              </Typography>
+              <ToggleButtonGroup
+                size="small" exclusive value={zoom}
+                onChange={(_, v: GanttZoom | null) => { if (v) setZoom(v); }}
+                sx={{ '& .MuiToggleButton-root': { py: 0.25, px: 1.25, textTransform: 'none', fontSize: 12 } }}
+              >
+                <ToggleButton value="day">Days</ToggleButton>
+                <ToggleButton value="week">Weeks</ToggleButton>
+                <ToggleButton value="month">Months</ToggleButton>
+              </ToggleButtonGroup>
+            </Stack>
+            <MsProjectGantt
+              rows={visibleRows}
+              idNumbers={idNumbers}
+              range={range}
+              totalDays={totalDays}
+              zoom={zoom}
+              workingDays={workingDays}
+              criticalIds={criticalIds}
+              isOverdue={isOverdue}
+              collapsed={collapsed}
+              onToggleCollapse={toggleCollapse}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onOpen={(t) => openEdit(tasks.find((x) => x.id === t.id) || t)}
+              onRowContextMenu={(e, row) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, row }); }}
+              onBarMouseDown={startDrag}
+              draggingTaskId={draggingTaskId}
+              gridWidth={gridWidth}
+              onGridWidthChange={setGridWidth}
+              scrollRequest={scrollReq}
+            />
+          </Paper>
+        );
+      })()}
 
-            {/* Timeline */}
-            <Box sx={{ position: 'relative' }}>
-              {/* Weekend shading (behind the rows) */}
-              {weekendOffsets.map((d) => (
-                <Box key={`we-${d}`} sx={{ position: 'absolute', top: 48, left: d * DAY_WIDTH, width: DAY_WIDTH, height: visibleRows.length * 44, bgcolor: 'rgba(0,0,0,0.035)', pointerEvents: 'none', zIndex: 0 }} />
-              ))}
-              {/* Today marker (on top, non-interactive) */}
-              {todayOffset !== null && (
-                <Box sx={{ position: 'absolute', top: 0, left: todayOffset, width: 2, height: 48 + visibleRows.length * 44, bgcolor: NET_PACIFIC_COLORS.error, pointerEvents: 'none', zIndex: 3 }}>
-                  <Box sx={{ position: 'absolute', top: 2, left: 3, px: 0.5, borderRadius: 0.5, bgcolor: NET_PACIFIC_COLORS.error, color: '#fff', fontSize: '0.6rem', fontWeight: 700, lineHeight: 1.4, whiteSpace: 'nowrap' }}>
-                    Today
-                  </Box>
-                </Box>
-              )}
-              {/* Dependency connectors (finish-to-start) */}
-              {depArrows.length > 0 && (
-                <svg
-                  style={{ position: 'absolute', top: 48, left: 0, width: totalDays * DAY_WIDTH, height: visibleRows.length * 44, pointerEvents: 'none', zIndex: 2, overflow: 'visible' }}
-                >
-                  <defs>
-                    <marker id="depArrowHead" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
-                      <path d="M0,0 L6,3 L0,6 Z" fill="#8a8a8a" />
-                    </marker>
-                    <marker id="depArrowHeadCrit" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
-                      <path d="M0,0 L6,3 L0,6 Z" fill="#d32f2f" />
-                    </marker>
-                  </defs>
-                  {depArrows.map((a) => {
-                    const crit = criticalIds.has(a.pid) && criticalIds.has(a.sid);
-                    return (
-                      <path
-                        key={a.key}
-                        d={`M ${a.x1} ${a.y1} H ${a.x1 + 8} V ${a.y2} H ${a.x2}`}
-                        fill="none" stroke={crit ? '#d32f2f' : '#8a8a8a'} strokeWidth={crit ? 2 : 1.5}
-                        markerEnd={crit ? 'url(#depArrowHeadCrit)' : 'url(#depArrowHead)'}
-                      />
-                    );
-                  })}
-                </svg>
-              )}
-              <Box sx={{ display: 'flex', height: 48, borderBottom: '1px solid', borderColor: 'divider', position: 'relative', zIndex: 1 }}>
-                {months.map((m, i) => (
-                  <Box key={i} sx={{ width: m.days * DAY_WIDTH, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>{m.label}</Typography>
-                  </Box>
-                ))}
-              </Box>
-              {visibleRows.map((row) => {
-                const t = row.task;
-                const offset = daysBetween(range.start, toDate(t.startDate)) * DAY_WIDTH;
-                const width = Math.max(DAY_WIDTH, (daysBetween(toDate(t.startDate), toDate(t.endDate)) + 1) * DAY_WIDTH);
-                const overdue = isOverdue(t);
-                const color = overdue ? '#e53935' : (SCHEDULE_CATEGORY_COLORS[t.category || 'Other'] || NET_PACIFIC_COLORS.info);
-                const critical = criticalIds.has(t.id);
-                const isDragging = draggingTaskId === t.id;
-                return (
-                  <Box key={t.id} sx={{ height: 44, position: 'relative', borderBottom: '1px solid', borderColor: 'divider' }}>
-                    {row.isSummary ? (
-                      <Tooltip title={`${t.name} — ${fmt(toDate(t.startDate))} to ${fmt(toDate(t.endDate))} (${t.progressPct}%)`}>
-                        <Box sx={{ position: 'absolute', left: offset, top: 17, width, height: 10, bgcolor: '#616161', borderRadius: 0.5, overflow: 'hidden' }}>
-                          <Box sx={{ height: '100%', width: `${Math.min(100, Math.max(0, t.progressPct))}%`, bgcolor: '#2f2f2f' }} />
-                        </Box>
-                      </Tooltip>
-                    ) : t.isMilestone ? (
-                      <Tooltip title={isDragging ? '' : `${t.name} — ${fmt(toDate(t.startDate))} · drag to move`}>
-                        <Box
-                          onMouseDown={(e) => startDrag(e, t, 'move')}
-                          sx={{
-                            position: 'absolute', left: offset + DAY_WIDTH / 2 - 7, top: 12, width: 14, height: 14,
-                            bgcolor: color, transform: 'rotate(45deg)', cursor: isDragging ? 'grabbing' : 'grab',
-                            boxShadow: critical ? '0 0 0 2px #d32f2f' : isDragging ? '0 0 0 3px rgba(0,0,0,0.15)' : 'none',
-                          }}
-                        />
-                      </Tooltip>
-                    ) : (
-                      <Tooltip title={isDragging ? '' : `${t.name} — ${fmt(toDate(t.startDate))} to ${fmt(toDate(t.endDate))} (${t.progressPct}%) · drag to move, edge to resize`}>
-                        <Box
-                          onMouseDown={(e) => startDrag(e, t, 'move')}
-                          sx={{
-                            position: 'absolute', left: offset, top: 10, width, height: 24, borderRadius: 1,
-                            bgcolor: `${color}33`, border: critical ? '2px solid #d32f2f' : `1px solid ${color}`, cursor: isDragging ? 'grabbing' : 'grab',
-                            overflow: 'hidden',
-                            boxShadow: isDragging ? '0 0 0 2px rgba(0,0,0,0.15)' : 'none',
-                          }}
-                        >
-                          <Box sx={{ height: '100%', width: `${Math.min(100, Math.max(0, t.progressPct))}%`, bgcolor: color }} />
-                          <Box
-                            onMouseDown={(e) => startDrag(e, t, 'resize')}
-                            sx={{
-                              position: 'absolute', right: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              '&:hover > div, &:active > div': { opacity: 1 },
-                            }}
-                          >
-                            <Box sx={{ width: 2, height: '60%', bgcolor: color, opacity: 0, borderRadius: 1 }} />
-                          </Box>
-                        </Box>
-                      </Tooltip>
-                    )}
-                  </Box>
-                );
-              })}
-            </Box>
-          </Box>
-        </Paper>
-      )}
+      <Menu
+        open={!!ctxMenu}
+        onClose={() => setCtxMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={ctxMenu ? { top: ctxMenu.y, left: ctxMenu.x } : undefined}
+        slotProps={{ list: { dense: true } }}
+      >
+        {ctxMenu && [
+          <MenuItem key="info" onClick={() => { const r = ctxMenu.row; setCtxMenu(null); openEdit(tasks.find((t) => t.id === r.task.id) || r.task); }}>Information…</MenuItem>,
+          <MenuItem key="scroll" onClick={() => { const r = ctxMenu.row; setCtxMenu(null); setScrollReq((p) => ({ id: r.task.id, n: (p?.n ?? 0) + 1 })); }}>Scroll to Task</MenuItem>,
+          <Divider key="d1" />,
+          <MenuItem key="insert" onClick={() => { setCtxMenu(null); openAdd(); }}>Insert Task</MenuItem>,
+          <MenuItem key="indent" onClick={() => { const r = ctxMenu.row; setCtxMenu(null); void indentTask(r); }}>Indent Task</MenuItem>,
+          <MenuItem key="outdent" disabled={!ctxMenu.row.task.parentId} onClick={() => { const r = ctxMenu.row; setCtxMenu(null); void outdentTask(r); }}>Outdent Task</MenuItem>,
+          <Divider key="d2" />,
+          <MenuItem key="delete" sx={{ color: 'error.main' }} onClick={() => { const r = ctxMenu.row; setCtxMenu(null); setDeleteTarget(tasks.find((t) => t.id === r.task.id) || r.task); }}>Delete Task</MenuItem>,
+        ]}
+      </Menu>
 
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>{editingId ? 'Edit Task' : 'Add Task'}</DialogTitle>
