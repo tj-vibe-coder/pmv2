@@ -23,6 +23,8 @@ import KeyboardIcon from '@mui/icons-material/Keyboard';
 import SearchIcon from '@mui/icons-material/Search';
 import FormatIndentIncreaseIcon from '@mui/icons-material/FormatIndentIncrease';
 import FormatIndentDecreaseIcon from '@mui/icons-material/FormatIndentDecrease';
+import FlagIcon from '@mui/icons-material/Flag';
+import OutlinedFlagIcon from '@mui/icons-material/OutlinedFlag';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { ServiceLine, Quotation } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
@@ -38,6 +40,7 @@ import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../
 import { durationWeight, leafWeights, projectPercent } from '../../utils/calcsheet/scheduleWeights';
 import MsProjectGantt, { GANTT_GRID_MAX_W, ZOOM_DAY_WIDTH, type GanttZoom } from './MsProjectGantt';
 import ScheduleSCurve from './ScheduleSCurve';
+import { baselineFromVersion, finishVariance, matchBaseline, varianceLabel, type ScheduleBaseline } from '../../utils/calcsheet/scheduleBaseline';
 import type { SCurveSnapshot } from '../../utils/calcsheet/scheduleSCurve';
 import {
   SCHEDULE_CATEGORY_COLORS, SCHEDULE_TASK_CATEGORIES, TASK_HIGHLIGHTS, type ScheduleTask, type TaskHighlight,
@@ -151,6 +154,8 @@ interface ScheduleVersion {
   label: string | null;
   taskCount: number;
   overallProgress: number;
+  /** The project's baseline (at most one) — see utils/calcsheet/scheduleBaseline. */
+  isBaseline?: boolean;
 }
 
 interface DiffRow {
@@ -277,6 +282,25 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const [compareTasks, setCompareTasks] = useState<ScheduleTask[]>([]);
   const [compareLoading, setCompareLoading] = useState(false);
 
+  // Baseline: the version flagged isBaseline, shown as grey bars + variance.
+  const [baseline, setBaseline] = useState<ScheduleBaseline | null>(null);
+  const [showBaseline, setShowBaseline] = useState<boolean>(() => {
+    try { return localStorage.getItem('gantt-show-baseline') !== '0'; } catch { return true; }
+  });
+  useEffect(() => { try { localStorage.setItem('gantt-show-baseline', showBaseline ? '1' : '0'); } catch { /* ignore */ } }, [showBaseline]);
+  const [saveAsBaseline, setSaveAsBaseline] = useState(false);
+  const loadBaseline = async () => {
+    if (!id) return;
+    try {
+      const r = await api<{ success: boolean; versions: ScheduleVersion[] }>('GET', `/api/schedule-versions?projectId=${encodeURIComponent(id)}`);
+      const b = (r.versions || []).find((v) => v.isBaseline);
+      if (!b) { setBaseline(null); return; }
+      const d = await api<{ success: boolean; version: ScheduleVersion & { tasks?: ScheduleTask[] } }>('GET', `/api/schedule-versions/${b.id}`);
+      setBaseline(baselineFromVersion(d.version));
+    } catch { /* baseline is optional — the Gantt works without it */ }
+  };
+  useEffect(() => { void loadBaseline(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const load = () => {
     if (!id) return;
     setLoading(true);
@@ -344,6 +368,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   // WBS: summary tasks carry rolled-up dates/progress; rows are the flattened
   // tree (respecting collapse) after the category / milestones-only filters.
   const rolledTasks = useMemo(() => rollUp(tasks), [tasks]);
+  const baselineMap = useMemo(() => matchBaseline(rolledTasks, baseline), [rolledTasks, baseline]);
   const visibleRows = useMemo(() => {
     const rows = flattenTree(rolledTasks, collapsed);
     return rows.filter((r) => {
@@ -409,6 +434,15 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       overdue,
     };
   }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Baseline finish vs current finish (project level).
+  const baselineSummary = useMemo(() => {
+    if (!baseline || !summary) return null;
+    const leaves = leafTasks(baseline.tasks);
+    if (leaves.length === 0) return null;
+    const end = leaves.reduce((m, t) => (t.endDate > m ? t.endDate : m), leaves[0].endDate);
+    return { end, variance: finishVariance(summary.end, end, workingDays) };
+  }, [baseline, summary, workingDays]);
 
   // Each task's share of project progress (%), phases = sum of their tasks.
   const weightInfo = useMemo(() => {
@@ -950,6 +984,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         workingDays,
         criticalIds: showCritical ? criticalIds : undefined,
         snapshots,
+        baseline: showBaseline ? baseline : null,
       });
     } catch (e) {
       setExportErr(e instanceof Error ? e.message : 'PDF export failed');
@@ -962,9 +997,10 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const saveVersion = async () => {
     setSavingVer(true);
     try {
-      await api('POST', '/api/schedule-versions', { projectId: id, label: verLabel.trim() || undefined });
+      await api('POST', '/api/schedule-versions', { projectId: id, label: verLabel.trim() || undefined, baseline: saveAsBaseline || undefined });
       setSaveVerOpen(false);
       setVerLabel('');
+      if (saveAsBaseline) { setShowBaseline(true); await loadBaseline(); }
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to save version');
     } finally {
@@ -1001,12 +1037,31 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     }
   };
 
+  const toggleBaseline = async (v: ScheduleVersion) => {
+    const on = !v.isBaseline;
+    if (on && versions.some((x) => x.isBaseline)) {
+      // eslint-disable-next-line no-alert
+      if (!window.confirm('Replace the current baseline with this version?')) return;
+    }
+    try {
+      await api('POST', `/api/schedule-versions/${v.id}/baseline`, { on });
+      setVersions((prev) => prev.map((x) => ({ ...x, isBaseline: on ? x.id === v.id : x.id === v.id ? false : x.isBaseline })));
+      if (on) setShowBaseline(true);
+      await loadBaseline();
+    } catch (e) {
+      setHistoryErr(e instanceof Error ? e.message : 'Failed to set baseline');
+    }
+  };
+
   const deleteVersion = async (v: ScheduleVersion) => {
     // eslint-disable-next-line no-alert
-    if (!window.confirm('Permanently delete this saved version? This cannot be undone.')) return;
+    if (!window.confirm(v.isBaseline
+      ? 'This version is the baseline — deleting it removes the baseline too. Permanently delete it?'
+      : 'Permanently delete this saved version? This cannot be undone.')) return;
     try {
       await api('DELETE', `/api/schedule-versions/${v.id}`);
       setVersions((prev) => prev.filter((x) => x.id !== v.id));
+      if (v.isBaseline) setBaseline(null);
     } catch (e) {
       setHistoryErr(e instanceof Error ? e.message : 'Delete failed');
     }
@@ -1165,7 +1220,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             History
           </Button>
           <Button
-            variant="outlined" startIcon={<SaveIcon />} onClick={() => { setVerLabel(''); setSaveVerOpen(true); }}
+            variant="outlined" startIcon={<SaveIcon />} onClick={() => { setVerLabel(''); setSaveAsBaseline(false); setSaveVerOpen(true); }}
             disabled={sorted.length === 0}
           >
             Save version
@@ -1224,6 +1279,32 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 sx={{ height: 8, borderRadius: 4, mt: 0.5, '& .MuiLinearProgress-bar': { bgcolor: NET_PACIFIC_COLORS.success } }}
               />
             </Box>
+            {baselineSummary ? (
+              <>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Baseline finish</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{fmt(toDate(baselineSummary.end))}</Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Finish variance</Typography>
+                  <Typography
+                    variant="body2"
+                    sx={{ fontWeight: 600, color: baselineSummary.variance > 0 ? 'error.main' : baselineSummary.variance < 0 ? 'success.main' : 'text.primary' }}
+                  >
+                    {varianceLabel(baselineSummary.variance)}{baselineSummary.variance > 0 ? ' late' : baselineSummary.variance < 0 ? ' early' : ''}
+                  </Typography>
+                </Box>
+              </>
+            ) : (
+              <Tooltip title="Freeze the current plan as the baseline to track slippage against it">
+                <Button
+                  size="small" startIcon={<OutlinedFlagIcon />}
+                  onClick={() => { setVerLabel('Baseline'); setSaveAsBaseline(true); setSaveVerOpen(true); }}
+                >
+                  Set baseline
+                </Button>
+              </Tooltip>
+            )}
             <Box>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Overdue</Typography>
               <Chip
@@ -1277,6 +1358,13 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               label={<Typography variant="body2">Critical path</Typography>}
             />
           </Tooltip>
+          <Tooltip title={baseline ? `Grey bars show the baseline${baseline.label ? ` “${baseline.label}”` : ''} saved ${new Date(baseline.savedAt).toLocaleDateString()}` : 'No baseline yet — use Set baseline, or History → Set as baseline'}>
+            <FormControlLabel
+              disabled={!baseline}
+              control={<Checkbox size="small" checked={!!baseline && showBaseline} onChange={(e) => setShowBaseline(e.target.checked)} />}
+              label={<Typography variant="body2">Baseline</Typography>}
+            />
+          </Tooltip>
           <FormControlLabel
             control={<Checkbox size="small" checked={milestonesOnly} onChange={(e) => setMilestonesOnly(e.target.checked)} />}
             label={<Typography variant="body2">Milestones only</Typography>}
@@ -1304,7 +1392,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       )}
 
       {view === 'scurve' && sorted.length > 0 && (
-        <ScheduleSCurve tasks={tasks} workingDays={workingDays} loadSnapshots={loadSnapshots} />
+        <ScheduleSCurve tasks={tasks} workingDays={workingDays} loadSnapshots={loadSnapshots} baselineTasks={showBaseline ? baseline?.tasks : undefined} />
       )}
 
       {view === 'gantt' && visibleRows.length > 0 && (() => {
@@ -1379,6 +1467,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               </ToggleButtonGroup>
             </Stack>
             <MsProjectGantt
+              baseline={showBaseline && baseline ? baselineMap : null}
               rows={visibleRows}
               idNumbers={idNumbers}
               range={range}
@@ -1845,7 +1934,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
 
       {/* Save version dialog */}
       <Dialog open={saveVerOpen} onClose={() => !savingVer && setSaveVerOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>Save schedule version</DialogTitle>
+        <DialogTitle>{saveAsBaseline ? 'Set baseline' : 'Save schedule version'}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Freezes the current schedule ({sorted.length} task{sorted.length === 1 ? '' : 's'}) as a named version you can restore later.
@@ -1857,11 +1946,21 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             onChange={(e) => setVerLabel(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void saveVersion(); }}
           />
+          <FormControlLabel
+            sx={{ mt: 1 }}
+            control={<Checkbox size="small" checked={saveAsBaseline} onChange={(e) => setSaveAsBaseline(e.target.checked)} />}
+            label={<Typography variant="body2">Set as the baseline</Typography>}
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 4 }}>
+            {baseline
+              ? `Replaces the current baseline (saved ${new Date(baseline.savedAt).toLocaleDateString()}).`
+              : 'The baseline is the reference plan — it stays put while the schedule changes.'}
+          </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSaveVerOpen(false)} disabled={savingVer}>Cancel</Button>
           <Button variant="contained" onClick={() => void saveVersion()} disabled={savingVer} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>
-            {savingVer ? 'Saving…' : 'Save version'}
+            {savingVer ? 'Saving…' : saveAsBaseline ? 'Set baseline' : 'Save version'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1903,10 +2002,14 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                       {v.label && (
                         <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>“{v.label}”</Typography>
                       )}
+                      {v.isBaseline && <Chip size="small" icon={<FlagIcon />} label="Baseline" color="primary" variant="outlined" sx={{ ml: 1, height: 20 }} />}
                     </TableCell>
                     <TableCell align="right">{v.taskCount}</TableCell>
                     <TableCell align="right">{v.overallProgress}%</TableCell>
                     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                      <Button size="small" startIcon={v.isBaseline ? <FlagIcon /> : <OutlinedFlagIcon />} onClick={() => void toggleBaseline(v)}>
+                        {v.isBaseline ? 'Clear baseline' : 'Set as baseline'}
+                      </Button>
                       <Button size="small" startIcon={<CompareArrowsIcon />} onClick={() => void openCompare(v)}>
                         Compare
                       </Button>

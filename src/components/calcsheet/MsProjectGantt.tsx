@@ -10,6 +10,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import { TASK_HIGHLIGHTS, type ScheduleTask } from '../../types/ScheduleTask';
 import type { TreeRow } from '../../utils/calcsheet/scheduleTree';
+import { finishVariance, varianceLabel } from '../../utils/calcsheet/scheduleBaseline';
 import { daysBetween, durationOf, toDate, todayStr, workingDaysBetween } from '../../utils/calcsheet/scheduleDates';
 import { dayAt, mspDate, timescaleTiers, type GanttZoom, type TimescaleSeg } from '../../utils/calcsheet/scheduleTimescale';
 
@@ -48,6 +49,9 @@ const MSP = {
   nonWorking: '#EFEFEF',
   today: '#E07B00',
   splitter: '#E4E4E4',
+  baseline: '#A6A6A6',
+  late: '#C00000',
+  early: '#2E7D32',
 };
 
 interface Col { key: string; label: ReactNode; w: number; align?: 'left' | 'right' | 'center' }
@@ -64,7 +68,13 @@ const COLS: Col[] = [
   { key: 'wt', label: 'Weight', w: 66, align: 'right' },
   { key: 'cat', label: 'Category', w: 110 },
 ];
-export const GANTT_GRID_MAX_W = COLS.reduce((sum, c) => sum + c.w, 0);
+// With a baseline shown: Baseline Finish + Finish Variance after Finish.
+const BASELINE_COLS: Col[] = [
+  { key: 'bfin', label: 'Baseline Finish', w: 104 },
+  { key: 'fvar', label: 'Finish Var.', w: 76, align: 'right' },
+];
+const COLS_WITH_BASELINE: Col[] = COLS.flatMap((c) => (c.key === 'finish' ? [c, ...BASELINE_COLS] : [c]));
+export const GANTT_GRID_MAX_W = COLS_WITH_BASELINE.reduce((sum, c) => sum + c.w, 0);
 
 export interface MsProjectGanttProps {
   rows: TreeRow[];
@@ -103,14 +113,23 @@ export interface MsProjectGanttProps {
   onGridWidthChange: (w: number) => void;
   /** Bump `n` to scroll the timeline to task `id` (MS Project's "Scroll to Task"). */
   scrollRequest: { id: string; n: number } | null;
+  /** Task id → its baseline task. When set, grey baseline bars and the
+   *  Baseline Finish / Finish Var. columns are shown. */
+  baseline?: Map<string, ScheduleTask> | null;
 }
 
 export default function MsProjectGantt({
   rows, idNumbers, range, totalDays, zoom, workingDays, criticalIds, isOverdue,
   collapsed, onToggleCollapse, selectedId, selectedIds, onSelect, onOpen, onRowContextMenu, onReorder, weightShare, weightMode,
   filterHits, searchQuery, revealRequest,
-  onBarMouseDown, draggingTaskId, gridWidth, onGridWidthChange, scrollRequest,
+  onBarMouseDown, draggingTaskId, gridWidth, onGridWidthChange, scrollRequest, baseline,
 }: MsProjectGanttProps) {
+  const cols = baseline ? COLS_WITH_BASELINE : COLS;
+  const colX = cols.reduce((s, c) => s + c.w, 0);
+  const gridW = Math.min(gridWidth, colX);
+  // With a baseline, the task bar sits higher to make room for the grey bar.
+  const barTop = baseline ? 4 : BAR_TOP;
+  const barH = baseline ? 10 : BAR_H;
   const dayW = ZOOM_DAY_WIDTH[zoom];
   const timelineW = totalDays * dayW;
   const bodyH = rows.length * GANTT_ROW_H;
@@ -163,7 +182,7 @@ export default function MsProjectGantt({
         const inset = s.isMilestone ? 0 : Math.min(5, sg.width / 2);
         let d: string;
         if (sX + inset >= x1 + 2) {
-          const yEnd = down ? si * GANTT_ROW_H + BAR_TOP - 1 : si * GANTT_ROW_H + BAR_TOP + BAR_H + 1;
+          const yEnd = down ? si * GANTT_ROW_H + barTop - 1 : si * GANTT_ROW_H + barTop + barH + 1;
           d = `M ${x1} ${y1} H ${sX + inset} V ${yEnd}`;
         } else {
           const mid = (down ? pi + 1 : pi) * GANTT_ROW_H;
@@ -174,7 +193,7 @@ export default function MsProjectGantt({
       });
     });
     return out;
-  }, [rows, range, dayW, criticalIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows, range, dayW, criticalIds, barTop, barH]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!scrollRequest || !scrollRef.current) return;
@@ -244,14 +263,14 @@ export default function MsProjectGantt({
   useEffect(() => {
     if (!splitDrag) return undefined;
     const move = (e: MouseEvent) => {
-      const next = Math.min(GANTT_GRID_MAX_W, Math.max(160, splitDrag.w + e.clientX - splitDrag.x));
+      const next = Math.min(colX, Math.max(160, splitDrag.w + e.clientX - splitDrag.x));
       onGridWidthChange(next);
     };
     const up = () => { setSplitDrag(null); document.body.style.userSelect = ''; document.body.style.cursor = ''; };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
-  }, [splitDrag, onGridWidthChange]);
+  }, [splitDrag, onGridWidthChange, colX]);
 
   const durationLabel = (row: TreeRow) => {
     const t = row.task;
@@ -313,6 +332,20 @@ export default function MsProjectGantt({
       case 'dur': return <Box component="span" sx={{ fontWeight: row.isSummary ? 700 : 400 }}>{durationLabel(row)}</Box>;
       case 'start': return <Box component="span" sx={{ fontWeight: row.isSummary ? 700 : 400 }}>{mspDate(t.startDate)}</Box>;
       case 'finish': return <Box component="span" sx={{ fontWeight: row.isSummary ? 700 : 400 }}>{mspDate(t.endDate)}</Box>;
+      case 'bfin': {
+        const b = baseline?.get(t.id);
+        return b ? <Box component="span" sx={{ fontWeight: row.isSummary ? 700 : 400 }}>{mspDate(b.endDate)}</Box> : '';
+      }
+      case 'fvar': {
+        const b = baseline?.get(t.id);
+        if (!b) return '';
+        const v = finishVariance(t.endDate, b.endDate, workingDays);
+        return (
+          <Box component="span" sx={{ fontWeight: row.isSummary ? 700 : 400, color: v > 0 ? MSP.late : v < 0 ? MSP.early : MSP.text }}>
+            {varianceLabel(v)}
+          </Box>
+        );
+      }
       case 'pred': return (t.predecessors || []).map((p) => idNumbers.get(p)).filter((n) => n != null).join(',');
       case 'mp': return !row.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? String(t.manpower) : '';
       case 'pct': return `${Math.round(t.progressPct || 0)}%`;
@@ -352,9 +385,32 @@ export default function MsProjectGantt({
       <Box>Duration: {durationLabel(row)}</Box>
       <Box>Complete: {Math.round(t.progressPct || 0)}%</Box>
       {!row.isSummary && <Box>Mode: {t.mode === 'manual' ? 'Manually scheduled' : 'Auto scheduled'}</Box>}
+      {(() => {
+        const b = baseline?.get(t.id);
+        if (!b) return null;
+        const v = finishVariance(t.endDate, b.endDate, workingDays);
+        return (
+          <Box sx={{ mt: 0.5 }}>
+            <Box>Baseline: {mspDate(b.startDate)} – {mspDate(b.endDate)}</Box>
+            <Box>Finish variance: {varianceLabel(v)}</Box>
+          </Box>
+        );
+      })()}
       {!row.isSummary && draggingTaskId === null && <Box sx={{ opacity: 0.75, mt: 0.5 }}>Drag to move · drag right edge to change duration</Box>}
     </Box>
   );
+
+  // Thin grey bar under the task: where the baseline had it (MS Project's
+  // Tracking Gantt). Milestones get a small hollow diamond.
+  const renderBaseline = (row: TreeRow) => {
+    const b = baseline?.get(row.task.id);
+    if (!b) return null;
+    const { left, width } = barGeom(b);
+    if (b.isMilestone && !row.isSummary) {
+      return <Box sx={{ position: 'absolute', left: left + dayW / 2 - 4, top: GANTT_ROW_H - 9, width: 7, height: 7, border: `1px solid ${MSP.baseline}`, bgcolor: '#fff', transform: 'rotate(45deg)', pointerEvents: 'none' }} />;
+    }
+    return <Box sx={{ position: 'absolute', left, width, top: barTop + barH + 2, height: 4, bgcolor: MSP.baseline, pointerEvents: 'none' }} />;
+  };
 
   const renderBar = (row: TreeRow) => {
     const t = row.task;
@@ -365,7 +421,7 @@ export default function MsProjectGantt({
     if (row.isSummary) {
       return (
         <Tooltip title={tipFor(t, row)} followCursor>
-          <Box sx={{ position: 'absolute', left, width, top: BAR_TOP, height: BAR_H + 2 }}>
+          <Box sx={{ position: 'absolute', left, width, top: barTop, height: barH + 2 }}>
             <Box sx={{ position: 'absolute', left: 0, right: 0, top: 1, height: 5, bgcolor: MSP.summary }} />
             <Box sx={{ position: 'absolute', left: 0, top: 6, width: 0, height: 0, borderTop: `6px solid ${MSP.summary}`, borderRight: '5px solid transparent' }} />
             <Box sx={{ position: 'absolute', right: 0, top: 6, width: 0, height: 0, borderTop: `6px solid ${MSP.summary}`, borderLeft: '5px solid transparent' }} />
@@ -383,7 +439,7 @@ export default function MsProjectGantt({
               onMouseDown={(e) => onBarMouseDown(e, t, 'move')}
               onDoubleClick={() => onOpen(t)}
               sx={{
-                position: 'absolute', left: cx - 6, top: BAR_TOP, width: 12, height: 12,
+                position: 'absolute', left: cx - 6, top: barTop - (baseline ? 1 : 0), width: 12, height: 12,
                 bgcolor: crit ? MSP.critProgress : MSP.summary, transform: 'rotate(45deg) scale(0.85)',
                 cursor: dragging ? 'grabbing' : 'grab',
               }}
@@ -407,7 +463,7 @@ export default function MsProjectGantt({
             onMouseDown={(e) => onBarMouseDown(e, t, 'move')}
             onDoubleClick={() => onOpen(t)}
             sx={{
-              position: 'absolute', left, width, top: BAR_TOP, height: BAR_H, boxSizing: 'border-box',
+              position: 'absolute', left, width, top: barTop, height: barH, boxSizing: 'border-box',
               bgcolor: fill, border: `1px solid ${edge}`,
               cursor: dragging ? 'grabbing' : 'grab',
               boxShadow: dragging ? '0 0 0 2px rgba(0,0,0,0.15)' : 'none',
@@ -418,7 +474,7 @@ export default function MsProjectGantt({
             )}
             <Box
               onMouseDown={(e) => onBarMouseDown(e, t, 'resize')}
-              sx={{ position: 'absolute', right: -3, top: -2, width: 8, height: BAR_H + 2, cursor: 'ew-resize' }}
+              sx={{ position: 'absolute', right: -3, top: -2, width: 8, height: barH + 2, cursor: 'ew-resize' }}
             />
           </Box>
         </Tooltip>
@@ -431,18 +487,16 @@ export default function MsProjectGantt({
     );
   };
 
-  const colX = COLS.reduce((s, c) => s + c.w, 0);
-
   return (
     <Box
       ref={scrollRef}
       sx={{ flex: 1, overflow: 'auto', position: 'relative', bgcolor: '#fff', border: `1px solid ${MSP.border}`, fontFamily: MSP.font, color: MSP.text, fontSize: 12, userSelect: 'none' }}
     >
-      <Box sx={{ display: 'flex', width: gridWidth + SPLITTER_W + timelineW, minHeight: '100%' }}>
+      <Box sx={{ display: 'flex', width: gridW + SPLITTER_W + timelineW, minHeight: '100%' }}>
         {/* ── Entry table (grid) ───────────────────────────────────────── */}
-        <Box sx={{ position: 'sticky', left: 0, zIndex: 3, width: gridWidth, flexShrink: 0, overflow: 'clip', bgcolor: '#fff' }}>
+        <Box sx={{ position: 'sticky', left: 0, zIndex: 3, width: gridW, flexShrink: 0, overflow: 'clip', bgcolor: '#fff' }}>
           <Box sx={{ position: 'sticky', top: 0, zIndex: 1, height: HEADER_H, width: colX, bgcolor: MSP.headerBg, borderBottom: `1px solid ${MSP.border}`, display: 'flex' }}>
-            {COLS.map((c) => (
+            {cols.map((c) => (
               <Box
                 key={c.key}
                 sx={{
@@ -479,7 +533,7 @@ export default function MsProjectGantt({
                   ...dropLine(row.task.id),
                 }}
               >
-                {COLS.map((c) => (
+                {cols.map((c) => (
                   <Box
                     key={c.key}
                     sx={{
@@ -508,10 +562,10 @@ export default function MsProjectGantt({
             e.preventDefault();
             document.body.style.userSelect = 'none';
             document.body.style.cursor = 'col-resize';
-            setSplitDrag({ x: e.clientX, w: gridWidth });
+            setSplitDrag({ x: e.clientX, w: gridW });
           }}
           sx={{
-            position: 'sticky', left: gridWidth, zIndex: 4, width: SPLITTER_W, flexShrink: 0, cursor: 'col-resize',
+            position: 'sticky', left: gridW, zIndex: 4, width: SPLITTER_W, flexShrink: 0, cursor: 'col-resize',
             bgcolor: MSP.splitter, borderLeft: `1px solid ${MSP.border}`, borderRight: `1px solid ${MSP.border}`, boxSizing: 'border-box',
           }}
         />
@@ -551,6 +605,7 @@ export default function MsProjectGantt({
                   } : {}),
                 }}
               >
+                {renderBaseline(row)}
                 {renderBar(row)}
               </Box>
             ))}

@@ -6,6 +6,8 @@ import { daysBetween, durationOf, toDate, todayStr, workingDaysBetween } from '.
 import { dayAt, mspDate, snapRange, timescaleTiers, type GanttZoom, type TimescaleSeg } from './scheduleTimescale';
 import { computeSCurve, type SCurveSnapshot } from './scheduleSCurve';
 import { leafWeights, projectPercent } from './scheduleWeights';
+import { finishVariance, matchBaseline, varianceLabel, type ScheduleBaseline } from './scheduleBaseline';
+import { leafTasks } from './scheduleTree';
 
 type ScheduleProjectRef = { code?: string; name?: string };
 
@@ -46,6 +48,10 @@ const C = {
   planned: '#2c5aa0',
   actual: '#eb6834',
   manpower: '#5F8FD1',
+  baseline: '#A6A6A6',
+  baselineCurve: '#8C8C8C',
+  late: '#C00000',
+  early: '#2E7D32',
   grid: '#E6E6E6',
 };
 
@@ -61,8 +67,10 @@ const COLS: Col[] = [
   { key: 'pct', label: '% Comp.', w: 36, align: 'right' },
   { key: 'wt', label: 'Weight', w: 38, align: 'right' },
 ];
-const TABLE_W = COLS.reduce((s, c) => s + c.w, 0);
-const CHART_W = PAGE_W - MARGIN * 2 - TABLE_W;
+// With a baseline: Baseline Finish + Finish Variance after Finish.
+const COLS_WITH_BASELINE: Col[] = COLS.flatMap((c) => (c.key === 'finish'
+  ? [c, { key: 'bfin', label: 'Baseline Fin.', w: 58 }, { key: 'fvar', label: 'Var.', w: 40, align: 'right' as const }]
+  : [c]));
 
 // Helvetica averages ~0.52em per character; trim with an ellipsis so a long
 // value can't wrap and push the row taller than the page allows.
@@ -76,12 +84,20 @@ interface ExportOptions {
   criticalIds?: Set<string>;
   /** Saved versions as dated status snapshots (S-Curve actual points). */
   snapshots?: SCurveSnapshot[];
+  /** When set: grey baseline bars, Baseline Finish / Var. columns, baseline curve. */
+  baseline?: ScheduleBaseline | null;
 }
 
 function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; rows: TreeRow[]; opts: ExportOptions }) {
   const crit = opts.criticalIds ?? new Set<string>();
   const leaves = rows.filter((r) => !r.isSummary).map((r) => r.task);
-  const spanTasks = leaves.length ? leaves : rows.map((r) => r.task);
+  const bmap = matchBaseline(rows.map((r) => r.task), opts.baseline ?? null);
+  const hasBaseline = bmap.size > 0;
+  const baseLeaves = hasBaseline && opts.baseline ? leafTasks(opts.baseline.tasks) : [];
+  const COLS_NOW = hasBaseline ? COLS_WITH_BASELINE : COLS;
+  const TABLE_W = COLS_NOW.reduce((sum, c) => sum + c.w, 0);
+  const CHART_W = PAGE_W - MARGIN * 2 - TABLE_W;
+  const spanTasks = [...(leaves.length ? leaves : rows.map((r) => r.task)), ...baseLeaves];
 
   let rawStart = toDate(todayStr());
   let rawEnd = new Date(rawStart.getFullYear(), rawStart.getMonth(), rawStart.getDate() + 13);
@@ -100,7 +116,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
   const dayW = CHART_W / totalDays;
   const tiers = timescaleTiers(zoom, range.start, totalDays, dayW);
 
-  const sc = computeSCurve(rows.map((r) => r.task), opts.workingDays, opts.snapshots ?? []);
+  const sc = computeSCurve(rows.map((r) => r.task), opts.workingDays, opts.snapshots ?? [], hasBaseline && opts.baseline ? opts.baseline.tasks : undefined);
 
   const bodyAvail = PAGE_H - MARGIN * 2 - HEADER_H - FOOTER_H - TIER_H * 2 - 6;
   const rowH = Math.min(MAX_ROW_H, bodyAvail / Math.max(1, rows.length));
@@ -153,6 +169,8 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
       case 'dur': return durLabel(r);
       case 'start': return mspDate(t.startDate);
       case 'finish': return mspDate(t.endDate);
+      case 'bfin': { const b = bmap.get(t.id); return b ? mspDate(b.endDate) : ''; }
+      case 'fvar': { const b = bmap.get(t.id); return b ? varianceLabel(finishVariance(t.endDate, b.endDate, opts.workingDays)) : ''; }
       case 'pred': return fit((t.predecessors || []).map((p) => idNum.get(p)).filter((n) => n != null).join(','), c.w, fs);
       case 'mp': return !r.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? String(t.manpower) : '';
       case 'pct': return `${Math.round(t.progressPct || 0)}%`;
@@ -161,9 +179,18 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
     }
   };
 
+  const varColor = (r: TreeRow) => {
+    const b = bmap.get(r.task.id);
+    const v = b ? finishVariance(r.task.endDate, b.endDate, opts.workingDays) : 0;
+    return v > 0 ? C.late : v < 0 ? C.early : C.text;
+  };
+
   // Finish-to-start links, routed like the on-screen chart.
-  const barTop = rowH * 0.25;
-  const barH = rowH * 0.5;
+  // With a baseline the task bar moves up to make room for the grey bar below.
+  const barTop = hasBaseline ? rowH * 0.16 : rowH * 0.25;
+  const barH = hasBaseline ? rowH * 0.46 : rowH * 0.5;
+  const baseTop = barTop + barH + rowH * 0.06;
+  const baseH = rowH * 0.16;
   const links: { d: string; crit: boolean; ex: number; ey: number; dir: 'down' | 'up' | 'right' }[] = [];
   const idx = new Map(rows.map((r, i) => [r.task.id, i]));
   rows.forEach((row, si) => {
@@ -235,6 +262,10 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                   ['Start', mspDate(pStart)],
                   ['Finish', mspDate(pEnd)],
                   ['Duration', `${workingDaysBetween(pStart, pEnd, opts.workingDays)} days`],
+                  ...(hasBaseline ? (() => {
+                    const bEnd = baseLeaves.reduce((m, t) => (t.endDate > m ? t.endDate : m), baseLeaves[0].endDate);
+                    return [['Baseline Finish', mspDate(bEnd)], ['Finish Var.', varianceLabel(finishVariance(pEnd, bEnd, opts.workingDays))]];
+                  })() : []),
                   ['% Complete', `${pct}%`],
                   ['Weighting', wMode === 'manual' ? 'Manual weights' : 'By duration'],
                   ['Tasks', String(leaves.length)],
@@ -252,7 +283,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
           <View style={{ flexDirection: 'row', borderWidth: 0.5, borderColor: C.border }}>
             <View style={{ width: TABLE_W, borderRightWidth: 1, borderColor: '#9E9E9E' }}>
               <View style={{ height: TIER_H * 2, flexDirection: 'row', backgroundColor: C.headerBg, borderBottomWidth: 0.5, borderColor: C.border }}>
-                {COLS.map((c) => (
+                {COLS_NOW.map((c) => (
                   <View key={c.key} style={{ width: c.w, borderRightWidth: 0.5, borderColor: C.border, justifyContent: 'center', paddingHorizontal: 2.5 }}>
                     <Text style={{ fontSize: 7, textAlign: c.align === 'right' ? 'right' : 'left' }}>{c.key === 'id' ? '' : c.label}</Text>
                   </View>
@@ -260,7 +291,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
               </View>
               {rows.map((r) => (
                 <View key={r.task.id} style={{ height: rowH, flexDirection: 'row', borderBottomWidth: 0.4, borderColor: C.border }}>
-                  {COLS.map((c) => (
+                  {COLS_NOW.map((c) => (
                     <View
                       key={c.key}
                       style={{
@@ -273,7 +304,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                         style={{
                           fontSize: fs, textAlign: c.align === 'right' ? 'right' : 'left',
                           fontFamily: r.isSummary && c.key !== 'id' && c.key !== 'pred' && c.key !== 'pct' ? 'Helvetica-Bold' : 'Helvetica',
-                          color: c.key === 'id' ? C.sub : C.text,
+                          color: c.key === 'id' ? C.sub : c.key === 'fvar' ? varColor(r) : C.text,
                         }}
                       >
                         {cellText(r, c)}
@@ -290,6 +321,19 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
               <View style={{ position: 'relative', height: bodyH }}>
                 <Svg width={CHART_W} height={bodyH} style={{ position: 'absolute', top: 0, left: 0 }}>
                   {nonWorking.map((d) => <Rect key={`nw${d}`} x={d * dayW} y={0} width={dayW} height={bodyH} fill={C.nonWorking} />)}
+                  {hasBaseline && rows.map((r, i) => {
+                    const b = bmap.get(r.task.id);
+                    if (!b) return null;
+                    const g = barGeom(b);
+                    const y = i * rowH + baseTop;
+                    if (b.isMilestone && !r.isSummary) {
+                      const cx = g.left + dayW / 2;
+                      const m = baseH * 1.1;
+                      const cy = y + baseH / 2;
+                      return <Polygon key={`bl${r.task.id}`} points={`${cx},${cy - m} ${cx + m},${cy} ${cx},${cy + m} ${cx - m},${cy}`} fill="#ffffff" stroke={C.baseline} strokeWidth={0.5} />;
+                    }
+                    return <Rect key={`bl${r.task.id}`} x={g.left} y={y} width={g.width} height={baseH} fill={C.baseline} />;
+                  })}
                   {rows.map((r, i) => {
                     const t = r.task;
                     const { left, width } = barGeom(t);
@@ -298,7 +342,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                     if (r.isSummary) {
                       const th = rowH * 0.2;
                       const tw = Math.min(width / 2, rowH * 0.32);
-                      const top = y + rowH * 0.3;
+                      const top = y + (hasBaseline ? rowH * 0.14 : rowH * 0.3);
                       return (
                         <Path
                           key={t.id}
@@ -309,8 +353,8 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                     }
                     if (t.isMilestone) {
                       const cx = left + dayW / 2;
-                      const cy = y + rowH / 2;
-                      const m = rowH * 0.3;
+                      const cy = hasBaseline ? y + barTop + barH / 2 : y + rowH / 2;
+                      const m = hasBaseline ? rowH * 0.26 : rowH * 0.3;
                       return <Polygon key={t.id} points={`${cx},${cy - m} ${cx + m},${cy} ${cx},${cy + m} ${cx - m},${cy}`} fill={isCrit ? C.critProgress : C.summary} />;
                     }
                     const p = Math.min(100, Math.max(0, t.progressPct || 0));
@@ -361,6 +405,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
               { key: 'sum', label: 'Summary', sw: <Path d="M 0 2 H 22 V 8 L 19 5 H 3 L 0 8 Z" fill={C.summary} /> },
               { key: 'ms', label: 'Milestone', sw: <Polygon points="11,1 15,5 11,9 7,5" fill={C.summary} /> },
               ...(rows.some((r) => !r.isSummary && r.task.mode === 'manual') ? [{ key: 'man', label: 'Manual task', sw: <Rect x={0} y={2} width={22} height={6} fill={C.manualBar} stroke={C.manualEdge} strokeWidth={0.5} /> }] : []),
+              ...(hasBaseline ? [{ key: 'base', label: 'Baseline', sw: <Rect x={0} y={3.5} width={22} height={3} fill={C.baseline} /> }] : []),
               ...(crit.size > 0 ? [{ key: 'crit', label: 'Critical', sw: <Rect x={0} y={2} width={22} height={6} fill={C.critBar} stroke={C.critEdge} strokeWidth={0.5} /> }] : []),
             ].map((it) => (
               <View key={it.key} style={{ flexDirection: 'row', alignItems: 'center', marginRight: 18 }}>
@@ -382,10 +427,14 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
         const yOf = (pv: number) => SC_PAD + (1 - pv / 100) * (plotH - SC_PAD - 2);
         const first = sc.daily[0];
         const plannedD = [`M ${x0(first.date)} ${yOf(0)}`, ...sc.daily.map((d) => `L ${xEnd(d.date)} ${yOf(d.plannedPct)}`)].join(' ');
+        const baselineD = sc.hasBaseline
+          ? [`M ${x0(first.date)} ${yOf(0)}`, ...sc.daily.map((d) => `L ${xEnd(d.date)} ${yOf(d.baselinePct ?? 0)}`)].join(' ')
+          : null;
         const actual = sc.actualPoints.map((a) => ({ x: xEnd(a.date), y: yOf(a.pct), pct: a.pct }));
         const actualD = actual.map((a, i) => `${i ? 'L' : 'M'} ${a.x} ${a.y}`).join(' ');
         const lastA = actual[actual.length - 1];
-        const variance = sc.actualToday - sc.plannedToday;
+        const vsBaseline = sc.hasBaseline && sc.baselineToday != null;
+        const variance = sc.actualToday - (vsBaseline ? (sc.baselineToday as number) : sc.plannedToday);
         const tX = today >= range.start && today <= range.end ? daysBetween(range.start, today) * scDayW + scDayW / 2 : null;
         const maxPax = Math.max(1, ...sc.daily.map((d) => d.pax));
         const paxTicks = Array.from(new Set([0, Math.round(maxPax / 2), maxPax]));
@@ -393,8 +442,9 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
         const pctTicks = [0, 25, 50, 75, 100];
         const kpis: [string, string][] = [
           ['Planned to date', `${sc.plannedToday.toFixed(1)}%`],
+          ...(sc.hasBaseline && sc.baselineToday != null ? [['Baseline to date', `${sc.baselineToday.toFixed(1)}%`] as [string, string]] : []),
           ['Actual to date', `${sc.actualToday.toFixed(1)}%`],
-          ['Variance', `${variance > 0 ? '+' : ''}${variance.toFixed(1)} pts ${Math.abs(variance) < 0.5 ? '(on plan)' : variance > 0 ? '(ahead)' : '(behind)'}`],
+          [vsBaseline ? 'Variance vs baseline' : 'Variance', `${variance > 0 ? '+' : ''}${variance.toFixed(1)} pts ${Math.abs(variance) < 0.5 ? '(on plan)' : variance > 0 ? '(ahead)' : '(behind)'}`],
           ...(sc.hasManpower ? [
             ['Peak manpower', sc.peak ? `${sc.peak.pax} · ${mspDate(sc.peak.date)}` : '—'] as [string, string],
           ] : []),
@@ -429,6 +479,8 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
               <View style={{ height: SC_LEGEND_H, flexDirection: 'row', alignItems: 'center' }}>
                 <Svg width={18} height={6}><Line x1={0} y1={3} x2={18} y2={3} stroke={C.planned} strokeWidth={1.8} /></Svg>
                 <Text style={{ fontSize: 8, marginLeft: 4, marginRight: 16 }}>Planned</Text>
+                {sc.hasBaseline && <Svg width={18} height={6}><Line x1={0} y1={3} x2={18} y2={3} stroke={C.baselineCurve} strokeWidth={1.8} strokeDasharray="4,2.5" /></Svg>}
+                {sc.hasBaseline && <Text style={{ fontSize: 8, marginLeft: 4, marginRight: 16 }}>Baseline</Text>}
                 <Svg width={18} height={6}>
                   <Line x1={0} y1={3} x2={18} y2={3} stroke={C.actual} strokeWidth={1.8} />
                   <Circle cx={9} cy={3} r={2.4} fill={C.actual} />
@@ -452,6 +504,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                   <Svg width={SC_PLOT_W} height={plotH} style={{ position: 'absolute', top: 0, left: 0 }}>
                     {pctTicks.map((v) => <Line key={v} x1={0} y1={yOf(v)} x2={SC_PLOT_W} y2={yOf(v)} stroke={C.grid} strokeWidth={0.6} />)}
                     {tX !== null && <Line x1={tX} y1={0} x2={tX} y2={plotH} stroke={C.today} strokeWidth={0.8} strokeDasharray="3,2" />}
+                    {baselineD && <Path d={baselineD} fill="none" stroke={C.baselineCurve} strokeWidth={1.8} strokeDasharray="4,2.5" />}
                     <Path d={plannedD} fill="none" stroke={C.planned} strokeWidth={1.8} />
                     {actual.length > 1 && <Path d={actualD} fill="none" stroke={C.actual} strokeWidth={1.8} />}
                     {actual.map((a, i) => <Circle key={i} cx={a.x} cy={a.y} r={3} fill={C.actual} stroke="#ffffff" strokeWidth={1} />)}
