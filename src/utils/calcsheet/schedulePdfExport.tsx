@@ -1,6 +1,6 @@
 import { Document, Page, Text, View, Svg, Rect, Polygon, Path, Line, Circle, pdf } from '@react-pdf/renderer';
 import { saveAs } from 'file-saver';
-import type { ScheduleTask } from '../../types/ScheduleTask';
+import { TASK_HIGHLIGHTS, type ScheduleTask } from '../../types/ScheduleTask';
 import type { TreeRow } from './scheduleTree';
 import { daysBetween, durationOf, toDate, todayStr, workingDaysBetween } from './scheduleDates';
 import { dayAt, mspDate, snapRange, timescaleTiers, type GanttZoom, type TimescaleSeg } from './scheduleTimescale';
@@ -35,6 +35,9 @@ const C = {
   critBar: '#F4A3A3',
   critEdge: '#D65C5C',
   critProgress: '#9C0006',
+  manualBar: '#8FD3CB',
+  manualEdge: '#2E9C8F',
+  manualProgress: '#14665C',
   summary: '#262626',
   link: '#4472C4',
   critLink: '#C00000',
@@ -105,10 +108,13 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
   const bodyH = rows.length * rowH;
 
   const idNum = new Map(rows.map((r, i) => [r.task.id, i + 1]));
-  const barGeom = (t: ScheduleTask) => ({
-    left: daysBetween(range.start, toDate(t.startDate)) * dayW,
-    width: Math.max(dayW, durationOf(t.startDate, t.endDate) * dayW),
-  });
+  const barGeom = (t: ScheduleTask) => {
+    const half = t.startDate === t.endDate && !t.isMilestone && t.durationDays != null && t.durationDays > 0 && t.durationDays < 1;
+    return {
+      left: daysBetween(range.start, toDate(t.startDate)) * dayW,
+      width: half ? Math.max(1, t.durationDays! * dayW) : Math.max(dayW, durationOf(t.startDate, t.endDate) * dayW),
+    };
+  };
   const durLabel = (r: TreeRow) => {
     if (r.task.isMilestone && !r.isSummary) return '0 days';
     const n = r.isSummary || r.task.durationDays == null
@@ -260,7 +266,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                       style={{
                         width: c.w, borderRightWidth: 0.4, borderColor: C.border, justifyContent: 'center', overflow: 'hidden',
                         paddingHorizontal: 2.5, paddingLeft: c.key === 'name' ? 2.5 + r.depth * fs * 1.2 : 2.5,
-                        backgroundColor: c.key === 'id' ? C.headerBg : undefined,
+                        backgroundColor: c.key === 'id' ? C.headerBg : r.task.highlight ? TASK_HIGHLIGHTS[r.task.highlight] : undefined,
                       }}
                     >
                       <Text
@@ -309,9 +315,10 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                     }
                     const p = Math.min(100, Math.max(0, t.progressPct || 0));
                     const ph = barH * 0.36;
+                    const manual = t.mode === 'manual';
                     return [
-                      <Rect key={`${t.id}b`} x={left} y={y + barTop} width={width} height={barH} fill={isCrit ? C.critBar : C.bar} stroke={isCrit ? C.critEdge : C.barEdge} strokeWidth={0.5} />,
-                      p > 0 ? <Rect key={`${t.id}p`} x={left} y={y + barTop + (barH - ph) / 2} width={(width * p) / 100} height={ph} fill={isCrit ? C.critProgress : C.progress} /> : null,
+                      <Rect key={`${t.id}b`} x={left} y={y + barTop} width={width} height={barH} fill={isCrit ? C.critBar : manual ? C.manualBar : C.bar} stroke={isCrit ? C.critEdge : manual ? C.manualEdge : C.barEdge} strokeWidth={0.5} />,
+                      p > 0 ? <Rect key={`${t.id}p`} x={left} y={y + barTop + (barH - ph) / 2} width={(width * p) / 100} height={ph} fill={isCrit ? C.critProgress : manual ? C.manualProgress : C.progress} /> : null,
                     ];
                   })}
                   {links.map((l, i) => {
@@ -353,6 +360,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
               { key: 'prog', label: 'Progress', sw: <Rect x={0} y={3.9} width={22} height={2.2} fill={C.progress} /> },
               { key: 'sum', label: 'Summary', sw: <Path d="M 0 2 H 22 V 8 L 19 5 H 3 L 0 8 Z" fill={C.summary} /> },
               { key: 'ms', label: 'Milestone', sw: <Polygon points="11,1 15,5 11,9 7,5" fill={C.summary} /> },
+              ...(rows.some((r) => !r.isSummary && r.task.mode === 'manual') ? [{ key: 'man', label: 'Manual task', sw: <Rect x={0} y={2} width={22} height={6} fill={C.manualBar} stroke={C.manualEdge} strokeWidth={0.5} /> }] : []),
               ...(crit.size > 0 ? [{ key: 'crit', label: 'Critical', sw: <Rect x={0} y={2} width={22} height={6} fill={C.critBar} stroke={C.critEdge} strokeWidth={0.5} /> }] : []),
             ].map((it) => (
               <View key={it.key} style={{ flexDirection: 'row', alignItems: 'center', marginRight: 18 }}>

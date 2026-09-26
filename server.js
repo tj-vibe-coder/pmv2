@@ -4051,7 +4051,10 @@ function scheduleTasksOverallProgress(tasks) {
     } else {
       const start = new Date(t.startDate).getTime();
       const end = new Date(t.endDate).getTime();
-      w = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
+      const dd = Number(t.durationDays);
+      w = t.isMilestone || !(end >= start) ? 1
+        : dd > 0 && dd < 1 ? dd // half-day task
+          : Math.max(1, Math.round((end - start) / 86400000) + 1);
     }
     weighted += (Number(t.progressPct) || 0) * w;
     weight += w;
