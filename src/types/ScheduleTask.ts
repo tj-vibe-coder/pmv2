@@ -27,6 +27,11 @@ export interface ScheduleTask {
    *  project/phase % complete weigh each task by weight ÷ total instead of by
    *  duration; see utils/calcsheet/scheduleWeights. Leaf tasks only. */
   weight?: number;
+  /** MS Project task mode. 'auto' (default): dates follow predecessors.
+   *  'manual': the entered start/finish stand — predecessors never move it. */
+  mode?: 'auto' | 'manual';
+  /** Row highlight colour (MS Project "Text Highlight"); null/absent = none. */
+  highlight?: TaskHighlight | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -52,3 +57,15 @@ export const SCHEDULE_CATEGORY_COLORS: Record<string, string> = {
   Commissioning: '#fdcb6e',
   Other: '#8e8e93',
 };
+
+// Row highlight colours for the Gantt table (and the PDF export).
+export const TASK_HIGHLIGHTS = {
+  yellow: '#FFF59D',
+  green: '#C8E6C9',
+  blue: '#BBDEFB',
+  orange: '#FFE0B2',
+  red: '#FFCDD2',
+  purple: '#E1BEE7',
+} as const;
+
+export type TaskHighlight = keyof typeof TASK_HIGHLIGHTS;

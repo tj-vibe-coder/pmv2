@@ -4051,7 +4051,10 @@ function scheduleTasksOverallProgress(tasks) {
     } else {
       const start = new Date(t.startDate).getTime();
       const end = new Date(t.endDate).getTime();
-      w = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
+      const dd = Number(t.durationDays);
+      w = t.isMilestone || !(end >= start) ? 1
+        : dd > 0 && dd < 1 ? dd // half-day task
+          : Math.max(1, Math.round((end - start) / 86400000) + 1);
     }
     weighted += (Number(t.progressPct) || 0) * w;
     weight += w;
@@ -4077,6 +4080,21 @@ async function snapshotScheduleVersion(projectId, label, savedBy) {
   const ref = await db.collection('calcsheet_schedule_versions').add(doc);
   const { tasks: _t, ...meta } = doc;
   return { ...meta, id: ref.id };
+}
+
+// Make one version the project's baseline (MS Project "Set Baseline") — at most
+// one per project, so any other flagged version is cleared. versionId null
+// clears the baseline.
+async function setScheduleBaseline(projectId, versionId) {
+  const snap = await db.collection('calcsheet_schedule_versions').where('projectId', '==', String(projectId)).get();
+  const now = new Date().toISOString();
+  const batch = db.batch();
+  snap.docs.forEach((dd) => {
+    const on = dd.id === versionId;
+    if (on) batch.update(dd.ref, { isBaseline: true, baselineSetAt: now });
+    else if (dd.data().isBaseline) batch.update(dd.ref, { isBaseline: false });
+  });
+  await batch.commit();
 }
 
 // ── Projects ─────────────────────────────────────────────────────────────────
@@ -4601,9 +4619,13 @@ app.post('/api/schedule-versions', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    const { projectId, label } = req.body || {};
+    const { projectId, label, baseline } = req.body || {};
     if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
     const version = await snapshotScheduleVersion(projectId, label, user.full_name || user.username || null);
+    if (baseline === true) {
+      await setScheduleBaseline(projectId, version.id);
+      version.isBaseline = true;
+    }
     res.json({ success: true, version });
   } catch (err) {
     console.error('Error saving schedule version:', err);
@@ -4672,6 +4694,22 @@ app.post('/api/schedule-versions/:id/restore', async (req, res) => {
   } catch (err) {
     console.error('Error restoring schedule version:', err);
     res.status(500).json({ success: false, error: 'Failed to restore schedule version' });
+  }
+});
+
+// Set (on: true) or clear (on: false) an existing version as the baseline.
+app.post('/api/schedule-versions/:id/baseline', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const vdoc = await db.collection('calcsheet_schedule_versions').doc(req.params.id).get();
+    if (!vdoc.exists) return res.status(404).json({ success: false, error: 'Version not found' });
+    const on = !(req.body && req.body.on === false);
+    await setScheduleBaseline(vdoc.data().projectId, on ? vdoc.id : null);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error setting schedule baseline:', err);
+    res.status(500).json({ success: false, error: 'Failed to set baseline' });
   }
 });
 

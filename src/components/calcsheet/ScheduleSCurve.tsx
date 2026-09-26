@@ -17,6 +17,8 @@ import { mspDate } from '../../utils/calcsheet/scheduleTimescale';
 const PLANNED = '#2c5aa0';
 const ACTUAL = '#eb6834';
 const MANPOWER = '#5F8FD1';
+// Baseline = the reference plan: neutral grey, dashed (never colour alone).
+const BASELINE = '#8C8C8C';
 const TODAY = '#E07B00';
 const GRID = '#ECECEC';
 const AXIS_W = 52;
@@ -27,12 +29,14 @@ interface Props {
   workingDays: boolean;
   /** Saved schedule versions as dated status snapshots (actual-progress points). */
   loadSnapshots: () => Promise<SCurveSnapshot[]>;
+  /** The saved baseline's tasks — adds a dashed baseline curve. */
+  baselineTasks?: ScheduleTask[];
 }
 
 const pct = (n: number | undefined) => (n == null ? '—' : `${n.toFixed(1)}%`);
 const num = (n: number) => (Math.round(n * 10) / 10).toLocaleString();
 
-export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Props) {
+export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots, baselineTasks }: Props) {
   const [snapshots, setSnapshots] = useState<SCurveSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -48,7 +52,7 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
     return () => { alive = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const data = useMemo(() => computeSCurve(tasks, workingDays, snapshots), [tasks, workingDays, snapshots]);
+  const data = useMemo(() => computeSCurve(tasks, workingDays, snapshots, baselineTasks), [tasks, workingDays, snapshots, baselineTasks]);
 
   if (!data) {
     return (
@@ -60,7 +64,10 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
 
   const labelOf = new Map(data.buckets.map((b) => [b.key, b.label]));
   const periodOf = (b: SCurveBucket) => (data.granularity === 'week' ? `Week of ${mspDate(b.start)}` : mspDate(b.start));
-  const variance = data.actualToday - data.plannedToday;
+  // With a baseline, slippage is measured against it — re-planning the
+  // current schedule must not hide that the project is behind.
+  const vsBaseline = data.hasBaseline && data.baselineToday != null;
+  const variance = data.actualToday - (vsBaseline ? (data.baselineToday as number) : data.plannedToday);
   const varianceTone = Math.abs(variance) < 0.5 ? 'on' : variance > 0 ? 'ahead' : 'behind';
   const actualPoints = data.buckets.filter((b) => b.actualPct != null).length;
 
@@ -71,6 +78,7 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
       <Paper variant="outlined" sx={{ px: 1.25, py: 0.75, fontSize: 12, lineHeight: 1.6 }}>
         <Box sx={{ fontWeight: 700 }}>{periodOf(b)}</Box>
         <Box>Planned % complete: <b>{pct(b.plannedPct)}</b></Box>
+        {data.hasBaseline && <Box>Baseline % complete: <b>{pct(b.baselinePct)}</b></Box>}
         <Box>Actual % complete: <b>{pct(b.actualPct)}</b></Box>
         {data.hasManpower && (
           <Box>Manpower: <b>{num(b.manpower)}/day{data.granularity === 'week' ? ' avg' : ''}</b>{data.granularity === 'week' && b.peak > 0 ? ` · peak ${num(b.peak)}` : ''}</Box>
@@ -99,6 +107,7 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
       <Stack direction="row" spacing={4} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
         {[
           { label: 'Planned % complete', value: pct(data.plannedToday), sub: 'as of today' },
+          ...(data.hasBaseline ? [{ label: 'Baseline % complete', value: pct(data.baselineToday ?? undefined), sub: 'as of today' }] : []),
           { label: 'Actual % complete', value: pct(data.actualToday), sub: 'as of today' },
         ].map((k) => (
           <Box key={k.label}>
@@ -108,14 +117,14 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
           </Box>
         ))}
         <Box>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Variance</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Variance{vsBaseline ? ' vs baseline' : ''}</Typography>
           <Stack direction="row" spacing={0.5} alignItems="center"
             sx={{ color: varianceTone === 'behind' ? 'error.main' : varianceTone === 'ahead' ? 'success.main' : 'text.primary' }}>
             {varianceTone === 'behind' ? <TrendingDownIcon fontSize="small" /> : varianceTone === 'ahead' ? <TrendingUpIcon fontSize="small" /> : <TrendingFlatIcon fontSize="small" />}
             <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3 }}>
               {variance > 0 ? '+' : ''}{variance.toFixed(1)} pts
             </Typography>
-            <Typography variant="body2">{varianceTone === 'behind' ? 'Behind' : varianceTone === 'ahead' ? 'Ahead' : 'On plan'}</Typography>
+            <Typography variant="body2">{varianceTone === 'behind' ? 'Behind' : varianceTone === 'ahead' ? 'Ahead' : vsBaseline ? 'On baseline' : 'On plan'}</Typography>
           </Stack>
         </Box>
         {data.hasManpower && (
@@ -142,6 +151,9 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
           <Tooltip content={tip} cursor={{ stroke: '#9E9E9E', strokeWidth: 1 }} />
           <Legend verticalAlign="top" align="right" height={24} iconType="plainline" wrapperStyle={{ fontSize: 12 }} />
           {today}
+          {data.hasBaseline && (
+            <Line name="Baseline" type="monotone" dataKey="baselinePct" stroke={BASELINE} strokeWidth={2} strokeDasharray="6 4" dot={false} isAnimationActive={false} />
+          )}
           <Line name="Planned" type="monotone" dataKey="plannedPct" stroke={PLANNED} strokeWidth={2} dot={false} isAnimationActive={false} />
           <Line name="Actual" type="linear" dataKey="actualPct" stroke={ACTUAL} strokeWidth={2} connectNulls
             dot={{ r: 4, fill: ACTUAL, stroke: '#fff', strokeWidth: 2 }} activeDot={{ r: 5 }} isAnimationActive={false} />
@@ -177,6 +189,7 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
             <TableRow>
               <TableCell>{data.granularity === 'week' ? 'Week of' : 'Date'}</TableCell>
               <TableCell align="right">Planned % complete</TableCell>
+              {data.hasBaseline && <TableCell align="right">Baseline % complete</TableCell>}
               <TableCell align="right">Actual % complete</TableCell>
               {data.hasManpower && <TableCell align="right">Manpower (per day{data.granularity === 'week' ? ' avg' : ''})</TableCell>}
               {data.hasManpower && data.granularity === 'week' && <TableCell align="right">Peak</TableCell>}
@@ -187,6 +200,7 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
               <TableRow key={b.key} selected={b.key === data.todayKey}>
                 <TableCell>{mspDate(b.start)}</TableCell>
                 <TableCell align="right">{pct(b.plannedPct)}</TableCell>
+                {data.hasBaseline && <TableCell align="right">{pct(b.baselinePct)}</TableCell>}
                 <TableCell align="right">{pct(b.actualPct)}</TableCell>
                 {data.hasManpower && <TableCell align="right">{num(b.manpower)}</TableCell>}
                 {data.hasManpower && data.granularity === 'week' && <TableCell align="right">{num(b.peak)}</TableCell>}

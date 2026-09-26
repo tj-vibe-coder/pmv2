@@ -10,7 +10,7 @@ import { durationOf } from './scheduleDates';
 //     weight (any unit — %, cost, man-hours); leaves left without one count 0.
 //     A task's share is weight ÷ total, so weights needn't sum to exactly 100.
 //   • Duration (default): with no weights entered, each leaf counts by its
-//     duration in calendar days (milestones count 1).
+//     duration in calendar days (milestones count 1, half-day tasks 0.5).
 //
 // Only leaf tasks carry weight; a phase's weight is the sum of its tasks'.
 
@@ -23,7 +23,10 @@ function leavesOf(tasks: ScheduleTask[]): ScheduleTask[] {
 }
 
 export function durationWeight(t: ScheduleTask): number {
-  return t.isMilestone ? 1 : Math.max(1, durationOf(t.startDate, t.endDate));
+  if (t.isMilestone) return 1;
+  // A half-day task weighs half a day; otherwise the calendar-day span.
+  if (t.durationDays != null && t.durationDays > 0 && t.durationDays < 1) return t.durationDays;
+  return Math.max(1, durationOf(t.startDate, t.endDate));
 }
 
 export function manualWeight(t: ScheduleTask): number {
