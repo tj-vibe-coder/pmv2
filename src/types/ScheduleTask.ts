@@ -26,6 +26,10 @@ export interface ScheduleTask {
    *  Man-days = manpower × working days; drives the S-Curve weighting and the
    *  manpower histogram. Unset/0 = no labor (e.g. procurement lead time). */
   manpower?: number;
+  /** Crew composition by role (e.g. 2 Electrician + 1 PLC Engineer). When
+   *  set, `manpower` is kept equal to its total; the manpower chart can split
+   *  headcount by role. */
+  crew?: CrewMember[];
   /** Progress weight (any unit — %, cost, man-hours). Once any task has one,
    *  project/phase % complete weigh each task by weight ÷ total instead of by
    *  duration; see utils/calcsheet/scheduleWeights. Leaf tasks only. */
@@ -38,6 +42,16 @@ export interface ScheduleTask {
   createdAt?: string;
   updatedAt?: string;
 }
+
+export interface CrewMember { role: string; qty: number }
+
+/** Suggested crew roles (free text is allowed too). */
+export const CREW_ROLES = [
+  'Electrician', 'Technician', 'PLC Engineer', 'Controls Engineer', 'Instrumentation Tech', 'Supervisor',
+  'Foreman', 'Helper', 'Welder', 'Fitter', 'Safety Officer', 'Project Engineer',
+] as const;
+
+export const crewTotal = (crew?: CrewMember[]) => (crew || []).reduce((sum, c) => sum + Math.max(0, Number(c.qty) || 0), 0);
 
 /** MS Project dependency types: Finish-to-Start, Start-to-Start, Finish-to-Finish, Start-to-Finish. */
 export type LinkType = 'FS' | 'SS' | 'FF' | 'SF';

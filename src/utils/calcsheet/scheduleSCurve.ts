@@ -24,6 +24,8 @@ export interface SCurveBucket {
   manpower: number;    // average pax per working day in the bucket
   peak: number;        // peak pax on any single day in the bucket
   manDays: number;     // internal: headcount summed over the bucket's days (for the average)
+  /** Headcount per role (same basis as `manpower`: per day, or weekly average). */
+  byRole: Record<string, number>;
 }
 
 export interface SCurveSnapshot { date: string; tasks: ScheduleTask[] }
@@ -34,7 +36,9 @@ export interface SCurveResult {
   weighting: WeightMode;
   buckets: SCurveBucket[];
   /** Per-day planned % complete (cumulative) and manpower, for precise plotting. */
-  daily: { date: string; plannedPct: number; pax: number; baselinePct?: number }[];
+  daily: { date: string; plannedPct: number; pax: number; baselinePct?: number; byRole: Record<string, number> }[];
+  /** Roles (crew roles, or the task's category when no crew) — most man-days first. */
+  roles: string[];
   /** Dated actual % complete points (saved versions + today), oldest first. */
   actualPoints: { date: string; pct: number }[];
   /** Set when a baseline was passed: the baseline's planned curve. */
@@ -87,7 +91,33 @@ function earningPlan(leaves: ScheduleTask[], weights: Map<string, number>, worki
  * (scored with the current plan's weights, like snapshots) and widens the
  * date range to cover it.
  */
-export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snapshots: SCurveSnapshot[], baselineTasks?: ScheduleTask[]): SCurveResult | null {
+/** Headcount per role for a task: its crew, else its manpower under its category. */
+export function roleSplit(t: ScheduleTask): Record<string, number> {
+  const out: Record<string, number> = {};
+  const crew = (t.crew || []).filter((c) => c.role && (Number(c.qty) || 0) > 0);
+  if (crew.length) crew.forEach((c) => { out[c.role] = (out[c.role] || 0) + Number(c.qty); });
+  else if ((t.manpower || 0) > 0) out[t.category || 'Unassigned'] = t.manpower as number;
+  return out;
+}
+
+/** Tasks with manpower working between `from` and `to` (inclusive) — what a manpower bar is made of. */
+export function manpowerContributors(tasks: ScheduleTask[], from: string, to: string, workingDays: boolean): { task: ScheduleTask; pax: number; days: number; roles: Record<string, number> }[] {
+  const out: { task: ScheduleTask; pax: number; days: number; roles: Record<string, number> }[] = [];
+  for (const t of leafTasks(tasks)) {
+    if (t.isMilestone || !((t.manpower || 0) > 0) || t.endDate < from || t.startDate > to) continue;
+    let days = 0;
+    for (let d = t.startDate > from ? t.startDate : from; d <= (t.endDate < to ? t.endDate : to); d = addDays(d, 1)) {
+      if (!workingDays || !isWeekend(d)) days += 1;
+    }
+    if (days > 0) out.push({ task: t, pax: t.manpower as number, days, roles: roleSplit(t) });
+  }
+  return out.sort((a, b) => b.pax - a.pax || a.task.startDate.localeCompare(b.task.startDate));
+}
+
+export function computeSCurve(
+  tasks: ScheduleTask[], workingDays: boolean, snapshots: SCurveSnapshot[], baselineTasks?: ScheduleTask[],
+  opts: { granularity?: 'day' | 'week' } = {},
+): SCurveResult | null {
   const leaves = leafTasks(tasks);
   if (leaves.length === 0) return null;
   const working = leaves.filter((t) => !t.isMilestone);
@@ -109,7 +139,9 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
   let baseCum = 0;
   let baselineToday: number | null = base ? 0 : null;
 
-  const granularity: 'day' | 'week' = durationOf(start, end) <= 60 ? 'day' : 'week';
+  const granularity: 'day' | 'week' = opts.granularity ?? (durationOf(start, end) <= 60 ? 'day' : 'week');
+  const splitOf = new Map(working.map((t) => [t.id, roleSplit(t)]));
+  const roleDays = new Map<string, number>();
   const buckets: SCurveBucket[] = [];
   const daily: SCurveResult['daily'] = [];
   let cum = 0;
@@ -129,17 +161,23 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
     }
 
     let pax = 0;
+    const byRole: Record<string, number> = {};
     if (!workingDays || !isWeekend(date)) {
-      for (const t of working) if (t.startDate <= date && date <= t.endDate) pax += Math.max(0, t.manpower || 0);
+      for (const t of working) {
+        if (t.startDate <= date && date <= t.endDate) {
+          pax += Math.max(0, t.manpower || 0);
+          Object.entries(splitOf.get(t.id) || {}).forEach(([r, q]) => { byRole[r] = (byRole[r] || 0) + q; roleDays.set(r, (roleDays.get(r) || 0) + q); });
+        }
+      }
     }
     if (!peak || pax > peak.pax) peak = { pax, date };
-    daily.push({ date, plannedPct: pctNow, pax, ...(basePct !== undefined ? { baselinePct: basePct } : {}) });
+    daily.push({ date, plannedPct: pctNow, pax, byRole, ...(basePct !== undefined ? { baselinePct: basePct } : {}) });
 
     const d = toDate(date);
     const key = granularity === 'day' ? date : formatLocalDate(new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay()));
     let b = buckets[buckets.length - 1];
     if (!b || b.key !== key) {
-      b = { key, label: labelFor(key < start ? start : key), start: date, end: date, plannedPct: 0, manpower: 0, peak: 0, manDays: 0 };
+      b = { key, label: labelFor(key < start ? start : key), start: date, end: date, plannedPct: 0, manpower: 0, peak: 0, manDays: 0, byRole: {} };
       buckets.push(b);
     }
     b.end = date;
@@ -147,11 +185,15 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
     if (basePct !== undefined) b.baselinePct = basePct;
     b.manDays += pax;
     b.peak = Math.max(b.peak, pax);
+    Object.entries(byRole).forEach(([r, q]) => { b.byRole[r] = (b.byRole[r] || 0) + q; });
   }
   if (today > end) { plannedToday = 100; if (base) baselineToday = 100; }
   for (const b of buckets) {
-    b.manpower = granularity === 'day' ? b.manDays : b.manDays / Math.max(1, workingDaysBetween(b.start, b.end, workingDays));
+    const n = granularity === 'day' ? 1 : Math.max(1, workingDaysBetween(b.start, b.end, workingDays));
+    b.manpower = b.manDays / n;
+    Object.keys(b.byRole).forEach((r) => { b.byRole[r] /= n; });
   }
+  const roles = Array.from(roleDays.entries()).sort((a, b) => b[1] - a[1]).map(([r]) => r);
 
   // Actual points: each saved version is a dated status snapshot, plus today.
   const bucketOf = (date: string) => buckets.find((b) => b.start <= date && date <= b.end)
@@ -175,6 +217,7 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
     hasBaseline: !!base,
     baselineToday,
     hasManpower,
+    roles,
     peak: peak && peak.pax > 0 ? peak : null,
     plannedToday,
     actualToday,

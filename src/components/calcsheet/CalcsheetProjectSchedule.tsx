@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
@@ -59,10 +60,11 @@ import { MAX_DAY_W, MIN_DAY_W, ZOOM_PRESETS, snapRange, tierFor } from '../../ut
 import ScheduleSCurve from './ScheduleSCurve';
 import ScheduleExportDialog from './ScheduleExportDialog';
 import { baselineFromVersion, finishVariance, matchBaseline, varianceLabel, type ScheduleBaseline } from '../../utils/calcsheet/scheduleBaseline';
-import type { SCurveSnapshot } from '../../utils/calcsheet/scheduleSCurve';
+import { computeSCurve, type SCurveSnapshot } from '../../utils/calcsheet/scheduleSCurve';
 import {
-  SCHEDULE_CATEGORY_COLORS, SCHEDULE_TASK_CATEGORIES, TASK_HIGHLIGHTS, type ScheduleTask, type TaskHighlight,
+  SCHEDULE_CATEGORY_COLORS, SCHEDULE_TASK_CATEGORIES, TASK_HIGHLIGHTS, crewTotal, type CrewMember, type ScheduleTask, type TaskHighlight,
 } from '../../types/ScheduleTask';
+import CrewEditor from './CrewEditor';
 
 // Remembered Gantt layout (columns, display options, current view) — per browser.
 type GanttLayout = { columns?: GanttColumn[]; display?: Partial<GanttDisplay>; viewId?: string | null };
@@ -153,6 +155,7 @@ interface TaskFormState {
   finishDate: string;
   parentId: string | null;
   manpower: number;
+  crew: CrewMember[];
   weight: number;
 }
 
@@ -160,7 +163,7 @@ interface TaskFormState {
 const normDuration = (v: number): number => Math.max(0.5, Math.round((Number(v) || 0) * 2) / 2);
 
 const emptyForm = (): TaskFormState => ({
-  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', links: [], predText: '', mode: 'auto', finishDate: todayStr(), parentId: null, manpower: 0, weight: 0,
+  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', links: [], predText: '', mode: 'auto', finishDate: todayStr(), parentId: null, manpower: 0, crew: [], weight: 0,
 });
 
 // Best-effort category guess from a service line's description, so imported
@@ -567,6 +570,28 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     const end = leaves.reduce((m, t) => (t.endDate > m ? t.endDate : m), leaves[0].endDate);
     return { end, variance: finishVariance(summary.end, end, workingDays) };
   }, [baseline, summary, workingDays]);
+
+  // KPI strip: planned / baseline % today, variance, days remaining, peak
+  // manpower, next milestone.
+  const [scurveFocus, setScurveFocus] = useState<{ date: string; n: number } | null>(null);
+  const kpis = useMemo(() => {
+    const sc = computeSCurve(tasks, workingDays, [], baseline?.tasks);
+    const today = todayStr();
+    const actual = projectPercent(tasks) ?? 0;
+    const planned = sc?.plannedToday ?? 0;
+    const baselinePct = sc?.hasBaseline ? sc.baselineToday : null;
+    const leaves = leafTasks(tasks);
+    const finish = summary?.end ?? today;
+    const remaining = actual >= 100 ? { label: 'Complete', late: false }
+      : finish < today ? { label: `${workingDaysBetween(addDays(finish, 1), today, workingDays)} d past finish`, late: true }
+        : { label: `${workingDaysBetween(today, finish, workingDays)} days`, late: false };
+    const ms = leaves.filter((t) => t.isMilestone && (t.progressPct || 0) < 100 && t.startDate >= today).sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+    return {
+      planned, baselinePct, variance: actual - (baselinePct ?? planned), remaining,
+      peak: sc?.peak ?? null,
+      nextMs: ms ? { task: ms, inDays: daysBetween(toDate(today), toDate(ms.startDate)) } : null,
+    };
+  }, [tasks, workingDays, baseline, summary]);
 
   // Each task's share of project progress (%), phases = sum of their tasks.
   const weightInfo = useMemo(() => {
@@ -1026,6 +1051,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       finishDate: t.endDate,
       parentId: t.parentId ?? null,
       manpower: t.manpower ?? 0,
+      crew: t.crew || [],
       weight: t.weight ?? 0,
     });
     setFormErr('');
@@ -1108,7 +1134,8 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       name: form.name, category: form.category, startDate, endDate, durationDays: duration,
       progressPct: form.progressPct, isMilestone: form.isMilestone, notes: form.notes,
       ...linkFields(form.links), parentId: form.parentId,
-      manpower: form.isMilestone ? 0 : Math.max(0, Math.round((form.manpower || 0) * 10) / 10),
+      manpower: form.isMilestone ? 0 : form.crew.length ? crewTotal(form.crew) : Math.max(0, Math.round((form.manpower || 0) * 10) / 10),
+      crew: form.isMilestone ? [] : form.crew,
       weight: Math.max(0, Number(form.weight) || 0),
     };
     setSaving(true);
@@ -1562,69 +1589,75 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       {exportErr && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setExportErr('')}>{exportErr}</Alert>}
       {loading && <LinearProgress sx={{ mb: 1.5 }} />}
 
-      {/* Summary roll-up */}
-      {summary && (
-        <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5 }}>
-          <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap alignItems="center">
-            {[
-              { label: 'Start', value: fmt(toDate(summary.start)) },
-              { label: 'Finish', value: fmt(toDate(summary.end)) },
-              { label: 'Duration', value: `${summary.durationDays} day${summary.durationDays === 1 ? '' : 's'}` },
-              { label: 'Tasks', value: String(tasks.length) },
-            ].map((s) => (
-              <Box key={s.label}>
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{s.label}</Typography>
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>{s.value}</Typography>
-              </Box>
-            ))}
-            <Box sx={{ minWidth: 160 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                Overall progress — {summary.pctComplete}%
-              </Typography>
-              <LinearProgress
-                variant="determinate"
-                value={summary.pctComplete}
-                sx={{ height: 8, borderRadius: 4, mt: 0.5, '& .MuiLinearProgress-bar': { bgcolor: NET_PACIFIC_COLORS.success } }}
-              />
+      {/* Summary roll-up — KPI cards; the clickable ones jump to the detail */}
+      {summary && (() => {
+        const kpi = (label: string, value: ReactNode, o: { onClick?: () => void; tip?: string; color?: string; sub?: ReactNode } = {}) => (
+          <Tooltip key={label} title={o.tip || ''}>
+            <Box
+              onClick={o.onClick}
+              sx={{
+                px: 1, py: 0.5, mx: -1, borderRadius: 1, cursor: o.onClick ? 'pointer' : 'default',
+                ...(o.onClick ? { '&:hover': { bgcolor: 'action.hover' } } : {}),
+              }}
+            >
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'nowrap' }}>{label}</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600, color: o.color, whiteSpace: 'nowrap' }}>{value}</Typography>
+              {o.sub && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'nowrap' }}>{o.sub}</Typography>}
             </Box>
-            {baselineSummary ? (
-              <>
-                <Box>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Baseline finish</Typography>
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{fmt(toDate(baselineSummary.end))}</Typography>
+          </Tooltip>
+        );
+        const toSCurve = () => setView('scurve');
+        const v = kpis.variance;
+        return (
+          <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5 }}>
+            <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap alignItems="flex-start">
+              {kpi('Start', fmt(toDate(summary.start)))}
+              {kpi('Finish', fmt(toDate(summary.end)), { sub: `${summary.durationDays} days` })}
+              {kpi('Days remaining', kpis.remaining.label, { color: kpis.remaining.late ? 'error.main' : undefined, tip: 'Working days from today to the finish' })}
+              <Tooltip title="Open the S-Curve">
+                <Box onClick={toSCurve} sx={{ minWidth: 150, px: 1, py: 0.5, mx: -1, borderRadius: 1, cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Actual — {summary.pctComplete}%</Typography>
+                  <LinearProgress
+                    variant="determinate" value={summary.pctComplete}
+                    sx={{ height: 8, borderRadius: 4, mt: 0.75, '& .MuiLinearProgress-bar': { bgcolor: NET_PACIFIC_COLORS.success } }}
+                  />
                 </Box>
-                <Box>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Finish variance</Typography>
-                  <Typography
-                    variant="body2"
-                    sx={{ fontWeight: 600, color: baselineSummary.variance > 0 ? 'error.main' : baselineSummary.variance < 0 ? 'success.main' : 'text.primary' }}
-                  >
-                    {varianceLabel(baselineSummary.variance)}{baselineSummary.variance > 0 ? ' late' : baselineSummary.variance < 0 ? ' early' : ''}
-                  </Typography>
-                </Box>
-              </>
-            ) : (
-              <Tooltip title="Freeze the current plan as the baseline to track slippage against it">
-                <Button
-                  size="small" startIcon={<OutlinedFlagIcon />}
-                  onClick={() => { setVerLabel('Baseline'); setSaveAsBaseline(true); setSaveVerOpen(true); }}
-                >
-                  Set baseline
-                </Button>
               </Tooltip>
-            )}
-            <Box>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Overdue</Typography>
-              <Chip
-                size="small"
-                label={summary.overdue}
-                color={summary.overdue > 0 ? 'error' : 'default'}
-                variant={summary.overdue > 0 ? 'filled' : 'outlined'}
-              />
-            </Box>
-          </Stack>
-        </Paper>
-      )}
+              {kpi('Planned', `${kpis.planned.toFixed(0)}%`, { onClick: toSCurve, tip: 'Where the current plan says you should be today', sub: kpis.baselinePct != null ? `baseline ${kpis.baselinePct.toFixed(0)}%` : undefined })}
+              {kpi(kpis.baselinePct != null ? 'Variance vs baseline' : 'Variance', `${v > 0 ? '+' : ''}${v.toFixed(1)} pts`, {
+                onClick: toSCurve, color: Math.abs(v) < 0.5 ? undefined : v > 0 ? 'success.main' : 'error.main',
+                sub: Math.abs(v) < 0.5 ? 'on plan' : v > 0 ? 'ahead' : 'behind',
+              })}
+              {kpis.peak && kpi('Peak manpower', `${kpis.peak.pax}`, {
+                onClick: () => { setView('scurve'); setScurveFocus((p) => ({ date: (kpis.peak as { date: string }).date, n: (p?.n ?? 0) + 1 })); },
+                tip: 'Show the tasks behind the peak', sub: fmt(toDate(kpis.peak.date)),
+              })}
+              {kpis.nextMs && kpi('Next milestone', kpis.nextMs.task.name.length > 22 ? `${kpis.nextMs.task.name.slice(0, 21)}…` : kpis.nextMs.task.name, {
+                onClick: () => { const tid = (kpis.nextMs as { task: ScheduleTask }).task.id; setView('gantt'); selectOne(tid); setScrollReq((p) => ({ id: tid, n: (p?.n ?? 0) + 1 })); setRevealReq((p) => ({ id: tid, n: (p?.n ?? 0) + 1 })); },
+                tip: kpis.nextMs.task.name, sub: `${fmt(toDate(kpis.nextMs.task.startDate))} · ${kpis.nextMs.inDays === 0 ? 'today' : `in ${kpis.nextMs.inDays} d`}`,
+              })}
+              {baselineSummary ? (
+                kpi('Baseline finish', fmt(toDate(baselineSummary.end)), {
+                  color: baselineSummary.variance > 0 ? 'error.main' : baselineSummary.variance < 0 ? 'success.main' : undefined,
+                  sub: `${varianceLabel(baselineSummary.variance)}${baselineSummary.variance > 0 ? ' late' : baselineSummary.variance < 0 ? ' early' : ''}`,
+                })
+              ) : (
+                <Tooltip title="Freeze the current plan as the baseline to track slippage against it">
+                  <Button
+                    size="small" startIcon={<OutlinedFlagIcon />} sx={{ alignSelf: 'center' }}
+                    onClick={() => { setVerLabel('Baseline'); setSaveAsBaseline(true); setSaveVerOpen(true); }}
+                  >
+                    Set baseline
+                  </Button>
+                </Tooltip>
+              )}
+              {kpi('Overdue', (
+                <Chip size="small" label={summary.overdue} color={summary.overdue > 0 ? 'error' : 'default'} variant={summary.overdue > 0 ? 'filled' : 'outlined'} />
+              ), summary.overdue > 0 ? { onClick: () => { setView('gantt'); setHlFilter((f) => (f === 'overdue' ? 'none' : 'overdue')); }, tip: 'Highlight overdue tasks' } : {})}
+            </Stack>
+          </Paper>
+        );
+      })()}
 
       {/* Filters */}
       {sorted.length > 0 && (
@@ -1715,7 +1748,10 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       )}
 
       {view === 'scurve' && sorted.length > 0 && (
-        <ScheduleSCurve tasks={tasks} workingDays={workingDays} loadSnapshots={loadSnapshots} baselineTasks={showBaseline ? baseline?.tasks : undefined} />
+        <ScheduleSCurve
+          tasks={tasks} workingDays={workingDays} loadSnapshots={loadSnapshots} baselineTasks={showBaseline ? baseline?.tasks : undefined}
+          projectId={id} focus={scurveFocus}
+        />
       )}
 
       {view === 'gantt' && visibleRows.length > 0 && (() => {
@@ -2029,14 +2065,24 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 />
               )}
               <TextField
-                label="Manpower" type="number" value={form.manpower} fullWidth
-                disabled={form.isMilestone}
+                label="Manpower" type="number" value={form.crew.length ? crewTotal(form.crew) : form.manpower} fullWidth
+                disabled={form.isMilestone || form.crew.length > 0}
                 inputProps={{ min: 0, step: 1 }}
-                helperText="Headcount per working day"
+                helperText={form.crew.length ? 'Total of the crew below' : 'Headcount per working day'}
                 onChange={(e) => setForm((f) => ({ ...f, manpower: Math.max(0, Number(e.target.value) || 0) }))}
                 onWheel={blurNumberInputOnWheel}
               />
             </Stack>
+            {!form.isMilestone && (
+              <Box>
+                <Typography variant="body2" color="text.secondary">Crew by role (optional — splits the manpower chart by discipline)</Typography>
+                <CrewEditor
+                  crew={form.crew}
+                  knownRoles={Array.from(new Set(tasks.flatMap((t) => (t.crew || []).map((c) => c.role))))}
+                  onCommit={(crew) => setForm((f) => ({ ...f, crew }))}
+                />
+              </Box>
+            )}
             {(() => {
               const isPhase = !!editingId && tasks.some((t) => t.parentId === editingId);
               const others = leafTasks(tasks).filter((t) => t.id !== editingId).reduce((sum, t) => sum + Math.max(0, Number(t.weight) || 0), 0);

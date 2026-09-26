@@ -8,7 +8,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import EditIcon from '@mui/icons-material/Edit';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import { SCHEDULE_TASK_CATEGORIES, type ScheduleTask } from '../../types/ScheduleTask';
+import { SCHEDULE_TASK_CATEGORIES, crewTotal, type ScheduleTask } from '../../types/ScheduleTask';
+import CrewEditor from './CrewEditor';
 import { formatLink, linksOf } from '../../utils/calcsheet/scheduleLinks';
 import { finishVariance, varianceLabel } from '../../utils/calcsheet/scheduleBaseline';
 import { mspDate } from '../../utils/calcsheet/scheduleTimescale';
@@ -20,7 +21,7 @@ import { blurNumberInputOnWheel } from '../../utils/calcsheet/numberInput';
 // commits on Enter / blur as one undoable change.
 
 export type InspectorPatch = Partial<Pick<ScheduleTask,
-  'name' | 'category' | 'notes' | 'manpower' | 'weight' | 'progressPct' | 'mode' | 'startDate' | 'endDate' | 'durationDays'>>;
+  'name' | 'category' | 'notes' | 'manpower' | 'crew' | 'weight' | 'progressPct' | 'mode' | 'startDate' | 'endDate' | 'durationDays'>>;
 
 interface Props {
   /** The stored task (for a phase: its rolled-up version). */
@@ -230,12 +231,22 @@ export default function ScheduleTaskInspector({
         {!isSummary && (
           <>
             <Section title="Resources">
+              {!task.isMilestone && (
+                <Box>
+                  <Typography variant="caption" color="text.secondary">Crew (by role)</Typography>
+                  <CrewEditor
+                    crew={task.crew || []}
+                    knownRoles={Array.from(new Set(tasks.flatMap((t) => (t.crew || []).map((c) => c.role))))}
+                    onCommit={(crew) => onChange({ crew, ...(crew.length ? { manpower: crewTotal(crew) } : {}) }, `Crew of ${label}`)}
+                  />
+                </Box>
+              )}
               <Stack direction="row" spacing={1}>
                 <TextField
-                  {...small} type="number" label="Manpower" value={mp} inputProps={{ min: 0, step: 1 }} disabled={task.isMilestone}
+                  {...small} type="number" label="Manpower" value={mp} inputProps={{ min: 0, step: 1 }} disabled={task.isMilestone || (task.crew || []).length > 0}
                   onWheel={blurNumberInputOnWheel} onChange={(e) => setMp(e.target.value)} onKeyDown={enter}
                   onBlur={() => commitNumber(mp, task.manpower ?? 0, 'manpower', 'Manpower')}
-                  helperText="Headcount / day"
+                  helperText={(task.crew || []).length > 0 ? 'From the crew' : 'Headcount / day'}
                 />
                 <TextField
                   {...small} type="number" label="Weight" value={wt} inputProps={{ min: 0, step: 1 }}
