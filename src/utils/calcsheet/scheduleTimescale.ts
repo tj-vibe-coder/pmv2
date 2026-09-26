@@ -3,7 +3,17 @@ import { toDate } from './scheduleDates';
 // Shared MS Project-style timescale helpers for the on-screen Gantt
 // (MsProjectGantt) and the PDF export.
 
-export type GanttZoom = 'day' | 'week' | 'month';
+export type GanttZoom = 'day' | 'week' | 'month' | 'quarter';
+
+/** Pixels per day for each zoom preset. Zoom is continuous in between. */
+export const ZOOM_PRESETS: Record<GanttZoom, number> = { day: 24, week: 8, month: 3, quarter: 1 };
+export const MIN_DAY_W = 0.35;
+export const MAX_DAY_W = 60;
+
+/** Timescale style (tiers + range snapping) for a given pixels-per-day. */
+export function tierFor(dayW: number): GanttZoom {
+  return dayW >= 14 ? 'day' : dayW >= 4 ? 'week' : dayW >= 1.6 ? 'month' : 'quarter';
+}
 
 const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -56,6 +66,14 @@ export function timescaleTiers(zoom: GanttZoom, start: Date, totalDays: number, 
         (d) => { const w = weekStart(d); return `${w.getMonth() + 1}/${w.getDate()}`; }),
     };
   }
+  if (zoom === 'quarter') {
+    return {
+      top: buildTier(start, totalDays, dayW, (d) => String(d.getFullYear()), (d) => String(d.getFullYear())),
+      bottom: buildTier(start, totalDays, dayW,
+        (d) => `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3)}`,
+        (d) => `Q${Math.floor(d.getMonth() / 3) + 1}`),
+    };
+  }
   return {
     top: buildTier(start, totalDays, dayW,
       (d) => `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3)}`,
@@ -69,7 +87,10 @@ export function timescaleTiers(zoom: GanttZoom, start: Date, totalDays: number, 
 export function snapRange(start: Date, end: Date, zoom: GanttZoom): { start: Date; end: Date } {
   let min = new Date(start.getFullYear(), start.getMonth(), start.getDate() - 2);
   let max = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 2);
-  if (zoom === 'month') {
+  if (zoom === 'quarter') {
+    min = new Date(min.getFullYear(), Math.floor(min.getMonth() / 3) * 3, 1);
+    max = new Date(max.getFullYear(), Math.floor(max.getMonth() / 3) * 3 + 3, 0);
+  } else if (zoom === 'month') {
     min = new Date(min.getFullYear(), min.getMonth(), 1);
     max = new Date(max.getFullYear(), max.getMonth() + 1, 0);
   } else {

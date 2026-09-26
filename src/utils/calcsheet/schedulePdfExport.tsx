@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Document, Page, Text, View, Svg, Rect, Polygon, Path, Line, Circle, Image, pdf } from '@react-pdf/renderer';
+import { Document, Page, Text, View, Svg, Rect, Polygon, Path, Line, Circle, pdf } from '@react-pdf/renderer';
 import { saveAs } from 'file-saver';
 import { TASK_HIGHLIGHTS, type ScheduleTask } from '../../types/ScheduleTask';
 import { leafTasks, type TreeRow } from './scheduleTree';
@@ -8,6 +8,7 @@ import { dayAt, mspDate, snapRange, timescaleTiers, type GanttZoom, type Timesca
 import { computeSCurve, type SCurveSnapshot } from './scheduleSCurve';
 import { leafWeights, projectPercent } from './scheduleWeights';
 import { finishVariance, matchBaseline, varianceLabel, type ScheduleBaseline } from './scheduleBaseline';
+import { formatLink, linksOf } from './scheduleLinks';
 
 // Gantt + S-Curve PDF, driven by the Export dialog's settings (paper,
 // orientation, one-page fit or multi-page, date range, title block, what to
@@ -53,13 +54,8 @@ export interface ScheduleExportSettings {
   title: string;
   projectNumber: string;
   projectTitle: string;
+  /** Shown after the project line in the page header (and in the file name) when set. */
   revision: string;
-  preparedBy: string;
-  checkedBy: string;
-  approvedBy: string;
-  dateIssued: string;
-  titleBlock: boolean;
-  logo: boolean;
   // Chart
   columns: Record<ExportColumn, boolean>;
   showDependencies: boolean;
@@ -72,7 +68,7 @@ export interface ScheduleExportSettings {
   showWeekends: boolean;
 }
 
-export function defaultExportSettings(project: ScheduleProjectRef, preparedBy = ''): ScheduleExportSettings {
+export function defaultExportSettings(project: ScheduleProjectRef): ScheduleExportSettings {
   return {
     paper: 'A3',
     orientation: 'landscape',
@@ -86,13 +82,7 @@ export function defaultExportSettings(project: ScheduleProjectRef, preparedBy = 
     title: 'Gantt Chart',
     projectNumber: project.code || '',
     projectTitle: project.name || '',
-    revision: '0',
-    preparedBy,
-    checkedBy: '',
-    approvedBy: '',
-    dateIssued: todayStr(),
-    titleBlock: true,
-    logo: true,
+    revision: '',
     columns: { dur: true, start: true, finish: true, pred: true, mp: true, pct: true, wt: true },
     showDependencies: true,
     showBaseline: true,
@@ -118,7 +108,6 @@ export interface ScheduleExportData {
 const MARGIN = 28;
 const HEADER_H = 46;
 const LEGEND_H = 22;
-const TB_H = 40;              // title block
 const TIER_H = 13;
 const MAX_ROW_H = 16;
 const PAGED_ROW_H = 14;
@@ -207,11 +196,6 @@ function fit(text: string, width: number, fontSize: number, em = 0.52): string {
 }
 const textW = (text: string, fontSize: number) => text.length * fontSize * 0.52;
 
-function issuedLabel(d: string, short = false): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
-  return toDate(d).toLocaleDateString('en-US', short ? { month: 'numeric', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
 function spanOf(tasks: ScheduleTask[]): { start: Date; end: Date } | null {
   if (tasks.length === 0) return null;
   let start = toDate(tasks[0].startDate);
@@ -228,7 +212,6 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
   const PAGE_W = s.orientation === 'landscape' ? paper.h : paper.w;
   const PAGE_H = s.orientation === 'landscape' ? paper.w : paper.h;
   const CONTENT_W = PAGE_W - MARGIN * 2;
-  const tbH = s.titleBlock ? TB_H + 6 : 0;
   const narrow = CONTENT_W < 760;
 
   const crit = s.showCritical ? (data.criticalIds ?? new Set<string>()) : new Set<string>();
@@ -257,7 +240,7 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
 
   const zoomFor = (w: number, span: { start: Date; end: Date }): GanttZoom => {
     const est = w / Math.max(1, daysBetween(span.start, span.end) + 1);
-    return est >= 14 ? 'day' : est >= 3 ? 'week' : 'month';
+    return est >= 14 ? 'day' : est >= 3 ? 'week' : est >= 1.2 ? 'month' : 'quarter';
   };
   const zoom = zoomFor(CHART_W, ganttSpan);
   const range = snapRange(ganttSpan.start, ganttSpan.end, zoom);
@@ -266,7 +249,7 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
   const tiers = timescaleTiers(zoom, range.start, totalDays, dayW);
 
   // Rows per page: squeeze onto one page, or readable rows split over pages.
-  const bodyAvail = PAGE_H - MARGIN * 2 - HEADER_H - LEGEND_H - TIER_H * 2 - 6 - tbH;
+  const bodyAvail = PAGE_H - MARGIN * 2 - HEADER_H - LEGEND_H - TIER_H * 2 - 6;
   const rowH = s.layout === 'fit' ? Math.min(MAX_ROW_H, bodyAvail / Math.max(1, printed.length)) : PAGED_ROW_H;
   const perPage = s.layout === 'fit' ? Math.max(1, printed.length) : Math.max(1, Math.floor(bodyAvail / rowH));
   const chunks: TreeRow[][] = [];
@@ -329,7 +312,7 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
       case 'finish': return mspDate(t.endDate);
       case 'bfin': { const b = bmap.get(t.id); return b ? mspDate(b.endDate) : ''; }
       case 'fvar': { const b = bmap.get(t.id); return b ? varianceLabel(finishVariance(t.endDate, b.endDate, data.workingDays)) : ''; }
-      case 'pred': return fit((t.predecessors || []).map((p) => idNum.get(p)).filter((n) => n != null).join(','), c.w, fs);
+      case 'pred': return fit(linksOf(t).filter((l) => idNum.has(l.id)).map((l) => formatLink(idNum.get(l.id) as number, l)).join(','), c.w, fs);
       case 'mp': return !r.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? String(t.manpower) : '';
       case 'pct': return `${Math.round(t.progressPct || 0)}%`;
       case 'wt': return share.has(t.id) ? `${(share.get(t.id) || 0).toFixed(1)}%` : '';
@@ -375,56 +358,17 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
     </View>
   );
 
-  const logoUrl = typeof window !== 'undefined' ? `${window.location.origin}/logo-ioct-only.png` : '/logo-ioct-only.png';
-
-  // Title block (bottom of every page): project, document, revision, sign-offs, sheet X of Y.
-  const titleBlock = () => {
-    if (!s.titleBlock) return null;
-    const cells: { label: string; value?: string; weight: number; sheet?: boolean }[] = [
-      { label: 'Project', value: [s.projectNumber, s.projectTitle].filter(Boolean).join(' — '), weight: narrow ? 2.2 : 3 },
-      { label: 'Document', value: s.title, weight: narrow ? 1.2 : 1.5 },
-      { label: 'Rev.', value: s.revision, weight: 0.45 },
-      { label: 'Prepared by', value: s.preparedBy, weight: 1.15 },
-      { label: 'Checked by', value: s.checkedBy, weight: 1.15 },
-      { label: 'Approved by', value: s.approvedBy, weight: 1.15 },
-      { label: 'Date issued', value: issuedLabel(s.dateIssued, narrow), weight: 0.95 },
-      { label: 'Sheet', weight: 0.6, sheet: true },
-    ];
-    const avail = CONTENT_W - (s.logo ? TB_H : 0);
-    const tbFs = narrow ? 7 : 8;
-    const unit = avail / cells.reduce((sum, c) => sum + c.weight, 0);
-    return (
-      // marginTop auto pins the block to the bottom of the sheet.
-      <View style={{ height: TB_H, marginTop: 'auto', flexDirection: 'row', borderWidth: 0.75, borderColor: C.frame }}>
-        {s.logo && (
-          <View style={{ width: TB_H, borderRightWidth: 0.5, borderColor: C.frame, alignItems: 'center', justifyContent: 'center' }}>
-            <Image src={logoUrl} style={{ width: TB_H - 12, height: TB_H - 12, objectFit: 'contain' }} />
-          </View>
-        )}
-        {cells.map((c, i) => (
-          <View key={c.label} style={{ width: unit * c.weight, paddingHorizontal: 4, paddingTop: 4, borderRightWidth: i === cells.length - 1 ? 0 : 0.5, borderColor: C.frame }}>
-            <Text style={{ fontSize: 5.5, color: C.sub }}>{c.label.toUpperCase()}</Text>
-            {c.sheet ? (
-              <Text style={{ fontSize: tbFs, fontFamily: 'Helvetica-Bold', marginTop: 3 }} render={({ pageNumber, totalPages }) => `${pageNumber} of ${totalPages}`} />
-            ) : (
-              <Text style={{ fontSize: tbFs, fontFamily: 'Helvetica-Bold', marginTop: 3 }}>{fit(c.value || '', unit * c.weight - 8, tbFs, 0.6)}</Text>
-            )}
-          </View>
-        ))}
-      </View>
-    );
-  };
-  // Without a title block, still number the pages.
-  const pageNo = () => (s.titleBlock ? null : (
+  // Unbranded page numbering (schedules also go out on subcontracted projects).
+  const pageNo = () => (
     <Text style={{ fontSize: 7, color: C.sub, marginLeft: 'auto' }} render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
-  ));
+  );
 
   const pageHeader = (title: string, kpis: [string, string][]) => (
     <View style={{ height: HEADER_H, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
       <View style={{ maxWidth: narrow ? CONTENT_W * 0.42 : CONTENT_W * 0.45 }}>
         <Text style={{ fontSize: narrow ? 13 : 16, fontFamily: 'Helvetica-Bold', color: C.primary }}>{title}</Text>
         <Text style={{ fontSize: narrow ? 7.5 : 9, color: C.sub, marginTop: 2 }}>
-          {fit([s.projectNumber, s.projectTitle].filter(Boolean).join(' — '), narrow ? CONTENT_W * 0.42 : CONTENT_W * 0.45, narrow ? 7.5 : 9)}
+          {fit([s.projectNumber, s.projectTitle].filter(Boolean).join(' — ') + (s.revision.trim() ? ` · Rev. ${s.revision.trim()}` : ''), narrow ? CONTENT_W * 0.42 : CONTENT_W * 0.45, narrow ? 7.5 : 9)}
         </Text>
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', maxWidth: CONTENT_W * 0.56 }}>
@@ -487,26 +431,43 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
 
   const renderGanttPage = (chunk: TreeRow[], pageIdx: number) => {
     const bodyH = chunk.length * rowH;
-    // Finish-to-start links between rows on this page, routed like the screen.
-    const links: { d: string; crit: boolean; ex: number; ey: number; dir: 'down' | 'up' | 'right' }[] = [];
+    // Links between rows on this page, routed like the screen (FS / SS / FF / SF).
+    const links: { d: string; crit: boolean; ex: number; ey: number; dir: 'down' | 'up' | 'right' | 'left' }[] = [];
     if (s.showDependencies) {
       const idx = new Map(chunk.map((r, i) => [r.task.id, i]));
       chunk.forEach((row, si) => {
         const st = row.task;
-        (st.predecessors || []).forEach((pid) => {
+        linksOf(st).forEach((lk) => {
+          const pid = lk.id;
           const pi = idx.get(pid);
           if (pi === undefined || pi === si) return;
           const p = chunk[pi].task;
           const pg = barGeom(p);
           const sg = barGeom(st);
-          const x1 = p.isMilestone ? pg.left + dayW / 2 + rowH * 0.35 : pg.left + pg.width;
+          const ms = rowH * 0.35;
+          const pStart = p.isMilestone ? pg.left + dayW / 2 - ms : pg.left;
+          const pEnd = p.isMilestone ? pg.left + dayW / 2 + ms : pg.left + pg.width;
+          const sStart = st.isMilestone ? sg.left + dayW / 2 - ms : sg.left;
+          const sEnd = st.isMilestone ? sg.left + dayW / 2 + ms : sg.left + sg.width;
+          const inChart = (x: number) => x >= 0 && x <= CHART_W;
+          const x1 = pEnd;
           const sX = st.isMilestone ? sg.left + dayW / 2 : sg.left;
-          if (x1 < 0 || x1 > CHART_W || sX < 0 || sX > CHART_W) return; // an end is outside the date range
+          if (![pStart, pEnd, sStart, sEnd].every(inChart)) return; // an end is outside the date range
           const y1 = pi * rowH + rowH / 2;
+          const y2 = si * rowH + rowH / 2;
           const down = si > pi;
+          const mid = (down ? pi + 1 : pi) * rowH;
           const inset = st.isMilestone ? 0 : Math.min(4, sg.width / 2);
           const isCrit = crit.has(pid) && crit.has(st.id);
-          if (sX + inset >= x1 + 1.5) {
+          if (lk.type === 'SS') {
+            const xL = Math.max(0, Math.min(pStart, sStart) - 5);
+            links.push({ d: `M ${pStart} ${y1} H ${xL} V ${y2} H ${sStart}`, crit: isCrit, ex: sStart, ey: y2, dir: 'right' });
+          } else if (lk.type === 'FF') {
+            const xR = Math.min(CHART_W, Math.max(pEnd, sEnd) + 5);
+            links.push({ d: `M ${pEnd} ${y1} H ${xR} V ${y2} H ${sEnd}`, crit: isCrit, ex: sEnd, ey: y2, dir: 'left' });
+          } else if (lk.type === 'SF') {
+            links.push({ d: `M ${pStart} ${y1} H ${Math.max(0, pStart - 5)} V ${mid} H ${Math.min(CHART_W, sEnd + 5)} V ${y2} H ${sEnd}`, crit: isCrit, ex: sEnd, ey: y2, dir: 'left' });
+          } else if (sX + inset >= x1 + 1.5) {
             const yEnd = down ? si * rowH + barTop - 0.3 : si * rowH + barTop + barH + 0.3;
             links.push({ d: `M ${x1} ${y1} H ${sX + inset} V ${yEnd}`, crit: isCrit, ex: sX + inset, ey: yEnd, dir: down ? 'down' : 'up' });
           } else {
@@ -521,7 +482,7 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
 
     return (
       <Page key={`g${pageIdx}`} size={[PAGE_W, PAGE_H]} style={{ padding: MARGIN, fontFamily: 'Helvetica', color: C.text }}>
-        <View wrap={false} style={{ flexGrow: 1 }}>
+        <View wrap={false}>
           {pageHeader(ganttTitle, ganttKpis)}
 
           <View style={{ flexDirection: 'row', borderWidth: 0.5, borderColor: C.border }}>
@@ -627,7 +588,9 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
                       ? `${l.ex - a},${l.ey - a * 1.6} ${l.ex + a},${l.ey - a * 1.6} ${l.ex},${l.ey}`
                       : l.dir === 'up'
                         ? `${l.ex - a},${l.ey + a * 1.6} ${l.ex + a},${l.ey + a * 1.6} ${l.ex},${l.ey}`
-                        : `${l.ex - a * 1.6},${l.ey - a} ${l.ex - a * 1.6},${l.ey + a} ${l.ex},${l.ey}`;
+                        : l.dir === 'left'
+                          ? `${l.ex + a * 1.6},${l.ey - a} ${l.ex + a * 1.6},${l.ey + a} ${l.ex},${l.ey}`
+                          : `${l.ex - a * 1.6},${l.ey - a} ${l.ex - a * 1.6},${l.ey + a} ${l.ex},${l.ey}`;
                     const col = l.crit ? C.critLink : C.link;
                     return [
                       <Path key={`l${i}`} d={l.d} fill="none" stroke={col} strokeWidth={0.6} />,
@@ -660,7 +623,6 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
             ))}
             {pageNo()}
           </View>
-          {titleBlock()}
         </View>
       </Page>
     );
@@ -679,7 +641,7 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
     const scDayW = SC_PLOT_W / scDays;
     const scTiers = timescaleTiers(scZoom, scRange.start, scDays, scDayW);
     const mpH = s.includeManpower && sc.hasManpower ? Math.min(150, PAGE_H * 0.2) : 0;
-    const plotH = PAGE_H - MARGIN * 2 - HEADER_H - SC_LEGEND_H - TIER_H * 2 - 2 - (mpH ? mpH + 22 : 0) - tbH;
+    const plotH = PAGE_H - MARGIN * 2 - HEADER_H - SC_LEGEND_H - TIER_H * 2 - 2 - (mpH ? mpH + 22 : 0);
     const x0 = (d: string) => daysBetween(scRange.start, toDate(d)) * scDayW;
     const xEnd = (d: string) => x0(d) + scDayW;
     const yOf = (pv: number) => SC_PAD + (1 - pv / 100) * (plotH - SC_PAD - 2);
@@ -722,7 +684,7 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
     );
     return (
       <Page key="scurve" size={[PAGE_W, PAGE_H]} style={{ padding: MARGIN, fontFamily: 'Helvetica', color: C.text }}>
-        <View wrap={false} style={{ flexGrow: 1 }}>
+        <View wrap={false}>
           {pageHeader('S-Curve — Project % Complete', kpis)}
 
           <View style={{ height: SC_LEGEND_H, flexDirection: 'row', alignItems: 'center' }}>
@@ -787,7 +749,6 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
           <View style={{ borderTopWidth: 0.5, borderColor: C.border, marginLeft: SC_GUTTER }} />
           {tierAt(scTiers.bottom, 'center')}
           {tierAt(scTiers.top, 'left')}
-          {titleBlock()}
         </View>
       </Page>
     );

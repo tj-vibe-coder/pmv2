@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Box, Tooltip } from '@mui/material';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
@@ -11,11 +11,16 @@ import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import { TASK_HIGHLIGHTS, type ScheduleTask } from '../../types/ScheduleTask';
 import type { TreeRow } from '../../utils/calcsheet/scheduleTree';
 import { finishVariance, varianceLabel } from '../../utils/calcsheet/scheduleBaseline';
+import { formatLink, linksOf } from '../../utils/calcsheet/scheduleLinks';
+import { DEFAULT_COLUMNS, DEFAULT_DISPLAY, columnDef, type GanttColumn, type GanttDisplay } from '../../utils/calcsheet/ganttViews';
 import { daysBetween, durationOf, toDate, todayStr, workingDaysBetween } from '../../utils/calcsheet/scheduleDates';
-import { dayAt, mspDate, timescaleTiers, type GanttZoom, type TimescaleSeg } from '../../utils/calcsheet/scheduleTimescale';
+import { ZOOM_PRESETS, dayAt, mspDate, tierFor, timescaleTiers, type GanttZoom, type TimescaleSeg } from '../../utils/calcsheet/scheduleTimescale';
 
 export type { GanttZoom };
-export const ZOOM_DAY_WIDTH: Record<GanttZoom, number> = { day: 24, week: 8, month: 3 };
+export const ZOOM_DAY_WIDTH: Record<GanttZoom, number> = ZOOM_PRESETS;
+const MS_DAY = 86400000;
+/** Timeline navigation, bumped via `n`: scroll to today, page left/right, or show a date at the left edge. */
+export type GanttNav = { kind: 'today' } | { kind: 'page'; dir: 1 | -1 } | { kind: 'date'; date: string };
 export const GANTT_ROW_H = 24;
 
 const TIER_H = 22;
@@ -55,26 +60,12 @@ const MSP = {
 };
 
 interface Col { key: string; label: ReactNode; w: number; align?: 'left' | 'right' | 'center' }
-const COLS: Col[] = [
+// ID and the indicator column are fixed; the rest come from the `columns` prop.
+const FIXED_COLS: Col[] = [
   { key: 'id', label: '', w: 40, align: 'right' },
   { key: 'ind', label: <InfoOutlinedIcon sx={{ fontSize: 14, color: MSP.subText }} />, w: 26, align: 'center' },
-  { key: 'name', label: 'Task Name', w: 250 },
-  { key: 'dur', label: 'Duration', w: 74 },
-  { key: 'start', label: 'Start', w: 96 },
-  { key: 'finish', label: 'Finish', w: 96 },
-  { key: 'pred', label: 'Predecessors', w: 96 },
-  { key: 'mp', label: 'Manpower', w: 74, align: 'right' },
-  { key: 'pct', label: '% Complete', w: 80, align: 'right' },
-  { key: 'wt', label: 'Weight', w: 66, align: 'right' },
-  { key: 'cat', label: 'Category', w: 110 },
 ];
-// With a baseline shown: Baseline Finish + Finish Variance after Finish.
-const BASELINE_COLS: Col[] = [
-  { key: 'bfin', label: 'Baseline Finish', w: 104 },
-  { key: 'fvar', label: 'Finish Var.', w: 76, align: 'right' },
-];
-const COLS_WITH_BASELINE: Col[] = COLS.flatMap((c) => (c.key === 'finish' ? [c, ...BASELINE_COLS] : [c]));
-export const GANTT_GRID_MAX_W = COLS_WITH_BASELINE.reduce((sum, c) => sum + c.w, 0);
+export const GANTT_GRID_MAX_W = 2400;
 
 export interface MsProjectGanttProps {
   rows: TreeRow[];
@@ -82,7 +73,13 @@ export interface MsProjectGanttProps {
   idNumbers: Map<string, number>;
   range: { start: Date; end: Date };
   totalDays: number;
-  zoom: GanttZoom;
+  /** Pixels per day (continuous zoom); the timescale style follows it. */
+  dayW: number;
+  /** Ctrl/⌘ + wheel zoom: the requested pixels-per-day. */
+  onZoom?: (dayW: number) => void;
+  navRequest?: (GanttNav & { n: number }) | null;
+  /** Width of the visible timeline area (for Fit). */
+  onViewportWidth?: (w: number) => void;
   workingDays: boolean;
   criticalIds: Set<string>;
   isOverdue: (t: ScheduleTask) => boolean;
@@ -107,7 +104,19 @@ export interface MsProjectGanttProps {
   weightMode?: 'manual' | 'duration';
   /** Drag a table row onto another to move it above/below that task. */
   onReorder?: (dragId: string, targetId: string, pos: 'above' | 'below') => void;
-  onBarMouseDown: (e: ReactMouseEvent, t: ScheduleTask, mode: 'move' | 'resize') => void;
+  onBarMouseDown: (e: ReactMouseEvent, t: ScheduleTask, mode: 'move' | 'resize' | 'progress') => void;
+  /** A link was drawn from one bar end to another (screen coords of the drop). */
+  onLinkDraw?: (fromId: string, toId: string, fromEnd: 'start' | 'finish', toEnd: 'start' | 'finish', x: number, y: number) => void;
+  /** A link line was double-clicked. */
+  onLinkOpen?: (predId: string, succId: string, x: number, y: number) => void;
+  /** Table columns after ID + indicators, in order, with widths. */
+  columns?: GanttColumn[];
+  /** Resize (drag a header edge) or reorder (drag a header) columns. */
+  onColumnsChange?: (cols: GanttColumn[]) => void;
+  /** What the chart draws (critical path / baseline are driven by their own props). */
+  display?: GanttDisplay;
+  /** Total float per leaf task (working days) for the Total Float column. */
+  floatMap?: Map<string, number>;
   draggingTaskId: string | null;
   gridWidth: number;
   onGridWidthChange: (w: number) => void;
@@ -119,39 +128,100 @@ export interface MsProjectGanttProps {
 }
 
 export default function MsProjectGantt({
-  rows, idNumbers, range, totalDays, zoom, workingDays, criticalIds, isOverdue,
+  rows, idNumbers, range, totalDays, dayW, onZoom, navRequest, onViewportWidth, workingDays, criticalIds, isOverdue,
   collapsed, onToggleCollapse, selectedId, selectedIds, onSelect, onOpen, onRowContextMenu, onReorder, weightShare, weightMode,
   filterHits, searchQuery, revealRequest,
-  onBarMouseDown, draggingTaskId, gridWidth, onGridWidthChange, scrollRequest, baseline,
+  onBarMouseDown, draggingTaskId, gridWidth, onGridWidthChange, scrollRequest, baseline, onLinkDraw, onLinkOpen,
+  columns = DEFAULT_COLUMNS, onColumnsChange, display = DEFAULT_DISPLAY, floatMap,
 }: MsProjectGanttProps) {
-  const cols = baseline ? COLS_WITH_BASELINE : COLS;
+  const cols: Col[] = [
+    ...FIXED_COLS,
+    ...columns
+      .filter((c) => (c.key !== 'bfin' && c.key !== 'fvar') || !!baseline)
+      .map((c) => { const d = columnDef(c.key); return { key: c.key, label: d.label, w: c.w, align: d.align }; }),
+  ];
   const colX = cols.reduce((s, c) => s + c.w, 0);
   const gridW = Math.min(gridWidth, colX);
   // With a baseline, the task bar sits higher to make room for the grey bar.
   const barTop = baseline ? 4 : BAR_TOP;
   const barH = baseline ? 10 : BAR_H;
-  const dayW = ZOOM_DAY_WIDTH[zoom];
+  const zoom: GanttZoom = tierFor(dayW);
   const timelineW = totalDays * dayW;
   const bodyH = rows.length * GANTT_ROW_H;
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Keep the same date in view when the zoom (or the chart's start) changes:
+  // under the cursor for Ctrl/⌘ + wheel, else at the centre of the timeline.
+  const viewRef = useRef({ dayW, start: range.start.getTime(), scrollLeft: 0 });
+  const anchorPxRef = useRef<number | null>(null);
+  const gridWRef = useRef(0);
+  gridWRef.current = gridW;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const prev = viewRef.current;
+    if (el && (prev.dayW !== dayW || prev.start !== range.start.getTime())) {
+      const visW = Math.max(0, el.clientWidth - gridWRef.current - SPLITTER_W);
+      const px = anchorPxRef.current ?? visW / 2;
+      const dateMs = prev.start + ((prev.scrollLeft + px) / prev.dayW) * MS_DAY;
+      el.scrollLeft = Math.max(0, ((dateMs - range.start.getTime()) / MS_DAY) * dayW - px);
+      viewRef.current.scrollLeft = el.scrollLeft;
+    }
+    anchorPxRef.current = null;
+    viewRef.current.dayW = dayW;
+    viewRef.current.start = range.start.getTime();
+  }, [dayW, range.start]);
+
+  // Ctrl/⌘ + wheel (or trackpad pinch) zooms around the cursor; Shift + wheel scrolls sideways.
+  const zoomRef = useRef({ dayW, onZoom });
+  zoomRef.current = { dayW, onZoom };
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return undefined;
+    const onWheel = (e: WheelEvent) => {
+      if ((e.ctrlKey || e.metaKey) && zoomRef.current.onZoom) {
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        const px = e.clientX - rect.left - gridWRef.current - SPLITTER_W;
+        anchorPxRef.current = px > 0 ? px : null;
+        zoomRef.current.onZoom(zoomRef.current.dayW * Math.exp(-e.deltaY * 0.0025));
+      } else if (e.shiftKey && Math.abs(e.deltaX) < Math.abs(e.deltaY)) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // Report the visible timeline width (for Fit).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !onViewportWidth) return undefined;
+    const report = () => onViewportWidth(Math.max(0, el.clientWidth - gridWRef.current - SPLITTER_W));
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onViewportWidth]);
+
   const { top, bottom } = useMemo(() => timescaleTiers(zoom, range.start, totalDays, dayW), [zoom, range.start, totalDays, dayW]);
 
   const nonWorking = useMemo(() => {
-    if (dayW < 6) return [] as number[];
+    if (dayW < 6 || !display.weekends) return [] as number[];
     const out: number[] = [];
     for (let i = 0; i < totalDays; i++) {
       const g = dayAt(range.start, i).getDay();
       if (g === 0 || g === 6) out.push(i);
     }
     return out;
-  }, [range.start, totalDays, dayW]);
+  }, [range.start, totalDays, dayW, display.weekends]);
 
   const todayX = useMemo(() => {
+    if (!display.today) return null;
     const t = toDate(todayStr());
     if (t < range.start || t > range.end) return null;
     return daysBetween(range.start, t) * dayW + dayW / 2;
-  }, [range, dayW]);
+  }, [range, dayW, display.today]);
 
   const barGeom = (t: ScheduleTask) => {
     const left = daysBetween(range.start, toDate(t.startDate)) * dayW;
@@ -160,40 +230,100 @@ export default function MsProjectGantt({
     return { left, width };
   };
 
-  // Finish-to-start links drawn the MS Project way: out of the predecessor's
-  // finish, across to just inside the successor's start, then vertically onto
-  // the bar. When the successor starts before the predecessor finishes, route
-  // a zig-zag back to the successor's left edge instead.
+  // Links drawn the MS Project way. FS: out of the predecessor's finish,
+  // across to just inside the successor's start, then down onto the bar (or a
+  // zig-zag back to its left edge when it starts earlier). SS / FF / SF leave
+  // from and arrive at the matching bar ends, looping round the outside.
   const links = useMemo(() => {
     const idx = new Map(rows.map((r, i) => [r.task.id, i]));
-    const out: { key: string; d: string; crit: boolean }[] = [];
+    const out: { key: string; d: string; crit: boolean; predId: string; succId: string; label: string }[] = [];
+    if (!display.dependencies) return out;
     rows.forEach((row, si) => {
       const s = row.task;
-      (s.predecessors || []).forEach((pid) => {
-        const pi = idx.get(pid);
+      linksOf(s).forEach((l) => {
+        const pi = idx.get(l.id);
         if (pi === undefined || pi === si) return;
         const p = rows[pi].task;
         const pg = barGeom(p);
         const sg = barGeom(s);
-        const x1 = p.isMilestone ? pg.left + dayW / 2 + 6 : pg.left + pg.width;
+        const pStart = p.isMilestone ? pg.left + dayW / 2 - 6 : pg.left;
+        const pEnd = p.isMilestone ? pg.left + dayW / 2 + 6 : pg.left + pg.width;
+        const sStart = s.isMilestone ? sg.left + dayW / 2 - 6 : sg.left;
+        const sEnd = s.isMilestone ? sg.left + dayW / 2 + 6 : sg.left + sg.width;
         const y1 = pi * GANTT_ROW_H + GANTT_ROW_H / 2;
-        const sX = s.isMilestone ? sg.left + dayW / 2 : sg.left;
+        const y2 = si * GANTT_ROW_H + GANTT_ROW_H / 2;
         const down = si > pi;
-        const inset = s.isMilestone ? 0 : Math.min(5, sg.width / 2);
+        const mid = (down ? pi + 1 : pi) * GANTT_ROW_H;
         let d: string;
-        if (sX + inset >= x1 + 2) {
-          const yEnd = down ? si * GANTT_ROW_H + barTop - 1 : si * GANTT_ROW_H + barTop + barH + 1;
-          d = `M ${x1} ${y1} H ${sX + inset} V ${yEnd}`;
+        if (l.type === 'SS') {
+          const xL = Math.min(pStart, sStart) - 8;
+          d = `M ${pStart} ${y1} H ${xL} V ${y2} H ${sStart - 1}`;
+        } else if (l.type === 'FF') {
+          const xR = Math.max(pEnd, sEnd) + 8;
+          d = `M ${pEnd} ${y1} H ${xR} V ${y2} H ${sEnd + 1}`;
+        } else if (l.type === 'SF') {
+          d = `M ${pStart} ${y1} H ${pStart - 8} V ${mid} H ${sEnd + 8} V ${y2} H ${sEnd + 1}`;
         } else {
-          const mid = (down ? pi + 1 : pi) * GANTT_ROW_H;
-          const y2 = si * GANTT_ROW_H + GANTT_ROW_H / 2;
-          d = `M ${x1} ${y1} h 6 V ${mid} H ${sX - 8} V ${y2} H ${sX - 1}`;
+          const sX = s.isMilestone ? sg.left + dayW / 2 : sg.left;
+          const inset = s.isMilestone ? 0 : Math.min(5, sg.width / 2);
+          if (sX + inset >= pEnd + 2) {
+            const yEnd = down ? si * GANTT_ROW_H + barTop - 1 : si * GANTT_ROW_H + barTop + barH + 1;
+            d = `M ${pEnd} ${y1} H ${sX + inset} V ${yEnd}`;
+          } else {
+            d = `M ${pEnd} ${y1} h 6 V ${mid} H ${sX - 8} V ${y2} H ${sX - 1}`;
+          }
         }
-        out.push({ key: `${pid}-${s.id}`, d, crit: criticalIds.has(pid) && criticalIds.has(s.id) });
+        out.push({
+          key: `${l.id}-${s.id}`, d, crit: criticalIds.has(l.id) && criticalIds.has(s.id), predId: l.id, succId: s.id,
+          label: `${formatLink(idNumbers.get(l.id) ?? '?', l)} → ${idNumbers.get(s.id) ?? '?'}`,
+        });
       });
     });
     return out;
-  }, [rows, range, dayW, criticalIds, barTop, barH]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows, range, dayW, criticalIds, barTop, barH, idNumbers, display.dependencies]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Draw a link: drag from the dot at a bar's start/finish onto another bar
+  // (its left half = start, right half = finish).
+  const bodyRef = useRef<HTMLDivElement>(null);
+  type LinkDragState = { fromId: string; fromEnd: 'start' | 'finish'; x0: number; y0: number; x: number; y: number };
+  const [linkDrag, setLinkDrag] = useState<LinkDragState | null>(null);
+  // Latest rows / geometry for the window listeners of an in-progress drag.
+  const linkCtx = useRef<{ rows: TreeRow[]; barGeom: typeof barGeom; onLinkDraw: typeof onLinkDraw }>({ rows, barGeom, onLinkDraw });
+  linkCtx.current = { rows, barGeom, onLinkDraw };
+  const linkTargetFor = (d: LinkDragState, x: number, y: number): { row: TreeRow; end: 'start' | 'finish' } | null => {
+    const { rows: rs, barGeom: geom } = linkCtx.current;
+    const row = rs[Math.floor(y / GANTT_ROW_H)];
+    if (!row || row.task.id === d.fromId) return null;
+    const g = geom(row.task);
+    return { row, end: row.task.isMilestone || x < g.left + g.width / 2 ? 'start' : 'finish' };
+  };
+  const linkTarget = (x: number, y: number) => (linkDrag ? linkTargetFor(linkDrag, x, y) : null);
+  // Listeners go on at mousedown (not in an effect) so even a quick drag is caught.
+  const startLinkDrag = (e: ReactMouseEvent, t: ScheduleTask, end: 'start' | 'finish', x0: number, rowIdx: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = bodyRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    let cur: LinkDragState = { fromId: t.id, fromEnd: end, x0, y0: rowIdx * GANTT_ROW_H + GANTT_ROW_H / 2, x: e.clientX - rect.left, y: e.clientY - rect.top };
+    setLinkDrag(cur);
+    document.body.style.cursor = 'crosshair';
+    const rel = (ev: MouseEvent) => {
+      const r = bodyRef.current?.getBoundingClientRect() ?? rect;
+      return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+    };
+    const move = (ev: MouseEvent) => { cur = { ...cur, ...rel(ev) }; setLinkDrag(cur); };
+    const up = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      document.body.style.cursor = '';
+      const p = rel(ev);
+      const tgt = linkTargetFor(cur, p.x, p.y);
+      setLinkDrag(null);
+      if (tgt) linkCtx.current.onLinkDraw?.(cur.fromId, tgt.row.task.id, cur.fromEnd, tgt.end, ev.clientX, ev.clientY);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
 
   useEffect(() => {
     if (!scrollRequest || !scrollRef.current) return;
@@ -207,6 +337,21 @@ export default function MsProjectGantt({
       el.scrollTop = Math.max(0, y - el.clientHeight / 2);
     }
   }, [scrollRequest]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!navRequest || !el) return;
+    const visW = Math.max(0, el.clientWidth - gridW - SPLITTER_W);
+    if (navRequest.kind === 'today') {
+      const x = daysBetween(range.start, toDate(todayStr())) * dayW;
+      el.scrollLeft = Math.max(0, x - visW / 3);
+    } else if (navRequest.kind === 'page') {
+      el.scrollLeft = Math.max(0, el.scrollLeft + navRequest.dir * visW * 0.8);
+    } else {
+      el.scrollLeft = Math.max(0, daysBetween(range.start, toDate(navRequest.date)) * dayW - 12);
+      viewRef.current.scrollLeft = el.scrollLeft;
+    }
+  }, [navRequest?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!revealRequest || !scrollRef.current) return;
@@ -257,6 +402,39 @@ export default function MsProjectGantt({
       ...(dropHint.pos === 'above' ? { top: -1 } : { bottom: -1 }),
     },
   } : {});
+
+  // Column reorder (drag a header) and resize (drag a header's right edge).
+  const [colDrag, setColDrag] = useState<string | null>(null);
+  const [colDrop, setColDrop] = useState<{ key: string; before: boolean } | null>(null);
+  const moveColumn = (from: string, to: string, before: boolean) => {
+    if (!onColumnsChange || from === to) return;
+    const moving = columns.find((c) => c.key === from);
+    if (!moving) return;
+    const rest = columns.filter((c) => c.key !== from);
+    const at = rest.findIndex((c) => c.key === to);
+    if (at < 0) return;
+    onColumnsChange([...rest.slice(0, before ? at : at + 1), moving, ...rest.slice(before ? at : at + 1)]);
+  };
+  const colsRef = useRef(columns);
+  colsRef.current = columns;
+  const startColResize = (e: ReactMouseEvent, key: string, w0: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const x0 = e.clientX;
+    const min = key === 'name' ? 120 : 44;
+    const move = (ev: MouseEvent) => {
+      const w = Math.max(min, Math.round(w0 + ev.clientX - x0));
+      onColumnsChange?.(colsRef.current.map((c) => (c.key === key ? { ...c, w } : c)));
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      document.body.style.cursor = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
 
   // Splitter between the grid and the chart, like MS Project's divider bar.
   const [splitDrag, setSplitDrag] = useState<{ x: number; w: number } | null>(null);
@@ -346,7 +524,7 @@ export default function MsProjectGantt({
           </Box>
         );
       }
-      case 'pred': return (t.predecessors || []).map((p) => idNumbers.get(p)).filter((n) => n != null).join(',');
+      case 'pred': return linksOf(t).filter((l) => idNumbers.has(l.id)).map((l) => formatLink(idNumbers.get(l.id) as number, l)).join(',');
       case 'mp': return !row.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? String(t.manpower) : '';
       case 'pct': return `${Math.round(t.progressPct || 0)}%`;
       case 'wt': {
@@ -359,6 +537,12 @@ export default function MsProjectGantt({
         );
       }
       case 'cat': return row.isSummary ? '' : (t.category || '');
+      case 'float': {
+        const f = row.isSummary ? undefined : floatMap?.get(t.id);
+        if (f == null) return '';
+        return <Box component="span" sx={{ color: f <= 0 ? MSP.late : MSP.text, fontWeight: f <= 0 ? 600 : 400 }}>{`${f} day${f === 1 ? '' : 's'}`}</Box>;
+      }
+      case 'notes': return t.notes ? <Tooltip title={t.notes}><span>{t.notes}</span></Tooltip> : '';
       default: return null;
     }
   };
@@ -396,7 +580,9 @@ export default function MsProjectGantt({
           </Box>
         );
       })()}
-      {!row.isSummary && draggingTaskId === null && <Box sx={{ opacity: 0.75, mt: 0.5 }}>Drag to move · drag right edge to change duration</Box>}
+      {!row.isSummary && draggingTaskId === null && (
+        <Box sx={{ opacity: 0.75, mt: 0.5 }}>Drag to move · right edge = duration · ▲ below = % complete · end dots = link</Box>
+      )}
     </Box>
   );
 
@@ -412,7 +598,23 @@ export default function MsProjectGantt({
     return <Box sx={{ position: 'absolute', left, width, top: barTop + barH + 2, height: 4, bgcolor: MSP.baseline, pointerEvents: 'none' }} />;
   };
 
-  const renderBar = (row: TreeRow) => {
+  // Hover handles: link dots at the bar ends, % complete grip below the bar.
+  const linkDot = (t: ScheduleTask, end: 'start' | 'finish', cx: number, rowIdx: number) => (
+    onLinkDraw ? (
+      <Tooltip title={`Drag to link from this task's ${end}`} disableInteractive>
+        <Box
+          className="gantt-h"
+          onMouseDown={(e) => startLinkDrag(e, t, end, cx, rowIdx)}
+          sx={{
+            position: 'absolute', left: cx - 5, top: barTop + barH / 2 - 5, width: 10, height: 10, borderRadius: '50%',
+            bgcolor: '#fff', border: `2px solid ${MSP.link}`, boxSizing: 'border-box', cursor: 'crosshair', zIndex: 2,
+          }}
+        />
+      </Tooltip>
+    ) : null
+  );
+
+  const renderBar = (row: TreeRow, rowIdx: number) => {
     const t = row.task;
     const { left, width } = barGeom(t);
     const crit = criticalIds.has(t.id);
@@ -446,8 +648,9 @@ export default function MsProjectGantt({
             />
           </Tooltip>
           <Box sx={{ position: 'absolute', left: cx + 10, top: 0, height: GANTT_ROW_H, display: 'flex', alignItems: 'center', fontSize: 11, color: MSP.text, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-            {`${toDate(t.startDate).getMonth() + 1}/${toDate(t.startDate).getDate()}`}
+            {display.taskLabels ? `${toDate(t.startDate).getMonth() + 1}/${toDate(t.startDate).getDate()}` : ''}
           </Box>
+          {linkDot(t, 'finish', cx - 16, rowIdx)}
         </>
       );
     }
@@ -469,7 +672,7 @@ export default function MsProjectGantt({
               boxShadow: dragging ? '0 0 0 2px rgba(0,0,0,0.15)' : 'none',
             }}
           >
-            {pct > 0 && (
+            {display.progress && pct > 0 && (
               <Box sx={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', height: 4, width: `${pct}%`, bgcolor: crit ? MSP.critProgress : manual ? MSP.manualProgress : MSP.progress }} />
             )}
             <Box
@@ -478,11 +681,26 @@ export default function MsProjectGantt({
             />
           </Box>
         </Tooltip>
-        {(t.category || (t.manpower || 0) > 0) && (
-          <Box sx={{ position: 'absolute', left: left + width + 6, top: 0, height: GANTT_ROW_H, display: 'flex', alignItems: 'center', fontSize: 11, color: MSP.text, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-            {[t.category, (t.manpower || 0) > 0 ? `[${t.manpower}]` : ''].filter(Boolean).join(' ')}
-          </Box>
-        )}
+        {display.progress && <Tooltip title={`${Math.round(pct)}% complete — drag to change`} disableInteractive>
+          <Box
+            className="gantt-h"
+            onMouseDown={(e) => onBarMouseDown(e, t, 'progress')}
+            sx={{
+              position: 'absolute', left: left + (width * pct) / 100 - 5, top: barTop + barH - 1, width: 10, height: 8, cursor: 'col-resize', zIndex: 2,
+              '&::after': { content: '""', position: 'absolute', left: 1, top: 1, borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderBottom: `6px solid ${MSP.progress}` },
+            }}
+          />
+        </Tooltip>}
+        {linkDot(t, 'start', left - 9, rowIdx)}
+        {linkDot(t, 'finish', left + width + 11, rowIdx)}
+        {(() => {
+          const label = [display.taskLabels ? t.category : '', display.manpowerLabels && (t.manpower || 0) > 0 ? `[${t.manpower}]` : ''].filter(Boolean).join(' ');
+          return label ? (
+            <Box sx={{ position: 'absolute', left: left + width + 6, top: 0, height: GANTT_ROW_H, display: 'flex', alignItems: 'center', fontSize: 11, color: MSP.text, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+              {label}
+            </Box>
+          ) : null;
+        })()}
       </>
     );
   };
@@ -490,24 +708,51 @@ export default function MsProjectGantt({
   return (
     <Box
       ref={scrollRef}
-      sx={{ flex: 1, overflow: 'auto', position: 'relative', bgcolor: '#fff', border: `1px solid ${MSP.border}`, fontFamily: MSP.font, color: MSP.text, fontSize: 12, userSelect: 'none' }}
+      onScroll={(e) => { viewRef.current.scrollLeft = (e.currentTarget as HTMLDivElement).scrollLeft; }}
+      sx={{ flex: 1, minWidth: 0, overflow: 'auto', position: 'relative', bgcolor: '#fff', border: `1px solid ${MSP.border}`, fontFamily: MSP.font, color: MSP.text, fontSize: 12, userSelect: 'none' }}
     >
       <Box sx={{ display: 'flex', width: gridW + SPLITTER_W + timelineW, minHeight: '100%' }}>
         {/* ── Entry table (grid) ───────────────────────────────────────── */}
         <Box sx={{ position: 'sticky', left: 0, zIndex: 3, width: gridW, flexShrink: 0, overflow: 'clip', bgcolor: '#fff' }}>
           <Box sx={{ position: 'sticky', top: 0, zIndex: 1, height: HEADER_H, width: colX, bgcolor: MSP.headerBg, borderBottom: `1px solid ${MSP.border}`, display: 'flex' }}>
-            {cols.map((c) => (
-              <Box
-                key={c.key}
-                sx={{
-                  width: c.w, flexShrink: 0, borderRight: `1px solid ${MSP.border}`, boxSizing: 'border-box',
-                  display: 'flex', alignItems: 'center', justifyContent: c.align === 'center' ? 'center' : 'flex-start',
-                  px: '6px', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden',
-                }}
-              >
-                {c.label}
-              </Box>
-            ))}
+            {cols.map((c) => {
+              const movable = !!onColumnsChange && c.key !== 'id' && c.key !== 'ind';
+              const drop = colDrop?.key === c.key ? colDrop : null;
+              return (
+                <Box
+                  key={c.key}
+                  draggable={movable}
+                  onDragStart={(e) => { if (!movable) return; e.dataTransfer.setData('text/plain', c.key); e.dataTransfer.effectAllowed = 'move'; setColDrag(c.key); }}
+                  onDragOver={(e) => {
+                    if (!colDrag || !movable || colDrag === c.key) return;
+                    e.preventDefault();
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    const before = e.clientX < r.left + r.width / 2;
+                    if (colDrop?.key !== c.key || colDrop.before !== before) setColDrop({ key: c.key, before });
+                  }}
+                  onDrop={(e) => { e.preventDefault(); if (colDrag && colDrop) moveColumn(colDrag, colDrop.key, colDrop.before); setColDrag(null); setColDrop(null); }}
+                  onDragEnd={() => { setColDrag(null); setColDrop(null); }}
+                  title={movable ? 'Drag to move · drag the right edge to resize' : undefined}
+                  sx={{
+                    position: 'relative', width: c.w, flexShrink: 0, borderRight: `1px solid ${MSP.border}`, boxSizing: 'border-box',
+                    display: 'flex', alignItems: 'center', justifyContent: c.align === 'center' ? 'center' : 'flex-start',
+                    px: '6px', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', cursor: movable ? 'grab' : 'default',
+                    opacity: colDrag === c.key ? 0.5 : 1,
+                    boxShadow: drop ? (drop.before ? 'inset 3px 0 0 #1F6FD1' : 'inset -3px 0 0 #1F6FD1') : 'none',
+                  }}
+                >
+                  {c.label}
+                  {movable && (
+                    <Box
+                      draggable={false}
+                      onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                      onMouseDown={(e) => startColResize(e, c.key, c.w)}
+                      sx={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 6, cursor: 'col-resize', '&:hover': { bgcolor: 'rgba(31,111,209,0.25)' } }}
+                    />
+                  )}
+                </Box>
+              );
+            })}
           </Box>
           {rows.map((row) => {
             const sel = selectedIds ? selectedIds.has(row.task.id) : row.task.id === selectedId;
@@ -581,7 +826,7 @@ export default function MsProjectGantt({
             </Box>
           </Box>
 
-          <Box sx={{ position: 'relative', height: bodyH }}>
+          <Box ref={bodyRef} sx={{ position: 'relative', height: bodyH }}>
             {nonWorking.map((d) => (
               <Box key={`nw-${d}`} sx={{ position: 'absolute', top: 0, left: d * dayW, width: dayW, height: bodyH, bgcolor: MSP.nonWorking, pointerEvents: 'none' }} />
             ))}
@@ -594,6 +839,8 @@ export default function MsProjectGantt({
                 onContextMenu={(e) => { if (!(selectedIds ? selectedIds.has(row.task.id) : row.task.id === selectedId)) onSelect(row.task.id); onRowContextMenu(e, row); }}
                 sx={{
                   position: 'absolute', left: 0, top: i * GANTT_ROW_H, width: timelineW, height: GANTT_ROW_H,
+                  '& .gantt-h': { opacity: 0, transition: 'opacity .1s' },
+                  '&:hover .gantt-h': { opacity: linkDrag ? 0 : 1 },
                   bgcolor: (selectedIds ? selectedIds.has(row.task.id) : row.task.id === selectedId)
                     ? 'rgba(92,141,209,0.12)'
                     : filterHits?.has(row.task.id) ? 'rgba(255,214,0,0.14)' : 'transparent',
@@ -606,11 +853,11 @@ export default function MsProjectGantt({
                 }}
               >
                 {renderBaseline(row)}
-                {renderBar(row)}
+                {renderBar(row, i)}
               </Box>
             ))}
 
-            {links.length > 0 && (
+            {(links.length > 0 || linkDrag) && (
               <svg style={{ position: 'absolute', top: 0, left: 0, width: timelineW, height: bodyH, pointerEvents: 'none', overflow: 'visible' }}>
                 <defs>
                   <marker id="msp-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
@@ -627,6 +874,27 @@ export default function MsProjectGantt({
                     markerEnd={l.crit ? 'url(#msp-arrow-crit)' : 'url(#msp-arrow)'}
                   />
                 ))}
+                {/* Wider invisible hit lines: double-click a link to edit or delete it. */}
+                {onLinkOpen && !linkDrag && links.map((l) => (
+                  <path
+                    key={`hit-${l.key}`} d={l.d} fill="none" stroke="transparent" strokeWidth={7}
+                    style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                    onDoubleClick={(e) => onLinkOpen(l.predId, l.succId, e.clientX, e.clientY)}
+                  >
+                    <title>{`Link ${l.label} — double-click to edit`}</title>
+                  </path>
+                ))}
+                {linkDrag && (() => {
+                  const tgt = linkTarget(linkDrag.x, linkDrag.y);
+                  const ti = tgt ? rows.indexOf(tgt.row) : -1;
+                  return (
+                    <>
+                      {tgt && <rect x={0} y={ti * GANTT_ROW_H} width={timelineW} height={GANTT_ROW_H} fill="rgba(68,114,196,0.10)" />}
+                      <line x1={linkDrag.x0} y1={linkDrag.y0} x2={linkDrag.x} y2={linkDrag.y} stroke={MSP.link} strokeWidth={1.5} strokeDasharray="4 3" />
+                      <circle cx={linkDrag.x} cy={linkDrag.y} r={3} fill={MSP.link} />
+                    </>
+                  );
+                })()}
               </svg>
             )}
 

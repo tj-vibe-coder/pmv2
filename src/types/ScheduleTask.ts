@@ -15,6 +15,9 @@ export interface ScheduleTask {
   /** Finish-to-start predecessor task ids. A task with predecessors is
    *  auto-scheduled to start the day after its latest predecessor ends. */
   predecessors?: string[];
+  /** Type + lag (working days) for links that aren't a plain finish-to-start,
+   *  keyed by predecessor id. Absent = FS with no lag. See scheduleLinks. */
+  linkTypes?: Record<string, { type: LinkType; lag: number }>;
   /** Parent (summary) task id for WBS hierarchy. Null/absent = top level.
    *  A task that is some other task's parent is a summary — its dates and
    *  progress roll up from its children and aren't edited directly. */
@@ -23,6 +26,10 @@ export interface ScheduleTask {
    *  Man-days = manpower × working days; drives the S-Curve weighting and the
    *  manpower histogram. Unset/0 = no labor (e.g. procurement lead time). */
   manpower?: number;
+  /** Crew composition by role (e.g. 2 Electrician + 1 PLC Engineer). When
+   *  set, `manpower` is kept equal to its total; the manpower chart can split
+   *  headcount by role. */
+  crew?: CrewMember[];
   /** Progress weight (any unit — %, cost, man-hours). Once any task has one,
    *  project/phase % complete weigh each task by weight ÷ total instead of by
    *  duration; see utils/calcsheet/scheduleWeights. Leaf tasks only. */
@@ -35,6 +42,19 @@ export interface ScheduleTask {
   createdAt?: string;
   updatedAt?: string;
 }
+
+export interface CrewMember { role: string; qty: number }
+
+/** Suggested crew roles (free text is allowed too). */
+export const CREW_ROLES = [
+  'Electrician', 'Technician', 'PLC Engineer', 'Controls Engineer', 'Instrumentation Tech', 'Supervisor',
+  'Foreman', 'Helper', 'Welder', 'Fitter', 'Safety Officer', 'Project Engineer',
+] as const;
+
+export const crewTotal = (crew?: CrewMember[]) => (crew || []).reduce((sum, c) => sum + Math.max(0, Number(c.qty) || 0), 0);
+
+/** MS Project dependency types: Finish-to-Start, Start-to-Start, Finish-to-Finish, Start-to-Finish. */
+export type LinkType = 'FS' | 'SS' | 'FF' | 'SF';
 
 export const SCHEDULE_TASK_CATEGORIES = [
   'Engineering',

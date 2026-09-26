@@ -11,11 +11,11 @@ import {
   EXPORT_COLUMNS, PAPER_SIZES, defaultExportSettings, droppedColumns, renderSchedulePdf, schedulePdfFileName,
   type ScheduleExportData, type ScheduleExportSettings, type PaperSize,
 } from '../../utils/calcsheet/schedulePdfExport';
-import { todayStr } from '../../utils/calcsheet/scheduleDates';
 
 // Export Gantt dialog: layout / document / chart settings on the left, a live
 // preview of the exact PDF pages on the right. Settings are remembered per
-// project (except Date issued, which defaults to today).
+// project. No company branding or sign-off block — schedules also go out on
+// projects where IOCT is the subcontractor.
 
 interface Props {
   open: boolean;
@@ -25,7 +25,6 @@ interface Props {
   project: { code?: string; name?: string };
   rows: TreeRow[];
   loadData: () => Promise<ScheduleExportData>;
-  preparedBy: string;
   /** Page toggles carried in as the chart defaults each time the dialog opens. */
   initial: { showCritical: boolean; showBaseline: boolean };
   hasBaseline: boolean;
@@ -33,13 +32,15 @@ interface Props {
 
 const storageKey = (id: string) => `gantt-export-${id}`;
 
-function loadSettings(id: string, project: Props['project'], preparedBy: string): ScheduleExportSettings {
-  const base = defaultExportSettings(project, preparedBy);
+function loadSettings(id: string, project: Props['project']): ScheduleExportSettings {
+  const base = defaultExportSettings(project);
   try {
     const raw = localStorage.getItem(storageKey(id));
     if (!raw) return base;
     const saved = JSON.parse(raw) as Partial<ScheduleExportSettings>;
-    return { ...base, ...saved, columns: { ...base.columns, ...(saved.columns || {}) }, dateIssued: todayStr() };
+    // Keep only known keys (older saves carried title-block fields).
+    const known = Object.fromEntries(Object.entries(saved).filter(([k]) => k in base)) as Partial<ScheduleExportSettings>;
+    return { ...base, ...known, columns: { ...base.columns, ...(saved.columns || {}) } };
   } catch {
     return base;
   }
@@ -54,8 +55,8 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-export default function ScheduleExportDialog({ open, onClose, projectId, project, rows, loadData, preparedBy, initial, hasBaseline }: Props) {
-  const [s, setS] = useState<ScheduleExportSettings>(() => loadSettings(projectId, project, preparedBy));
+export default function ScheduleExportDialog({ open, onClose, projectId, project, rows, loadData, initial, hasBaseline }: Props) {
+  const [s, setS] = useState<ScheduleExportSettings>(() => loadSettings(projectId, project));
   const [data, setData] = useState<ScheduleExportData | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [rendering, setRendering] = useState(false);
@@ -67,7 +68,7 @@ export default function ScheduleExportDialog({ open, onClose, projectId, project
   // Fresh settings + data each time the dialog opens.
   useEffect(() => {
     if (!open) return;
-    setS({ ...loadSettings(projectId, project, preparedBy), showCritical: initial.showCritical, showBaseline: initial.showBaseline });
+    setS({ ...loadSettings(projectId, project), showCritical: initial.showCritical, showBaseline: initial.showBaseline });
     setData(null);
     setErr('');
     loadData().then(setData).catch((e) => setErr(e instanceof Error ? e.message : 'Failed to load schedule data'));
@@ -76,7 +77,7 @@ export default function ScheduleExportDialog({ open, onClose, projectId, project
   // Remember settings (Date issued is always today's on open).
   useEffect(() => {
     if (!open) return;
-    try { const { dateIssued: _d, ...keep } = s; localStorage.setItem(storageKey(projectId), JSON.stringify(keep)); } catch { /* ignore */ }
+    try { localStorage.setItem(storageKey(projectId), JSON.stringify(s)); } catch { /* ignore */ }
   }, [s, open, projectId]);
 
   // Live preview, debounced; a newer render supersedes an older one.
@@ -174,12 +175,6 @@ export default function ScheduleExportDialog({ open, onClose, projectId, project
               {text('revision', 'Revision')}
             </Stack>
             {text('projectTitle', 'Project title')}
-            {text('preparedBy', 'Prepared by')}
-            {text('checkedBy', 'Checked by')}
-            {text('approvedBy', 'Approved by')}
-            {text('dateIssued', 'Date issued', { type: 'date', InputLabelProps: { shrink: true } })}
-            {check('titleBlock', 'Title block', false, 'sign-offs + sheet X of Y on every page')}
-            {check('logo', 'Company logo', !s.titleBlock)}
           </Section>
 
           <Divider sx={{ mb: 1.5 }} />
@@ -211,7 +206,7 @@ export default function ScheduleExportDialog({ open, onClose, projectId, project
               </Alert>
             )}
           </Section>
-          <Button size="small" onClick={() => setS({ ...defaultExportSettings(project, preparedBy), showCritical: initial.showCritical, showBaseline: initial.showBaseline })}>
+          <Button size="small" onClick={() => setS({ ...defaultExportSettings(project), showCritical: initial.showCritical, showBaseline: initial.showBaseline })}>
             Reset to defaults
           </Button>
         </Box>
