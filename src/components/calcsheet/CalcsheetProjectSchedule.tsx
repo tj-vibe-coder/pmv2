@@ -34,12 +34,14 @@ import {
   addWorkingDays, nextWorkingDay, workingDaysBetween,
 } from '../../utils/calcsheet/scheduleDates';
 import { exportScheduleXlsx } from '../../utils/calcsheet/scheduleXlsxExport';
-import { exportSchedulePdf } from '../../utils/calcsheet/schedulePdfExport';
+import type { ScheduleExportData } from '../../utils/calcsheet/schedulePdfExport';
 import { autoSchedule, wouldCycle, criticalPath } from '../../utils/calcsheet/scheduleAuto';
 import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../../utils/calcsheet/scheduleTree';
 import { durationWeight, leafWeights, projectPercent } from '../../utils/calcsheet/scheduleWeights';
 import MsProjectGantt, { GANTT_GRID_MAX_W, ZOOM_DAY_WIDTH, type GanttZoom } from './MsProjectGantt';
 import ScheduleSCurve from './ScheduleSCurve';
+import ScheduleExportDialog from './ScheduleExportDialog';
+import { useAuth } from '../../contexts/AuthContext';
 import { baselineFromVersion, finishVariance, matchBaseline, varianceLabel, type ScheduleBaseline } from '../../utils/calcsheet/scheduleBaseline';
 import type { SCurveSnapshot } from '../../utils/calcsheet/scheduleSCurve';
 import {
@@ -585,7 +587,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
   keyHandler.current = (e: KeyboardEvent) => {
     if (view !== 'gantt') return;
-    if (dialogOpen || deleteTarget || bulkDelete || weightsOpen || importOpen || saveVerOpen || historyOpen || compareVersion || helpOpen || ctxMenu || hlMenu) return;
+    if (dialogOpen || deleteTarget || bulkDelete || weightsOpen || importOpen || saveVerOpen || historyOpen || compareVersion || helpOpen || ctxMenu || hlMenu || pdfOpen) return;
     const target = e.target as HTMLElement | null;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
@@ -975,23 +977,17 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     }
   };
 
-  const runExportPdf = async () => {
-    setExportBusy('pdf');
-    setExportErr('');
-    try {
-      const snapshots = await loadSnapshots().catch(() => []);
-      await exportSchedulePdf({ code, name }, flattenTree(rolledTasks, new Set()), {
-        workingDays,
-        criticalIds: showCritical ? criticalIds : undefined,
-        snapshots,
-        baseline: showBaseline ? baseline : null,
-      });
-    } catch (e) {
-      setExportErr(e instanceof Error ? e.message : 'PDF export failed');
-    } finally {
-      setExportBusy(null);
-    }
-  };
+  // PDF export goes through the Export dialog (settings + live preview).
+  const { user: currentUser } = useAuth();
+  const [pdfOpen, setPdfOpen] = useState(false);
+  const exportRows = useMemo(() => (pdfOpen ? flattenTree(rolledTasks, new Set()) : []), [pdfOpen, rolledTasks]);
+  const loadExportData = async (): Promise<ScheduleExportData> => ({
+    workingDays,
+    // Always computed, so the dialog's Critical path toggle works even when it's off on the page.
+    criticalIds: criticalPath(leafTasks(tasks), workingDays),
+    snapshots: await loadSnapshots().catch(() => []),
+    baseline,
+  });
 
   // ── Version history ─────────────────────────────────────────────────────
   const saveVersion = async () => {
@@ -1232,10 +1228,10 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             {exportBusy === 'xlsx' ? 'Exporting…' : 'Export Excel'}
           </Button>
           <Button
-            variant="outlined" startIcon={<PictureAsPdfIcon />} onClick={() => void runExportPdf()}
+            variant="outlined" startIcon={<PictureAsPdfIcon />} onClick={() => setPdfOpen(true)}
             disabled={sorted.length === 0 || exportBusy !== null}
           >
-            {exportBusy === 'pdf' ? 'Exporting…' : 'Export PDF'}
+            Export PDF
           </Button>
           {quotations.length > 0 && (
             <Button
@@ -1931,6 +1927,18 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
           <Button variant="contained" onClick={() => void saveWeights()} disabled={weightsSaving}>{weightsSaving ? 'Saving…' : 'Save weights'}</Button>
         </DialogActions>
       </Dialog>
+
+      <ScheduleExportDialog
+        open={pdfOpen}
+        onClose={() => setPdfOpen(false)}
+        projectId={id}
+        project={{ code, name }}
+        rows={exportRows}
+        loadData={loadExportData}
+        preparedBy={currentUser?.full_name || currentUser?.username || ''}
+        initial={{ showCritical, showBaseline: showBaseline && !!baseline }}
+        hasBaseline={!!baseline}
+      />
 
       {/* Save version dialog */}
       <Dialog open={saveVerOpen} onClose={() => !savingVer && setSaveVerOpen(false)} maxWidth="xs" fullWidth>
