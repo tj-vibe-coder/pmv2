@@ -41,7 +41,6 @@ import { durationWeight, leafWeights, projectPercent } from '../../utils/calcshe
 import MsProjectGantt, { GANTT_GRID_MAX_W, ZOOM_DAY_WIDTH, type GanttZoom } from './MsProjectGantt';
 import ScheduleSCurve from './ScheduleSCurve';
 import ScheduleExportDialog from './ScheduleExportDialog';
-import { useAuth } from '../../contexts/AuthContext';
 import { baselineFromVersion, finishVariance, matchBaseline, varianceLabel, type ScheduleBaseline } from '../../utils/calcsheet/scheduleBaseline';
 import type { SCurveSnapshot } from '../../utils/calcsheet/scheduleSCurve';
 import {
@@ -978,7 +977,6 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   };
 
   // PDF export goes through the Export dialog (settings + live preview).
-  const { user: currentUser } = useAuth();
   const [pdfOpen, setPdfOpen] = useState(false);
   const exportRows = useMemo(() => (pdfOpen ? flattenTree(rolledTasks, new Set()) : []), [pdfOpen, rolledTasks]);
   const loadExportData = async (): Promise<ScheduleExportData> => ({
@@ -1935,7 +1933,6 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         project={{ code, name }}
         rows={exportRows}
         loadData={loadExportData}
-        preparedBy={currentUser?.full_name || currentUser?.username || ''}
         initial={{ showCritical, showBaseline: showBaseline && !!baseline }}
         hasBaseline={!!baseline}
       />
