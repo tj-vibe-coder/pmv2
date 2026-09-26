@@ -470,29 +470,49 @@ export default function QuotationEditor() {
 
   // Merge picked inclusions (from another quotation, or the Scope Library) into
   // the current draft. Lines already carry fresh ids from the source dialog.
-  const appendInclusions = (picked: CopiedInclusions) => {
+  // A section locked by this quotation's scope category (see scopeCategory
+  // below) never receives picked lines — its EditableTable renders readOnly,
+  // so anything appended there would be stuck: visible, uneditable, and
+  // undeletable through the UI. Returns whether anything was actually
+  // skipped, so the caller can tell the user.
+  const appendInclusions = (picked: CopiedInclusions): boolean => {
+    const skipped =
+      (generalReqtsLocked && picked.generalReqts.length > 0) ||
+      (componentsLocked && picked.components.length > 0) ||
+      (servicesLocked && (picked.services.length > 0 || picked.manpower.length > 0));
     setDraft((d) => d ? {
       ...d,
-      generalReqts: [...d.generalReqts, ...picked.generalReqts],
-      components: [...d.components, ...picked.components],
-      services: [...d.services, ...picked.services],
-      manpower: [...d.manpower, ...picked.manpower],
+      generalReqts: generalReqtsLocked ? d.generalReqts : [...d.generalReqts, ...picked.generalReqts],
+      components: componentsLocked ? d.components : [...d.components, ...picked.components],
+      services: servicesLocked ? d.services : [...d.services, ...picked.services],
+      manpower: servicesLocked ? d.manpower : [...d.manpower, ...picked.manpower],
       ...(picked.terms ? { termsOverrides: { ...d.termsOverrides, ...picked.terms } } : {}),
     } : d);
+    return skipped;
   };
 
   // Append copied inclusions (from another quotation) into the current draft.
   const handleCopyInclusions = (picked: CopiedInclusions) => {
-    appendInclusions(picked);
+    const skipped = appendInclusions(picked);
     setCopyOpen(false);
-    setToast({ msg: 'Inclusions copied — review and Save.', sev: 'success' });
+    setToast({
+      msg: skipped
+        ? 'Inclusions copied — some lines were skipped (locked by this quotation\'s scope). Review and Save.'
+        : 'Inclusions copied — review and Save.',
+      sev: skipped ? 'warning' : 'success',
+    });
   };
 
   // Insert inclusions chosen from the Scope Library into the current draft.
   const handleInsertFromLibrary = (picked: CopiedInclusions) => {
-    appendInclusions(picked);
+    const skipped = appendInclusions(picked);
     setLibraryOpen(false);
-    setToast({ msg: 'Inserted from library — review and Save.', sev: 'success' });
+    setToast({
+      msg: skipped
+        ? 'Inserted from library — some lines were skipped (locked by this quotation\'s scope). Review and Save.'
+        : 'Inserted from library — review and Save.',
+      sev: skipped ? 'warning' : 'success',
+    });
   };
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -552,6 +572,15 @@ export default function QuotationEditor() {
   const customer = clients.find((c) => c.id === project.customerId);
   const issuer = quotation.kind;
   const isLegacy = quotation.formulaVersion === 'legacy';
+  // Scope category, fixed at quotation creation (see QuotationScopeCategory).
+  // 'supply' leaves only B (Components) editable; 'services' leaves only B
+  // locked (A and C stay editable); 'both' (default, incl. every quotation
+  // predating this field) locks nothing. Combined with isLegacy below, since a
+  // legacy quotation is already fully locked regardless of scope.
+  const scopeCategory = quotation.scopeCategory ?? 'both';
+  const generalReqtsLocked = isLegacy || scopeCategory === 'supply';
+  const componentsLocked = isLegacy || scopeCategory === 'services';
+  const servicesLocked = isLegacy || scopeCategory === 'supply';
   // Shown as a quick preview on the Terms & Conditions confirmation dialogs
   // (Save / Export PDF) so the team can eyeball the actual Delivery wording —
   // the thing most often left stale, e.g. after enabling the delivery fee —
@@ -1315,6 +1344,14 @@ export default function QuotationEditor() {
         <Stack spacing={0.5}>
           <Stack direction="row" spacing={1} alignItems="center">
             <Chip size="small" label={`${issuer} → ${recipient?.code ?? '?'}`} color={issuer === 'IOCT' ? 'primary' : 'secondary'} />
+            {scopeCategory !== 'both' && (
+              <Chip
+                size="small"
+                label={scopeCategory === 'supply' ? 'Supply only' : 'Services only'}
+                variant="outlined"
+                title="Scope is fixed at creation — see the locked sections below"
+              />
+            )}
             {isLegacy && (
               <Chip
                 size="small"
@@ -1794,11 +1831,11 @@ export default function QuotationEditor() {
           </Box>
 
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' }, gap: 2 }}>
-            <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
-            <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} helperText="Default for product rows" disabled={isLegacy} sx={{ width: '100%' }} />
-            <NumField label="General Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} disabled={isLegacy} sx={{ width: '100%' }} />
-            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = (1 + (((s.markupPct ?? v) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100)); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={isLegacy} sx={{ width: '100%' }} />
-            <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={isLegacy} sx={{ width: '100%' }} />
+            <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} disabled={componentsLocked} sx={{ width: '100%' }} />
+            <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} helperText="Default for product rows" disabled={componentsLocked} sx={{ width: '100%' }} />
+            <NumField label="General Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} disabled={generalReqtsLocked} sx={{ width: '100%' }} />
+            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = (1 + (((s.markupPct ?? v) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100)); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={servicesLocked} sx={{ width: '100%' }} />
+            <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={servicesLocked} sx={{ width: '100%' }} />
             <NumField
               label="Discount %"
               value={quotation.discountPct}
@@ -1888,13 +1925,16 @@ export default function QuotationEditor() {
         <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>A. General Requirements</Typography>
+            {generalReqtsLocked && !isLegacy && (
+              <Chip label="Locked — Supply only" size="small" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
+            )}
             <FormControlLabel
               control={
                 <Switch
                   size="small"
                   checked={!!quotation.exportGeneralReqtsAsLot}
                   onChange={(e) => setField('exportGeneralReqtsAsLot', e.target.checked)}
-                  disabled={isLegacy}
+                  disabled={generalReqtsLocked}
                 />
               }
               label={<Typography variant="caption">Group in PDF/Excel</Typography>}
@@ -1907,7 +1947,7 @@ export default function QuotationEditor() {
                   onChange={(v) => setField('generalReqtsExportQty', Math.max(1, v))}
                   integer
                   sx={{ width: 86 }}
-                  disabled={isLegacy}
+                  disabled={generalReqtsLocked}
                 />
                 <Typography variant="caption" color="text.secondary">
                   Unit: {PHP(generalReqtsExportUnitPrice)} / LOT
@@ -1915,7 +1955,7 @@ export default function QuotationEditor() {
               </Stack>
             )}
           </Stack>
-          {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addGeneral}>Add row</Button>}
+          {!generalReqtsLocked && <Button startIcon={<AddIcon />} size="small" onClick={addGeneral}>Add row</Button>}
         </Stack>
         <EditableTable
           rows={quotation.generalReqts}
@@ -1924,7 +1964,7 @@ export default function QuotationEditor() {
           onDelete={(idx) => deleteRow('generalReqts', idx)}
           onReorder={(rows) => reorderRows('generalReqts', rows)}
           emptyMessage="No general requirements"
-          readOnly={isLegacy}
+          readOnly={generalReqtsLocked}
           footer={
             <>
               {/* colSpan = columns.length: drag handle + all data cols except Total (amount sits under Total; trailing empty is delete) */}
@@ -1957,30 +1997,33 @@ export default function QuotationEditor() {
         <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>B. Supply of Components</Typography>
+            {componentsLocked && !isLegacy && (
+              <Chip label="Locked — Services only" size="small" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
+            )}
             <FormControlLabel
-              control={<Switch size="small" checked={!!quotation.hidePartNumbersInPdf} onChange={(e) => setField('hidePartNumbersInPdf', e.target.checked)} disabled={isLegacy} />}
+              control={<Switch size="small" checked={!!quotation.hidePartNumbersInPdf} onChange={(e) => setField('hidePartNumbersInPdf', e.target.checked)} disabled={componentsLocked} />}
               label={<Typography variant="caption">Hide part numbers in PDF</Typography>}
             />
             <FormControlLabel
-              control={<Switch size="small" checked={quotation.salesValueScope === 'services_only'} onChange={(e) => setField('salesValueScope', e.target.checked ? 'services_only' : undefined)} disabled={isLegacy} />}
+              control={<Switch size="small" checked={quotation.salesValueScope === 'services_only'} onChange={(e) => setField('salesValueScope', e.target.checked ? 'services_only' : undefined)} disabled={componentsLocked} />}
               label={<Typography variant="caption">Client supplies materials — Sales counts services only</Typography>}
             />
           </Stack>
           <Stack direction="row" spacing={1}>
-            {selectedCompIds.size >= 2 && !isLegacy && (
+            {selectedCompIds.size >= 2 && !componentsLocked && (
               <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen('components')}>
                 Group selected ({selectedCompIds.size})
               </Button>
             )}
-            {selectedCompIds.size >= 1 && !isLegacy && (
+            {selectedCompIds.size >= 1 && !componentsLocked && (
               <Button size="small" variant="outlined" onClick={() => setSubheaderDialogOpen('components')}>
                 Add subheader ({selectedCompIds.size})
               </Button>
             )}
-            {selectedCompIds.size >= 1 && quotation.components.some((c) => selectedCompIds.has(c.id) && c.subheader) && !isLegacy && (
+            {selectedCompIds.size >= 1 && quotation.components.some((c) => selectedCompIds.has(c.id) && c.subheader) && !componentsLocked && (
               <Button size="small" variant="text" onClick={() => clearSelectedSubheaders('components')}>Clear subheader</Button>
             )}
-            {!isLegacy && (
+            {!componentsLocked && (
               <>
                 <Button startIcon={<MenuBookIcon />} size="small" variant="outlined" onClick={() => setCatalogOpen(true)}>
                   Browse Catalog
@@ -1998,7 +2041,7 @@ export default function QuotationEditor() {
           onReorder={(rows) => reorderRows('components', rows)}
           subheader={(row, index) => subheaderBefore(quotation.components, index)}
           emptyMessage="No components — typical for IOCT services-only quotes"
-          readOnly={isLegacy}
+          readOnly={componentsLocked}
           isHeaderRow={(r) => !!r.isHeader}
           isChildHeaderRow={(r) => !!r.isChildHeader}
           getContextMenu={getComponentContextMenu}
@@ -2031,7 +2074,12 @@ export default function QuotationEditor() {
       <Paper sx={{ p: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
           <Box>
-            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>C. Engineering Services</Typography>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>C. Engineering Services</Typography>
+              {servicesLocked && !isLegacy && (
+                <Chip label="Locked — Supply only" size="small" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
+              )}
+            </Stack>
             <Typography variant="caption" color="text.secondary">
               {quotation.servicesFromManpower && quotation.servicesPerLinePricing
                 ? 'Scope of Works — each deliverable priced individually. Manpower table below is the cost basis.'
@@ -2042,13 +2090,13 @@ export default function QuotationEditor() {
           </Box>
           <Stack direction="row" spacing={1} alignItems="center">
             <FormControlLabel
-              control={<Switch size="small" checked={quotation.servicesFromManpower} onChange={(e) => setField('servicesFromManpower', e.target.checked)} disabled={isLegacy} />}
+              control={<Switch size="small" checked={quotation.servicesFromManpower} onChange={(e) => setField('servicesFromManpower', e.target.checked)} disabled={servicesLocked} />}
               label={<Typography variant="caption">Price from manpower</Typography>}
             />
             {quotation.servicesFromManpower && (
               <>
                 <FormControlLabel
-                  control={<Switch size="small" checked={!!quotation.servicesPerLinePricing} onChange={(e) => setField('servicesPerLinePricing', e.target.checked)} disabled={isLegacy} />}
+                  control={<Switch size="small" checked={!!quotation.servicesPerLinePricing} onChange={(e) => setField('servicesPerLinePricing', e.target.checked)} disabled={servicesLocked} />}
                   label={<Typography variant="caption">Per-line pricing</Typography>}
                 />
                 {!quotation.servicesPerLinePricing && (
@@ -2059,7 +2107,7 @@ export default function QuotationEditor() {
                       onChange={(v) => setField('engineeringServicesQty', Math.max(1, v))}
                       integer
                       sx={{ width: 86 }}
-                      disabled={isLegacy}
+                      disabled={servicesLocked}
                     />
                     <Typography variant="caption" color="text.secondary">
                       Unit: {PHP(engineeringServicesUnitPrice)} / LOT
@@ -2068,20 +2116,20 @@ export default function QuotationEditor() {
                 )}
               </>
             )}
-            {perLinePricing && selectedSvcIds.size >= 2 && !isLegacy && (
+            {perLinePricing && selectedSvcIds.size >= 2 && !servicesLocked && (
               <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen('services')}>
                 Group selected ({selectedSvcIds.size})
               </Button>
             )}
-            {selectedSvcIds.size >= 1 && !isLegacy && (
+            {selectedSvcIds.size >= 1 && !servicesLocked && (
               <Button size="small" variant="outlined" onClick={() => setSubheaderDialogOpen('services')}>
                 Add subheader ({selectedSvcIds.size})
               </Button>
             )}
-            {selectedSvcIds.size >= 1 && quotation.services.some((s) => selectedSvcIds.has(s.id) && s.subheader) && !isLegacy && (
+            {selectedSvcIds.size >= 1 && quotation.services.some((s) => selectedSvcIds.has(s.id) && s.subheader) && !servicesLocked && (
               <Button size="small" variant="text" onClick={() => clearSelectedSubheaders('services')}>Clear subheader</Button>
             )}
-            {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addService}>Add scope item</Button>}
+            {!servicesLocked && <Button startIcon={<AddIcon />} size="small" onClick={addService}>Add scope item</Button>}
           </Stack>
         </Stack>
         <EditableTable
@@ -2096,7 +2144,7 @@ export default function QuotationEditor() {
           onReorder={(rows) => reorderRows('services', rows)}
           subheader={(row, index) => subheaderBefore(quotation.services, index)}
           emptyMessage="No scope items — add deliverables (e.g., 'PLC redundancy troubleshooting', 'TIA Portal integration')"
-          readOnly={isLegacy}
+          readOnly={servicesLocked}
           isHeaderRow={(r) => !!r.isHeader}
           isChildHeaderRow={(r) => !!r.isChildHeader}
           getContextMenu={getServiceContextMenu}
@@ -2121,7 +2169,7 @@ export default function QuotationEditor() {
                     Subtotal = Manpower cost / LOT × {engineeringServicesQty} LOT
                   </Typography>
                 )}
-                {!isLegacy && <Button startIcon={<AddIcon />} size="small" onClick={addManpower}>Add manpower</Button>}
+                {!servicesLocked && <Button startIcon={<AddIcon />} size="small" onClick={addManpower}>Add manpower</Button>}
               </Stack>
             </Stack>
             <EditableTable
@@ -2131,7 +2179,7 @@ export default function QuotationEditor() {
               onDelete={(idx) => deleteRow('manpower', idx)}
               onReorder={(rows) => reorderRows('manpower', rows)}
               emptyMessage="No manpower entries — pick a role from the dropdown to auto-fill rate & allowance"
-              readOnly={isLegacy}
+              readOnly={servicesLocked}
               footer={
                 quotation.servicesPerLinePricing ? (
                   <>

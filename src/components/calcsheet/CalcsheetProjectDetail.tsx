@@ -22,7 +22,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
 import { blurNumberInputOnWheel, parseLenientFloat } from '../../utils/calcsheet/numberInput';
-import type { ProjectStatus, Quotation, QuotationKind, OpportunityGrade } from '../../types/Quotation';
+import type { ProjectStatus, Quotation, QuotationKind, QuotationScopeCategory, OpportunityGrade } from '../../types/Quotation';
 import { PROJECT_STATUSES, projectStatusLabel, OPPORTUNITY_GRADES, opportunityGradeLabel } from '../../types/Quotation';
 import { parseLegacyWorkbook } from '../../utils/calcsheet/legacyImport';
 import type { ParsedProject, ParsedQuotation } from '../../utils/calcsheet/legacyImport';
@@ -645,6 +645,8 @@ export default function ProjectDetail() {
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<QuotationKind>('IOCT');
   const [recipientId, setRecipientId] = useState('');
+  // Locked in at creation, same as `kind` — see QuotationScopeCategory.
+  const [scopeCategory, setScopeCategory] = useState<QuotationScopeCategory>('both');
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState({ code: '', name: '', location: '', customerId: '', partnerId: '' });
 
@@ -700,10 +702,11 @@ export default function ProjectDetail() {
   const startNew = (k: QuotationKind) => {
     setKind(k);
     setRecipientId(k === 'IOCT' ? (partner?.id ?? customer?.id ?? '') : (customer?.id ?? ''));
+    setScopeCategory('both');
     setOpen(true);
   };
   const create = async () => {
-    const q = await createQuotation(project.id, kind, recipientId || null);
+    const q = await createQuotation(project.id, kind, recipientId || null, scopeCategory);
     setOpen(false);
     navigate(`/sales/calcsheet/quotations/${q.id}`);
   };
@@ -2353,6 +2356,27 @@ export default function ProjectDetail() {
                 ? 'IOCT issues this quotation to the recipient — typically the partner (ACTI) when subcontracted, or the end customer when direct.'
                 : 'ACTI issues this quotation to the end customer — typically includes hardware and IOCT services with ACTI margin.'}
             </Typography>
+            <TextField
+              select
+              label="Scope"
+              value={scopeCategory}
+              onChange={(e) => setScopeCategory(e.target.value as QuotationScopeCategory)}
+              fullWidth
+              helperText={
+                scopeCategory === 'supply'
+                  ? 'Only B. Supply of Components will be editable — A and C lock.'
+                  : scopeCategory === 'services'
+                    ? 'Only C. Services (and Manpower) will be editable — B locks. A stays editable.'
+                    : 'Everything editable — the usual full quotation.'
+              }
+            >
+              <MenuItem value="both">Both — supply &amp; services</MenuItem>
+              <MenuItem value="supply">Supply only</MenuItem>
+              <MenuItem value="services">Services only</MenuItem>
+            </TextField>
+            <Alert severity="info" variant="outlined" sx={{ py: 0 }}>
+              Scope is fixed once this quotation is created, like Kind — create a new quotation to change it later.
+            </Alert>
           </Stack>
         </DialogContent>
         <DialogActions>
