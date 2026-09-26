@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Box, Tooltip } from '@mui/material';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import ArrowRightIcon from '@mui/icons-material/ArrowRight';
@@ -56,6 +56,7 @@ const COLS: Col[] = [
   { key: 'pred', label: 'Predecessors', w: 96 },
   { key: 'mp', label: 'Manpower', w: 74, align: 'right' },
   { key: 'pct', label: '% Complete', w: 80, align: 'right' },
+  { key: 'wt', label: 'Weight', w: 66, align: 'right' },
   { key: 'cat', label: 'Category', w: 110 },
 ];
 export const GANTT_GRID_MAX_W = COLS.reduce((sum, c) => sum + c.w, 0);
@@ -76,6 +77,12 @@ export interface MsProjectGanttProps {
   onSelect: (id: string) => void;
   onOpen: (t: ScheduleTask) => void;
   onRowContextMenu: (e: ReactMouseEvent, row: TreeRow) => void;
+  /** Each task's share of project progress (%), phases = sum; see scheduleWeights. */
+  weightShare?: Map<string, number>;
+  /** 'duration' shares are automatic (shown grey); 'manual' come from entered weights. */
+  weightMode?: 'manual' | 'duration';
+  /** Drag a table row onto another to move it above/below that task. */
+  onReorder?: (dragId: string, targetId: string, pos: 'above' | 'below') => void;
   onBarMouseDown: (e: ReactMouseEvent, t: ScheduleTask, mode: 'move' | 'resize') => void;
   draggingTaskId: string | null;
   gridWidth: number;
@@ -86,7 +93,7 @@ export interface MsProjectGanttProps {
 
 export default function MsProjectGantt({
   rows, idNumbers, range, totalDays, zoom, workingDays, criticalIds, isOverdue,
-  collapsed, onToggleCollapse, selectedId, onSelect, onOpen, onRowContextMenu,
+  collapsed, onToggleCollapse, selectedId, onSelect, onOpen, onRowContextMenu, onReorder, weightShare, weightMode,
   onBarMouseDown, draggingTaskId, gridWidth, onGridWidthChange, scrollRequest,
 }: MsProjectGanttProps) {
   const dayW = ZOOM_DAY_WIDTH[zoom];
@@ -166,6 +173,44 @@ export default function MsProjectGantt({
     }
   }, [scrollRequest]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Row drag-to-reorder. A row can't be dropped on itself or inside its own
+  // subtree (a phase dragged into one of its own subtasks).
+  const [dragRow, setDragRow] = useState<{ id: string; blocked: Set<string> } | null>(null);
+  const [dropHint, setDropHint] = useState<{ id: string; pos: 'above' | 'below' } | null>(null);
+  const startRowDrag = (e: ReactDragEvent, row: TreeRow) => {
+    const i = rows.findIndex((r) => r.task.id === row.task.id);
+    const blocked = new Set<string>([row.task.id]);
+    for (let j = i + 1; j < rows.length && rows[j].depth > row.depth; j++) blocked.add(rows[j].task.id);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', row.task.id);
+    setDragRow({ id: row.task.id, blocked });
+    onSelect(row.task.id);
+  };
+  const overRow = (e: ReactDragEvent, row: TreeRow) => {
+    if (!dragRow || dragRow.blocked.has(row.task.id)) { setDropHint(null); return; }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const pos = e.clientY < r.top + r.height / 2 ? 'above' : 'below';
+    if (dropHint?.id !== row.task.id || dropHint.pos !== pos) setDropHint({ id: row.task.id, pos });
+  };
+  const dropOnRow = (e: ReactDragEvent, row: TreeRow) => {
+    e.preventDefault();
+    if (dragRow && dropHint && dropHint.id === row.task.id && !dragRow.blocked.has(row.task.id)) {
+      onReorder?.(dragRow.id, row.task.id, dropHint.pos);
+    }
+    setDragRow(null);
+    setDropHint(null);
+  };
+  const endRowDrag = () => { setDragRow(null); setDropHint(null); };
+  const dropLine = (id: string) => (dropHint?.id === id ? {
+    position: 'relative' as const,
+    '&::after': {
+      content: '""', position: 'absolute', left: 0, right: 0, height: 2, bgcolor: '#1F6FD1', zIndex: 2, pointerEvents: 'none',
+      ...(dropHint.pos === 'above' ? { top: -1 } : { bottom: -1 }),
+    },
+  } : {});
+
   // Splitter between the grid and the chart, like MS Project's divider bar.
   const [splitDrag, setSplitDrag] = useState<{ x: number; w: number } | null>(null);
   useEffect(() => {
@@ -228,8 +273,17 @@ export default function MsProjectGantt({
       case 'start': return <Box component="span" sx={{ fontWeight: row.isSummary ? 700 : 400 }}>{mspDate(t.startDate)}</Box>;
       case 'finish': return <Box component="span" sx={{ fontWeight: row.isSummary ? 700 : 400 }}>{mspDate(t.endDate)}</Box>;
       case 'pred': return (t.predecessors || []).map((p) => idNumbers.get(p)).filter((n) => n != null).join(',');
-      case 'mp': return !row.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? `${t.manpower} pax` : '';
+      case 'mp': return !row.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? String(t.manpower) : '';
       case 'pct': return `${Math.round(t.progressPct || 0)}%`;
+      case 'wt': {
+        const v = weightShare?.get(t.id);
+        if (v == null) return '';
+        return (
+          <Box component="span" sx={{ fontWeight: row.isSummary ? 700 : 400, color: weightMode === 'manual' ? MSP.text : '#8C8C8C', fontStyle: weightMode === 'manual' ? 'normal' : 'italic' }}>
+            {`${v.toFixed(1)}%`}
+          </Box>
+        );
+      }
       case 'cat': return row.isSummary ? '' : (t.category || '');
       default: return null;
     }
@@ -325,7 +379,7 @@ export default function MsProjectGantt({
         </Tooltip>
         {(t.category || (t.manpower || 0) > 0) && (
           <Box sx={{ position: 'absolute', left: left + width + 6, top: 0, height: GANTT_ROW_H, display: 'flex', alignItems: 'center', fontSize: 11, color: MSP.text, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-            {[t.category, (t.manpower || 0) > 0 ? `[${t.manpower} pax]` : ''].filter(Boolean).join(' ')}
+            {[t.category, (t.manpower || 0) > 0 ? `[${t.manpower}]` : ''].filter(Boolean).join(' ')}
           </Box>
         )}
       </>
@@ -361,10 +415,19 @@ export default function MsProjectGantt({
             return (
               <Box
                 key={row.task.id}
+                draggable={!!onReorder}
+                onDragStart={(e) => startRowDrag(e, row)}
+                onDragOver={(e) => overRow(e, row)}
+                onDrop={(e) => dropOnRow(e, row)}
+                onDragEnd={endRowDrag}
                 onMouseDown={() => onSelect(row.task.id)}
                 onDoubleClick={() => onOpen(row.task)}
                 onContextMenu={(e) => { onSelect(row.task.id); onRowContextMenu(e, row); }}
-                sx={{ height: GANTT_ROW_H, width: colX, display: 'flex', bgcolor: sel ? MSP.selBg : '#fff', cursor: 'default' }}
+                sx={{
+                  height: GANTT_ROW_H, width: colX, display: 'flex', bgcolor: sel ? MSP.selBg : '#fff', cursor: 'default',
+                  opacity: dragRow?.id === row.task.id ? 0.45 : 1,
+                  ...dropLine(row.task.id),
+                }}
               >
                 {COLS.map((c) => (
                   <Box
@@ -375,7 +438,7 @@ export default function MsProjectGantt({
                       display: 'flex', alignItems: 'center',
                       justifyContent: c.align === 'right' ? 'flex-end' : c.align === 'center' ? 'center' : 'flex-start',
                       px: '6px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
-                      ...(c.key === 'id' ? { bgcolor: sel ? MSP.idSelBg : MSP.headerBg, color: MSP.subText } : {}),
+                      ...(c.key === 'id' ? { bgcolor: sel ? MSP.idSelBg : MSP.headerBg, color: MSP.subText, cursor: onReorder ? 'grab' : 'default' } : {}),
                     }}
                   >
                     {cell(row, c)}
@@ -425,6 +488,12 @@ export default function MsProjectGantt({
                 sx={{
                   position: 'absolute', left: 0, top: i * GANTT_ROW_H, width: timelineW, height: GANTT_ROW_H,
                   bgcolor: row.task.id === selectedId ? 'rgba(92,141,209,0.12)' : 'transparent',
+                  ...(dropHint?.id === row.task.id ? {
+                    '&::after': {
+                      content: '""', position: 'absolute', left: 0, right: 0, height: 2, bgcolor: '#1F6FD1', zIndex: 2, pointerEvents: 'none',
+                      ...(dropHint.pos === 'above' ? { top: -1 } : { bottom: -1 }),
+                    },
+                  } : {}),
                 }}
               >
                 {renderBar(row)}

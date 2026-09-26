@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { SCHEDULE_CATEGORY_COLORS, type ScheduleTask } from '../../types/ScheduleTask';
 import { addDays, daysBetween, durationOf, formatLocalDate, MS_PER_DAY, toDate } from './scheduleDates';
+import { leafWeights } from './scheduleWeights';
 
 type ScheduleProjectRef = { code?: string; name?: string };
 
@@ -51,14 +52,20 @@ export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: Sch
     { header: 'Start', key: 'start', width: 12 },
     { header: 'End', key: 'end', width: 12 },
     { header: 'Duration (days)', key: 'duration', width: 14 },
-    { header: 'Manpower (pax)', key: 'manpower', width: 14 },
+    { header: 'Manpower', key: 'manpower', width: 14 },
     { header: 'Man-days', key: 'manDays', width: 11 },
     { header: 'Progress (%)', key: 'progress', width: 12 },
+    { header: 'Weight', key: 'weight', width: 10 },
+    { header: 'Share (%)', key: 'share', width: 11 },
     { header: 'Notes', key: 'notes', width: 40 },
   ];
   const tsHeader = ts.getRow(1);
   tsHeader.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   tsHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2C5AA0' } };
+  // Each leaf task's share of project progress (see scheduleWeights).
+  const lw = leafWeights(tasks);
+  const shareMap = new Map<string, number>();
+  lw.weights.forEach((w, id) => shareMap.set(id, lw.total > 0 ? (w / lw.total) * 100 : 0));
   for (const t of tasks) {
     ts.addRow({
       name: t.name,
@@ -70,10 +77,12 @@ export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: Sch
       manpower: t.isMilestone ? '' : (t.manpower || ''),
       manDays: t.isMilestone || !t.manpower ? '' : t.manpower * (t.durationDays ?? durationOf(t.startDate, t.endDate)),
       progress: t.progressPct,
+      weight: shareMap.has(t.id) ? (Number(t.weight) || '') : '',
+      share: shareMap.has(t.id) ? Math.round(shareMap.get(t.id)! * 100) / 100 : '',
       notes: t.notes || '',
     });
   }
-  ts.autoFilter = { from: 'A1', to: 'J1' };
+  ts.autoFilter = { from: 'A1', to: 'L1' };
 
   // ── Gantt sheet ──────────────────────────────────────────────────────────
   const range = computeRange(tasks);

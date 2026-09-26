@@ -4025,37 +4025,38 @@ async function syncScheduleProgressToMonitoringProject(projectId) {
   if (!projDoc.exists) return;
   const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
   if (snap.empty) return;
-  // Only leaf tasks contribute — WBS summary tasks roll up and would double-count.
-  const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  const parents = new Set(rows.filter((t) => t.parentId).map((t) => String(t.parentId)));
-  const leaves = rows.filter((t) => !parents.has(String(t.id)));
-  let weighted = 0;
-  let weight = 0;
-  for (const t of leaves) {
-    const start = new Date(t.startDate).getTime();
-    const end = new Date(t.endDate).getTime();
-    const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
-    weighted += (Number(t.progressPct) || 0) * days;
-    weight += days;
-  }
-  if (weight <= 0) return;
-  const pct = Math.max(0, Math.min(100, Math.round(weighted / weight)));
+  const rows = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
+  const pct = scheduleTasksOverallProgress(rows);
+  if (pct === null) return;
   const status = pct <= 0 ? 'Not Started' : pct >= 100 ? 'Completed' : 'In Progress';
   await projDoc.ref.update({ actual_site_progress_percent: pct, project_status: status, updated_at: new Date().toISOString() });
 }
 
 // Progress-weighted overall % across a task array (milestones weigh 1 day).
+// Project % complete from schedule tasks. Only leaf tasks count (WBS summary
+// tasks roll up and would double-count). Weighted by each task's manual
+// `weight` once any leaf has one (leaves left unweighted then count 0);
+// otherwise by duration in days (milestones = 1). Mirrors
+// src/utils/calcsheet/scheduleWeights.ts. Returns null with nothing to weigh.
 function scheduleTasksOverallProgress(tasks) {
+  const parents = new Set(tasks.filter((t) => t.parentId).map((t) => String(t.parentId)));
+  const leaves = tasks.filter((t) => !parents.has(String(t.id)));
+  const manual = leaves.some((t) => Number(t.weight) > 0);
   let weighted = 0;
   let weight = 0;
-  for (const t of tasks) {
-    const start = new Date(t.startDate).getTime();
-    const end = new Date(t.endDate).getTime();
-    const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
-    weighted += (Number(t.progressPct) || 0) * days;
-    weight += days;
+  for (const t of leaves) {
+    let w;
+    if (manual) {
+      w = Math.max(0, Number(t.weight) || 0);
+    } else {
+      const start = new Date(t.startDate).getTime();
+      const end = new Date(t.endDate).getTime();
+      w = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
+    }
+    weighted += (Number(t.progressPct) || 0) * w;
+    weight += w;
   }
-  return weight > 0 ? Math.max(0, Math.min(100, Math.round(weighted / weight))) : 0;
+  return weight > 0 ? Math.max(0, Math.min(100, Math.round(weighted / weight))) : null;
 }
 
 // Freeze a project's whole Gantt (all tasks) into a named version snapshot.
@@ -4070,7 +4071,7 @@ async function snapshotScheduleVersion(projectId, label, savedBy) {
     savedBy: savedBy || null,
     label: (label && String(label).trim()) || null,
     taskCount: tasks.length,
-    overallProgress: scheduleTasksOverallProgress(tasks),
+    overallProgress: scheduleTasksOverallProgress(tasks) ?? 0,
     tasks,
   };
   const ref = await db.collection('calcsheet_schedule_versions').add(doc);

@@ -17,6 +17,7 @@ import UndoIcon from '@mui/icons-material/Undo';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
+import BalanceIcon from '@mui/icons-material/Balance';
 import FormatIndentIncreaseIcon from '@mui/icons-material/FormatIndentIncrease';
 import FormatIndentDecreaseIcon from '@mui/icons-material/FormatIndentDecrease';
 import { useQuotationStore } from '../../store/quotationStore';
@@ -31,6 +32,7 @@ import { exportScheduleXlsx } from '../../utils/calcsheet/scheduleXlsxExport';
 import { exportSchedulePdf } from '../../utils/calcsheet/schedulePdfExport';
 import { autoSchedule, wouldCycle, criticalPath } from '../../utils/calcsheet/scheduleAuto';
 import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../../utils/calcsheet/scheduleTree';
+import { durationWeight, leafWeights, projectPercent } from '../../utils/calcsheet/scheduleWeights';
 import MsProjectGantt, { GANTT_GRID_MAX_W, ZOOM_DAY_WIDTH, type GanttZoom } from './MsProjectGantt';
 import ScheduleSCurve from './ScheduleSCurve';
 import type { SCurveSnapshot } from '../../utils/calcsheet/scheduleSCurve';
@@ -76,10 +78,11 @@ interface TaskFormState {
   predecessors: string[];
   parentId: string | null;
   manpower: number;
+  weight: number;
 }
 
 const emptyForm = (): TaskFormState => ({
-  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', predecessors: [], parentId: null, manpower: 0,
+  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', predecessors: [], parentId: null, manpower: 0, weight: 0,
 });
 
 // Best-effort category guess from a service line's description, so imported
@@ -174,6 +177,9 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   useEffect(() => { try { localStorage.setItem('gantt-grid-w', String(gridWidth)); } catch { /* ignore */ } }, [gridWidth]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; row: TreeRow } | null>(null);
+  const [weightsOpen, setWeightsOpen] = useState(false);
+  const [weightDraft, setWeightDraft] = useState<Record<string, number>>({});
+  const [weightsSaving, setWeightsSaving] = useState(false);
   const [scrollReq, setScrollReq] = useState<{ id: string; n: number } | null>(null);
   const [view, setView] = useState<'gantt' | 'scurve'>(() => {
     try { return localStorage.getItem('gantt-view') === 'scurve' ? 'scurve' : 'gantt'; } catch { return 'gantt'; }
@@ -310,25 +316,35 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     if (leaves.length === 0) return null;
     let minStart = leaves[0].startDate;
     let maxEnd = leaves[0].endDate;
-    let weightedProgress = 0;
-    let weightDays = 0;
     let overdue = 0;
     for (const t of leaves) {
       if (t.startDate < minStart) minStart = t.startDate;
       if (t.endDate > maxEnd) maxEnd = t.endDate;
-      const dur = t.isMilestone ? 1 : Math.max(1, durationOf(t.startDate, t.endDate));
-      weightedProgress += (t.progressPct || 0) * dur;
-      weightDays += dur;
       if (isOverdue(t)) overdue += 1;
     }
     return {
       start: minStart,
       end: maxEnd,
       durationDays: daysBetween(toDate(minStart), toDate(maxEnd)) + 1,
-      pctComplete: weightDays > 0 ? Math.round(weightedProgress / weightDays) : 0,
+      pctComplete: Math.round(projectPercent(tasks) ?? 0),
       overdue,
     };
   }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Each task's share of project progress (%), phases = sum of their tasks.
+  const weightInfo = useMemo(() => {
+    const { mode, weights, total } = leafWeights(tasks);
+    const share = new Map<string, number>();
+    weights.forEach((w, tid) => share.set(tid, total > 0 ? (w / total) * 100 : 0));
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    weights.forEach((_, tid) => {
+      let p = byId.get(tid)?.parentId;
+      const pct = share.get(tid) || 0;
+      while (p && byId.has(p)) { share.set(p, (share.get(p) || 0) + pct); p = byId.get(p)?.parentId; }
+    });
+    const unweighted = mode === 'manual' ? leafTasks(tasks).filter((t) => !(Number(t.weight) > 0)).length : 0;
+    return { mode, share, total, unweighted };
+  }, [tasks]);
 
   const toggleCategoryFilter = (c: string) => setCategoryFilter((prev) => {
     const next = new Set(prev);
@@ -359,6 +375,75 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     } catch (e) { setErr(e instanceof Error ? e.message : 'Indent failed'); }
   };
 
+  // ── Progress weights dialog ───────────────────────────────────────────
+  const openWeights = () => {
+    const d: Record<string, number> = {};
+    leafTasks(tasks).forEach((t) => { d[t.id] = Math.max(0, Number(t.weight) || 0); });
+    setWeightDraft(d);
+    setWeightsOpen(true);
+  };
+  // Weights as percentages summing to 100 (2 dp), from a raw per-task basis.
+  const toPercents = (basis: Record<string, number>) => {
+    const total = Object.values(basis).reduce((a, b) => a + b, 0);
+    const out: Record<string, number> = {};
+    Object.entries(basis).forEach(([k, v]) => { out[k] = total > 0 ? Math.round((v / total) * 10000) / 100 : 0; });
+    return out;
+  };
+  const saveWeights = async () => {
+    const changed = leafTasks(tasks).filter((t) => (Math.max(0, Number(t.weight) || 0)) !== (weightDraft[t.id] || 0));
+    setWeightsSaving(true);
+    try {
+      await Promise.all(changed.map((t) => api('PUT', `/api/schedule-tasks/${t.id}`, { weight: weightDraft[t.id] || 0 })));
+      setTasks((prev) => prev.map((t) => (t.id in weightDraft ? { ...t, weight: weightDraft[t.id] || 0 } : t)));
+      setWeightsOpen(false);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to save weights');
+    } finally {
+      setWeightsSaving(false);
+    }
+  };
+
+  // Drag-to-reorder: place `dragId` above/below `targetId` as its sibling
+  // (dragging a phase carries its subtasks). Dropping just below an expanded
+  // phase's header makes the task that phase's first subtask, matching where
+  // the drop line is drawn.
+  const moveTask = async (dragId: string, targetId: string, pos: 'above' | 'below') => {
+    if (dragId === targetId || descendantIds(tasks, dragId).has(targetId)) return;
+    const target = tasks.find((t) => t.id === targetId);
+    if (!target) return;
+    const intoPhase = pos === 'below' && tasks.some((t) => t.parentId === targetId) && !collapsed.has(targetId);
+    const newParent = intoPhase ? targetId : (target.parentId ?? null);
+    const outline = flattenTree(rolledTasks, new Set()).map((r) => r.task.id);
+    const sibs = outline.filter((tid) => {
+      const t = tasks.find((x) => x.id === tid);
+      return t && (t.parentId ?? null) === newParent && tid !== dragId;
+    });
+    const at = intoPhase ? 0 : sibs.indexOf(targetId) + (pos === 'below' ? 1 : 0);
+    const nextOrder = [...sibs.slice(0, at), dragId, ...sibs.slice(at)];
+
+    const before = tasks;
+    const updated = tasks.map((t) => {
+      const i = nextOrder.indexOf(t.id);
+      if (i < 0) return t;
+      return { ...t, order: i, ...(t.id === dragId ? { parentId: newParent } : {}) };
+    });
+    const changed = updated.filter((t) => {
+      const o = before.find((x) => x.id === t.id);
+      return o && ((o.order ?? 0) !== (t.order ?? 0) || (o.parentId ?? null) !== (t.parentId ?? null));
+    });
+    if (changed.length === 0) return;
+    setTasks(updated);
+    setSelectedId(dragId);
+    try {
+      await Promise.all(changed.map((t) => api('PUT', `/api/schedule-tasks/${t.id}`, {
+        order: t.order, ...(t.id === dragId ? { parentId: t.parentId ?? null } : {}),
+      })));
+    } catch (e) {
+      setTasks(before);
+      setErr(e instanceof Error ? e.message : 'Failed to move task');
+    }
+  };
+
   // Outdent: move up one level (new parent = current grandparent, or top level).
   const outdentTask = async (row: TreeRow) => {
     const cur = tasks.find((t) => t.id === row.task.id);
@@ -386,6 +471,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       predecessors: t.predecessors || [],
       parentId: t.parentId ?? null,
       manpower: t.manpower ?? 0,
+      weight: t.weight ?? 0,
     });
     setFormErr('');
     setDialogOpen(true);
@@ -437,6 +523,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       progressPct: form.progressPct, isMilestone: form.isMilestone, notes: form.notes,
       predecessors: form.predecessors, parentId: form.parentId,
       manpower: form.isMilestone ? 0 : Math.max(0, Math.round((form.manpower || 0) * 10) / 10),
+      weight: Math.max(0, Number(form.weight) || 0),
     };
     setSaving(true);
     setFormErr('');
@@ -944,6 +1031,14 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               <Divider orientation="vertical" flexItem />
               <Button {...tb} startIcon={<InfoOutlinedIcon />} disabled={!selRow} onClick={() => selRow && openEdit(tasks.find((t) => t.id === selRow.task.id) || selRow.task)}>Information</Button>
               <Button {...tb} startIcon={<CenterFocusStrongIcon />} disabled={!selRow} onClick={() => selRow && setScrollReq((p) => ({ id: selRow.task.id, n: (p?.n ?? 0) + 1 }))}>Scroll to Task</Button>
+              <Tooltip title={weightInfo.mode === 'manual'
+                ? `Progress is weighted by the task weights you entered${weightInfo.unweighted ? ` — ${weightInfo.unweighted} task(s) have no weight and count 0` : ''}`
+                : 'Progress is weighted by task duration. Set weights to control each task\'s share.'}>
+                <Button {...tb} startIcon={<BalanceIcon />} onClick={openWeights}
+                  sx={{ ...tb.sx, ...(weightInfo.unweighted ? { color: 'warning.dark' } : {}) }}>
+                  Weights: {weightInfo.mode === 'manual' ? 'Manual' : 'By duration'}{weightInfo.unweighted ? ` (${weightInfo.unweighted} missing)` : ''}
+                </Button>
+              </Tooltip>
               <Button {...tb} startIcon={<DeleteIcon />} disabled={!selRow} onClick={() => selRow && setDeleteTarget(tasks.find((t) => t.id === selRow.task.id) || selRow.task)}>Delete</Button>
               <Box sx={{ flexGrow: 1 }} />
               <Typography variant="caption" color="text.secondary" sx={{ mr: 1, display: { xs: 'none', xl: 'block' } }}>
@@ -974,6 +1069,9 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               onSelect={setSelectedId}
               onOpen={(t) => openEdit(tasks.find((x) => x.id === t.id) || t)}
               onRowContextMenu={(e, row) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, row }); }}
+              onReorder={(d, t, pos) => void moveTask(d, t, pos)}
+              weightShare={weightInfo.share}
+              weightMode={weightInfo.mode}
               onBarMouseDown={startDrag}
               draggingTaskId={draggingTaskId}
               gridWidth={gridWidth}
@@ -1040,7 +1138,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 onWheel={blurNumberInputOnWheel}
               />
               <TextField
-                label="Manpower (pax)" type="number" value={form.manpower} fullWidth
+                label="Manpower" type="number" value={form.manpower} fullWidth
                 disabled={form.isMilestone}
                 inputProps={{ min: 0, step: 1 }}
                 helperText={!form.isMilestone && form.manpower > 0 ? `${Math.round(form.manpower * Math.max(1, Math.round(form.durationDays) || 1) * 10) / 10} man-days` : 'Headcount per working day'}
@@ -1048,6 +1146,28 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 onWheel={blurNumberInputOnWheel}
               />
             </Stack>
+            {(() => {
+              const isPhase = !!editingId && tasks.some((t) => t.parentId === editingId);
+              const others = leafTasks(tasks).filter((t) => t.id !== editingId).reduce((sum, t) => sum + Math.max(0, Number(t.weight) || 0), 0);
+              const w = Math.max(0, Number(form.weight) || 0);
+              const help = isPhase
+                ? "A phase's weight is the sum of its tasks' weights — set weights on its tasks."
+                : w > 0
+                  ? `≈ ${((w / (others + w)) * 100).toFixed(1)}% of project progress`
+                  : weightInfo.mode === 'manual'
+                    ? 'No weight — this task counts 0 toward progress'
+                    : 'Blank = weigh by duration (current method)';
+              return (
+                <TextField
+                  label="Progress weight" type="number" value={isPhase ? '' : form.weight || ''} fullWidth
+                  disabled={isPhase}
+                  inputProps={{ min: 0, step: 0.1 }}
+                  helperText={help}
+                  onChange={(e) => setForm((f) => ({ ...f, weight: Math.max(0, Number(e.target.value) || 0) }))}
+                  onWheel={blurNumberInputOnWheel}
+                />
+              );
+            })()}
             {!form.isMilestone && (
               <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
                 Ends {fmt(toDate(addWorkingDays(nextWorkingDay(form.startDate, workingDays), Math.max(1, Math.round(form.durationDays) || 1), workingDays)))}
@@ -1209,6 +1329,108 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         <DialogActions>
           <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
           <Button color="error" variant="contained" onClick={() => void confirmDelete()}>Delete</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Progress weights */}
+      <Dialog open={weightsOpen} onClose={() => !weightsSaving && setWeightsOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Progress weights</DialogTitle>
+        <DialogContent>
+          {(() => {
+            const rows = flattenTree(rolledTasks, new Set());
+            const total = Object.values(weightDraft).reduce((a, b) => a + b, 0);
+            const manual = total > 0;
+            const durBasis: Record<string, number> = {};
+            leafTasks(tasks).forEach((t) => { durBasis[t.id] = durationWeight(t); });
+            const durTotal = Object.values(durBasis).reduce((a, b) => a + b, 0);
+            const missing = manual ? Object.values(weightDraft).filter((v) => !(v > 0)).length : 0;
+            const shareOf = (tid: string) => (manual ? (total > 0 ? ((weightDraft[tid] || 0) / total) * 100 : 0) : (durTotal > 0 ? (durBasis[tid] / durTotal) * 100 : 0));
+            return (
+              <>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  Each task's share of project progress = its weight ÷ total weight. Enter any consistent unit — percentages,
+                  contract value, or man-hours. Leave every weight blank to weigh tasks by duration.
+                  Project % complete = Σ (share × task % complete); phases roll up the same way.
+                </Typography>
+                <Stack direction="row" spacing={1} sx={{ mb: 1.5 }} flexWrap="wrap" useFlexGap>
+                  <Button size="small" variant="outlined" onClick={() => setWeightDraft(toPercents(durBasis))}>Fill from duration</Button>
+                  <Button size="small" variant="outlined" onClick={() => {
+                    const ids = Object.keys(weightDraft);
+                    setWeightDraft(toPercents(Object.fromEntries(ids.map((k) => [k, 1]))));
+                  }}>Distribute evenly</Button>
+                  {manual && Math.abs(total - 100) > 0.01 && (
+                    <Button size="small" variant="outlined" onClick={() => setWeightDraft(toPercents(weightDraft))}>Scale to 100</Button>
+                  )}
+                  <Button size="small" color="inherit" onClick={() => setWeightDraft(Object.fromEntries(Object.keys(weightDraft).map((k) => [k, 0])))}>Clear (use duration)</Button>
+                </Stack>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ width: 40 }}>ID</TableCell>
+                      <TableCell>Task</TableCell>
+                      <TableCell align="right" sx={{ width: 90 }}>Duration</TableCell>
+                      <TableCell align="right" sx={{ width: 130 }}>Weight</TableCell>
+                      <TableCell align="right" sx={{ width: 100 }}>Share</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {rows.map((r, i) => {
+                      const t = r.task;
+                      if (r.isSummary) {
+                        const sub = Array.from(descendantIds(tasks, t.id));
+                        const phaseShare = sub.reduce((a, tid) => a + (tid in weightDraft ? shareOf(tid) : 0), 0);
+                        const phaseWeight = sub.reduce((a, tid) => a + (weightDraft[tid] || 0), 0);
+                        return (
+                          <TableRow key={t.id} sx={{ bgcolor: 'grey.50' }}>
+                            <TableCell>{i + 1}</TableCell>
+                            <TableCell sx={{ fontWeight: 700, pl: `${16 + r.depth * 16}px` }}>{t.name}</TableCell>
+                            <TableCell />
+                            <TableCell align="right" sx={{ fontWeight: 700 }}>{manual ? Math.round(phaseWeight * 100) / 100 : ''}</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700 }}>{phaseShare.toFixed(1)}%</TableCell>
+                          </TableRow>
+                        );
+                      }
+                      return (
+                        <TableRow key={t.id}>
+                          <TableCell>{i + 1}</TableCell>
+                          <TableCell sx={{ pl: `${16 + r.depth * 16}px` }}>{t.name}</TableCell>
+                          <TableCell align="right">{t.isMilestone ? '0 days' : `${durationOf(t.startDate, t.endDate)} d`}</TableCell>
+                          <TableCell align="right">
+                            <TextField
+                              size="small" type="number" variant="standard" value={weightDraft[t.id] || ''}
+                              placeholder={manual ? '0' : (durTotal > 0 ? ((durBasis[t.id] / durTotal) * 100).toFixed(2) : '')}
+                              inputProps={{ min: 0, step: 0.1, style: { textAlign: 'right' } }}
+                              onChange={(e) => setWeightDraft((d) => ({ ...d, [t.id]: Math.max(0, Number(e.target.value) || 0) }))}
+                              onWheel={blurNumberInputOnWheel}
+                              sx={{ width: 100 }}
+                            />
+                          </TableCell>
+                          <TableCell align="right" sx={{ color: manual ? (weightDraft[t.id] > 0 ? 'text.primary' : 'warning.dark') : 'text.secondary' }}>
+                            {shareOf(t.id).toFixed(1)}%
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    <TableRow>
+                      <TableCell />
+                      <TableCell sx={{ fontWeight: 700 }}>Total{manual ? '' : ' (weighted by duration)'}</TableCell>
+                      <TableCell />
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>{manual ? Math.round(total * 100) / 100 : '—'}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>100.0%</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+                {/* Below the table so it never shifts the rows while typing */}
+                {missing > 0 && (
+                  <Alert severity="warning" sx={{ mt: 1.5 }}>{missing} task{missing === 1 ? ' has' : 's have'} no weight and will count 0 toward progress.</Alert>
+                )}
+              </>
+            );
+          })()}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setWeightsOpen(false)} disabled={weightsSaving}>Cancel</Button>
+          <Button variant="contained" onClick={() => void saveWeights()} disabled={weightsSaving}>{weightsSaving ? 'Saving…' : 'Save weights'}</Button>
         </DialogActions>
       </Dialog>
 
