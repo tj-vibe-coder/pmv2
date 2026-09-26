@@ -213,6 +213,12 @@ export interface ServiceLine {
   /** A calculation-neutral label rendered above this contiguous block of items. */
   subheader?: string;
   markupPct?: number;
+  /** Section-header row — same label-only, excluded-from-totals row as
+   * ComponentLine.isHeader, for breaking Engineering Services into named
+   * sections. */
+  isHeader?: boolean;
+  /** Child (second-level) header — see ComponentLine.isChildHeader. */
+  isChildHeader?: boolean;
 }
 
 export interface ManpowerEntry {
