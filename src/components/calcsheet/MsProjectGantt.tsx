@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Box, Tooltip } from '@mui/material';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
@@ -14,10 +14,13 @@ import { finishVariance, varianceLabel } from '../../utils/calcsheet/scheduleBas
 import { formatLink, linksOf } from '../../utils/calcsheet/scheduleLinks';
 import { DEFAULT_COLUMNS, DEFAULT_DISPLAY, columnDef, type GanttColumn, type GanttDisplay } from '../../utils/calcsheet/ganttViews';
 import { daysBetween, durationOf, toDate, todayStr, workingDaysBetween } from '../../utils/calcsheet/scheduleDates';
-import { dayAt, mspDate, timescaleTiers, type GanttZoom, type TimescaleSeg } from '../../utils/calcsheet/scheduleTimescale';
+import { ZOOM_PRESETS, dayAt, mspDate, tierFor, timescaleTiers, type GanttZoom, type TimescaleSeg } from '../../utils/calcsheet/scheduleTimescale';
 
 export type { GanttZoom };
-export const ZOOM_DAY_WIDTH: Record<GanttZoom, number> = { day: 24, week: 8, month: 3 };
+export const ZOOM_DAY_WIDTH: Record<GanttZoom, number> = ZOOM_PRESETS;
+const MS_DAY = 86400000;
+/** Timeline navigation, bumped via `n`: scroll to today, page left/right, or show a date at the left edge. */
+export type GanttNav = { kind: 'today' } | { kind: 'page'; dir: 1 | -1 } | { kind: 'date'; date: string };
 export const GANTT_ROW_H = 24;
 
 const TIER_H = 22;
@@ -70,7 +73,13 @@ export interface MsProjectGanttProps {
   idNumbers: Map<string, number>;
   range: { start: Date; end: Date };
   totalDays: number;
-  zoom: GanttZoom;
+  /** Pixels per day (continuous zoom); the timescale style follows it. */
+  dayW: number;
+  /** Ctrl/⌘ + wheel zoom: the requested pixels-per-day. */
+  onZoom?: (dayW: number) => void;
+  navRequest?: (GanttNav & { n: number }) | null;
+  /** Width of the visible timeline area (for Fit). */
+  onViewportWidth?: (w: number) => void;
   workingDays: boolean;
   criticalIds: Set<string>;
   isOverdue: (t: ScheduleTask) => boolean;
@@ -119,7 +128,7 @@ export interface MsProjectGanttProps {
 }
 
 export default function MsProjectGantt({
-  rows, idNumbers, range, totalDays, zoom, workingDays, criticalIds, isOverdue,
+  rows, idNumbers, range, totalDays, dayW, onZoom, navRequest, onViewportWidth, workingDays, criticalIds, isOverdue,
   collapsed, onToggleCollapse, selectedId, selectedIds, onSelect, onOpen, onRowContextMenu, onReorder, weightShare, weightMode,
   filterHits, searchQuery, revealRequest,
   onBarMouseDown, draggingTaskId, gridWidth, onGridWidthChange, scrollRequest, baseline, onLinkDraw, onLinkOpen,
@@ -136,10 +145,64 @@ export default function MsProjectGantt({
   // With a baseline, the task bar sits higher to make room for the grey bar.
   const barTop = baseline ? 4 : BAR_TOP;
   const barH = baseline ? 10 : BAR_H;
-  const dayW = ZOOM_DAY_WIDTH[zoom];
+  const zoom: GanttZoom = tierFor(dayW);
   const timelineW = totalDays * dayW;
   const bodyH = rows.length * GANTT_ROW_H;
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Keep the same date in view when the zoom (or the chart's start) changes:
+  // under the cursor for Ctrl/⌘ + wheel, else at the centre of the timeline.
+  const viewRef = useRef({ dayW, start: range.start.getTime(), scrollLeft: 0 });
+  const anchorPxRef = useRef<number | null>(null);
+  const gridWRef = useRef(0);
+  gridWRef.current = gridW;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const prev = viewRef.current;
+    if (el && (prev.dayW !== dayW || prev.start !== range.start.getTime())) {
+      const visW = Math.max(0, el.clientWidth - gridWRef.current - SPLITTER_W);
+      const px = anchorPxRef.current ?? visW / 2;
+      const dateMs = prev.start + ((prev.scrollLeft + px) / prev.dayW) * MS_DAY;
+      el.scrollLeft = Math.max(0, ((dateMs - range.start.getTime()) / MS_DAY) * dayW - px);
+      viewRef.current.scrollLeft = el.scrollLeft;
+    }
+    anchorPxRef.current = null;
+    viewRef.current.dayW = dayW;
+    viewRef.current.start = range.start.getTime();
+  }, [dayW, range.start]);
+
+  // Ctrl/⌘ + wheel (or trackpad pinch) zooms around the cursor; Shift + wheel scrolls sideways.
+  const zoomRef = useRef({ dayW, onZoom });
+  zoomRef.current = { dayW, onZoom };
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return undefined;
+    const onWheel = (e: WheelEvent) => {
+      if ((e.ctrlKey || e.metaKey) && zoomRef.current.onZoom) {
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        const px = e.clientX - rect.left - gridWRef.current - SPLITTER_W;
+        anchorPxRef.current = px > 0 ? px : null;
+        zoomRef.current.onZoom(zoomRef.current.dayW * Math.exp(-e.deltaY * 0.0025));
+      } else if (e.shiftKey && Math.abs(e.deltaX) < Math.abs(e.deltaY)) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // Report the visible timeline width (for Fit).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !onViewportWidth) return undefined;
+    const report = () => onViewportWidth(Math.max(0, el.clientWidth - gridWRef.current - SPLITTER_W));
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onViewportWidth]);
 
   const { top, bottom } = useMemo(() => timescaleTiers(zoom, range.start, totalDays, dayW), [zoom, range.start, totalDays, dayW]);
 
@@ -274,6 +337,21 @@ export default function MsProjectGantt({
       el.scrollTop = Math.max(0, y - el.clientHeight / 2);
     }
   }, [scrollRequest]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!navRequest || !el) return;
+    const visW = Math.max(0, el.clientWidth - gridW - SPLITTER_W);
+    if (navRequest.kind === 'today') {
+      const x = daysBetween(range.start, toDate(todayStr())) * dayW;
+      el.scrollLeft = Math.max(0, x - visW / 3);
+    } else if (navRequest.kind === 'page') {
+      el.scrollLeft = Math.max(0, el.scrollLeft + navRequest.dir * visW * 0.8);
+    } else {
+      el.scrollLeft = Math.max(0, daysBetween(range.start, toDate(navRequest.date)) * dayW - 12);
+      viewRef.current.scrollLeft = el.scrollLeft;
+    }
+  }, [navRequest?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!revealRequest || !scrollRef.current) return;
@@ -630,6 +708,7 @@ export default function MsProjectGantt({
   return (
     <Box
       ref={scrollRef}
+      onScroll={(e) => { viewRef.current.scrollLeft = (e.currentTarget as HTMLDivElement).scrollLeft; }}
       sx={{ flex: 1, minWidth: 0, overflow: 'auto', position: 'relative', bgcolor: '#fff', border: `1px solid ${MSP.border}`, fontFamily: MSP.font, color: MSP.text, fontSize: 12, userSelect: 'none' }}
     >
       <Box sx={{ display: 'flex', width: gridW + SPLITTER_W + timelineW, minHeight: '100%' }}>

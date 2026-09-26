@@ -240,7 +240,7 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
 
   const zoomFor = (w: number, span: { start: Date; end: Date }): GanttZoom => {
     const est = w / Math.max(1, daysBetween(span.start, span.end) + 1);
-    return est >= 14 ? 'day' : est >= 3 ? 'week' : 'month';
+    return est >= 14 ? 'day' : est >= 3 ? 'week' : est >= 1.2 ? 'month' : 'quarter';
   };
   const zoom = zoomFor(CHART_W, ganttSpan);
   const range = snapRange(ganttSpan.start, ganttSpan.end, zoom);

@@ -22,6 +22,12 @@ import BalanceIcon from '@mui/icons-material/Balance';
 import BorderColorIcon from '@mui/icons-material/BorderColor';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
 import SearchIcon from '@mui/icons-material/Search';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import FitScreenIcon from '@mui/icons-material/FitScreen';
+import TodayIcon from '@mui/icons-material/Today';
+import ZoomInIcon from '@mui/icons-material/ZoomIn';
+import ZoomOutIcon from '@mui/icons-material/ZoomOut';
 import FormatIndentIncreaseIcon from '@mui/icons-material/FormatIndentIncrease';
 import FormatIndentDecreaseIcon from '@mui/icons-material/FormatIndentDecrease';
 import FlagIcon from '@mui/icons-material/Flag';
@@ -48,7 +54,8 @@ import {
 } from '../../utils/calcsheet/ganttViews';
 import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../../utils/calcsheet/scheduleTree';
 import { durationWeight, leafWeights, projectPercent } from '../../utils/calcsheet/scheduleWeights';
-import MsProjectGantt, { GANTT_GRID_MAX_W, ZOOM_DAY_WIDTH, type GanttZoom } from './MsProjectGantt';
+import MsProjectGantt, { GANTT_GRID_MAX_W, type GanttNav, type GanttZoom } from './MsProjectGantt';
+import { MAX_DAY_W, MIN_DAY_W, ZOOM_PRESETS, snapRange, tierFor } from '../../utils/calcsheet/scheduleTimescale';
 import ScheduleSCurve from './ScheduleSCurve';
 import ScheduleExportDialog from './ScheduleExportDialog';
 import { baselineFromVersion, finishVariance, matchBaseline, varianceLabel, type ScheduleBaseline } from '../../utils/calcsheet/scheduleBaseline';
@@ -123,7 +130,9 @@ const SHORTCUTS: [string, string][] = [
   ['H', 'Highlight the selected task(s) (press again to clear)'],
   ['S', 'Scroll the chart to the selected task'],
   ['Ctrl/⌘ + F', 'Find a task (Enter = next, Shift + Enter = previous)'],
-  ['= / −', 'Zoom the timescale in / out'],
+  ['= / −  ·  Ctrl/⌘ + wheel', 'Zoom the timescale in / out (wheel zooms around the pointer)'],
+  ['Shift + wheel', 'Scroll the timeline sideways'],
+  ['T · F', 'Go to today · Fit the whole project'],
   ['Esc', 'Clear the selection'],
   ['?', 'Show these shortcuts'],
 ];
@@ -290,11 +299,22 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
 
   // MS Project-style view state: timescale zoom, grid/chart divider, selected
   // row, right-click menu, and "Scroll to Task" requests.
-  const [zoom, setZoom] = useState<GanttZoom>(() => {
-    try { const v = localStorage.getItem('gantt-zoom'); return v === 'week' || v === 'month' ? v : 'day'; } catch { return 'day'; }
+  // Zoom is continuous (pixels per day); the timescale style follows it.
+  const [dayW, setDayWRaw] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem('gantt-dayw'));
+      if (v > 0) return v;
+      return ZOOM_PRESETS[(localStorage.getItem('gantt-zoom') || 'day') as GanttZoom] ?? ZOOM_PRESETS.day;
+    } catch { return ZOOM_PRESETS.day; }
   });
-  useEffect(() => { try { localStorage.setItem('gantt-zoom', zoom); } catch { /* ignore */ } }, [zoom]);
-  const dayW = ZOOM_DAY_WIDTH[zoom];
+  const setDayW = (v: number) => setDayWRaw(Math.round(Math.max(MIN_DAY_W, Math.min(MAX_DAY_W, v)) * 100) / 100);
+  useEffect(() => { try { localStorage.setItem('gantt-dayw', String(dayW)); } catch { /* ignore */ } }, [dayW]);
+  const zoom: GanttZoom = tierFor(dayW);
+  // A view stores its zoom as a preset name, or pixels-per-day for anything in between.
+  const zoomKey = (Object.keys(ZOOM_PRESETS) as GanttZoom[]).find((k) => ZOOM_PRESETS[k] === dayW) ?? String(dayW);
+  const [navReq, setNavReq] = useState<(GanttNav & { n: number }) | null>(null);
+  const nav = (n: GanttNav) => setNavReq((p) => ({ ...n, n: (p?.n ?? 0) + 1 }));
+  const [chartViewW, setChartViewW] = useState(900);
   const dayWRef = useRef(dayW);
   useEffect(() => { dayWRef.current = dayW; }, [dayW]);
   const [gridWidth, setGridWidth] = useState<number>(() => {
@@ -431,19 +451,29 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     // Snap to whole timescale units (weeks, or months when zoomed out) like MS
     // Project, with a little lead-in so the first bar doesn't touch the edge,
     // and run the chart out far enough that it never looks cut short.
-    min = new Date(min.getFullYear(), min.getMonth(), min.getDate() - 2);
-    max = new Date(max.getFullYear(), max.getMonth(), max.getDate() + 2);
-    if (zoom === 'month') {
-      min = new Date(min.getFullYear(), min.getMonth(), 1);
-      max = new Date(max.getFullYear(), max.getMonth() + 1, 0);
-    } else {
-      min = new Date(min.getFullYear(), min.getMonth(), min.getDate() - min.getDay());
-      max = new Date(max.getFullYear(), max.getMonth(), max.getDate() + (6 - max.getDay()));
-    }
-    const minDays = Math.ceil(1400 / ZOOM_DAY_WIDTH[zoom]);
+    // Always include today, and leave room to page past the finish.
+    const today = toDate(todayStr());
+    if (today < min) min = today;
+    if (today > max) max = today;
+    max = new Date(max.getFullYear(), max.getMonth(), max.getDate() + Math.ceil((chartViewW * 0.6) / dayW));
+    ({ start: min, end: max } = snapRange(min, max, zoom));
+    const minDays = Math.ceil(Math.max(1400, chartViewW + 60) / dayW);
     if (daysBetween(min, max) < minDays) max = new Date(min.getFullYear(), min.getMonth(), min.getDate() + minDays);
     return { start: min, end: max };
-  }, [tasks, zoom]);
+  }, [tasks, zoom, dayW, chartViewW]);
+
+  // Fit: zoom so the whole project fills the visible timeline, then show its start.
+  const fitProject = () => {
+    const leaves = leafTasks(tasks);
+    if (leaves.length === 0) return;
+    let lo = leaves[0].startDate;
+    let hi = leaves[0].endDate;
+    leaves.forEach((t) => { if (t.startDate < lo) lo = t.startDate; if (t.endDate > hi) hi = t.endDate; });
+    const days = daysBetween(toDate(lo), toDate(hi)) + 1;
+    setDayW((Math.max(200, chartViewW) - 36) / (days + 2));
+    nav({ kind: 'date', date: addDays(lo, -1) });
+  };
+  const zoomBy = (f: number) => setDayW(dayW * f);
 
   const totalDays = Math.max(1, daysBetween(range.start, range.end) + 1);
 
@@ -692,6 +722,8 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); void stepHistory(e.shiftKey ? 'redo' : 'undo'); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); void stepHistory('redo'); return; }
     if (!mod && !e.altKey && e.key.toLowerCase() === 'i') { e.preventDefault(); setInspectorOpen((v) => !v); return; }
+    if (!mod && !e.altKey && e.key.toLowerCase() === 't') { e.preventDefault(); nav({ kind: 'today' }); return; }
+    if (!mod && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); fitProject(); return; }
 
     const order = visibleRows.map((r) => r.task.id);
     const idx = selectedId ? order.indexOf(selectedId) : -1;
@@ -748,8 +780,8 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         return;
       case 'Escape': selectOne(null); return;
       case '?': e.preventDefault(); setHelpOpen(true); return;
-      case '=': case '+': e.preventDefault(); setZoom((z) => (z === 'month' ? 'week' : 'day')); return;
-      case '-': case '_': e.preventDefault(); setZoom((z) => (z === 'day' ? 'week' : 'month')); return;
+      case '=': case '+': e.preventDefault(); zoomBy(1.25); return;
+      case '-': case '_': e.preventDefault(); zoomBy(1 / 1.25); return;
       default: break;
     }
     if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); setSelectedIds(new Set(order)); if (!selectedId && order[0]) setSelectedId(order[0]); return; }
@@ -780,7 +812,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   });
   const currentFilters = { categories: Array.from(categoryFilter), milestonesOnly, highlight: hlFilter };
   const currentView = allViews.find((v) => v.id === viewId) || null;
-  const viewModified = !!currentView && layoutSig({ columns, display, filters: currentFilters, zoom }) !== layoutSig(currentView);
+  const viewModified = !!currentView && layoutSig({ columns, display, filters: currentFilters, zoom: zoomKey }) !== layoutSig(currentView);
   const applyView = (v: GanttView) => {
     const cols = sanitizeColumns(v.columns);
     setColumns(cols);
@@ -790,14 +822,15 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     setCategoryFilter(new Set(v.filters?.categories || []));
     setMilestonesOnly(!!v.filters?.milestonesOnly);
     setHlFilter((HIGHLIGHT_FILTERS.some((f) => f.value === v.filters?.highlight) ? v.filters.highlight : 'none') as HighlightFilter);
-    if (v.zoom === 'day' || v.zoom === 'week' || v.zoom === 'month') setZoom(v.zoom);
+    if (v.zoom in ZOOM_PRESETS) setDayW(ZOOM_PRESETS[v.zoom as GanttZoom]);
+    else if (Number(v.zoom) > 0) setDayW(Number(v.zoom));
     setViewId(v.id);
     // Show the whole table for the view (up to about half the screen).
     setGridWidth(Math.max(240, Math.min(tableWidth(cols, !!baseline && !!v.display.baseline), Math.round(window.innerWidth * 0.55))));
   };
   const saveViewAs = (name: string) => {
     const existing = customViews.find((v) => v.name.toLowerCase() === name.toLowerCase());
-    const view: GanttView = { id: existing?.id ?? `v${Date.now()}`, name, columns, display, filters: currentFilters, zoom };
+    const view: GanttView = { id: existing?.id ?? `v${Date.now()}`, name, columns, display, filters: currentFilters, zoom: zoomKey };
     const next = existing ? customViews.map((v) => (v.id === view.id ? view : v)) : [...customViews, view];
     setCustomViews(next);
     saveCustomViews(next);
@@ -1756,15 +1789,26 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               <Tooltip title="Keyboard shortcuts (?)">
                 <IconButton size="small" onClick={() => setHelpOpen(true)}><KeyboardIcon fontSize="small" /></IconButton>
               </Tooltip>
+              {/* Timeline navigation — kept together, right-aligned over the timeline */}
+              <Stack direction="row" alignItems="center" spacing={0.5} sx={{ ml: 'auto' }}>
+              <Divider orientation="vertical" flexItem />
+              <Tooltip title="Previous period"><IconButton size="small" onClick={() => nav({ kind: 'page', dir: -1 })}><ChevronLeftIcon fontSize="small" /></IconButton></Tooltip>
+              <Tooltip title="Go to today (T)"><Button {...tb} startIcon={<TodayIcon />} onClick={() => nav({ kind: 'today' })}>Today</Button></Tooltip>
+              <Tooltip title="Next period"><IconButton size="small" onClick={() => nav({ kind: 'page', dir: 1 })}><ChevronRightIcon fontSize="small" /></IconButton></Tooltip>
+              <Tooltip title="Fit the whole project in view (F)"><Button {...tb} startIcon={<FitScreenIcon />} onClick={fitProject}>Fit</Button></Tooltip>
               <ToggleButtonGroup
-                size="small" exclusive value={zoom}
-                onChange={(_, v: GanttZoom | null) => { if (v) setZoom(v); }}
-                sx={{ '& .MuiToggleButton-root': { py: 0.25, px: 1.25, textTransform: 'none', fontSize: 12 } }}
+                size="small" exclusive value={(Object.keys(ZOOM_PRESETS) as GanttZoom[]).find((k) => ZOOM_PRESETS[k] === dayW) ?? null}
+                onChange={(_, v: GanttZoom | null) => { if (v) setDayW(ZOOM_PRESETS[v]); }}
+                sx={{ '& .MuiToggleButton-root': { py: 0.25, px: 1, textTransform: 'none', fontSize: 12 } }}
               >
-                <ToggleButton value="day">Days</ToggleButton>
-                <ToggleButton value="week">Weeks</ToggleButton>
-                <ToggleButton value="month">Months</ToggleButton>
+                <ToggleButton value="day">Day</ToggleButton>
+                <ToggleButton value="week">Week</ToggleButton>
+                <ToggleButton value="month">Month</ToggleButton>
+                <ToggleButton value="quarter">Quarter</ToggleButton>
               </ToggleButtonGroup>
+              <Tooltip title="Zoom out (−)"><span><IconButton size="small" disabled={dayW <= MIN_DAY_W} onClick={() => zoomBy(1 / 1.25)}><ZoomOutIcon fontSize="small" /></IconButton></span></Tooltip>
+              <Tooltip title="Zoom in (=)"><span><IconButton size="small" disabled={dayW >= MAX_DAY_W} onClick={() => zoomBy(1.25)}><ZoomInIcon fontSize="small" /></IconButton></span></Tooltip>
+              </Stack>
             </Stack>
             <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
             <MsProjectGantt
@@ -1779,7 +1823,10 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               idNumbers={idNumbers}
               range={range}
               totalDays={totalDays}
-              zoom={zoom}
+              dayW={dayW}
+              onZoom={setDayW}
+              navRequest={navReq}
+              onViewportWidth={setChartViewW}
               workingDays={workingDays}
               criticalIds={criticalIds}
               isOverdue={isOverdue}
