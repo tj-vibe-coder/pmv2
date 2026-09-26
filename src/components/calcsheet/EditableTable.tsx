@@ -176,7 +176,7 @@ function SortableRow<T extends { id: string }>({
                 textTransform: isChildHeader ? 'none' : 'uppercase',
                 letterSpacing: isChildHeader ? 0 : 0.3,
                 fontStyle: isChildHeader ? 'italic' : 'normal',
-                color: isChildHeader ? 'text.secondary' : undefined,
+                color: isChildHeader ? 'primary.light' : 'primary.main',
               },
             }}
             inputProps={{ style: { padding: '6px 4px' } }}

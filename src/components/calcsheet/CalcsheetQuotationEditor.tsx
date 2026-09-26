@@ -993,6 +993,44 @@ export default function QuotationEditor() {
     items.push({ label: 'Delete row', dividerBefore: true, danger: true, onClick: () => deleteRow('components', idx) });
     return items;
   };
+
+  // Same section-header rows as components (see insertHeaderComponent), for
+  // Engineering Services.
+  const insertHeaderService = (idx: number, position: 'above' | 'below') => {
+    const insertAt = position === 'above' ? idx : idx + 1;
+    const list = [...quotation.services];
+    list.splice(insertAt, 0, { id: id(), code: '', description: '', amount: 0, isHeader: true } as ServiceLine);
+    commit('services', list);
+  };
+  const insertChildHeaderService = (idx: number, position: 'above' | 'below') => {
+    const insertAt = position === 'above' ? idx : idx + 1;
+    const list = [...quotation.services];
+    list.splice(insertAt, 0, { id: id(), code: '', description: '', amount: 0, isChildHeader: true } as ServiceLine);
+    commit('services', list);
+  };
+
+  const getServiceContextMenu = (row: ServiceLine, idx: number): ContextMenuItem[] => {
+    if (isLegacy) return [];
+    const items: ContextMenuItem[] = [];
+    if (!row.isHeader && !row.isChildHeader && perLinePricing) {
+      items.push({
+        label: `Group selected (${selectedSvcIds.size})`,
+        disabled: selectedSvcIds.size < 2,
+        onClick: () => setGroupDialogOpen('services'),
+      });
+      if (row.group) {
+        items.push({ label: 'Ungroup this row', onClick: () => ungroupSvc(row.id) });
+      }
+    }
+    items.push(
+      { label: 'Insert header above', dividerBefore: true, onClick: () => insertHeaderService(idx, 'above') },
+      { label: 'Insert header below', onClick: () => insertHeaderService(idx, 'below') },
+      { label: 'Insert child header above', onClick: () => insertChildHeaderService(idx, 'above') },
+      { label: 'Insert child header below', onClick: () => insertChildHeaderService(idx, 'below') },
+    );
+    items.push({ label: 'Delete row', dividerBefore: true, danger: true, onClick: () => deleteRow('services', idx) });
+    return items;
+  };
   // Per-group export style. Absent = 'lot' (collapse to a single "1.00 LOT"
   // line priced at the group total); 'itemized' shows each member's own qty
   // and UOM while the group keeps one combined price.
@@ -2059,6 +2097,9 @@ export default function QuotationEditor() {
           subheader={(row, index) => subheaderBefore(quotation.services, index)}
           emptyMessage="No scope items — add deliverables (e.g., 'PLC redundancy troubleshooting', 'TIA Portal integration')"
           readOnly={isLegacy}
+          isHeaderRow={(r) => !!r.isHeader}
+          isChildHeaderRow={(r) => !!r.isChildHeader}
+          getContextMenu={getServiceContextMenu}
           footer={
             (!quotation.servicesFromManpower || quotation.servicesPerLinePricing) ? (
               <TableRow sx={{ bgcolor: 'grey.50' }}>
