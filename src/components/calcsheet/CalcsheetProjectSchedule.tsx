@@ -1141,7 +1141,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 label="Manpower" type="number" value={form.manpower} fullWidth
                 disabled={form.isMilestone}
                 inputProps={{ min: 0, step: 1 }}
-                helperText={!form.isMilestone && form.manpower > 0 ? `${Math.round(form.manpower * Math.max(1, Math.round(form.durationDays) || 1) * 10) / 10} man-days` : 'Headcount per working day'}
+                helperText="Headcount per working day"
                 onChange={(e) => setForm((f) => ({ ...f, manpower: Math.max(0, Number(e.target.value) || 0) }))}
                 onWheel={blurNumberInputOnWheel}
               />

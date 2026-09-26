@@ -125,10 +125,6 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
               <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3 }}>{data.peak ? num(data.peak.pax) : '—'}</Typography>
               {data.peak && <Typography variant="caption" color="text.secondary">{mspDate(data.peak.date)}</Typography>}
             </Box>
-            <Box>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Total man-days</Typography>
-              <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3 }}>{num(data.totalManDays)}</Typography>
-            </Box>
           </>
         )}
       </Stack>
@@ -184,7 +180,6 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
               <TableCell align="right">Actual % complete</TableCell>
               {data.hasManpower && <TableCell align="right">Manpower (per day{data.granularity === 'week' ? ' avg' : ''})</TableCell>}
               {data.hasManpower && data.granularity === 'week' && <TableCell align="right">Peak</TableCell>}
-              {data.hasManpower && <TableCell align="right">Man-days</TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -195,7 +190,6 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
                 <TableCell align="right">{pct(b.actualPct)}</TableCell>
                 {data.hasManpower && <TableCell align="right">{num(b.manpower)}</TableCell>}
                 {data.hasManpower && data.granularity === 'week' && <TableCell align="right">{num(b.peak)}</TableCell>}
-                {data.hasManpower && <TableCell align="right">{num(b.manDays)}</TableCell>}
               </TableRow>
             ))}
           </TableBody>
