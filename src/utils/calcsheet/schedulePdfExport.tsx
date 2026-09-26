@@ -389,7 +389,6 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
           ['Variance', `${variance > 0 ? '+' : ''}${variance.toFixed(1)} pts ${Math.abs(variance) < 0.5 ? '(on plan)' : variance > 0 ? '(ahead)' : '(behind)'}`],
           ...(sc.hasManpower ? [
             ['Peak manpower', sc.peak ? `${sc.peak.pax} · ${mspDate(sc.peak.date)}` : '—'] as [string, string],
-            ['Total man-days', Math.round(sc.totalManDays).toLocaleString()] as [string, string],
           ] : []),
         ];
         const tierAt = (segs: TimescaleSeg[], align: 'left' | 'center') => (

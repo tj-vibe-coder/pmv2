@@ -22,7 +22,7 @@ export interface SCurveBucket {
   actualPct?: number;  // % complete from a status snapshot dated in this bucket
   manpower: number;    // average pax per working day in the bucket
   peak: number;        // peak pax on any single day in the bucket
-  manDays: number;     // planned man-days in the bucket
+  manDays: number;     // internal: headcount summed over the bucket's days (for the average)
 }
 
 export interface SCurveSnapshot { date: string; tasks: ScheduleTask[] }
@@ -37,7 +37,6 @@ export interface SCurveResult {
   /** Dated actual % complete points (saved versions + today), oldest first. */
   actualPoints: { date: string; pct: number }[];
   hasManpower: boolean;
-  totalManDays: number;
   peak: { pax: number; date: string } | null;
   plannedToday: number;
   actualToday: number;
@@ -93,7 +92,6 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
   const buckets: SCurveBucket[] = [];
   const daily: SCurveResult['daily'] = [];
   let cum = 0;
-  let totalManDays = 0;
   let peak: { pax: number; date: string } | null = null;
   let plannedToday = 0;
   const today = todayStr();
@@ -107,7 +105,6 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
     if (!workingDays || !isWeekend(date)) {
       for (const t of working) if (t.startDate <= date && date <= t.endDate) pax += Math.max(0, t.manpower || 0);
     }
-    totalManDays += pax;
     if (!peak || pax > peak.pax) peak = { pax, date };
     daily.push({ date, plannedPct: pctNow, pax });
 
@@ -147,7 +144,6 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
     daily,
     actualPoints: points,
     hasManpower,
-    totalManDays,
     peak: peak && peak.pax > 0 ? peak : null,
     plannedToday,
     actualToday,

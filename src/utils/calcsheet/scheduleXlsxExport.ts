@@ -53,7 +53,6 @@ export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: Sch
     { header: 'End', key: 'end', width: 12 },
     { header: 'Duration (days)', key: 'duration', width: 14 },
     { header: 'Manpower', key: 'manpower', width: 14 },
-    { header: 'Man-days', key: 'manDays', width: 11 },
     { header: 'Progress (%)', key: 'progress', width: 12 },
     { header: 'Weight', key: 'weight', width: 10 },
     { header: 'Share (%)', key: 'share', width: 11 },
@@ -75,14 +74,13 @@ export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: Sch
       end: t.isMilestone ? '' : t.endDate,
       duration: t.isMilestone ? '' : durationOf(t.startDate, t.endDate),
       manpower: t.isMilestone ? '' : (t.manpower || ''),
-      manDays: t.isMilestone || !t.manpower ? '' : t.manpower * (t.durationDays ?? durationOf(t.startDate, t.endDate)),
       progress: t.progressPct,
       weight: shareMap.has(t.id) ? (Number(t.weight) || '') : '',
       share: shareMap.has(t.id) ? Math.round(shareMap.get(t.id)! * 100) / 100 : '',
       notes: t.notes || '',
     });
   }
-  ts.autoFilter = { from: 'A1', to: 'L1' };
+  ts.autoFilter = { from: 'A1', to: 'K1' };
 
   // ── Gantt sheet ──────────────────────────────────────────────────────────
   const range = computeRange(tasks);
