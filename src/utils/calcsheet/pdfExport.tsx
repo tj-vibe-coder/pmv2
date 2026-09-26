@@ -593,6 +593,10 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                         }
                         const subheader = subheaderBefore(quotation.services, index);
                         if (subheader) rendered.push(<Text style={styles.inlineSubheader} key={`subheader-${l.id}`}>{subheader}</Text>);
+                        const itemized = !!quotation.servicesItemizedExport;
+                        const rawQty = l.qty ?? l.days ?? 0;
+                        const lineQty = rawQty > 0 ? rawQty : 1;
+                        const lineUom = (l.uom || 'lot').toUpperCase();
                         if (l.group) {
                           const members = groups.get(l.group)!;
                           const midIdx = groupedLotDisplayIndex(members.length);
@@ -603,10 +607,23 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                             <View style={styles.tr} key={l.id}>
                               <Text style={styles.cItem}>{isFirst ? codesC.get(l.id) : ''}</Text>
                               <Text style={styles.cDesc}>{l.description}</Text>
-                              <Text style={styles.cQty}>{isMid ? NUM(1) : ''}</Text>
-                              <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
+                              <Text style={styles.cQty}>{itemized ? NUM(lineQty) : (isMid ? NUM(1) : '')}</Text>
+                              <Text style={styles.cUom}>{itemized ? lineUom : (isMid ? 'LOT' : '')}</Text>
                               <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
                               <Text style={styles.cTotal}>{isMid ? NUM(groupTotal) : ''}</Text>
+                            </View>,
+                          );
+                        } else if (itemized) {
+                          // Real QTY/UOM, with unit price derived from amount ÷ qty
+                          // so unit × qty still reconciles to the printed total.
+                          rendered.push(
+                            <View style={styles.tr} key={l.id}>
+                              <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
+                              <Text style={styles.cDesc}>{l.description}</Text>
+                              <Text style={styles.cQty}>{NUM(lineQty)}</Text>
+                              <Text style={styles.cUom}>{lineUom}</Text>
+                              <Text style={styles.cUnit}>{NUM((l.amount || 0) / lineQty)}</Text>
+                              <Text style={styles.cTotal}>{NUM(l.amount)}</Text>
                             </View>,
                           );
                         } else {

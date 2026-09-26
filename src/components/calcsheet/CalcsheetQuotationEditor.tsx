@@ -2118,6 +2118,12 @@ export default function QuotationEditor() {
                   control={<Switch size="small" checked={!!quotation.servicesPerLinePricing} onChange={(e) => setField('servicesPerLinePricing', e.target.checked)} disabled={servicesLocked} />}
                   label={<Typography variant="caption">Per-line pricing</Typography>}
                 />
+                {quotation.servicesPerLinePricing && (
+                  <FormControlLabel
+                    control={<Switch size="small" checked={!!quotation.servicesItemizedExport} onChange={(e) => setField('servicesItemizedExport', e.target.checked)} disabled={servicesLocked} />}
+                    label={<Typography variant="caption">Show QTY/UOM in PDF &amp; Excel (else 1 LOT)</Typography>}
+                  />
+                )}
                 {!quotation.servicesPerLinePricing && (
                   <Stack direction="row" spacing={1} alignItems="center">
                     <NumField

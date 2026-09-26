@@ -258,6 +258,10 @@ export async function exportQuotationXlsx(
         }
         const subheader = subheaderBefore(quotation.services, index);
         if (subheader) inlineSubheader(subheader);
+        const itemized = !!quotation.servicesPerLinePricing && !!quotation.servicesItemizedExport;
+        const rawQty = l.qty ?? l.days ?? 0;
+        const lineQty = rawQty > 0 ? rawQty : 1;
+        const lineUom = (l.uom || 'lot').toLowerCase();
         if (l.group) {
           const members = groups.get(l.group)!;
           const midIdx = Math.max(0, Math.floor((members.length - 1) / 2));
@@ -267,9 +271,19 @@ export async function exportQuotationXlsx(
             ws.getRow(r).values = [l.code, l.description, 1, 'lot', groupTotal, groupTotal];
             ws.getCell(r, 5).numFmt = PHP_FMT;
             ws.getCell(r, 6).numFmt = PHP_FMT;
+          } else if (itemized) {
+            ws.getRow(r).values = [l.code, l.description, lineQty, lineUom, '', ''];
           } else {
             ws.getRow(r).values = [l.code, l.description, '', '', '', ''];
           }
+          r++;
+        } else if (itemized) {
+          // Real QTY/UOM, with unit price derived from amount ÷ qty so
+          // unit × qty still reconciles to the printed total.
+          const amt = l.amount || 0;
+          ws.getRow(r).values = [l.code, l.description, lineQty, lineUom, amt / lineQty, amt];
+          ws.getCell(r, 5).numFmt = PHP_FMT;
+          ws.getCell(r, 6).numFmt = PHP_FMT;
           r++;
         } else {
           const amt = quotation.servicesPerLinePricing ? (l.amount || 0) : serviceLineAmount(l, ewtPct);
