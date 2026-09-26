@@ -10,8 +10,9 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import type { ScheduleTask } from '../../types/ScheduleTask';
 import type { TreeRow } from '../../utils/calcsheet/scheduleTree';
 import { daysBetween, durationOf, toDate, todayStr, workingDaysBetween } from '../../utils/calcsheet/scheduleDates';
+import { dayAt, mspDate, timescaleTiers, type GanttZoom, type TimescaleSeg } from '../../utils/calcsheet/scheduleTimescale';
 
-export type GanttZoom = 'day' | 'week' | 'month';
+export type { GanttZoom };
 export const ZOOM_DAY_WIDTH: Record<GanttZoom, number> = { day: 24, week: 8, month: 3 };
 export const GANTT_ROW_H = 24;
 export const GANTT_GRID_MAX_W = 868;
@@ -58,65 +59,6 @@ const COLS: Col[] = [
   { key: 'cat', label: 'Category', w: 110 },
 ];
 
-const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
-// "Mon 9/28/26" — MS Project's default date format.
-export function mspDate(s: string): string {
-  const d = toDate(s);
-  const wd = d.toLocaleDateString('en-US', { weekday: 'short' });
-  return `${wd} ${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
-}
-
-function dayAt(start: Date, i: number): Date {
-  return new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
-}
-
-function weekStart(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay());
-}
-
-interface Seg { key: string; label: string; left: number; width: number }
-
-// Group consecutive days sharing a key into one timescale cell.
-function buildTier(start: Date, totalDays: number, dayW: number, keyOf: (d: Date) => string, labelOf: (d: Date) => string): Seg[] {
-  const out: Seg[] = [];
-  for (let i = 0; i < totalDays; i++) {
-    const d = dayAt(start, i);
-    const key = keyOf(d);
-    const last = out[out.length - 1];
-    if (last && last.key === key) last.width += dayW;
-    else out.push({ key, label: labelOf(d), left: i * dayW, width: dayW });
-  }
-  return out;
-}
-
-function tiersFor(zoom: GanttZoom, start: Date, totalDays: number, dayW: number): { top: Seg[]; bottom: Seg[] } {
-  if (zoom === 'day') {
-    return {
-      top: buildTier(start, totalDays, dayW,
-        (d) => weekStart(d).toDateString(),
-        (d) => { const w = weekStart(d); return `${MONTH_SHORT[w.getMonth()]} ${w.getDate()}, '${String(w.getFullYear()).slice(-2)}`; }),
-      bottom: buildTier(start, totalDays, dayW, (d) => d.toDateString(), (d) => DOW[d.getDay()]),
-    };
-  }
-  if (zoom === 'week') {
-    return {
-      top: buildTier(start, totalDays, dayW, (d) => `${d.getFullYear()}-${d.getMonth()}`, (d) => `${MONTH_LONG[d.getMonth()]} ${d.getFullYear()}`),
-      bottom: buildTier(start, totalDays, dayW,
-        (d) => weekStart(d).toDateString(),
-        (d) => { const w = weekStart(d); return `${w.getMonth() + 1}/${w.getDate()}`; }),
-    };
-  }
-  return {
-    top: buildTier(start, totalDays, dayW,
-      (d) => `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3)}`,
-      (d) => `Qtr ${Math.floor(d.getMonth() / 3) + 1}, ${d.getFullYear()}`),
-    bottom: buildTier(start, totalDays, dayW, (d) => `${d.getFullYear()}-${d.getMonth()}`, (d) => MONTH_SHORT[d.getMonth()]),
-  };
-}
-
 export interface MsProjectGanttProps {
   rows: TreeRow[];
   /** Stable MS Project-style row IDs (1-based position in the fully expanded outline). */
@@ -151,7 +93,7 @@ export default function MsProjectGantt({
   const bodyH = rows.length * GANTT_ROW_H;
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const { top, bottom } = useMemo(() => tiersFor(zoom, range.start, totalDays, dayW), [zoom, range.start, totalDays, dayW]);
+  const { top, bottom } = useMemo(() => timescaleTiers(zoom, range.start, totalDays, dayW), [zoom, range.start, totalDays, dayW]);
 
   const nonWorking = useMemo(() => {
     if (dayW < 6) return [] as number[];
@@ -291,7 +233,7 @@ export default function MsProjectGantt({
     }
   };
 
-  const tierCell = (s: Seg, align: 'left' | 'center') => (
+  const tierCell = (s: TimescaleSeg, align: 'left' | 'center') => (
     <Box
       key={s.key}
       sx={{

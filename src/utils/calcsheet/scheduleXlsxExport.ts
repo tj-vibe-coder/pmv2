@@ -127,6 +127,19 @@ export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: Sch
     rowIdx++;
   }
 
+  // Print (and Excel's "Save as PDF") on a single A3 landscape page.
+  for (const ws of [ts, gs]) {
+    ws.pageSetup = {
+      ...ws.pageSetup,
+      paperSize: 8, // A3
+      orientation: 'landscape',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 1,
+      margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 },
+    };
+  }
+
   const buffer = await wb.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/octet-stream' });
   saveAs(blob, `${project.code || 'schedule'}-gantt-chart.xlsx`);

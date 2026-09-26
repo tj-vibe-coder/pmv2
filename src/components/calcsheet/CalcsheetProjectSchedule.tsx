@@ -552,7 +552,10 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     setExportBusy('pdf');
     setExportErr('');
     try {
-      await exportSchedulePdf({ code, name }, flattenTree(rolledTasks, new Set()).map((r) => r.task));
+      await exportSchedulePdf({ code, name }, flattenTree(rolledTasks, new Set()), {
+        workingDays,
+        criticalIds: showCritical ? criticalIds : undefined,
+      });
     } catch (e) {
       setExportErr(e instanceof Error ? e.message : 'PDF export failed');
     } finally {
