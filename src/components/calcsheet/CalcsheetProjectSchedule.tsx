@@ -570,9 +570,11 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     setExportBusy('pdf');
     setExportErr('');
     try {
+      const snapshots = await loadSnapshots().catch(() => []);
       await exportSchedulePdf({ code, name }, flattenTree(rolledTasks, new Set()), {
         workingDays,
         criticalIds: showCritical ? criticalIds : undefined,
+        snapshots,
       });
     } catch (e) {
       setExportErr(e instanceof Error ? e.message : 'PDF export failed');

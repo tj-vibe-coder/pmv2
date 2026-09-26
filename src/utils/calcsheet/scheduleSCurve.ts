@@ -30,6 +30,10 @@ export interface SCurveSnapshot { date: string; tasks: ScheduleTask[] }
 export interface SCurveResult {
   granularity: 'day' | 'week';
   buckets: SCurveBucket[];
+  /** Per-day planned % complete (cumulative) and manpower, for precise plotting. */
+  daily: { date: string; plannedPct: number; pax: number }[];
+  /** Dated actual % complete points (saved versions + today), oldest first. */
+  actualPoints: { date: string; pct: number }[];
   hasManpower: boolean;
   totalManDays: number;
   peak: { pax: number; date: string } | null;
@@ -92,6 +96,7 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
 
   const granularity: 'day' | 'week' = durationOf(start, end) <= 60 ? 'day' : 'week';
   const buckets: SCurveBucket[] = [];
+  const daily: SCurveResult['daily'] = [];
   let cum = 0;
   let totalManDays = 0;
   let peak: { pax: number; date: string } | null = null;
@@ -109,6 +114,7 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
     }
     totalManDays += pax;
     if (!peak || pax > peak.pax) peak = { pax, date };
+    daily.push({ date, plannedPct: pctNow, pax });
 
     const d = toDate(date);
     const key = granularity === 'day' ? date : formatLocalDate(new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay()));
@@ -142,6 +148,8 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
   return {
     granularity,
     buckets,
+    daily,
+    actualPoints: points,
     hasManpower,
     totalManDays,
     peak: peak && peak.pax > 0 ? peak : null,
