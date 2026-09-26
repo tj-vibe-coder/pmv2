@@ -1097,6 +1097,14 @@ export default function QuotationEditor() {
           </Stack>
         ) },
         { key: 'days', label: 'Days', width: 80, type: 'number', align: 'right', min: 0 },
+        // Read-only: the team's blended daily rate (from Manpower below), shown
+        // here so the pre-markup cost/budget for this line — Days × Unit Price —
+        // is visible without scrolling down to the Manpower table.
+        { key: '_unitPrice', label: 'Unit Price', width: 100, align: 'right', render: (r) => (
+          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8125rem', color: 'text.secondary' }}>
+            {PHP(teamDailyRate)}
+          </Typography>
+        ) },
         // Shows the global Labor markup (greyed) until a per-line override is typed;
         // editing recomputes the line amount, clearing falls back to the global.
         { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.laborMarkupPct || 0) },
