@@ -11,6 +11,7 @@ import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import { TASK_HIGHLIGHTS, type ScheduleTask } from '../../types/ScheduleTask';
 import type { TreeRow } from '../../utils/calcsheet/scheduleTree';
 import { finishVariance, varianceLabel } from '../../utils/calcsheet/scheduleBaseline';
+import { formatLink, linksOf } from '../../utils/calcsheet/scheduleLinks';
 import { daysBetween, durationOf, toDate, todayStr, workingDaysBetween } from '../../utils/calcsheet/scheduleDates';
 import { dayAt, mspDate, timescaleTiers, type GanttZoom, type TimescaleSeg } from '../../utils/calcsheet/scheduleTimescale';
 
@@ -107,7 +108,11 @@ export interface MsProjectGanttProps {
   weightMode?: 'manual' | 'duration';
   /** Drag a table row onto another to move it above/below that task. */
   onReorder?: (dragId: string, targetId: string, pos: 'above' | 'below') => void;
-  onBarMouseDown: (e: ReactMouseEvent, t: ScheduleTask, mode: 'move' | 'resize') => void;
+  onBarMouseDown: (e: ReactMouseEvent, t: ScheduleTask, mode: 'move' | 'resize' | 'progress') => void;
+  /** A link was drawn from one bar end to another (screen coords of the drop). */
+  onLinkDraw?: (fromId: string, toId: string, fromEnd: 'start' | 'finish', toEnd: 'start' | 'finish', x: number, y: number) => void;
+  /** A link line was double-clicked. */
+  onLinkOpen?: (predId: string, succId: string, x: number, y: number) => void;
   draggingTaskId: string | null;
   gridWidth: number;
   onGridWidthChange: (w: number) => void;
@@ -122,7 +127,7 @@ export default function MsProjectGantt({
   rows, idNumbers, range, totalDays, zoom, workingDays, criticalIds, isOverdue,
   collapsed, onToggleCollapse, selectedId, selectedIds, onSelect, onOpen, onRowContextMenu, onReorder, weightShare, weightMode,
   filterHits, searchQuery, revealRequest,
-  onBarMouseDown, draggingTaskId, gridWidth, onGridWidthChange, scrollRequest, baseline,
+  onBarMouseDown, draggingTaskId, gridWidth, onGridWidthChange, scrollRequest, baseline, onLinkDraw, onLinkOpen,
 }: MsProjectGanttProps) {
   const cols = baseline ? COLS_WITH_BASELINE : COLS;
   const colX = cols.reduce((s, c) => s + c.w, 0);
@@ -160,40 +165,99 @@ export default function MsProjectGantt({
     return { left, width };
   };
 
-  // Finish-to-start links drawn the MS Project way: out of the predecessor's
-  // finish, across to just inside the successor's start, then vertically onto
-  // the bar. When the successor starts before the predecessor finishes, route
-  // a zig-zag back to the successor's left edge instead.
+  // Links drawn the MS Project way. FS: out of the predecessor's finish,
+  // across to just inside the successor's start, then down onto the bar (or a
+  // zig-zag back to its left edge when it starts earlier). SS / FF / SF leave
+  // from and arrive at the matching bar ends, looping round the outside.
   const links = useMemo(() => {
     const idx = new Map(rows.map((r, i) => [r.task.id, i]));
-    const out: { key: string; d: string; crit: boolean }[] = [];
+    const out: { key: string; d: string; crit: boolean; predId: string; succId: string; label: string }[] = [];
     rows.forEach((row, si) => {
       const s = row.task;
-      (s.predecessors || []).forEach((pid) => {
-        const pi = idx.get(pid);
+      linksOf(s).forEach((l) => {
+        const pi = idx.get(l.id);
         if (pi === undefined || pi === si) return;
         const p = rows[pi].task;
         const pg = barGeom(p);
         const sg = barGeom(s);
-        const x1 = p.isMilestone ? pg.left + dayW / 2 + 6 : pg.left + pg.width;
+        const pStart = p.isMilestone ? pg.left + dayW / 2 - 6 : pg.left;
+        const pEnd = p.isMilestone ? pg.left + dayW / 2 + 6 : pg.left + pg.width;
+        const sStart = s.isMilestone ? sg.left + dayW / 2 - 6 : sg.left;
+        const sEnd = s.isMilestone ? sg.left + dayW / 2 + 6 : sg.left + sg.width;
         const y1 = pi * GANTT_ROW_H + GANTT_ROW_H / 2;
-        const sX = s.isMilestone ? sg.left + dayW / 2 : sg.left;
+        const y2 = si * GANTT_ROW_H + GANTT_ROW_H / 2;
         const down = si > pi;
-        const inset = s.isMilestone ? 0 : Math.min(5, sg.width / 2);
+        const mid = (down ? pi + 1 : pi) * GANTT_ROW_H;
         let d: string;
-        if (sX + inset >= x1 + 2) {
-          const yEnd = down ? si * GANTT_ROW_H + barTop - 1 : si * GANTT_ROW_H + barTop + barH + 1;
-          d = `M ${x1} ${y1} H ${sX + inset} V ${yEnd}`;
+        if (l.type === 'SS') {
+          const xL = Math.min(pStart, sStart) - 8;
+          d = `M ${pStart} ${y1} H ${xL} V ${y2} H ${sStart - 1}`;
+        } else if (l.type === 'FF') {
+          const xR = Math.max(pEnd, sEnd) + 8;
+          d = `M ${pEnd} ${y1} H ${xR} V ${y2} H ${sEnd + 1}`;
+        } else if (l.type === 'SF') {
+          d = `M ${pStart} ${y1} H ${pStart - 8} V ${mid} H ${sEnd + 8} V ${y2} H ${sEnd + 1}`;
         } else {
-          const mid = (down ? pi + 1 : pi) * GANTT_ROW_H;
-          const y2 = si * GANTT_ROW_H + GANTT_ROW_H / 2;
-          d = `M ${x1} ${y1} h 6 V ${mid} H ${sX - 8} V ${y2} H ${sX - 1}`;
+          const sX = s.isMilestone ? sg.left + dayW / 2 : sg.left;
+          const inset = s.isMilestone ? 0 : Math.min(5, sg.width / 2);
+          if (sX + inset >= pEnd + 2) {
+            const yEnd = down ? si * GANTT_ROW_H + barTop - 1 : si * GANTT_ROW_H + barTop + barH + 1;
+            d = `M ${pEnd} ${y1} H ${sX + inset} V ${yEnd}`;
+          } else {
+            d = `M ${pEnd} ${y1} h 6 V ${mid} H ${sX - 8} V ${y2} H ${sX - 1}`;
+          }
         }
-        out.push({ key: `${pid}-${s.id}`, d, crit: criticalIds.has(pid) && criticalIds.has(s.id) });
+        out.push({
+          key: `${l.id}-${s.id}`, d, crit: criticalIds.has(l.id) && criticalIds.has(s.id), predId: l.id, succId: s.id,
+          label: `${formatLink(idNumbers.get(l.id) ?? '?', l)} → ${idNumbers.get(s.id) ?? '?'}`,
+        });
       });
     });
     return out;
-  }, [rows, range, dayW, criticalIds, barTop, barH]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows, range, dayW, criticalIds, barTop, barH, idNumbers]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Draw a link: drag from the dot at a bar's start/finish onto another bar
+  // (its left half = start, right half = finish).
+  const bodyRef = useRef<HTMLDivElement>(null);
+  type LinkDragState = { fromId: string; fromEnd: 'start' | 'finish'; x0: number; y0: number; x: number; y: number };
+  const [linkDrag, setLinkDrag] = useState<LinkDragState | null>(null);
+  // Latest rows / geometry for the window listeners of an in-progress drag.
+  const linkCtx = useRef<{ rows: TreeRow[]; barGeom: typeof barGeom; onLinkDraw: typeof onLinkDraw }>({ rows, barGeom, onLinkDraw });
+  linkCtx.current = { rows, barGeom, onLinkDraw };
+  const linkTargetFor = (d: LinkDragState, x: number, y: number): { row: TreeRow; end: 'start' | 'finish' } | null => {
+    const { rows: rs, barGeom: geom } = linkCtx.current;
+    const row = rs[Math.floor(y / GANTT_ROW_H)];
+    if (!row || row.task.id === d.fromId) return null;
+    const g = geom(row.task);
+    return { row, end: row.task.isMilestone || x < g.left + g.width / 2 ? 'start' : 'finish' };
+  };
+  const linkTarget = (x: number, y: number) => (linkDrag ? linkTargetFor(linkDrag, x, y) : null);
+  // Listeners go on at mousedown (not in an effect) so even a quick drag is caught.
+  const startLinkDrag = (e: ReactMouseEvent, t: ScheduleTask, end: 'start' | 'finish', x0: number, rowIdx: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = bodyRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    let cur: LinkDragState = { fromId: t.id, fromEnd: end, x0, y0: rowIdx * GANTT_ROW_H + GANTT_ROW_H / 2, x: e.clientX - rect.left, y: e.clientY - rect.top };
+    setLinkDrag(cur);
+    document.body.style.cursor = 'crosshair';
+    const rel = (ev: MouseEvent) => {
+      const r = bodyRef.current?.getBoundingClientRect() ?? rect;
+      return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+    };
+    const move = (ev: MouseEvent) => { cur = { ...cur, ...rel(ev) }; setLinkDrag(cur); };
+    const up = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      document.body.style.cursor = '';
+      const p = rel(ev);
+      const tgt = linkTargetFor(cur, p.x, p.y);
+      setLinkDrag(null);
+      if (tgt) linkCtx.current.onLinkDraw?.(cur.fromId, tgt.row.task.id, cur.fromEnd, tgt.end, ev.clientX, ev.clientY);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
 
   useEffect(() => {
     if (!scrollRequest || !scrollRef.current) return;
@@ -346,7 +410,7 @@ export default function MsProjectGantt({
           </Box>
         );
       }
-      case 'pred': return (t.predecessors || []).map((p) => idNumbers.get(p)).filter((n) => n != null).join(',');
+      case 'pred': return linksOf(t).filter((l) => idNumbers.has(l.id)).map((l) => formatLink(idNumbers.get(l.id) as number, l)).join(',');
       case 'mp': return !row.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? String(t.manpower) : '';
       case 'pct': return `${Math.round(t.progressPct || 0)}%`;
       case 'wt': {
@@ -396,7 +460,9 @@ export default function MsProjectGantt({
           </Box>
         );
       })()}
-      {!row.isSummary && draggingTaskId === null && <Box sx={{ opacity: 0.75, mt: 0.5 }}>Drag to move · drag right edge to change duration</Box>}
+      {!row.isSummary && draggingTaskId === null && (
+        <Box sx={{ opacity: 0.75, mt: 0.5 }}>Drag to move · right edge = duration · ▲ below = % complete · end dots = link</Box>
+      )}
     </Box>
   );
 
@@ -412,7 +478,23 @@ export default function MsProjectGantt({
     return <Box sx={{ position: 'absolute', left, width, top: barTop + barH + 2, height: 4, bgcolor: MSP.baseline, pointerEvents: 'none' }} />;
   };
 
-  const renderBar = (row: TreeRow) => {
+  // Hover handles: link dots at the bar ends, % complete grip below the bar.
+  const linkDot = (t: ScheduleTask, end: 'start' | 'finish', cx: number, rowIdx: number) => (
+    onLinkDraw ? (
+      <Tooltip title={`Drag to link from this task's ${end}`} disableInteractive>
+        <Box
+          className="gantt-h"
+          onMouseDown={(e) => startLinkDrag(e, t, end, cx, rowIdx)}
+          sx={{
+            position: 'absolute', left: cx - 5, top: barTop + barH / 2 - 5, width: 10, height: 10, borderRadius: '50%',
+            bgcolor: '#fff', border: `2px solid ${MSP.link}`, boxSizing: 'border-box', cursor: 'crosshair', zIndex: 2,
+          }}
+        />
+      </Tooltip>
+    ) : null
+  );
+
+  const renderBar = (row: TreeRow, rowIdx: number) => {
     const t = row.task;
     const { left, width } = barGeom(t);
     const crit = criticalIds.has(t.id);
@@ -448,6 +530,7 @@ export default function MsProjectGantt({
           <Box sx={{ position: 'absolute', left: cx + 10, top: 0, height: GANTT_ROW_H, display: 'flex', alignItems: 'center', fontSize: 11, color: MSP.text, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
             {`${toDate(t.startDate).getMonth() + 1}/${toDate(t.startDate).getDate()}`}
           </Box>
+          {linkDot(t, 'finish', cx - 16, rowIdx)}
         </>
       );
     }
@@ -478,6 +561,18 @@ export default function MsProjectGantt({
             />
           </Box>
         </Tooltip>
+        <Tooltip title={`${Math.round(pct)}% complete — drag to change`} disableInteractive>
+          <Box
+            className="gantt-h"
+            onMouseDown={(e) => onBarMouseDown(e, t, 'progress')}
+            sx={{
+              position: 'absolute', left: left + (width * pct) / 100 - 5, top: barTop + barH - 1, width: 10, height: 8, cursor: 'col-resize', zIndex: 2,
+              '&::after': { content: '""', position: 'absolute', left: 1, top: 1, borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderBottom: `6px solid ${MSP.progress}` },
+            }}
+          />
+        </Tooltip>
+        {linkDot(t, 'start', left - 9, rowIdx)}
+        {linkDot(t, 'finish', left + width + 11, rowIdx)}
         {(t.category || (t.manpower || 0) > 0) && (
           <Box sx={{ position: 'absolute', left: left + width + 6, top: 0, height: GANTT_ROW_H, display: 'flex', alignItems: 'center', fontSize: 11, color: MSP.text, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
             {[t.category, (t.manpower || 0) > 0 ? `[${t.manpower}]` : ''].filter(Boolean).join(' ')}
@@ -490,7 +585,7 @@ export default function MsProjectGantt({
   return (
     <Box
       ref={scrollRef}
-      sx={{ flex: 1, overflow: 'auto', position: 'relative', bgcolor: '#fff', border: `1px solid ${MSP.border}`, fontFamily: MSP.font, color: MSP.text, fontSize: 12, userSelect: 'none' }}
+      sx={{ flex: 1, minWidth: 0, overflow: 'auto', position: 'relative', bgcolor: '#fff', border: `1px solid ${MSP.border}`, fontFamily: MSP.font, color: MSP.text, fontSize: 12, userSelect: 'none' }}
     >
       <Box sx={{ display: 'flex', width: gridW + SPLITTER_W + timelineW, minHeight: '100%' }}>
         {/* ── Entry table (grid) ───────────────────────────────────────── */}
@@ -581,7 +676,7 @@ export default function MsProjectGantt({
             </Box>
           </Box>
 
-          <Box sx={{ position: 'relative', height: bodyH }}>
+          <Box ref={bodyRef} sx={{ position: 'relative', height: bodyH }}>
             {nonWorking.map((d) => (
               <Box key={`nw-${d}`} sx={{ position: 'absolute', top: 0, left: d * dayW, width: dayW, height: bodyH, bgcolor: MSP.nonWorking, pointerEvents: 'none' }} />
             ))}
@@ -594,6 +689,8 @@ export default function MsProjectGantt({
                 onContextMenu={(e) => { if (!(selectedIds ? selectedIds.has(row.task.id) : row.task.id === selectedId)) onSelect(row.task.id); onRowContextMenu(e, row); }}
                 sx={{
                   position: 'absolute', left: 0, top: i * GANTT_ROW_H, width: timelineW, height: GANTT_ROW_H,
+                  '& .gantt-h': { opacity: 0, transition: 'opacity .1s' },
+                  '&:hover .gantt-h': { opacity: linkDrag ? 0 : 1 },
                   bgcolor: (selectedIds ? selectedIds.has(row.task.id) : row.task.id === selectedId)
                     ? 'rgba(92,141,209,0.12)'
                     : filterHits?.has(row.task.id) ? 'rgba(255,214,0,0.14)' : 'transparent',
@@ -606,11 +703,11 @@ export default function MsProjectGantt({
                 }}
               >
                 {renderBaseline(row)}
-                {renderBar(row)}
+                {renderBar(row, i)}
               </Box>
             ))}
 
-            {links.length > 0 && (
+            {(links.length > 0 || linkDrag) && (
               <svg style={{ position: 'absolute', top: 0, left: 0, width: timelineW, height: bodyH, pointerEvents: 'none', overflow: 'visible' }}>
                 <defs>
                   <marker id="msp-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
@@ -627,6 +724,27 @@ export default function MsProjectGantt({
                     markerEnd={l.crit ? 'url(#msp-arrow-crit)' : 'url(#msp-arrow)'}
                   />
                 ))}
+                {/* Wider invisible hit lines: double-click a link to edit or delete it. */}
+                {onLinkOpen && !linkDrag && links.map((l) => (
+                  <path
+                    key={`hit-${l.key}`} d={l.d} fill="none" stroke="transparent" strokeWidth={7}
+                    style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                    onDoubleClick={(e) => onLinkOpen(l.predId, l.succId, e.clientX, e.clientY)}
+                  >
+                    <title>{`Link ${l.label} — double-click to edit`}</title>
+                  </path>
+                ))}
+                {linkDrag && (() => {
+                  const tgt = linkTarget(linkDrag.x, linkDrag.y);
+                  const ti = tgt ? rows.indexOf(tgt.row) : -1;
+                  return (
+                    <>
+                      {tgt && <rect x={0} y={ti * GANTT_ROW_H} width={timelineW} height={GANTT_ROW_H} fill="rgba(68,114,196,0.10)" />}
+                      <line x1={linkDrag.x0} y1={linkDrag.y0} x2={linkDrag.x} y2={linkDrag.y} stroke={MSP.link} strokeWidth={1.5} strokeDasharray="4 3" />
+                      <circle cx={linkDrag.x} cy={linkDrag.y} r={3} fill={MSP.link} />
+                    </>
+                  );
+                })()}
               </svg>
             )}
 

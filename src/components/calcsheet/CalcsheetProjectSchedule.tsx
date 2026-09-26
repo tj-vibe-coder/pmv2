@@ -4,6 +4,7 @@ import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
   FormControlLabel, IconButton, LinearProgress, Menu, MenuItem, Paper, Slider, Stack, TextField,
   Tab, Tabs, ToggleButton, ToggleButtonGroup, Tooltip, Typography, Table, TableBody, TableCell, TableHead, TableRow,
+  Popover, Snackbar,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -24,6 +25,8 @@ import SearchIcon from '@mui/icons-material/Search';
 import FormatIndentIncreaseIcon from '@mui/icons-material/FormatIndentIncrease';
 import FormatIndentDecreaseIcon from '@mui/icons-material/FormatIndentDecrease';
 import FlagIcon from '@mui/icons-material/Flag';
+import RedoIcon from '@mui/icons-material/Redo';
+import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import OutlinedFlagIcon from '@mui/icons-material/OutlinedFlag';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { ServiceLine, Quotation } from '../../types/Quotation';
@@ -35,7 +38,9 @@ import {
 } from '../../utils/calcsheet/scheduleDates';
 import { exportScheduleXlsx } from '../../utils/calcsheet/scheduleXlsxExport';
 import type { ScheduleExportData } from '../../utils/calcsheet/schedulePdfExport';
-import { autoSchedule, wouldCycle, criticalPath } from '../../utils/calcsheet/scheduleAuto';
+import { autoSchedule, wouldCycle, criticalPath, scheduleFloat } from '../../utils/calcsheet/scheduleAuto';
+import { LINK_TYPES, formatLink, linkFields, linksOf, parseLinkToken, type LinkType, type TaskLink } from '../../utils/calcsheet/scheduleLinks';
+import ScheduleTaskInspector, { type InspectorPatch } from './ScheduleTaskInspector';
 import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../../utils/calcsheet/scheduleTree';
 import { durationWeight, leafWeights, projectPercent } from '../../utils/calcsheet/scheduleWeights';
 import MsProjectGantt, { GANTT_GRID_MAX_W, ZOOM_DAY_WIDTH, type GanttZoom } from './MsProjectGantt';
@@ -93,6 +98,8 @@ const SHORTCUTS: [string, string][] = [
   ['Shift + click · Ctrl/⌘ + click', 'Select a range · add/remove a task'],
   ['Home / End', 'First / last task'],
   ['Ctrl/⌘ + A', 'Select all tasks'],
+  ['Ctrl/⌘ + Z · Ctrl/⌘ + Shift + Z (or Y)', 'Undo · Redo'],
+  ['I', 'Show / hide the task inspector'],
   ['← / →', 'Collapse / expand a phase (← on a task jumps to its phase)'],
   ['Enter · F2 · double-click', 'Task Information (edit)'],
   ['Insert · Ctrl/⌘ + Enter', 'Insert a new task below the selected one'],
@@ -115,8 +122,8 @@ interface TaskFormState {
   progressPct: number;
   isMilestone: boolean;
   notes: string;
-  predecessors: string[];
-  /** Predecessors as typed row IDs, e.g. "3, 5" (MS Project style). */
+  links: TaskLink[];
+  /** Predecessors as typed row IDs, e.g. "3, 5SS, 7FS+2d" (MS Project style). */
   predText: string;
   mode: 'auto' | 'manual';
   /** Finish date — entered directly for manually scheduled tasks. */
@@ -130,7 +137,7 @@ interface TaskFormState {
 const normDuration = (v: number): number => Math.max(0.5, Math.round((Number(v) || 0) * 2) / 2);
 
 const emptyForm = (): TaskFormState => ({
-  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', predecessors: [], predText: '', mode: 'auto', finishDate: todayStr(), parentId: null, manpower: 0, weight: 0,
+  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', links: [], predText: '', mode: 'auto', finishDate: todayStr(), parentId: null, manpower: 0, weight: 0,
 });
 
 // Best-effort category guess from a service line's description, so imported
@@ -190,6 +197,61 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const [tasks, setTasks] = useState<ScheduleTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  // Latest tasks for async handlers (drag end, undo) that outlive a render.
+  const tasksRef = useRef<ScheduleTask[]>(tasks);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+  const [toast, setToast] = useState('');
+
+  // ── Undo / Redo ─────────────────────────────────────────────────────
+  // Snapshot-based: record(label) keeps the task list as it was before a
+  // change; undo writes that snapshot back (ids preserved, via the sync
+  // endpoint) and keeps the current state for redo. Session-only.
+  type UndoEntry = { label: string; snap: ScheduleTask[] };
+  const undoStack = useRef<UndoEntry[]>([]);
+  const redoStack = useRef<UndoEntry[]>([]);
+  const [, setUndoTick] = useState(0);
+  const [undoBusy, setUndoBusy] = useState(false);
+  const record = (label: string, snap: ScheduleTask[] = tasksRef.current) => {
+    undoStack.current.push({ label, snap });
+    if (undoStack.current.length > 60) undoStack.current.shift();
+    redoStack.current = [];
+    setUndoTick((n) => n + 1);
+  };
+  const dropLastRecord = () => { undoStack.current.pop(); setUndoTick((n) => n + 1); };
+  const clearUndo = () => { undoStack.current = []; redoStack.current = []; setUndoTick((n) => n + 1); };
+  const sameTask = (a: ScheduleTask, b: ScheduleTask) => {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    return Array.from(keys).every((k) => JSON.stringify((a as unknown as Record<string, unknown>)[k] ?? null) === JSON.stringify((b as unknown as Record<string, unknown>)[k] ?? null));
+  };
+  const syncTo = async (target: ScheduleTask[]) => {
+    const cur = tasksRef.current;
+    const curById = new Map(cur.map((t) => [t.id, t]));
+    const keep = new Set(target.map((t) => t.id));
+    const upsert = target.filter((t) => { const c = curById.get(t.id); return !c || !sameTask(c, t); });
+    const remove = cur.filter((t) => !keep.has(t.id)).map((t) => t.id);
+    setTasks(target);
+    if (upsert.length || remove.length) await api('POST', '/api/schedule-tasks/sync', { projectId: id, upsert, remove });
+  };
+  const stepHistory = async (dir: 'undo' | 'redo') => {
+    const from = dir === 'undo' ? undoStack.current : redoStack.current;
+    const to = dir === 'undo' ? redoStack.current : undoStack.current;
+    const entry = from.pop();
+    if (!entry || undoBusy) return;
+    to.push({ label: entry.label, snap: tasksRef.current });
+    setUndoTick((n) => n + 1);
+    setUndoBusy(true);
+    try {
+      await syncTo(entry.snap);
+      setToast(`${dir === 'undo' ? 'Undid' : 'Redid'}: ${entry.label}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : `${dir === 'undo' ? 'Undo' : 'Redo'} failed`);
+      load(); // eslint-disable-line @typescript-eslint/no-use-before-define
+    } finally {
+      setUndoBusy(false);
+    }
+  };
+  const undoLabel = undoStack.current[undoStack.current.length - 1]?.label;
+  const redoLabel = redoStack.current[redoStack.current.length - 1]?.label;
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -304,6 +366,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
 
   const load = () => {
     if (!id) return;
+    clearUndo(); // a reload (or restore) replaces the tasks — old snapshots no longer apply
     setLoading(true);
     setErr('');
     api<{ success: boolean; tasks: ScheduleTask[] }>('GET', `/api/schedule-tasks?projectId=${encodeURIComponent(id)}`)
@@ -483,6 +546,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     }
     if (!parent) return;
     const p = parent;
+    record(`Indent "${row.task.name}"`);
     try {
       await api('PUT', `/api/schedule-tasks/${row.task.id}`, { parentId: p });
       setTasks((prev) => prev.map((t) => (t.id === row.task.id ? { ...t, parentId: p } : t)));
@@ -506,6 +570,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const saveWeights = async () => {
     const changed = leafTasks(tasks).filter((t) => (Math.max(0, Number(t.weight) || 0)) !== (weightDraft[t.id] || 0));
     setWeightsSaving(true);
+    record('Set progress weights');
     try {
       await Promise.all(changed.map((t) => api('PUT', `/api/schedule-tasks/${t.id}`, { weight: weightDraft[t.id] || 0 })));
       setTasks((prev) => prev.map((t) => (t.id in weightDraft ? { ...t, weight: weightDraft[t.id] || 0 } : t)));
@@ -547,6 +612,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     if (targets.length === 0) return;
     const ids = new Set(targets.map((t) => t.id));
     const before = tasks;
+    record(`${color ? 'Highlight' : 'Clear highlight on'} ${targets.length === 1 ? `"${targets[0].name}"` : `${targets.length} tasks`}`);
     setTasks((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, highlight: color } : t)));
     if (color) {
       setLastHighlight(color);
@@ -555,6 +621,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     try {
       await Promise.all(Array.from(ids).map((tid) => api('PUT', `/api/schedule-tasks/${tid}`, { highlight: color })));
     } catch (e) {
+      dropLastRecord();
       setTasks(before);
       setErr(e instanceof Error ? e.message : 'Failed to save highlight');
     }
@@ -586,12 +653,15 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
   keyHandler.current = (e: KeyboardEvent) => {
     if (view !== 'gantt') return;
-    if (dialogOpen || deleteTarget || bulkDelete || weightsOpen || importOpen || saveVerOpen || historyOpen || compareVersion || helpOpen || ctxMenu || hlMenu || pdfOpen) return;
+    if (dialogOpen || deleteTarget || bulkDelete || weightsOpen || importOpen || saveVerOpen || historyOpen || compareVersion || helpOpen || ctxMenu || hlMenu || pdfOpen || linkPop) return;
     const target = e.target as HTMLElement | null;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
     if (target && target.tagName === 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) return;
+    if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); void stepHistory(e.shiftKey ? 'redo' : 'undo'); return; }
+    if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); void stepHistory('redo'); return; }
+    if (!mod && !e.altKey && e.key.toLowerCase() === 'i') { e.preventDefault(); setInspectorOpen((v) => !v); return; }
 
     const order = visibleRows.map((r) => r.task.id);
     const idx = selectedId ? order.indexOf(selectedId) : -1;
@@ -670,6 +740,102 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     return () => window.removeEventListener('keydown', h);
   }, []);
 
+  // ── Task inspector (side panel) ─────────────────────────────────────
+  const [inspectorOpen, setInspectorOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem('gantt-inspector') === '1'; } catch { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem('gantt-inspector', inspectorOpen ? '1' : '0'); } catch { /* ignore */ } }, [inspectorOpen]);
+  const floatMap = useMemo(() => scheduleFloat(leafTasks(tasks), workingDays), [tasks, workingDays]);
+
+  // One undoable edit from the inspector. Date edits follow the task mode:
+  // auto tasks keep start + duration as the source of truth (a finish edit
+  // changes the duration); manual tasks keep the dates as typed.
+  const applyEdit = async (tid: string, patch: InspectorPatch, label: string) => {
+    const cur = tasks.find((t) => t.id === tid);
+    if (!cur) return;
+    let next: ScheduleTask = { ...cur, ...patch };
+    if ('startDate' in patch || 'endDate' in patch || 'durationDays' in patch || 'mode' in patch) {
+      const manual = (next.mode ?? 'auto') === 'manual';
+      const curDur = cur.durationDays ?? workingDaysBetween(cur.startDate, cur.endDate, workingDays);
+      if (next.isMilestone) {
+        const st = manual ? next.startDate : nextWorkingDay(next.startDate, workingDays);
+        next = { ...next, startDate: st, endDate: st };
+      } else if (manual) {
+        if ('durationDays' in patch) next.endDate = addWorkingDays(next.startDate, normDuration(patch.durationDays as number), workingDays);
+        else if ('startDate' in patch && !('endDate' in patch)) next.endDate = addWorkingDays(next.startDate, curDur, workingDays);
+        next.durationDays = workingDaysBetween(next.startDate, next.endDate, workingDays);
+      } else {
+        const st = nextWorkingDay(next.startDate, workingDays);
+        let dur = curDur;
+        if ('durationDays' in patch) dur = normDuration(patch.durationDays as number);
+        if ('endDate' in patch) dur = Math.max(1, workingDaysBetween(st, patch.endDate as string, workingDays));
+        next = { ...next, startDate: st, durationDays: dur, endDate: addWorkingDays(st, dur, workingDays) };
+      }
+    }
+    const body: Record<string, unknown> = {};
+    (Object.keys(next) as (keyof ScheduleTask)[]).forEach((k) => { if (next[k] !== cur[k]) body[k] = next[k]; });
+    if (Object.keys(body).length === 0) return;
+    record(label);
+    const before = tasks;
+    const working = tasks.map((t) => (t.id === tid ? next : t));
+    setTasks(working);
+    try {
+      await api('PUT', `/api/schedule-tasks/${tid}`, body);
+      if ('startDate' in body || 'endDate' in body || 'durationDays' in body || 'mode' in body) await cascade(working);
+    } catch (e) {
+      dropLastRecord();
+      setTasks(before);
+      setErr(e instanceof Error ? e.message : 'Failed to save the change');
+    }
+  };
+
+  // ── Links (drawn on the chart, or edited from the inspector) ─────────
+  const [linkPop, setLinkPop] = useState<{ predId: string; succId: string; type: LinkType; lag: string; x: number; y: number; existing: boolean } | null>(null);
+  const openLinkEditor = (predId: string, succId: string, x: number, y: number, type?: LinkType) => {
+    const succ = tasks.find((t) => t.id === succId);
+    if (!succ || !tasks.some((t) => t.id === predId) || predId === succId) return;
+    const existing = linksOf(succ).find((l) => l.id === predId);
+    if (!existing) {
+      if (tasks.some((t) => t.parentId === predId)) { setToast('Link from one of the phase’s tasks, not the phase itself.'); return; }
+      if (descendantIds(tasks, succId).has(predId)) { setToast('A phase can’t depend on one of its own tasks.'); return; }
+      if (wouldCycle(tasks, succId, predId)) { setToast('That link would create a loop.'); return; }
+    }
+    setLinkPop({ predId, succId, type: existing?.type ?? type ?? 'FS', lag: String(existing?.lag ?? 0), x, y, existing: !!existing });
+  };
+  const writeLinks = async (succId: string, links: TaskLink[], label: string) => {
+    const fields = linkFields(links);
+    record(label);
+    const working = tasks.map((t) => (t.id === succId ? { ...t, ...fields } : t));
+    setTasks(working);
+    try {
+      await api('PUT', `/api/schedule-tasks/${succId}`, fields);
+      await cascade(working);
+    } catch (e) {
+      dropLastRecord();
+      setErr(e instanceof Error ? e.message : 'Failed to save the link');
+      load();
+    }
+  };
+  const linkName = (predId: string, succId: string) => `${idNumbers.get(predId) ?? '?'} → ${idNumbers.get(succId) ?? '?'}`;
+  const saveLinkPop = async (remove = false) => {
+    if (!linkPop) return;
+    const { predId, succId, type } = linkPop;
+    const succ = tasks.find((t) => t.id === succId);
+    setLinkPop(null);
+    if (!succ) return;
+    const lag = Math.round(Number(linkPop.lag) || 0);
+    const cur = linksOf(succ);
+    const links = remove ? cur.filter((l) => l.id !== predId)
+      : cur.some((l) => l.id === predId) ? cur.map((l) => (l.id === predId ? { id: predId, type, lag } : l))
+        : [...cur, { id: predId, type, lag }];
+    const tag = type !== 'FS' || lag ? ` (${formatLink('', { type, lag })})` : '';
+    await writeLinks(succId, links, remove ? `Remove link ${linkName(predId, succId)}` : `${linkPop.existing ? 'Change link' : 'Link'} ${linkName(predId, succId)}${tag}`);
+  };
+  const removeLink = (predId: string, succId: string) => {
+    const succ = tasks.find((t) => t.id === succId);
+    if (succ) void writeLinks(succId, linksOf(succ).filter((l) => l.id !== predId), `Remove link ${linkName(predId, succId)}`);
+  };
+
   // Drag-to-reorder: place `dragId` above/below `targetId` as its sibling
   // (dragging a phase carries its subtasks). Dropping just below an expanded
   // phase's header makes the task that phase's first subtask, matching where
@@ -699,6 +865,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       return o && ((o.order ?? 0) !== (t.order ?? 0) || (o.parentId ?? null) !== (t.parentId ?? null));
     });
     if (changed.length === 0) return;
+    record(`Move "${tasks.find((t) => t.id === dragId)?.name ?? 'task'}"`);
     setTasks(updated);
     selectOne(dragId);
     try {
@@ -706,6 +873,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         order: t.order, ...(t.id === dragId ? { parentId: t.parentId ?? null } : {}),
       })));
     } catch (e) {
+      dropLastRecord();
       setTasks(before);
       setErr(e instanceof Error ? e.message : 'Failed to move task');
     }
@@ -716,6 +884,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     const cur = tasks.find((t) => t.id === row.task.id);
     if (!cur || !cur.parentId) return;
     const grand = tasks.find((t) => t.id === cur.parentId)?.parentId ?? null;
+    record(`Outdent "${row.task.name}"`);
     try {
       await api('PUT', `/api/schedule-tasks/${row.task.id}`, { parentId: grand });
       setTasks((prev) => prev.map((t) => (t.id === row.task.id ? { ...t, parentId: grand } : t)));
@@ -741,8 +910,8 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       name: t.name, category: t.category || 'Other', startDate: t.startDate,
       durationDays: t.isMilestone ? 1 : (t.durationDays ?? workingDaysBetween(t.startDate, t.endDate, workingDays)),
       progressPct: t.progressPct, isMilestone: t.isMilestone, notes: t.notes || '',
-      predecessors: t.predecessors || [],
-      predText: (t.predecessors || []).map((p) => idNumbers.get(p)).filter((n) => n != null).join(', '),
+      links: linksOf(t),
+      predText: linksOf(t).filter((l) => idNumbers.has(l.id)).map((l) => formatLink(idNumbers.get(l.id) as number, l)).join(', '),
       mode: t.mode ?? 'auto',
       finishDate: t.endDate,
       parentId: t.parentId ?? null,
@@ -772,6 +941,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   // task's end from its duration, cascade dependencies, and persist what moved.
   const applyCalendar = async (nextWd: boolean) => {
     const oldWd = wdRef.current;
+    record(nextWd ? 'Switch to working days' : 'Switch to calendar days');
     const working = tasks.map((t) => {
       if (t.isMilestone) return { ...t, endDate: t.startDate };
       if (t.mode === 'manual') return t;
@@ -791,20 +961,23 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   };
 
   // Predecessors typed as row IDs ("3, 5") → task ids, with validation.
-  const parsePredecessors = (text: string, selfId: string | null): { ids: string[]; error: string } => {
+  const parsePredecessors = (text: string, selfId: string | null): { links: TaskLink[]; error: string } => {
     const byNumber = new Map(Array.from(idNumbers.entries()).map(([tid, n]) => [n, tid]));
     const summaryIds = new Set(tasks.filter((t) => t.parentId).map((t) => t.parentId as string));
-    const ids: string[] = [];
-    for (const part of text.split(/[\s,;]+/).filter(Boolean)) {
-      if (!/^\d+$/.test(part)) return { ids, error: `"${part}" isn't a row number` };
-      const tid = byNumber.get(Number(part));
-      if (!tid) return { ids, error: `There's no row ${part}` };
-      if (tid === selfId) return { ids, error: `Row ${part} is this task` };
-      if (summaryIds.has(tid)) return { ids, error: `Row ${part} is a phase — link to one of its tasks` };
-      if (selfId && wouldCycle(tasks, selfId, tid)) return { ids, error: `Row ${part} would create a circular link` };
-      if (!ids.includes(tid)) ids.push(tid);
+    const links: TaskLink[] = [];
+    // Comma/semicolon separated; plain "3 5" (space separated numbers) still works.
+    const parts = text.split(/[,;]+/).flatMap((c) => (/^\s*\d+(\s+\d+)+\s*$/.test(c) ? c.trim().split(/\s+/) : [c])).map((c) => c.trim()).filter(Boolean);
+    for (const part of parts) {
+      const tok = parseLinkToken(part);
+      if (!tok) return { links, error: `"${part}" isn't a row number (e.g. 3, 3SS, 3FS+2d)` };
+      const tid = byNumber.get(tok.n);
+      if (!tid) return { links, error: `There's no row ${tok.n}` };
+      if (tid === selfId) return { links, error: `Row ${tok.n} is this task` };
+      if (summaryIds.has(tid)) return { links, error: `Row ${tok.n} is a phase — link to one of its tasks` };
+      if (selfId && wouldCycle(tasks, selfId, tid)) return { links, error: `Row ${tok.n} would create a circular link` };
+      if (!links.some((l) => l.id === tid)) links.push({ id: tid, type: tok.type, lag: tok.lag });
     }
-    return { ids, error: '' };
+    return { links, error: '' };
   };
 
   const save = async () => {
@@ -824,12 +997,13 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       mode: form.mode,
       name: form.name, category: form.category, startDate, endDate, durationDays: duration,
       progressPct: form.progressPct, isMilestone: form.isMilestone, notes: form.notes,
-      predecessors: form.predecessors, parentId: form.parentId,
+      ...linkFields(form.links), parentId: form.parentId,
       manpower: form.isMilestone ? 0 : Math.max(0, Math.round((form.manpower || 0) * 10) / 10),
       weight: Math.max(0, Number(form.weight) || 0),
     };
     setSaving(true);
     setFormErr('');
+    record(editingId ? `Edit "${form.name}"` : `Add "${form.name}"`);
     try {
       let working: ScheduleTask[];
       if (editingId) {
@@ -858,6 +1032,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       insertAfterRef.current = null;
       setDialogOpen(false);
     } catch (e) {
+      dropLastRecord();
       setFormErr(e instanceof Error ? e.message : 'Save failed');
     } finally {
       setSaving(false);
@@ -867,19 +1042,20 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   // Delete tasks, strip them from successors' predecessors, then re-schedule.
   const deleteTasks = async (goneIds: string[]) => {
     const gone = new Set(goneIds);
+    record(goneIds.length === 1 ? `Delete "${tasks.find((t) => t.id === goneIds[0])?.name ?? 'task'}"` : `Delete ${goneIds.length} tasks`);
     try {
       await Promise.all(goneIds.map((tid) => api('DELETE', `/api/schedule-tasks/${tid}`)));
       const affected: ScheduleTask[] = [];
       const working = tasks.filter((t) => !gone.has(t.id)).map((t) => {
         if (t.predecessors?.some((p) => gone.has(p))) {
-          const next = { ...t, predecessors: t.predecessors.filter((p) => !gone.has(p)) };
+          const next = { ...t, ...linkFields(linksOf(t).filter((l) => !gone.has(l.id))) };
           affected.push(next);
           return next;
         }
         return t;
       });
       await Promise.all(affected.map((t) =>
-        api('PUT', `/api/schedule-tasks/${t.id}`, { predecessors: t.predecessors }).catch(() => {}),
+        api('PUT', `/api/schedule-tasks/${t.id}`, { predecessors: t.predecessors, linkTypes: t.linkTypes }).catch(() => {}),
       ));
       await cascade(working);
       setSelectedIds(new Set());
@@ -930,6 +1106,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     if (rows.length === 0) { setImportErr('Select at least one work item to import.'); return; }
     setImportBusy(true);
     setImportErr('');
+    record(`Import ${rows.length} task${rows.length === 1 ? '' : 's'}`);
     try {
       let cursor = importStartDate;
       const created: ScheduleTask[] = [];
@@ -1113,17 +1290,21 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   // instant visual feedback; the PUT to persist fires on mouseup, reading
   // the final dragged state off tasksRef (not the closure, which would be
   // stale by the time the listener runs).
-  const tasksRef = useRef<ScheduleTask[]>(tasks);
-  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
 
   const dragRef = useRef<{
     taskId: string;
-    mode: 'move' | 'resize';
+    mode: 'move' | 'resize' | 'progress';
     startX: number;
     origStart: string;
     origEnd: string;
     isMilestone: boolean;
     offsetDays: number;
+    /** Progress drag: starting %, bar width in px, current % (null until moved). */
+    origPct: number;
+    barPx: number;
+    pct: number | null;
+    /** Tasks before the drag, for Undo. */
+    snap: ScheduleTask[];
   } | null>(null);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
 
@@ -1132,6 +1313,13 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       const d = dragRef.current;
       if (!d) return;
       const deltaX = e.clientX - d.startX;
+      if (d.mode === 'progress') {
+        const pct = Math.max(0, Math.min(100, Math.round((d.origPct + (deltaX / Math.max(1, d.barPx)) * 100) / 5) * 5));
+        if (pct === (d.pct ?? d.origPct)) return;
+        d.pct = pct;
+        setTasks((prev) => prev.map((t) => (t.id === d.taskId ? { ...t, progressPct: pct } : t)));
+        return;
+      }
       const offsetDays = Math.round(deltaX / dayWRef.current);
       if (offsetDays === d.offsetDays) return;
       d.offsetDays = offsetDays;
@@ -1155,12 +1343,23 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       if (!d) return;
       const current = tasksRef.current.find((t) => t.id === d.taskId);
       if (!current) return;
-      // A click without movement just selects the row (double-click opens
-      // Task Information), matching MS Project.
-      if (d.offsetDays === 0) {
-        selectOne(current.id);
+      // A click without movement selects the task and shows it in the
+      // inspector (double-click opens Task Information).
+      if (d.mode === 'progress') {
+        if (d.pct === null || d.pct === d.origPct) { selectOne(current.id); setInspectorOpen(true); return; }
+        record(`Progress of "${current.name}" → ${d.pct}%`, d.snap);
+        api('PUT', `/api/schedule-tasks/${current.id}`, { progressPct: d.pct }).catch((e) => {
+          setErr(e instanceof Error ? e.message : 'Failed to save progress');
+          load();
+        });
         return;
       }
+      if (d.offsetDays === 0) {
+        selectOne(current.id);
+        setInspectorOpen(true);
+        return;
+      }
+      record(d.mode === 'move' ? `Reschedule "${current.name}"` : `Change duration of "${current.name}"`, d.snap);
       // Resizing changes the duration; recompute it from the new dates so it
       // stays the source of truth. Reflect it in state before the cascade.
       const dur = current.isMilestone ? 1 : workingDaysBetween(current.startDate, current.endDate, wdRef.current);
@@ -1182,12 +1381,17 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const startDrag = (e: React.MouseEvent, task: ScheduleTask, mode: 'move' | 'resize') => {
+  const startDrag = (e: React.MouseEvent, task: ScheduleTask, mode: 'move' | 'resize' | 'progress') => {
     e.preventDefault();
     e.stopPropagation();
+    const half = task.startDate === task.endDate && !task.isMilestone && task.durationDays != null && task.durationDays > 0 && task.durationDays < 1;
     dragRef.current = {
       taskId: task.id, mode, startX: e.clientX, origStart: task.startDate, origEnd: task.endDate,
       isMilestone: task.isMilestone, offsetDays: 0,
+      origPct: task.progressPct || 0,
+      barPx: (half ? (task.durationDays as number) : durationOf(task.startDate, task.endDate)) * dayWRef.current,
+      pct: null,
+      snap: tasksRef.current,
     };
     setDraggingTaskId(task.id);
     document.body.style.userSelect = 'none';
@@ -1396,6 +1600,13 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
           <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             {/* Ribbon-style task toolbar, acting on the selected row */}
             <Stack direction="row" alignItems="center" spacing={0.5} sx={{ px: 1, py: 0.5, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#FAFAFA', flexWrap: 'wrap' }} useFlexGap>
+              <Tooltip title={undoLabel ? `Undo: ${undoLabel} (Ctrl+Z)` : 'Nothing to undo'}>
+                <span><IconButton size="small" disabled={!undoLabel || undoBusy} onClick={() => void stepHistory('undo')}><UndoIcon fontSize="small" /></IconButton></span>
+              </Tooltip>
+              <Tooltip title={redoLabel ? `Redo: ${redoLabel} (Ctrl+Shift+Z)` : 'Nothing to redo'}>
+                <span><IconButton size="small" disabled={!redoLabel || undoBusy} onClick={() => void stepHistory('redo')}><RedoIcon fontSize="small" /></IconButton></span>
+              </Tooltip>
+              <Divider orientation="vertical" flexItem />
               <Button {...tb} startIcon={<FormatIndentDecreaseIcon />} disabled={!selRow || !selRow.task.parentId} onClick={() => selRow && void outdentTask(selRow)}>Outdent</Button>
               <Button {...tb} startIcon={<FormatIndentIncreaseIcon />} disabled={!selRow} onClick={() => selRow && void indentTask(selRow)}>Indent</Button>
               <Divider orientation="vertical" flexItem />
@@ -1447,6 +1658,9 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 }}
                 sx={{ width: 190, '& .MuiInputBase-input': { py: 0.5, fontSize: 12 } }}
               />
+              <Tooltip title={inspectorOpen ? 'Hide task inspector (I)' : 'Show task inspector (I)'}>
+                <IconButton size="small" color={inspectorOpen ? 'primary' : 'default'} onClick={() => setInspectorOpen((v) => !v)}><ViewSidebarOutlinedIcon fontSize="small" /></IconButton>
+              </Tooltip>
               <Tooltip title="Keyboard shortcuts (?)">
                 <IconButton size="small" onClick={() => setHelpOpen(true)}><KeyboardIcon fontSize="small" /></IconButton>
               </Tooltip>
@@ -1460,7 +1674,10 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 <ToggleButton value="month">Months</ToggleButton>
               </ToggleButtonGroup>
             </Stack>
+            <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
             <MsProjectGantt
+              onLinkDraw={(fromId, toId, fromEnd, toEnd, x, y) => openLinkEditor(fromId, toId, x, y, `${fromEnd === 'start' ? 'S' : 'F'}${toEnd === 'start' ? 'S' : 'F'}` as LinkType)}
+              onLinkOpen={(predId, succId, x, y) => openLinkEditor(predId, succId, x, y)}
               baseline={showBaseline && baseline ? baselineMap : null}
               rows={visibleRows}
               idNumbers={idNumbers}
@@ -1489,9 +1706,82 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               onGridWidthChange={setGridWidth}
               scrollRequest={scrollReq}
             />
+            {inspectorOpen && (() => {
+              const rolled = rolledTasks.find((t) => t.id === selectedId);
+              if (!rolled) {
+                return (
+                  <Box sx={{ width: 340, flexShrink: 0, borderLeft: '1px solid', borderColor: 'divider', p: 3, color: 'text.secondary', textAlign: 'center' }}>
+                    <Typography variant="body2">Select a task — click its bar or row — to see and edit it here.</Typography>
+                    <Button size="small" sx={{ mt: 1 }} onClick={() => setInspectorOpen(false)}>Hide panel</Button>
+                  </Box>
+                );
+              }
+              const isSum = tasks.some((t) => t.parentId === rolled.id);
+              const raw = tasks.find((t) => t.id === rolled.id) || rolled;
+              return (
+                <ScheduleTaskInspector
+                  task={isSum ? { ...raw, startDate: rolled.startDate, endDate: rolled.endDate, progressPct: rolled.progressPct } : raw}
+                  isSummary={isSum}
+                  tasks={tasks}
+                  idNumbers={idNumbers}
+                  workingDays={workingDays}
+                  baseline={showBaseline ? baselineMap.get(rolled.id) ?? null : null}
+                  float={floatMap.get(rolled.id) ?? null}
+                  onChange={(patch, label) => void applyEdit(rolled.id, patch, label)}
+                  onEditLink={(predId, succId, e) => openLinkEditor(predId, succId, e.clientX, e.clientY)}
+                  onRemoveLink={removeLink}
+                  onGoto={(tid) => { selectOne(tid); setRevealReq((p) => ({ id: tid, n: (p?.n ?? 0) + 1 })); setScrollReq((p) => ({ id: tid, n: (p?.n ?? 0) + 1 })); }}
+                  onOpenDialog={() => openEdit(raw)}
+                  onClose={() => setInspectorOpen(false)}
+                />
+              );
+            })()}
+            </Box>
           </Paper>
         );
       })()}
+
+      <Popover
+        open={!!linkPop}
+        onClose={() => setLinkPop(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={linkPop ? { top: linkPop.y, left: linkPop.x } : undefined}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+      >
+        {linkPop && (
+          <Box sx={{ p: 2, width: 320 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              {linkPop.existing ? 'Task dependency' : 'New dependency'} · {linkName(linkPop.predId, linkPop.succId)}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+              From “{tasks.find((t) => t.id === linkPop.predId)?.name}” to “{tasks.find((t) => t.id === linkPop.succId)?.name}”
+            </Typography>
+            <ToggleButtonGroup
+              size="small" exclusive fullWidth value={linkPop.type}
+              onChange={(_, v: LinkType | null) => v && setLinkPop((p) => (p ? { ...p, type: v } : p))}
+            >
+              {LINK_TYPES.map((t) => <ToggleButton key={t.value} value={t.value} sx={{ py: 0.25 }}>{t.value}</ToggleButton>)}
+            </ToggleButtonGroup>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, mb: 1.5 }}>
+              {LINK_TYPES.find((t) => t.value === linkPop.type)?.label}: the successor {LINK_TYPES.find((t) => t.value === linkPop.type)?.hint}.
+            </Typography>
+            <TextField
+              size="small" fullWidth type="number" label="Lag (working days)" value={linkPop.lag}
+              onChange={(e) => setLinkPop((p) => (p ? { ...p, lag: e.target.value } : p))}
+              onKeyDown={(e) => { if (e.key === 'Enter') void saveLinkPop(); }}
+              helperText="Negative = lead (overlap)"
+              onWheel={blurNumberInputOnWheel}
+            />
+            <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+              {linkPop.existing && <Button color="error" size="small" onClick={() => void saveLinkPop(true)}>Delete link</Button>}
+              <Box sx={{ flexGrow: 1 }} />
+              <Button size="small" onClick={() => setLinkPop(null)}>Cancel</Button>
+              <Button size="small" variant="contained" onClick={() => void saveLinkPop()}>{linkPop.existing ? 'Save' : 'Add link'}</Button>
+            </Stack>
+          </Box>
+        )}
+      </Popover>
+      <Snackbar open={!!toast} autoHideDuration={3500} onClose={() => setToast('')} message={toast} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }} />
 
       <Menu
         open={!!ctxMenu}
@@ -1573,8 +1863,8 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             <Stack direction="row" spacing={2}>
               <TextField
                 label="Start date" type="date" value={form.startDate} fullWidth InputLabelProps={{ shrink: true }}
-                disabled={form.mode === 'auto' && form.predecessors.length > 0}
-                helperText={form.mode === 'auto' && form.predecessors.length > 0 ? 'Driven by predecessors' : ' '}
+                disabled={form.mode === 'auto' && form.links.length > 0}
+                helperText={form.mode === 'auto' && form.links.length > 0 ? 'Driven by predecessors' : ' '}
                 onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
               />
               {form.mode === 'manual' ? (
@@ -1652,19 +1942,22 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             })()}
             {(() => {
               const check = parsePredecessors(form.predText, editingId);
-              const names = check.ids.map((tid) => tasks.find((t) => t.id === tid)?.name).filter(Boolean).join(', ');
+              const names = check.links.map((l) => {
+                const n = tasks.find((t) => t.id === l.id)?.name;
+                return n ? `${n}${l.type !== 'FS' || l.lag ? ` (${formatLink('', l)})` : ''}` : '';
+              }).filter(Boolean).join(', ');
               return (
                 <TextField
-                  fullWidth label="Predecessors (row IDs)" placeholder="e.g. 3, 5"
+                  fullWidth label="Predecessors (row IDs)" placeholder="e.g. 3, 5SS, 7FS+2d"
                   value={form.predText}
                   error={!!check.error}
                   onChange={(e) => {
                     const text = e.target.value;
                     const next = parsePredecessors(text, editingId);
-                    setForm((f) => ({ ...f, predText: text, predecessors: next.error ? f.predecessors : next.ids }));
+                    setForm((f) => ({ ...f, predText: text, links: next.error ? f.links : next.links }));
                   }}
                   helperText={check.error
-                    || (names ? `Starts after: ${names}` : 'Type the ID numbers from the table, separated by commas (finish-to-start).')}
+                    || (names ? `Linked to: ${names}` : 'Row IDs, comma-separated. Optional type + lag: 3SS, 4FS+2d, 5FF-1d (default FS).')}
                 />
               );
             })()}

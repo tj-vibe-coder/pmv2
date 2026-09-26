@@ -1,5 +1,6 @@
 import type { ScheduleTask } from '../../types/ScheduleTask';
 import { addDays, addWorkingDays, daysBetween, nextWorkingDay, prevWorkingDay, toDate, workingDaysBetween } from './scheduleDates';
+import { linksOf, requiredStart, shiftWorkingDays, type TaskLink } from './scheduleLinks';
 
 // Topological order of tasks by finish-to-start predecessors. null on a cycle.
 export function topoOrder(tasks: ScheduleTask[]): string[] | null {
@@ -38,10 +39,10 @@ export function wouldCycle(tasks: ScheduleTask[], taskId: string, predId: string
   return false;
 }
 
-// Forward-pass auto-schedule (finish-to-start, no lag), phase-aware:
-//  • a task WITH predecessors starts the next working day after the latest
-//    finish among its own predecessors and its phases' predecessors, keeping
-//    its working-day duration;
+// Forward-pass auto-schedule, phase-aware, honouring link type + lag
+// (FS / SS / FF / SF — see scheduleLinks.requiredStart):
+//  • a task WITH predecessors starts as early as all of its links — and its
+//    phases' links — allow, keeping its working-day duration;
 //  • a PHASE with predecessors moves its subtasks as a block (keeping their
 //    spacing) so the phase starts the working day after its predecessors
 //    finish — subtasks with their own links follow those links instead;
@@ -95,6 +96,20 @@ export function autoSchedule(tasks: ScheduleTask[], wd = false): ScheduleTask[] 
     if (!children.has(id)) return (dates.get(id) as { end: string }).end;
     return leavesUnder(id).reduce((m, l) => { const e = (dates.get(l) as { end: string }).end; return e > m ? e : m; }, '');
   };
+  const startOf = (id: string): string => {
+    if (!children.has(id)) return (dates.get(id) as { start: string }).start;
+    return leavesUnder(id).reduce((m, l) => { const st = (dates.get(l) as { start: string }).start; return m === '' || st < m ? st : m; }, '');
+  };
+  // Latest start any of `links` allows for a task of `dur` working days.
+  const earliestBy = (links: TaskLink[], dur: number, isMs: boolean): string => {
+    let req = '';
+    links.forEach((l) => {
+      const r = requiredStart(l, { start: startOf(l.id), end: endOf(l.id) }, dur, isMs, wd);
+      if (r > req) req = r;
+    });
+    return req;
+  };
+  const ownLinks = (t: ScheduleTask) => { const ok = new Set(ownPreds(t)); return linksOf(t).filter((l) => ok.has(l.id)); };
   const durOf = (t: ScheduleTask) => t.durationDays ?? workingDaysBetween(t.startDate, t.endDate, wd);
   const place = (t: ScheduleTask, start: string) => {
     dates.set(t.id, { start, end: t.isMilestone ? start : addWorkingDays(start, durOf(t), wd) });
@@ -108,14 +123,13 @@ export function autoSchedule(tasks: ScheduleTask[], wd = false): ScheduleTask[] 
     if (children.has(id)) {
       // Phase: shift its unlinked, auto-scheduled subtasks as a block.
       if (own.length === 0) continue;
-      let latest = '';
-      own.forEach((p) => { const e = endOf(p); if (e > latest) latest = e; });
-      const required = nextWorkingDay(addDays(latest, 1), wd);
       const movable = leavesUnder(id)
         .map((l) => byId.get(l) as ScheduleTask)
         .filter((l) => l.mode !== 'manual' && ownPreds(l).length === 0);
       if (movable.length === 0) continue;
       const earliest = movable.reduce((m, l) => { const st = (dates.get(l.id) as { start: string }).start; return m === '' || st < m ? st : m; }, '');
+      const latestEnd = movable.reduce((m, l) => { const e = (dates.get(l.id) as { end: string }).end; return e > m ? e : m; }, '');
+      const required = earliestBy(ownLinks(t), workingDaysBetween(earliest, latestEnd, wd), false);
       const delta = daysBetween(toDate(earliest), toDate(required));
       if (delta === 0) continue;
       movable.forEach((l) => place(l, nextWorkingDay(addDays((dates.get(l.id) as { start: string }).start, delta), wd)));
@@ -124,11 +138,9 @@ export function autoSchedule(tasks: ScheduleTask[], wd = false): ScheduleTask[] 
 
     // Task: own links plus every enclosing phase's links.
     if (own.length === 0) continue;
-    const all = [...own];
-    ancestors(t).forEach((a) => all.push(...ownPreds(a)));
-    let latest = '';
-    all.forEach((p) => { const e = endOf(p); if (e > latest) latest = e; });
-    place(t, nextWorkingDay(addDays(latest, 1), wd));
+    const all = [...ownLinks(t)];
+    ancestors(t).forEach((a) => all.push(...ownLinks(a)));
+    place(t, earliestBy(all, durOf(t), t.isMilestone));
   }
   return tasks.map((t) => {
     const d = dates.get(t.id) as { start: string; end: string };
@@ -166,12 +178,15 @@ function autoScheduleFlat(tasks: ScheduleTask[], wd: boolean): ScheduleTask[] {
   for (const id of order) {
     const t = byId.get(id) as ScheduleTask;
     if (t.mode === 'manual') continue;
-    const preds = (t.predecessors || []).filter((p) => byId.has(p));
-    if (preds.length === 0) continue;
-    let latest = '';
-    for (const p of preds) { const pe = (dates.get(p) as { end: string }).end; if (pe > latest) latest = pe; }
-    const start = nextWorkingDay(addDays(latest, 1), wd);
+    const links = linksOf(t).filter((l) => byId.has(l.id));
+    if (links.length === 0) continue;
     const dur = t.durationDays ?? workingDaysBetween(t.startDate, t.endDate, wd);
+    let start = '';
+    for (const l of links) {
+      const pd = dates.get(l.id) as { start: string; end: string };
+      const r = requiredStart(l, pd, dur, t.isMilestone, wd);
+      if (r > start) start = r;
+    }
     dates.set(id, { start, end: t.isMilestone ? start : addWorkingDays(start, dur, wd) });
   }
   return tasks.map((t) => {
@@ -180,42 +195,50 @@ function autoScheduleFlat(tasks: ScheduleTask[], wd: boolean): ScheduleTask[] {
   });
 }
 
-// Critical path: tasks with zero total slack — delaying any of them delays the
-// project finish. Backward pass over finish-to-start dependencies.
-export function criticalPath(tasks: ScheduleTask[], wd = false): Set<string> {
-  const critical = new Set<string>();
-  if (tasks.length === 0) return critical;
+// Total float (working days) per task: how far it can slip before it delays
+// the project finish. Backward pass from the project finish through each
+// successor's LATEST start / finish, honouring link type + lag.
+export function scheduleFloat(tasks: ScheduleTask[], wd = false): Map<string, number> {
+  const out = new Map<string, number>();
+  if (tasks.length === 0) return out;
   const order = topoOrder(tasks);
-  if (!order) return critical; // cycle — skip
+  if (!order) return out; // cycle — skip
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const succ = new Map<string, string[]>();
-  tasks.forEach((t) => (t.predecessors || []).forEach((p) => {
-    if (!byId.has(p)) return;
-    if (!succ.has(p)) succ.set(p, []);
-    (succ.get(p) as string[]).push(t.id);
+  const succ = new Map<string, { id: string; link: TaskLink }[]>();
+  tasks.forEach((t) => linksOf(t).forEach((l) => {
+    if (!byId.has(l.id)) return;
+    if (!succ.has(l.id)) succ.set(l.id, []);
+    (succ.get(l.id) as { id: string; link: TaskLink }[]).push({ id: t.id, link: l });
   }));
+  const spanOf = (t: ScheduleTask) => (t.isMilestone ? 0 : Math.max(1, workingDaysBetween(t.startDate, t.endDate, wd)) - 1);
   const projectFinish = tasks.reduce((m, t) => (t.endDate > m ? t.endDate : m), tasks[0].endDate);
   const LF = new Map<string, string>();
   for (let i = order.length - 1; i >= 0; i--) {
     const id = order[i];
-    const ss = succ.get(id) || [];
-    if (ss.length === 0) {
-      LF.set(id, projectFinish);
-    } else {
-      let lf = '';
-      for (const sid of ss) {
-        const s = byId.get(sid) as ScheduleTask;
-        const cand = prevWorkingDay(addDays(s.startDate, -1), wd);
-        if (lf === '' || cand < lf) lf = cand;
-      }
-      LF.set(id, lf);
+    const p = byId.get(id) as ScheduleTask;
+    const pSpan = spanOf(p);
+    let lf = projectFinish;
+    for (const { id: sid, link } of succ.get(id) || []) {
+      const s = byId.get(sid) as ScheduleTask;
+      const sLF = LF.get(sid) ?? projectFinish;
+      const sLS = shiftWorkingDays(sLF, -spanOf(s), wd);
+      // Latest finish of the predecessor that still lets this link hold.
+      const cand = link.type === 'SS' ? shiftWorkingDays(shiftWorkingDays(sLS, -link.lag, wd), pSpan, wd)
+        : link.type === 'FF' ? shiftWorkingDays(sLF, -link.lag, wd)
+          : link.type === 'SF' ? shiftWorkingDays(shiftWorkingDays(sLF, -link.lag, wd), pSpan, wd)
+            : prevWorkingDay(addDays(shiftWorkingDays(sLS, -link.lag, wd), -1), wd);
+      if (cand < lf) lf = cand;
     }
+    LF.set(id, lf);
+    out.set(id, p.endDate >= lf ? 0 : workingDaysBetween(p.endDate, lf, wd) - 1);
   }
-  tasks.forEach((t) => {
-    const lf = LF.get(t.id);
-    if (lf === undefined) return;
-    const slack = t.endDate >= lf ? 0 : workingDaysBetween(t.endDate, lf, wd) - 1;
-    if (slack <= 0) critical.add(t.id);
-  });
+  return out;
+}
+
+// Critical path: tasks with zero total float — delaying any of them delays
+// the project finish.
+export function criticalPath(tasks: ScheduleTask[], wd = false): Set<string> {
+  const critical = new Set<string>();
+  scheduleFloat(tasks, wd).forEach((f, id) => { if (f <= 0) critical.add(id); });
   return critical;
 }

@@ -15,6 +15,9 @@ export interface ScheduleTask {
   /** Finish-to-start predecessor task ids. A task with predecessors is
    *  auto-scheduled to start the day after its latest predecessor ends. */
   predecessors?: string[];
+  /** Type + lag (working days) for links that aren't a plain finish-to-start,
+   *  keyed by predecessor id. Absent = FS with no lag. See scheduleLinks. */
+  linkTypes?: Record<string, { type: LinkType; lag: number }>;
   /** Parent (summary) task id for WBS hierarchy. Null/absent = top level.
    *  A task that is some other task's parent is a summary — its dates and
    *  progress roll up from its children and aren't edited directly. */
@@ -35,6 +38,9 @@ export interface ScheduleTask {
   createdAt?: string;
   updatedAt?: string;
 }
+
+/** MS Project dependency types: Finish-to-Start, Start-to-Start, Finish-to-Finish, Start-to-Finish. */
+export type LinkType = 'FS' | 'SS' | 'FF' | 'SF';
 
 export const SCHEDULE_TASK_CATEGORIES = [
   'Engineering',

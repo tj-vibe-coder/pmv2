@@ -4596,6 +4596,47 @@ app.put('/api/schedule-tasks/:id', async (req, res) => {
   }
 });
 
+// Write an exact set of task snapshots (keeping their ids) and delete others —
+// used by the Gantt's Undo / Redo. Each upserted doc is replaced wholesale, so
+// fields added since the snapshot are dropped too. Every task must belong to
+// `projectId`.
+app.post('/api/schedule-tasks/sync', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { projectId, upsert = [], remove = [] } = req.body || {};
+    if (!projectId || !Array.isArray(upsert) || !Array.isArray(remove)) {
+      return res.status(400).json({ success: false, error: 'projectId, upsert[] and remove[] are required' });
+    }
+    const pid = String(projectId);
+    const idOk = (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
+    if (!upsert.every((t) => t && idOk(t.id) && String(t.projectId) === pid) || !remove.every(idOk)) {
+      return res.status(400).json({ success: false, error: 'Invalid task ids or project' });
+    }
+    const col = db.collection('calcsheet_schedule_tasks');
+    // Don't let a sync touch another project's tasks.
+    const existing = await col.where('projectId', '==', pid).get();
+    const mine = new Set(existing.docs.map((d) => d.id));
+    const foreign = await Promise.all(upsert.filter((t) => !mine.has(t.id)).map((t) => col.doc(t.id).get()));
+    if (foreign.some((d) => d.exists)) return res.status(409).json({ success: false, error: 'A task id belongs to another project' });
+    const now = new Date().toISOString();
+    const ops = [
+      ...upsert.map((t) => (b) => { const { id, ...data } = t; b.set(col.doc(id), stripUndefinedFields({ ...data, projectId: pid, updatedAt: now })); }),
+      ...remove.filter((id) => mine.has(id)).map((id) => (b) => b.delete(col.doc(id))),
+    ];
+    for (let i = 0; i < ops.length; i += 450) {
+      const batch = db.batch();
+      ops.slice(i, i + 450).forEach((op) => op(batch));
+      await batch.commit();
+    }
+    await syncScheduleProgressToMonitoringProject(pid).catch((e) => console.error('Schedule progress sync failed:', e.message));
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error syncing schedule tasks:', err);
+    res.status(500).json({ success: false, error: 'Failed to sync schedule tasks' });
+  }
+});
+
 app.delete('/api/schedule-tasks/:id', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
@@ -4683,10 +4724,14 @@ app.post('/api/schedule-versions/:id/restore', async (req, res) => {
     const items = (v.tasks || []).map((t) => ({ t, ref: db.collection('calcsheet_schedule_tasks').doc() }));
     const idMap = new Map(items.filter((it) => it.t.id).map((it) => [it.t.id, it.ref.id]));
     items.forEach(({ t, ref }) => {
-      const { id: _i, projectId: _p, createdAt: _c, updatedAt: _u, predecessors, parentId, ...rest } = t;
+      const { id: _i, projectId: _p, createdAt: _c, updatedAt: _u, predecessors, parentId, linkTypes, ...rest } = t;
       const remapped = Array.isArray(predecessors) ? predecessors.map((p) => idMap.get(p)).filter(Boolean) : undefined;
       const newParent = parentId ? (idMap.get(parentId) || null) : null;
-      batch.set(ref, stripUndefinedFields({ ...rest, predecessors: remapped, parentId: newParent, projectId, createdAt: now, updatedAt: now }));
+      // Link type/lag map is keyed by predecessor id — remap its keys too.
+      const newLinkTypes = linkTypes && typeof linkTypes === 'object'
+        ? Object.fromEntries(Object.entries(linkTypes).filter(([k]) => idMap.has(k)).map(([k, v]) => [idMap.get(k), v]))
+        : undefined;
+      batch.set(ref, stripUndefinedFields({ ...rest, predecessors: remapped, linkTypes: newLinkTypes, parentId: newParent, projectId, createdAt: now, updatedAt: now }));
     });
     await batch.commit();
     await syncScheduleProgressToMonitoringProject(projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));

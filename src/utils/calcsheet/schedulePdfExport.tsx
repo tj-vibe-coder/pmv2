@@ -8,6 +8,7 @@ import { dayAt, mspDate, snapRange, timescaleTiers, type GanttZoom, type Timesca
 import { computeSCurve, type SCurveSnapshot } from './scheduleSCurve';
 import { leafWeights, projectPercent } from './scheduleWeights';
 import { finishVariance, matchBaseline, varianceLabel, type ScheduleBaseline } from './scheduleBaseline';
+import { formatLink, linksOf } from './scheduleLinks';
 
 // Gantt + S-Curve PDF, driven by the Export dialog's settings (paper,
 // orientation, one-page fit or multi-page, date range, title block, what to
@@ -311,7 +312,7 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
       case 'finish': return mspDate(t.endDate);
       case 'bfin': { const b = bmap.get(t.id); return b ? mspDate(b.endDate) : ''; }
       case 'fvar': { const b = bmap.get(t.id); return b ? varianceLabel(finishVariance(t.endDate, b.endDate, data.workingDays)) : ''; }
-      case 'pred': return fit((t.predecessors || []).map((p) => idNum.get(p)).filter((n) => n != null).join(','), c.w, fs);
+      case 'pred': return fit(linksOf(t).filter((l) => idNum.has(l.id)).map((l) => formatLink(idNum.get(l.id) as number, l)).join(','), c.w, fs);
       case 'mp': return !r.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? String(t.manpower) : '';
       case 'pct': return `${Math.round(t.progressPct || 0)}%`;
       case 'wt': return share.has(t.id) ? `${(share.get(t.id) || 0).toFixed(1)}%` : '';
@@ -430,26 +431,43 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
 
   const renderGanttPage = (chunk: TreeRow[], pageIdx: number) => {
     const bodyH = chunk.length * rowH;
-    // Finish-to-start links between rows on this page, routed like the screen.
-    const links: { d: string; crit: boolean; ex: number; ey: number; dir: 'down' | 'up' | 'right' }[] = [];
+    // Links between rows on this page, routed like the screen (FS / SS / FF / SF).
+    const links: { d: string; crit: boolean; ex: number; ey: number; dir: 'down' | 'up' | 'right' | 'left' }[] = [];
     if (s.showDependencies) {
       const idx = new Map(chunk.map((r, i) => [r.task.id, i]));
       chunk.forEach((row, si) => {
         const st = row.task;
-        (st.predecessors || []).forEach((pid) => {
+        linksOf(st).forEach((lk) => {
+          const pid = lk.id;
           const pi = idx.get(pid);
           if (pi === undefined || pi === si) return;
           const p = chunk[pi].task;
           const pg = barGeom(p);
           const sg = barGeom(st);
-          const x1 = p.isMilestone ? pg.left + dayW / 2 + rowH * 0.35 : pg.left + pg.width;
+          const ms = rowH * 0.35;
+          const pStart = p.isMilestone ? pg.left + dayW / 2 - ms : pg.left;
+          const pEnd = p.isMilestone ? pg.left + dayW / 2 + ms : pg.left + pg.width;
+          const sStart = st.isMilestone ? sg.left + dayW / 2 - ms : sg.left;
+          const sEnd = st.isMilestone ? sg.left + dayW / 2 + ms : sg.left + sg.width;
+          const inChart = (x: number) => x >= 0 && x <= CHART_W;
+          const x1 = pEnd;
           const sX = st.isMilestone ? sg.left + dayW / 2 : sg.left;
-          if (x1 < 0 || x1 > CHART_W || sX < 0 || sX > CHART_W) return; // an end is outside the date range
+          if (![pStart, pEnd, sStart, sEnd].every(inChart)) return; // an end is outside the date range
           const y1 = pi * rowH + rowH / 2;
+          const y2 = si * rowH + rowH / 2;
           const down = si > pi;
+          const mid = (down ? pi + 1 : pi) * rowH;
           const inset = st.isMilestone ? 0 : Math.min(4, sg.width / 2);
           const isCrit = crit.has(pid) && crit.has(st.id);
-          if (sX + inset >= x1 + 1.5) {
+          if (lk.type === 'SS') {
+            const xL = Math.max(0, Math.min(pStart, sStart) - 5);
+            links.push({ d: `M ${pStart} ${y1} H ${xL} V ${y2} H ${sStart}`, crit: isCrit, ex: sStart, ey: y2, dir: 'right' });
+          } else if (lk.type === 'FF') {
+            const xR = Math.min(CHART_W, Math.max(pEnd, sEnd) + 5);
+            links.push({ d: `M ${pEnd} ${y1} H ${xR} V ${y2} H ${sEnd}`, crit: isCrit, ex: sEnd, ey: y2, dir: 'left' });
+          } else if (lk.type === 'SF') {
+            links.push({ d: `M ${pStart} ${y1} H ${Math.max(0, pStart - 5)} V ${mid} H ${Math.min(CHART_W, sEnd + 5)} V ${y2} H ${sEnd}`, crit: isCrit, ex: sEnd, ey: y2, dir: 'left' });
+          } else if (sX + inset >= x1 + 1.5) {
             const yEnd = down ? si * rowH + barTop - 0.3 : si * rowH + barTop + barH + 0.3;
             links.push({ d: `M ${x1} ${y1} H ${sX + inset} V ${yEnd}`, crit: isCrit, ex: sX + inset, ey: yEnd, dir: down ? 'down' : 'up' });
           } else {
@@ -570,7 +588,9 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
                       ? `${l.ex - a},${l.ey - a * 1.6} ${l.ex + a},${l.ey - a * 1.6} ${l.ex},${l.ey}`
                       : l.dir === 'up'
                         ? `${l.ex - a},${l.ey + a * 1.6} ${l.ex + a},${l.ey + a * 1.6} ${l.ex},${l.ey}`
-                        : `${l.ex - a * 1.6},${l.ey - a} ${l.ex - a * 1.6},${l.ey + a} ${l.ex},${l.ey}`;
+                        : l.dir === 'left'
+                          ? `${l.ex + a * 1.6},${l.ey - a} ${l.ex + a * 1.6},${l.ey + a} ${l.ex},${l.ey}`
+                          : `${l.ex - a * 1.6},${l.ey - a} ${l.ex - a * 1.6},${l.ey + a} ${l.ex},${l.ey}`;
                     const col = l.crit ? C.critLink : C.link;
                     return [
                       <Path key={`l${i}`} d={l.d} fill="none" stroke={col} strokeWidth={0.6} />,
