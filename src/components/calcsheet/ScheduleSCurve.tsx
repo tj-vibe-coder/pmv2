@@ -58,8 +58,6 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
     );
   }
 
-  const byManpower = data.weighting === 'manpower';
-  const unit = byManpower ? 'pax' : 'tasks';
   const labelOf = new Map(data.buckets.map((b) => [b.key, b.label]));
   const periodOf = (b: SCurveBucket) => (data.granularity === 'week' ? `Week of ${mspDate(b.start)}` : mspDate(b.start));
   const variance = data.actualToday - data.plannedToday;
@@ -72,10 +70,11 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
     return (
       <Paper variant="outlined" sx={{ px: 1.25, py: 0.75, fontSize: 12, lineHeight: 1.6 }}>
         <Box sx={{ fontWeight: 700 }}>{periodOf(b)}</Box>
-        <Box>Planned (cumulative): <b>{pct(b.plannedPct)}</b></Box>
-        <Box>Actual (cumulative): <b>{pct(b.actualPct)}</b></Box>
-        <Box>{byManpower ? 'Manpower' : 'Active tasks'}: <b>{num(b.manpower)} {unit}/day{data.granularity === 'week' ? ' avg' : ''}</b>{data.granularity === 'week' && b.peak > 0 ? ` · peak ${num(b.peak)}` : ''}</Box>
-        {byManpower && <Box>Man-days: <b>{num(b.manDays)}</b></Box>}
+        <Box>Planned % complete: <b>{pct(b.plannedPct)}</b></Box>
+        <Box>Actual % complete: <b>{pct(b.actualPct)}</b></Box>
+        {data.hasManpower && (
+          <Box>Manpower: <b>{num(b.manpower)} pax/day{data.granularity === 'week' ? ' avg' : ''}</b>{data.granularity === 'week' && b.peak > 0 ? ` · peak ${num(b.peak)}` : ''}</Box>
+        )}
       </Paper>
     );
   };
@@ -99,10 +98,8 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
       {/* Headline numbers */}
       <Stack direction="row" spacing={4} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
         {[
-          { label: byManpower ? 'Total man-days' : 'Total task-days', value: num(data.totalManDays) },
-          { label: 'Peak manpower', value: data.peak ? `${num(data.peak.pax)} ${unit}` : '—', sub: data.peak ? mspDate(data.peak.date) : '' },
-          { label: 'Planned to date', value: pct(data.plannedToday) },
-          { label: 'Actual to date', value: pct(data.actualToday) },
+          { label: 'Planned % complete', value: pct(data.plannedToday), sub: 'as of today' },
+          { label: 'Actual % complete', value: pct(data.actualToday), sub: 'as of today' },
         ].map((k) => (
           <Box key={k.label}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{k.label}</Typography>
@@ -121,19 +118,25 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
             <Typography variant="body2">{varianceTone === 'behind' ? 'Behind' : varianceTone === 'ahead' ? 'Ahead' : 'On plan'}</Typography>
           </Stack>
         </Box>
+        {data.hasManpower && (
+          <>
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Peak manpower</Typography>
+              <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3 }}>{data.peak ? `${num(data.peak.pax)} pax` : '—'}</Typography>
+              {data.peak && <Typography variant="caption" color="text.secondary">{mspDate(data.peak.date)}</Typography>}
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Total man-days</Typography>
+              <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3 }}>{num(data.totalManDays)}</Typography>
+            </Box>
+          </>
+        )}
       </Stack>
 
-      {!byManpower && (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          No manpower entered yet, so the curve is weighted by task duration. Set <b>Manpower (pax)</b> on each task
-          (double-click a task in the Gantt) to weight progress by man-days and see the manpower histogram.
-        </Alert>
-      )}
-
-      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>S-Curve — cumulative progress</Typography>
+      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>S-Curve — project % complete</Typography>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-        Weighted by {byManpower ? 'man-days (manpower × working days)' : 'task duration'}.
-        Actual points come from saved versions{actualPoints <= 1 ? ' — click Save version at each progress update to build the actual curve' : ''}.
+        Tasks weighted by duration, same as Overall progress. Actual points come from saved versions
+        {actualPoints <= 1 ? ' — click Save version at each progress update to build the actual curve' : ''}.
       </Typography>
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={data.buckets} margin={MARGIN} syncId="scurve">
@@ -150,18 +153,24 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
       </ResponsiveContainer>
 
       <Typography variant="subtitle2" sx={{ fontWeight: 700, mt: 2 }}>
-        {byManpower ? 'Manpower loading' : 'Active tasks'} ({unit}/day{data.granularity === 'week' ? ', weekly average' : ''})
+        Manpower loading (pax/day{data.granularity === 'week' ? ', weekly average' : ''})
       </Typography>
-      <ResponsiveContainer width="100%" height={190}>
-        <BarChart data={data.buckets} margin={MARGIN} syncId="scurve" barCategoryGap={2}>
-          <CartesianGrid vertical={false} stroke={GRID} />
-          {xAxis}
-          <YAxis width={AXIS_W} allowDecimals={false} tick={{ fontSize: 11, fill: '#595959' }} tickLine={false} axisLine={false} />
-          <Tooltip content={tip} cursor={{ fill: 'rgba(0,0,0,0.04)' }} />
-          {today}
-          <Bar name={byManpower ? 'Manpower' : 'Active tasks'} dataKey="manpower" fill={MANPOWER} radius={[4, 4, 0, 0]} isAnimationActive={false} />
-        </BarChart>
-      </ResponsiveContainer>
+      {data.hasManpower ? (
+        <ResponsiveContainer width="100%" height={190}>
+          <BarChart data={data.buckets} margin={MARGIN} syncId="scurve" barCategoryGap={2}>
+            <CartesianGrid vertical={false} stroke={GRID} />
+            {xAxis}
+            <YAxis width={AXIS_W} allowDecimals={false} tick={{ fontSize: 11, fill: '#595959' }} tickLine={false} axisLine={false} />
+            <Tooltip content={tip} cursor={{ fill: 'rgba(0,0,0,0.04)' }} />
+            {today}
+            <Bar name="Manpower" dataKey="manpower" fill={MANPOWER} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      ) : (
+        <Alert severity="info" sx={{ mt: 1 }}>
+          No manpower entered yet. Set <b>Manpower (pax)</b> on tasks (double-click a task in the Gantt) to see daily headcount here.
+        </Alert>
+      )}
 
       <Box sx={{ mt: 1.5 }}>
         <Button size="small" onClick={() => setShowTable((v) => !v)}>{showTable ? 'Hide table' : 'Show table'}</Button>
@@ -171,22 +180,22 @@ export default function ScheduleSCurve({ tasks, workingDays, loadSnapshots }: Pr
           <TableHead>
             <TableRow>
               <TableCell>{data.granularity === 'week' ? 'Week of' : 'Date'}</TableCell>
-              <TableCell align="right">{byManpower ? 'Manpower' : 'Active tasks'} ({unit}/day{data.granularity === 'week' ? ' avg' : ''})</TableCell>
-              {data.granularity === 'week' && <TableCell align="right">Peak</TableCell>}
-              <TableCell align="right">{byManpower ? 'Man-days' : 'Task-days'}</TableCell>
-              <TableCell align="right">Planned (cum.)</TableCell>
-              <TableCell align="right">Actual (cum.)</TableCell>
+              <TableCell align="right">Planned % complete</TableCell>
+              <TableCell align="right">Actual % complete</TableCell>
+              {data.hasManpower && <TableCell align="right">Manpower (pax/day{data.granularity === 'week' ? ' avg' : ''})</TableCell>}
+              {data.hasManpower && data.granularity === 'week' && <TableCell align="right">Peak</TableCell>}
+              {data.hasManpower && <TableCell align="right">Man-days</TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
             {data.buckets.map((b) => (
               <TableRow key={b.key} selected={b.key === data.todayKey}>
                 <TableCell>{mspDate(b.start)}</TableCell>
-                <TableCell align="right">{num(b.manpower)}</TableCell>
-                {data.granularity === 'week' && <TableCell align="right">{num(b.peak)}</TableCell>}
-                <TableCell align="right">{num(b.manDays)}</TableCell>
                 <TableCell align="right">{pct(b.plannedPct)}</TableCell>
                 <TableCell align="right">{pct(b.actualPct)}</TableCell>
+                {data.hasManpower && <TableCell align="right">{num(b.manpower)}</TableCell>}
+                {data.hasManpower && data.granularity === 'week' && <TableCell align="right">{num(b.peak)}</TableCell>}
+                {data.hasManpower && <TableCell align="right">{num(b.manDays)}</TableCell>}
               </TableRow>
             ))}
           </TableBody>
