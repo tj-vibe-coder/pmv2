@@ -12,6 +12,7 @@ import { TASK_HIGHLIGHTS, type ScheduleTask } from '../../types/ScheduleTask';
 import type { TreeRow } from '../../utils/calcsheet/scheduleTree';
 import { finishVariance, varianceLabel } from '../../utils/calcsheet/scheduleBaseline';
 import { formatLink, linksOf } from '../../utils/calcsheet/scheduleLinks';
+import { DEFAULT_COLUMNS, DEFAULT_DISPLAY, columnDef, type GanttColumn, type GanttDisplay } from '../../utils/calcsheet/ganttViews';
 import { daysBetween, durationOf, toDate, todayStr, workingDaysBetween } from '../../utils/calcsheet/scheduleDates';
 import { dayAt, mspDate, timescaleTiers, type GanttZoom, type TimescaleSeg } from '../../utils/calcsheet/scheduleTimescale';
 
@@ -56,26 +57,12 @@ const MSP = {
 };
 
 interface Col { key: string; label: ReactNode; w: number; align?: 'left' | 'right' | 'center' }
-const COLS: Col[] = [
+// ID and the indicator column are fixed; the rest come from the `columns` prop.
+const FIXED_COLS: Col[] = [
   { key: 'id', label: '', w: 40, align: 'right' },
   { key: 'ind', label: <InfoOutlinedIcon sx={{ fontSize: 14, color: MSP.subText }} />, w: 26, align: 'center' },
-  { key: 'name', label: 'Task Name', w: 250 },
-  { key: 'dur', label: 'Duration', w: 74 },
-  { key: 'start', label: 'Start', w: 96 },
-  { key: 'finish', label: 'Finish', w: 96 },
-  { key: 'pred', label: 'Predecessors', w: 96 },
-  { key: 'mp', label: 'Manpower', w: 74, align: 'right' },
-  { key: 'pct', label: '% Complete', w: 80, align: 'right' },
-  { key: 'wt', label: 'Weight', w: 66, align: 'right' },
-  { key: 'cat', label: 'Category', w: 110 },
 ];
-// With a baseline shown: Baseline Finish + Finish Variance after Finish.
-const BASELINE_COLS: Col[] = [
-  { key: 'bfin', label: 'Baseline Finish', w: 104 },
-  { key: 'fvar', label: 'Finish Var.', w: 76, align: 'right' },
-];
-const COLS_WITH_BASELINE: Col[] = COLS.flatMap((c) => (c.key === 'finish' ? [c, ...BASELINE_COLS] : [c]));
-export const GANTT_GRID_MAX_W = COLS_WITH_BASELINE.reduce((sum, c) => sum + c.w, 0);
+export const GANTT_GRID_MAX_W = 2400;
 
 export interface MsProjectGanttProps {
   rows: TreeRow[];
@@ -113,6 +100,14 @@ export interface MsProjectGanttProps {
   onLinkDraw?: (fromId: string, toId: string, fromEnd: 'start' | 'finish', toEnd: 'start' | 'finish', x: number, y: number) => void;
   /** A link line was double-clicked. */
   onLinkOpen?: (predId: string, succId: string, x: number, y: number) => void;
+  /** Table columns after ID + indicators, in order, with widths. */
+  columns?: GanttColumn[];
+  /** Resize (drag a header edge) or reorder (drag a header) columns. */
+  onColumnsChange?: (cols: GanttColumn[]) => void;
+  /** What the chart draws (critical path / baseline are driven by their own props). */
+  display?: GanttDisplay;
+  /** Total float per leaf task (working days) for the Total Float column. */
+  floatMap?: Map<string, number>;
   draggingTaskId: string | null;
   gridWidth: number;
   onGridWidthChange: (w: number) => void;
@@ -128,8 +123,14 @@ export default function MsProjectGantt({
   collapsed, onToggleCollapse, selectedId, selectedIds, onSelect, onOpen, onRowContextMenu, onReorder, weightShare, weightMode,
   filterHits, searchQuery, revealRequest,
   onBarMouseDown, draggingTaskId, gridWidth, onGridWidthChange, scrollRequest, baseline, onLinkDraw, onLinkOpen,
+  columns = DEFAULT_COLUMNS, onColumnsChange, display = DEFAULT_DISPLAY, floatMap,
 }: MsProjectGanttProps) {
-  const cols = baseline ? COLS_WITH_BASELINE : COLS;
+  const cols: Col[] = [
+    ...FIXED_COLS,
+    ...columns
+      .filter((c) => (c.key !== 'bfin' && c.key !== 'fvar') || !!baseline)
+      .map((c) => { const d = columnDef(c.key); return { key: c.key, label: d.label, w: c.w, align: d.align }; }),
+  ];
   const colX = cols.reduce((s, c) => s + c.w, 0);
   const gridW = Math.min(gridWidth, colX);
   // With a baseline, the task bar sits higher to make room for the grey bar.
@@ -143,20 +144,21 @@ export default function MsProjectGantt({
   const { top, bottom } = useMemo(() => timescaleTiers(zoom, range.start, totalDays, dayW), [zoom, range.start, totalDays, dayW]);
 
   const nonWorking = useMemo(() => {
-    if (dayW < 6) return [] as number[];
+    if (dayW < 6 || !display.weekends) return [] as number[];
     const out: number[] = [];
     for (let i = 0; i < totalDays; i++) {
       const g = dayAt(range.start, i).getDay();
       if (g === 0 || g === 6) out.push(i);
     }
     return out;
-  }, [range.start, totalDays, dayW]);
+  }, [range.start, totalDays, dayW, display.weekends]);
 
   const todayX = useMemo(() => {
+    if (!display.today) return null;
     const t = toDate(todayStr());
     if (t < range.start || t > range.end) return null;
     return daysBetween(range.start, t) * dayW + dayW / 2;
-  }, [range, dayW]);
+  }, [range, dayW, display.today]);
 
   const barGeom = (t: ScheduleTask) => {
     const left = daysBetween(range.start, toDate(t.startDate)) * dayW;
@@ -172,6 +174,7 @@ export default function MsProjectGantt({
   const links = useMemo(() => {
     const idx = new Map(rows.map((r, i) => [r.task.id, i]));
     const out: { key: string; d: string; crit: boolean; predId: string; succId: string; label: string }[] = [];
+    if (!display.dependencies) return out;
     rows.forEach((row, si) => {
       const s = row.task;
       linksOf(s).forEach((l) => {
@@ -214,7 +217,7 @@ export default function MsProjectGantt({
       });
     });
     return out;
-  }, [rows, range, dayW, criticalIds, barTop, barH, idNumbers]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows, range, dayW, criticalIds, barTop, barH, idNumbers, display.dependencies]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Draw a link: drag from the dot at a bar's start/finish onto another bar
   // (its left half = start, right half = finish).
@@ -322,6 +325,39 @@ export default function MsProjectGantt({
     },
   } : {});
 
+  // Column reorder (drag a header) and resize (drag a header's right edge).
+  const [colDrag, setColDrag] = useState<string | null>(null);
+  const [colDrop, setColDrop] = useState<{ key: string; before: boolean } | null>(null);
+  const moveColumn = (from: string, to: string, before: boolean) => {
+    if (!onColumnsChange || from === to) return;
+    const moving = columns.find((c) => c.key === from);
+    if (!moving) return;
+    const rest = columns.filter((c) => c.key !== from);
+    const at = rest.findIndex((c) => c.key === to);
+    if (at < 0) return;
+    onColumnsChange([...rest.slice(0, before ? at : at + 1), moving, ...rest.slice(before ? at : at + 1)]);
+  };
+  const colsRef = useRef(columns);
+  colsRef.current = columns;
+  const startColResize = (e: ReactMouseEvent, key: string, w0: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const x0 = e.clientX;
+    const min = key === 'name' ? 120 : 44;
+    const move = (ev: MouseEvent) => {
+      const w = Math.max(min, Math.round(w0 + ev.clientX - x0));
+      onColumnsChange?.(colsRef.current.map((c) => (c.key === key ? { ...c, w } : c)));
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      document.body.style.cursor = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
   // Splitter between the grid and the chart, like MS Project's divider bar.
   const [splitDrag, setSplitDrag] = useState<{ x: number; w: number } | null>(null);
   useEffect(() => {
@@ -423,6 +459,12 @@ export default function MsProjectGantt({
         );
       }
       case 'cat': return row.isSummary ? '' : (t.category || '');
+      case 'float': {
+        const f = row.isSummary ? undefined : floatMap?.get(t.id);
+        if (f == null) return '';
+        return <Box component="span" sx={{ color: f <= 0 ? MSP.late : MSP.text, fontWeight: f <= 0 ? 600 : 400 }}>{`${f} day${f === 1 ? '' : 's'}`}</Box>;
+      }
+      case 'notes': return t.notes ? <Tooltip title={t.notes}><span>{t.notes}</span></Tooltip> : '';
       default: return null;
     }
   };
@@ -528,7 +570,7 @@ export default function MsProjectGantt({
             />
           </Tooltip>
           <Box sx={{ position: 'absolute', left: cx + 10, top: 0, height: GANTT_ROW_H, display: 'flex', alignItems: 'center', fontSize: 11, color: MSP.text, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-            {`${toDate(t.startDate).getMonth() + 1}/${toDate(t.startDate).getDate()}`}
+            {display.taskLabels ? `${toDate(t.startDate).getMonth() + 1}/${toDate(t.startDate).getDate()}` : ''}
           </Box>
           {linkDot(t, 'finish', cx - 16, rowIdx)}
         </>
@@ -552,7 +594,7 @@ export default function MsProjectGantt({
               boxShadow: dragging ? '0 0 0 2px rgba(0,0,0,0.15)' : 'none',
             }}
           >
-            {pct > 0 && (
+            {display.progress && pct > 0 && (
               <Box sx={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', height: 4, width: `${pct}%`, bgcolor: crit ? MSP.critProgress : manual ? MSP.manualProgress : MSP.progress }} />
             )}
             <Box
@@ -561,7 +603,7 @@ export default function MsProjectGantt({
             />
           </Box>
         </Tooltip>
-        <Tooltip title={`${Math.round(pct)}% complete — drag to change`} disableInteractive>
+        {display.progress && <Tooltip title={`${Math.round(pct)}% complete — drag to change`} disableInteractive>
           <Box
             className="gantt-h"
             onMouseDown={(e) => onBarMouseDown(e, t, 'progress')}
@@ -570,14 +612,17 @@ export default function MsProjectGantt({
               '&::after': { content: '""', position: 'absolute', left: 1, top: 1, borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderBottom: `6px solid ${MSP.progress}` },
             }}
           />
-        </Tooltip>
+        </Tooltip>}
         {linkDot(t, 'start', left - 9, rowIdx)}
         {linkDot(t, 'finish', left + width + 11, rowIdx)}
-        {(t.category || (t.manpower || 0) > 0) && (
-          <Box sx={{ position: 'absolute', left: left + width + 6, top: 0, height: GANTT_ROW_H, display: 'flex', alignItems: 'center', fontSize: 11, color: MSP.text, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-            {[t.category, (t.manpower || 0) > 0 ? `[${t.manpower}]` : ''].filter(Boolean).join(' ')}
-          </Box>
-        )}
+        {(() => {
+          const label = [display.taskLabels ? t.category : '', display.manpowerLabels && (t.manpower || 0) > 0 ? `[${t.manpower}]` : ''].filter(Boolean).join(' ');
+          return label ? (
+            <Box sx={{ position: 'absolute', left: left + width + 6, top: 0, height: GANTT_ROW_H, display: 'flex', alignItems: 'center', fontSize: 11, color: MSP.text, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+              {label}
+            </Box>
+          ) : null;
+        })()}
       </>
     );
   };
@@ -591,18 +636,44 @@ export default function MsProjectGantt({
         {/* ── Entry table (grid) ───────────────────────────────────────── */}
         <Box sx={{ position: 'sticky', left: 0, zIndex: 3, width: gridW, flexShrink: 0, overflow: 'clip', bgcolor: '#fff' }}>
           <Box sx={{ position: 'sticky', top: 0, zIndex: 1, height: HEADER_H, width: colX, bgcolor: MSP.headerBg, borderBottom: `1px solid ${MSP.border}`, display: 'flex' }}>
-            {cols.map((c) => (
-              <Box
-                key={c.key}
-                sx={{
-                  width: c.w, flexShrink: 0, borderRight: `1px solid ${MSP.border}`, boxSizing: 'border-box',
-                  display: 'flex', alignItems: 'center', justifyContent: c.align === 'center' ? 'center' : 'flex-start',
-                  px: '6px', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden',
-                }}
-              >
-                {c.label}
-              </Box>
-            ))}
+            {cols.map((c) => {
+              const movable = !!onColumnsChange && c.key !== 'id' && c.key !== 'ind';
+              const drop = colDrop?.key === c.key ? colDrop : null;
+              return (
+                <Box
+                  key={c.key}
+                  draggable={movable}
+                  onDragStart={(e) => { if (!movable) return; e.dataTransfer.setData('text/plain', c.key); e.dataTransfer.effectAllowed = 'move'; setColDrag(c.key); }}
+                  onDragOver={(e) => {
+                    if (!colDrag || !movable || colDrag === c.key) return;
+                    e.preventDefault();
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    const before = e.clientX < r.left + r.width / 2;
+                    if (colDrop?.key !== c.key || colDrop.before !== before) setColDrop({ key: c.key, before });
+                  }}
+                  onDrop={(e) => { e.preventDefault(); if (colDrag && colDrop) moveColumn(colDrag, colDrop.key, colDrop.before); setColDrag(null); setColDrop(null); }}
+                  onDragEnd={() => { setColDrag(null); setColDrop(null); }}
+                  title={movable ? 'Drag to move · drag the right edge to resize' : undefined}
+                  sx={{
+                    position: 'relative', width: c.w, flexShrink: 0, borderRight: `1px solid ${MSP.border}`, boxSizing: 'border-box',
+                    display: 'flex', alignItems: 'center', justifyContent: c.align === 'center' ? 'center' : 'flex-start',
+                    px: '6px', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', cursor: movable ? 'grab' : 'default',
+                    opacity: colDrag === c.key ? 0.5 : 1,
+                    boxShadow: drop ? (drop.before ? 'inset 3px 0 0 #1F6FD1' : 'inset -3px 0 0 #1F6FD1') : 'none',
+                  }}
+                >
+                  {c.label}
+                  {movable && (
+                    <Box
+                      draggable={false}
+                      onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                      onMouseDown={(e) => startColResize(e, c.key, c.w)}
+                      sx={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 6, cursor: 'col-resize', '&:hover': { bgcolor: 'rgba(31,111,209,0.25)' } }}
+                    />
+                  )}
+                </Box>
+              );
+            })}
           </Box>
           {rows.map((row) => {
             const sel = selectedIds ? selectedIds.has(row.task.id) : row.task.id === selectedId;

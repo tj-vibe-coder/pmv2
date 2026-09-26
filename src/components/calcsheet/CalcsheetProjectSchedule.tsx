@@ -41,6 +41,11 @@ import type { ScheduleExportData } from '../../utils/calcsheet/schedulePdfExport
 import { autoSchedule, wouldCycle, criticalPath, scheduleFloat } from '../../utils/calcsheet/scheduleAuto';
 import { LINK_TYPES, formatLink, linkFields, linksOf, parseLinkToken, type LinkType, type TaskLink } from '../../utils/calcsheet/scheduleLinks';
 import ScheduleTaskInspector, { type InspectorPatch } from './ScheduleTaskInspector';
+import GanttViewControls from './GanttViewControls';
+import {
+  BUILTIN_VIEWS, DEFAULT_COLUMNS, DEFAULT_DISPLAY, loadCustomViews, sanitizeColumns, saveCustomViews,
+  type GanttColumn, type GanttDisplay, type GanttView,
+} from '../../utils/calcsheet/ganttViews';
 import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../../utils/calcsheet/scheduleTree';
 import { durationWeight, leafWeights, projectPercent } from '../../utils/calcsheet/scheduleWeights';
 import MsProjectGantt, { GANTT_GRID_MAX_W, ZOOM_DAY_WIDTH, type GanttZoom } from './MsProjectGantt';
@@ -51,6 +56,15 @@ import type { SCurveSnapshot } from '../../utils/calcsheet/scheduleSCurve';
 import {
   SCHEDULE_CATEGORY_COLORS, SCHEDULE_TASK_CATEGORIES, TASK_HIGHLIGHTS, type ScheduleTask, type TaskHighlight,
 } from '../../types/ScheduleTask';
+
+// Remembered Gantt layout (columns, display options, current view) — per browser.
+type GanttLayout = { columns?: GanttColumn[]; display?: Partial<GanttDisplay>; viewId?: string | null };
+function readGanttLayout(): GanttLayout {
+  try { return (JSON.parse(localStorage.getItem('gantt-layout') || 'null') as GanttLayout) || {}; } catch { return {}; }
+}
+// Table width in px: ID + indicator columns plus the visible configurable ones.
+const tableWidth = (cols: GanttColumn[], baselineShown: boolean) =>
+  66 + cols.filter((c) => baselineShown || (c.key !== 'bfin' && c.key !== 'fvar')).reduce((sum, c) => sum + c.w, 0);
 
 const NET_PACIFIC_COLORS = {
   primary: '#2c5aa0',
@@ -271,7 +285,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   // View filters (quick wins): narrow the rows shown without touching the data
   const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set()); // empty = all
   const [milestonesOnly, setMilestonesOnly] = useState(false);
-  const [showCritical, setShowCritical] = useState(false);
+  const [showCritical, setShowCritical] = useState<boolean>(() => !!readGanttLayout().display?.critical);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed summary ids
 
   // MS Project-style view state: timescale zoom, grid/chart divider, selected
@@ -352,6 +366,22 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   });
   useEffect(() => { try { localStorage.setItem('gantt-show-baseline', showBaseline ? '1' : '0'); } catch { /* ignore */ } }, [showBaseline]);
   const [saveAsBaseline, setSaveAsBaseline] = useState(false);
+
+  // ── Views: columns + display options + filters + zoom ───────────────
+  const [columns, setColumns] = useState<GanttColumn[]>(() => sanitizeColumns(readGanttLayout().columns ?? DEFAULT_COLUMNS));
+  const [displayOpts, setDisplayOpts] = useState<GanttDisplay>(() => ({ ...DEFAULT_DISPLAY, ...(readGanttLayout().display || {}) }));
+  const [viewId, setViewId] = useState<string | null>(() => { const l = readGanttLayout(); return l.viewId === undefined ? 'full' : l.viewId; });
+  const [customViews, setCustomViews] = useState<GanttView[]>(() => loadCustomViews());
+  // Critical path / baseline keep their own state (also toggled from the filter row).
+  const display: GanttDisplay = { ...displayOpts, critical: showCritical, baseline: showBaseline };
+  useEffect(() => {
+    try { localStorage.setItem('gantt-layout', JSON.stringify({ columns, display, viewId })); } catch { /* ignore */ }
+  }, [columns, displayOpts, showCritical, showBaseline, viewId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setDisplayOption = (key: keyof GanttDisplay, value: boolean) => {
+    if (key === 'critical') setShowCritical(value);
+    else if (key === 'baseline') setShowBaseline(value);
+    else setDisplayOpts((d) => ({ ...d, [key]: value }));
+  };
   const loadBaseline = async () => {
     if (!id) return;
     try {
@@ -739,6 +769,53 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, []);
+
+  // ── Views (apply / save / delete) ───────────────────────────────────
+  const allViews = useMemo(() => [...BUILTIN_VIEWS, ...customViews], [customViews]);
+  const layoutSig = (v: { columns: GanttColumn[]; display: GanttDisplay; filters: { categories: string[]; milestonesOnly: boolean; highlight: string }; zoom: string }) => JSON.stringify({
+    c: sanitizeColumns(v.columns).map((c) => [c.key, c.w]),
+    d: { ...DEFAULT_DISPLAY, ...v.display },
+    f: { categories: [...v.filters.categories].sort(), milestonesOnly: !!v.filters.milestonesOnly, highlight: v.filters.highlight || 'none' },
+    z: v.zoom,
+  });
+  const currentFilters = { categories: Array.from(categoryFilter), milestonesOnly, highlight: hlFilter };
+  const currentView = allViews.find((v) => v.id === viewId) || null;
+  const viewModified = !!currentView && layoutSig({ columns, display, filters: currentFilters, zoom }) !== layoutSig(currentView);
+  const applyView = (v: GanttView) => {
+    const cols = sanitizeColumns(v.columns);
+    setColumns(cols);
+    setDisplayOpts({ ...DEFAULT_DISPLAY, ...v.display });
+    setShowCritical(!!v.display.critical);
+    setShowBaseline(!!v.display.baseline);
+    setCategoryFilter(new Set(v.filters?.categories || []));
+    setMilestonesOnly(!!v.filters?.milestonesOnly);
+    setHlFilter((HIGHLIGHT_FILTERS.some((f) => f.value === v.filters?.highlight) ? v.filters.highlight : 'none') as HighlightFilter);
+    if (v.zoom === 'day' || v.zoom === 'week' || v.zoom === 'month') setZoom(v.zoom);
+    setViewId(v.id);
+    // Show the whole table for the view (up to about half the screen).
+    setGridWidth(Math.max(240, Math.min(tableWidth(cols, !!baseline && !!v.display.baseline), Math.round(window.innerWidth * 0.55))));
+  };
+  const saveViewAs = (name: string) => {
+    const existing = customViews.find((v) => v.name.toLowerCase() === name.toLowerCase());
+    const view: GanttView = { id: existing?.id ?? `v${Date.now()}`, name, columns, display, filters: currentFilters, zoom };
+    const next = existing ? customViews.map((v) => (v.id === view.id ? view : v)) : [...customViews, view];
+    setCustomViews(next);
+    saveCustomViews(next);
+    setViewId(view.id);
+    setToast(`Saved view “${name}”`);
+  };
+  const deleteView = (vid: string) => {
+    const next = customViews.filter((v) => v.id !== vid);
+    setCustomViews(next);
+    saveCustomViews(next);
+    if (viewId === vid) setViewId(null);
+  };
+  const changeColumns = (cols: GanttColumn[]) => {
+    const shownB = !!baseline && showBaseline;
+    // If the whole table was showing, keep showing all of it.
+    if (gridWidth >= tableWidth(columns, shownB) - 2) setGridWidth(tableWidth(cols, shownB));
+    setColumns(cols);
+  };
 
   // ── Task inspector (side panel) ─────────────────────────────────────
   const [inspectorOpen, setInspectorOpen] = useState<boolean>(() => {
@@ -1544,6 +1621,21 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             <Chip label="Clear" size="small" variant="outlined" onClick={() => setCategoryFilter(new Set())} />
           )}
           <Box sx={{ flexGrow: 1 }} />
+          {view === 'gantt' && (
+            <GanttViewControls
+              views={allViews}
+              viewId={viewId}
+              modified={viewModified}
+              onApply={applyView}
+              onSaveAs={saveViewAs}
+              onDelete={deleteView}
+              columns={columns}
+              onColumnsChange={changeColumns}
+              display={display}
+              onDisplayChange={setDisplayOption}
+              hasBaseline={!!baseline}
+            />
+          )}
           <Tooltip title="When on, durations count working days and the whole schedule recomputes to skip weekends">
             <FormControlLabel
               control={<Checkbox size="small" checked={workingDays} onChange={(e) => { setWorkingDays(e.target.checked); void applyCalendar(e.target.checked); }} />}
@@ -1678,6 +1770,10 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             <MsProjectGantt
               onLinkDraw={(fromId, toId, fromEnd, toEnd, x, y) => openLinkEditor(fromId, toId, x, y, `${fromEnd === 'start' ? 'S' : 'F'}${toEnd === 'start' ? 'S' : 'F'}` as LinkType)}
               onLinkOpen={(predId, succId, x, y) => openLinkEditor(predId, succId, x, y)}
+              columns={columns}
+              onColumnsChange={changeColumns}
+              display={display}
+              floatMap={floatMap}
               baseline={showBaseline && baseline ? baselineMap : null}
               rows={visibleRows}
               idNumbers={idNumbers}
