@@ -208,7 +208,19 @@ export interface ServiceLine {
   code: string;
   description: string;
   amount: number;
+  /** @deprecated superseded by `qty` (per-line pricing is now QTY x Unit
+   * Price, not day-count). Kept so older quotations' stored values still
+   * read correctly; still feeds the delivery-terms installation-duration
+   * estimate, which is specifically calendar days. */
   days?: number;
+  /** Per-line pricing: quantity of units (e.g. days, lots, pax) — see `uom`. */
+  qty?: number;
+  /** Per-line pricing: unit of measure for `qty` (e.g. "day", "lot", "pax"). */
+  uom?: string;
+  /** Per-line pricing: price per unit. Falls back to the shared team daily
+   * rate (manpowerDailyRate) when unset — same override pattern as
+   * markupPct falling back to Quotation.laborMarkupPct. */
+  unitPrice?: number;
   group?: string;
   /** A calculation-neutral label rendered above this contiguous block of items. */
   subheader?: string;

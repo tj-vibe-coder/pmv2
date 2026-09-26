@@ -905,24 +905,30 @@ export default function QuotationEditor() {
   // Section C — Services
   const perLinePricing = quotation.servicesFromManpower && !!quotation.servicesPerLinePricing;
   const teamDailyRate = manpowerDailyRate(quotation.manpower);
+  // Per-line pricing formula: QTY × Unit Price × (markup × EWT). `qty` falls
+  // back to the old `days` field (pre-QTY/UOM/Unit Price quotations) and
+  // `unitPrice` falls back to the shared team daily rate when unset — same
+  // override pattern as markupPct falling back to the global Labor Markup %.
+  const svcQty = (row: ServiceLine) => row.qty ?? row.days ?? 0;
+  const svcUnitPrice = (row: ServiceLine) => row.unitPrice ?? teamDailyRate;
   const addService = () =>
     commit('services', [
       ...quotation.services,
-      { id: id(), code: nextCode('C', quotation.services), description: '', amount: 0, ...(perLinePricing ? { days: 0 } : {}) },
+      { id: id(), code: nextCode('C', quotation.services), description: '', amount: 0, ...(perLinePricing ? { qty: 0, uom: '' } : {}) },
     ] as ServiceLine[]);
 
   const updateServiceRow = (idx: number, key: keyof ServiceLine, value: any) => {
     const list = [...quotation.services];
     const row = { ...list[idx], [key]: value };
     // Amount is the single source of truth (calc + PDF/Excel print it directly),
-    // so markup edits recompute it: per-line override, else the global Labor Markup %.
-    // EWT (IOCT-only, invisible on the PDF) rides along as an extra factor —
-    // see Quotation.ewtPct. Guarded on teamDailyRate > 0: with no manpower cost
-    // basis there's nothing valid to derive, so leave a manually-typed Amount
-    // alone instead of clobbering it to 0.
-    if (perLinePricing && teamDailyRate > 0 && (key === 'days' || key === 'markupPct')) {
+    // so QTY/Unit Price/markup edits recompute it. EWT (IOCT-only, invisible on
+    // the PDF) rides along as an extra factor — see Quotation.ewtPct. Guarded
+    // on the effective unit price > 0: with no valid cost basis (no per-line
+    // Unit Price AND no manpower rate) there's nothing to derive, so leave a
+    // manually-typed Amount alone instead of clobbering it to 0.
+    if (perLinePricing && svcUnitPrice(row) > 0 && (key === 'qty' || key === 'unitPrice' || key === 'markupPct')) {
       const mult = (1 + (((row.markupPct ?? quotation.laborMarkupPct) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100));
-      row.amount = (row.days || 0) * teamDailyRate * mult;
+      row.amount = svcQty(row) * svcUnitPrice(row) * mult;
     }
     list[idx] = row;
     setField('services', list);
@@ -1096,15 +1102,14 @@ export default function QuotationEditor() {
             {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupSvc(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
           </Stack>
         ) },
-        { key: 'days', label: 'Days', width: 80, type: 'number', align: 'right', min: 0 },
-        // Read-only: the team's blended daily rate (from Manpower below), shown
-        // here so the pre-markup cost/budget for this line — Days × Unit Price —
-        // is visible without scrolling down to the Manpower table.
-        { key: '_unitPrice', label: 'Unit Price', width: 100, align: 'right', render: (r) => (
-          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8125rem', color: 'text.secondary' }}>
-            {PHP(teamDailyRate)}
-          </Typography>
-        ) },
+        { key: 'qty', label: 'QTY', width: 70, type: 'number', align: 'right', min: 0 },
+        { key: 'uom', label: 'UOM', width: 70 },
+        // Shows the shared team daily rate (greyed) until a per-line override is
+        // typed; editing recomputes the line amount, clearing falls back to the
+        // shared rate. Amount = QTY × Unit Price × markup, so the pre-markup
+        // budget is QTY × Unit Price — visible inline without scrolling down to
+        // the Manpower table.
+        { key: 'unitPrice', label: 'Unit Price', width: 100, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(teamDailyRate || 0) },
         // Shows the global Labor markup (greyed) until a per-line override is typed;
         // editing recomputes the line amount, clearing falls back to the global.
         { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.laborMarkupPct || 0) },
@@ -1232,8 +1237,9 @@ export default function QuotationEditor() {
     setField(section, prefix ? renumber(list, prefix) : list);
   };
 
-  // When manpower changes and per-line pricing is on, recalculate service amounts
-  // for any scope item that has days set.
+  // When manpower changes and per-line pricing is on, recalculate service
+  // amounts for any scope item that's priced off the shared team rate (i.e.
+  // has no per-line Unit Price override) and has a QTY set.
   const recalcServiceAmounts = (manpowerRows: ManpowerEntry[]) => {
     if (!perLinePricing) return;
     const rate = manpowerDailyRate(manpowerRows);
@@ -1242,7 +1248,7 @@ export default function QuotationEditor() {
     if (rate <= 0) return;
     const mult = 1 + (quotation.laborMarkupPct || 0) / 100;
     const updated = quotation.services.map((s) =>
-      (s.days || 0) > 0 ? { ...s, amount: (s.days || 0) * rate * mult } : s,
+      s.unitPrice == null && svcQty(s) > 0 ? { ...s, amount: svcQty(s) * rate * mult } : s,
     );
     if (updated.some((s, i) => s.amount !== quotation.services[i].amount)) {
       setField('services', updated);
@@ -1847,7 +1853,7 @@ export default function QuotationEditor() {
             <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} disabled={componentsLocked} sx={{ width: '100%' }} />
             <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} helperText="Default for product rows" disabled={componentsLocked} sx={{ width: '100%' }} />
             <NumField label="General Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} disabled={generalReqtsLocked} sx={{ width: '100%' }} />
-            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing && teamDailyRate > 0) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = (1 + (((s.markupPct ?? v) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100)); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={servicesLocked} sx={{ width: '100%' }} />
+            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if (svcQty(s) <= 0 || svcUnitPrice(s) <= 0) return s; const mult = (1 + (((s.markupPct ?? v) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100)); return { ...s, amount: svcQty(s) * svcUnitPrice(s) * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={servicesLocked} sx={{ width: '100%' }} />
             <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={servicesLocked} sx={{ width: '100%' }} />
             <NumField
               label="Discount %"
@@ -1866,11 +1872,11 @@ export default function QuotationEditor() {
               value={quotation.ewtPct ?? 0}
               onChange={(v) => {
                 setField('ewtPct', v);
-                if (perLinePricing && teamDailyRate > 0) {
+                if (perLinePricing) {
                   setField('services', quotation.services.map((s) => {
-                    if ((s.days || 0) <= 0) return s;
+                    if (svcQty(s) <= 0 || svcUnitPrice(s) <= 0) return s;
                     const mult = (1 + (((s.markupPct ?? quotation.laborMarkupPct) || 0) / 100)) * (1 + ((v || 0) / 100));
-                    return { ...s, amount: (s.days || 0) * teamDailyRate * mult };
+                    return { ...s, amount: svcQty(s) * svcUnitPrice(s) * mult };
                   }));
                 }
               }}
