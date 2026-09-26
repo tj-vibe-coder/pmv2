@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
   FormControlLabel, IconButton, LinearProgress, Menu, MenuItem, Paper, Slider, Stack, TextField,
-  ToggleButton, ToggleButtonGroup, Tooltip, Typography, Table, TableBody, TableCell, TableHead, TableRow,
+  Tab, Tabs, ToggleButton, ToggleButtonGroup, Tooltip, Typography, Table, TableBody, TableCell, TableHead, TableRow,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -24,7 +24,7 @@ import type { ServiceLine, Quotation } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { blurNumberInputOnWheel } from '../../utils/calcsheet/numberInput';
 import {
-  MS_PER_DAY, addDays, daysBetween, durationOf, fmt, toDate, todayStr,
+  MS_PER_DAY, addDays, daysBetween, durationOf, fmt, formatLocalDate, toDate, todayStr,
   addWorkingDays, nextWorkingDay, workingDaysBetween,
 } from '../../utils/calcsheet/scheduleDates';
 import { exportScheduleXlsx } from '../../utils/calcsheet/scheduleXlsxExport';
@@ -32,6 +32,8 @@ import { exportSchedulePdf } from '../../utils/calcsheet/schedulePdfExport';
 import { autoSchedule, wouldCycle, criticalPath } from '../../utils/calcsheet/scheduleAuto';
 import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../../utils/calcsheet/scheduleTree';
 import MsProjectGantt, { GANTT_GRID_MAX_W, ZOOM_DAY_WIDTH, type GanttZoom } from './MsProjectGantt';
+import ScheduleSCurve from './ScheduleSCurve';
+import type { SCurveSnapshot } from '../../utils/calcsheet/scheduleSCurve';
 import {
   SCHEDULE_CATEGORY_COLORS, SCHEDULE_TASK_CATEGORIES, type ScheduleTask,
 } from '../../types/ScheduleTask';
@@ -73,10 +75,11 @@ interface TaskFormState {
   notes: string;
   predecessors: string[];
   parentId: string | null;
+  manpower: number;
 }
 
 const emptyForm = (): TaskFormState => ({
-  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', predecessors: [], parentId: null,
+  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', predecessors: [], parentId: null, manpower: 0,
 });
 
 // Best-effort category guess from a service line's description, so imported
@@ -172,6 +175,19 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; row: TreeRow } | null>(null);
   const [scrollReq, setScrollReq] = useState<{ id: string; n: number } | null>(null);
+  const [view, setView] = useState<'gantt' | 'scurve'>(() => {
+    try { return localStorage.getItem('gantt-view') === 'scurve' ? 'scurve' : 'gantt'; } catch { return 'gantt'; }
+  });
+  useEffect(() => { try { localStorage.setItem('gantt-view', view); } catch { /* ignore */ } }, [view]);
+
+  // Saved versions double as dated status snapshots for the S-Curve's actual line.
+  const loadSnapshots = async (): Promise<SCurveSnapshot[]> => {
+    const r = await api<{ success: boolean; versions: ScheduleVersion[] }>('GET', `/api/schedule-versions?projectId=${encodeURIComponent(id)}`);
+    return Promise.all((r.versions || []).map(async (v) => {
+      const d = await api<{ success: boolean; version: { tasks?: ScheduleTask[] } }>('GET', `/api/schedule-versions/${v.id}`);
+      return { date: formatLocalDate(new Date(v.savedAt)), tasks: d.version.tasks || [] };
+    }));
+  };
 
   // Working-day calendar: durations & auto-scheduling skip weekends. Persisted per project.
   const [workingDays, setWorkingDays] = useState<boolean>(() => {
@@ -369,6 +385,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       progressPct: t.progressPct, isMilestone: t.isMilestone, notes: t.notes || '',
       predecessors: t.predecessors || [],
       parentId: t.parentId ?? null,
+      manpower: t.manpower ?? 0,
     });
     setFormErr('');
     setDialogOpen(true);
@@ -419,6 +436,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       name: form.name, category: form.category, startDate, endDate, durationDays: duration,
       progressPct: form.progressPct, isMilestone: form.isMilestone, notes: form.notes,
       predecessors: form.predecessors, parentId: form.parentId,
+      manpower: form.isMilestone ? 0 : Math.max(0, Math.round((form.manpower || 0) * 10) / 10),
     };
     setSaving(true);
     setFormErr('');
@@ -895,13 +913,24 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         </Paper>
       )}
 
-      {sorted.length > 0 && visibleRows.length === 0 && (
+      {view === 'gantt' && sorted.length > 0 && visibleRows.length === 0 && (
         <Paper sx={{ p: 3, textAlign: 'center' }}>
           <Typography color="text.secondary">No tasks match the current filters.</Typography>
         </Paper>
       )}
 
-      {visibleRows.length > 0 && (() => {
+      {sorted.length > 0 && (
+        <Tabs value={view} onChange={(_, v) => setView(v)} sx={{ minHeight: 36, mb: 1, '& .MuiTab-root': { minHeight: 36, textTransform: 'none', fontWeight: 600 } }}>
+          <Tab value="gantt" label="Gantt Chart" />
+          <Tab value="scurve" label="S-Curve & Manpower" />
+        </Tabs>
+      )}
+
+      {view === 'scurve' && sorted.length > 0 && (
+        <ScheduleSCurve tasks={tasks} workingDays={workingDays} loadSnapshots={loadSnapshots} />
+      )}
+
+      {view === 'gantt' && visibleRows.length > 0 && (() => {
         const selRow = visibleRows.find((r) => r.task.id === selectedId) || null;
         const tb = { size: 'small' as const, variant: 'text' as const, sx: { minWidth: 0, px: 1, color: 'text.primary', textTransform: 'none' } };
         return (
@@ -1006,6 +1035,14 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 disabled={form.isMilestone}
                 inputProps={{ min: 1 }}
                 onChange={(e) => setForm((f) => ({ ...f, durationDays: Math.max(1, Number(e.target.value) || 1) }))}
+                onWheel={blurNumberInputOnWheel}
+              />
+              <TextField
+                label="Manpower (pax)" type="number" value={form.manpower} fullWidth
+                disabled={form.isMilestone}
+                inputProps={{ min: 0, step: 1 }}
+                helperText={!form.isMilestone && form.manpower > 0 ? `${Math.round(form.manpower * Math.max(1, Math.round(form.durationDays) || 1) * 10) / 10} man-days` : 'Headcount per working day'}
+                onChange={(e) => setForm((f) => ({ ...f, manpower: Math.max(0, Number(e.target.value) || 0) }))}
                 onWheel={blurNumberInputOnWheel}
               />
             </Stack>

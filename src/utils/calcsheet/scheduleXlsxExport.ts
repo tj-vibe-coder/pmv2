@@ -51,6 +51,8 @@ export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: Sch
     { header: 'Start', key: 'start', width: 12 },
     { header: 'End', key: 'end', width: 12 },
     { header: 'Duration (days)', key: 'duration', width: 14 },
+    { header: 'Manpower (pax)', key: 'manpower', width: 14 },
+    { header: 'Man-days', key: 'manDays', width: 11 },
     { header: 'Progress (%)', key: 'progress', width: 12 },
     { header: 'Notes', key: 'notes', width: 40 },
   ];
@@ -65,11 +67,13 @@ export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: Sch
       start: t.startDate,
       end: t.isMilestone ? '' : t.endDate,
       duration: t.isMilestone ? '' : durationOf(t.startDate, t.endDate),
+      manpower: t.isMilestone ? '' : (t.manpower || ''),
+      manDays: t.isMilestone || !t.manpower ? '' : t.manpower * (t.durationDays ?? durationOf(t.startDate, t.endDate)),
       progress: t.progressPct,
       notes: t.notes || '',
     });
   }
-  ts.autoFilter = { from: 'A1', to: 'H1' };
+  ts.autoFilter = { from: 'A1', to: 'J1' };
 
   // ── Gantt sheet ──────────────────────────────────────────────────────────
   const range = computeRange(tasks);

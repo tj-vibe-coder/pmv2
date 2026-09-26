@@ -19,6 +19,10 @@ export interface ScheduleTask {
    *  A task that is some other task's parent is a summary — its dates and
    *  progress roll up from its children and aren't edited directly. */
   parentId?: string | null;
+  /** Manpower loading: headcount (pax) working on this task each working day.
+   *  Man-days = manpower × working days; drives the S-Curve weighting and the
+   *  manpower histogram. Unset/0 = no labor (e.g. procurement lead time). */
+  manpower?: number;
   createdAt?: string;
   updatedAt?: string;
 }

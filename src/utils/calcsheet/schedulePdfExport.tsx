@@ -43,6 +43,7 @@ const COLS: Col[] = [
   { key: 'start', label: 'Start', w: 58 },
   { key: 'finish', label: 'Finish', w: 58 },
   { key: 'pred', label: 'Predecessors', w: 50 },
+  { key: 'mp', label: 'Manpower', w: 44, align: 'right' },
   { key: 'pct', label: '% Comp.', w: 36, align: 'right' },
 ];
 const TABLE_W = COLS.reduce((s, c) => s + c.w, 0);
@@ -120,6 +121,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
       case 'start': return mspDate(t.startDate);
       case 'finish': return mspDate(t.endDate);
       case 'pred': return fit((t.predecessors || []).map((p) => idNum.get(p)).filter((n) => n != null).join(','), c.w, fs);
+      case 'mp': return !r.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? `${t.manpower} pax` : '';
       case 'pct': return `${Math.round(t.progressPct || 0)}%`;
       default: return '';
     }
@@ -303,7 +305,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                   if (r.isSummary || fs < 4) return null;
                   const { left, width } = barGeom(t);
                   const x = t.isMilestone ? left + dayW / 2 + rowH * 0.45 : left + width + 3;
-                  const label = t.isMilestone ? `${toDate(t.startDate).getMonth() + 1}/${toDate(t.startDate).getDate()}` : (t.category || '');
+                  const label = t.isMilestone ? `${toDate(t.startDate).getMonth() + 1}/${toDate(t.startDate).getDate()}` : [t.category, (t.manpower || 0) > 0 ? `[${t.manpower} pax]` : ''].filter(Boolean).join(' ');
                   if (!label || x > CHART_W - 10) return null;
                   return (
                     <Text key={`lbl${t.id}`} style={{ position: 'absolute', left: x, top: i * rowH + (rowH - fs) / 2 - 0.5, fontSize: fs * 0.9, color: C.text }}>
@@ -329,8 +331,6 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                 <Text style={{ fontSize: 7, marginLeft: 4 }}>{it.label}</Text>
               </View>
             ))}
-            <View style={{ flexGrow: 1 }} />
-            <Text style={{ fontSize: 7, color: C.sub }}>Printed {mspDate(todayStr())}</Text>
           </View>
         </View>
       </Page>

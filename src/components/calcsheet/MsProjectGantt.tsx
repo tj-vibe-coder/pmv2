@@ -15,7 +15,6 @@ import { dayAt, mspDate, timescaleTiers, type GanttZoom, type TimescaleSeg } fro
 export type { GanttZoom };
 export const ZOOM_DAY_WIDTH: Record<GanttZoom, number> = { day: 24, week: 8, month: 3 };
 export const GANTT_ROW_H = 24;
-export const GANTT_GRID_MAX_W = 868;
 
 const TIER_H = 22;
 const HEADER_H = TIER_H * 2;
@@ -55,9 +54,11 @@ const COLS: Col[] = [
   { key: 'start', label: 'Start', w: 96 },
   { key: 'finish', label: 'Finish', w: 96 },
   { key: 'pred', label: 'Predecessors', w: 96 },
+  { key: 'mp', label: 'Manpower', w: 74, align: 'right' },
   { key: 'pct', label: '% Complete', w: 80, align: 'right' },
   { key: 'cat', label: 'Category', w: 110 },
 ];
+export const GANTT_GRID_MAX_W = COLS.reduce((sum, c) => sum + c.w, 0);
 
 export interface MsProjectGanttProps {
   rows: TreeRow[];
@@ -227,6 +228,7 @@ export default function MsProjectGantt({
       case 'start': return <Box component="span" sx={{ fontWeight: row.isSummary ? 700 : 400 }}>{mspDate(t.startDate)}</Box>;
       case 'finish': return <Box component="span" sx={{ fontWeight: row.isSummary ? 700 : 400 }}>{mspDate(t.endDate)}</Box>;
       case 'pred': return (t.predecessors || []).map((p) => idNumbers.get(p)).filter((n) => n != null).join(',');
+      case 'mp': return !row.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? `${t.manpower} pax` : '';
       case 'pct': return `${Math.round(t.progressPct || 0)}%`;
       case 'cat': return row.isSummary ? '' : (t.category || '');
       default: return null;
@@ -321,9 +323,9 @@ export default function MsProjectGantt({
             />
           </Box>
         </Tooltip>
-        {t.category && (
+        {(t.category || (t.manpower || 0) > 0) && (
           <Box sx={{ position: 'absolute', left: left + width + 6, top: 0, height: GANTT_ROW_H, display: 'flex', alignItems: 'center', fontSize: 11, color: MSP.text, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-            {t.category}
+            {[t.category, (t.manpower || 0) > 0 ? `[${t.manpower} pax]` : ''].filter(Boolean).join(' ')}
           </Box>
         )}
       </>
