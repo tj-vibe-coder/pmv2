@@ -195,6 +195,12 @@ export interface ComponentLine {
    * break the BOM into named sections on screen and on export. Carries no
    * qty/cost and is excluded from every totals calculation. */
   isHeader?: boolean;
+  /** Child (second-level) header — nests under a preceding `isHeader` row to
+   * break a section into named sub-groups (e.g. a "FIELD INSTRUMENTS" header
+   * with "Temperature" / "Pressure" child headers underneath). Same label-only,
+   * no qty/cost, excluded-from-totals behavior as `isHeader`, just rendered
+   * indented one level. */
+  isChildHeader?: boolean;
 }
 
 export interface ServiceLine {

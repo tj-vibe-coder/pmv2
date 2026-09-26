@@ -127,8 +127,8 @@ export function computeTotals(q: Quotation): QuotationTotals {
   // section subtotal.
   // Optional items are excluded from every contract figure (cost/subtotal/
   // grand total) and reported separately via componentsOptionalSubtotal.
-  const contractComponents = q.components.filter((l) => !l.optional && !l.isHeader);
-  const optionalComponents = q.components.filter((l) => l.optional && !l.isHeader);
+  const contractComponents = q.components.filter((l) => !l.optional && !l.isHeader && !l.isChildHeader);
+  const optionalComponents = q.components.filter((l) => l.optional && !l.isHeader && !l.isChildHeader);
   const componentsSubtotal = contractComponents.reduce(
     (s, l) => s + componentLineTotal(l, q.productMarkupPct, ewtPct),
     0,
