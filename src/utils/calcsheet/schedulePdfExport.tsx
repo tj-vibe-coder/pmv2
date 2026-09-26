@@ -16,12 +16,11 @@ const HEADER_H = 46;
 const FOOTER_H = 22;
 const TIER_H = 13;
 const MAX_ROW_H = 16;
-// S-Curve strip under the Gantt (same date scale as the bars above).
-const SC_GAP = 8;
-const SC_PLOT_MIN = 150;
-const SC_PLOT_MAX = 300;
-const SC_PAD = 8;
-const MP_H = 64;
+// Page 2: full-width S-Curve.
+const SC_GUTTER = 34;             // y-axis labels
+const SC_PLOT_W = PAGE_W - MARGIN * 2 - SC_GUTTER;
+const SC_PAD = 10;
+const SC_LEGEND_H = 30;
 
 const C = {
   text: '#262626',
@@ -97,16 +96,11 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
   const tiers = timescaleTiers(zoom, range.start, totalDays, dayW);
 
   const sc = computeSCurve(rows.map((r) => r.task), opts.workingDays, opts.snapshots ?? []);
-  const mpH = sc?.hasManpower ? MP_H : 0;
-  const scFixed = sc ? SC_GAP + mpH + TIER_H + 1 : 0;
-  const scH = sc ? scFixed + SC_PLOT_MIN : 0;
 
-  const bodyAvail = PAGE_H - MARGIN * 2 - HEADER_H - FOOTER_H - TIER_H * 2 - 6 - scH;
+  const bodyAvail = PAGE_H - MARGIN * 2 - HEADER_H - FOOTER_H - TIER_H * 2 - 6;
   const rowH = Math.min(MAX_ROW_H, bodyAvail / Math.max(1, rows.length));
   const fs = Math.max(3, Math.min(8, rowH * 0.55));
   const bodyH = rows.length * rowH;
-  // Short schedules leave room on the page — let the S-Curve use it.
-  const scPlotH = sc ? Math.min(SC_PLOT_MAX, Math.max(SC_PLOT_MIN, bodyAvail + scH - bodyH - scFixed)) : 0;
 
   const idNum = new Map(rows.map((r, i) => [r.task.id, i + 1]));
   const barGeom = (t: ScheduleTask) => ({
@@ -340,106 +334,6 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
             </View>
           </View>
 
-          {/* S-Curve: project % complete, on the same date scale as the bars */}
-          {sc && (() => {
-            const xEnd = (d: string) => (daysBetween(range.start, toDate(d)) + 1) * dayW;
-            const yOf = (pv: number) => SC_PAD + (1 - pv / 100) * (scPlotH - SC_PAD - 3);
-            const first = sc.daily[0];
-            const plannedD = [
-              `M ${daysBetween(range.start, toDate(first.date)) * dayW} ${yOf(0)}`,
-              ...sc.daily.map((d) => `L ${xEnd(d.date)} ${yOf(d.plannedPct)}`),
-            ].join(' ');
-            const actual = sc.actualPoints.map((a) => ({ x: xEnd(a.date), y: yOf(a.pct), pct: a.pct }));
-            const actualD = actual.map((a, i) => `${i ? 'L' : 'M'} ${a.x} ${a.y}`).join(' ');
-            const lastA = actual[actual.length - 1];
-            const variance = sc.actualToday - sc.plannedToday;
-            const maxPax = Math.max(1, ...sc.daily.map((d) => d.pax));
-            const barGap = Math.min(0.6, dayW * 0.18);
-            const yLabels = [0, 25, 50, 75, 100];
-            return (
-              <View style={{ flexDirection: 'row', borderWidth: 0.5, borderColor: C.border, marginTop: SC_GAP }}>
-                <View style={{ width: TABLE_W, borderRightWidth: 1, borderColor: '#9E9E9E' }}>
-                  <View style={{ height: scPlotH, position: 'relative', paddingLeft: 6, paddingTop: 6 }}>
-                    <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', color: C.text }}>S-Curve — project % complete</Text>
-                    <View style={{ flexDirection: 'row', marginTop: 8 }}>
-                      {[
-                        ['Planned', `${sc.plannedToday.toFixed(1)}%`],
-                        ['Actual', `${sc.actualToday.toFixed(1)}%`],
-                        ['Variance', `${variance > 0 ? '+' : ''}${variance.toFixed(1)} pts ${Math.abs(variance) < 0.5 ? '(on plan)' : variance > 0 ? '(ahead)' : '(behind)'}`],
-                      ].map(([k, v]) => (
-                        <View key={k} style={{ marginRight: 16 }}>
-                          <Text style={{ fontSize: 6.5, color: C.sub }}>{k} to date</Text>
-                          <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', marginTop: 1 }}>{v}</Text>
-                        </View>
-                      ))}
-                    </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
-                      <Svg width={18} height={6}><Line x1={0} y1={3} x2={18} y2={3} stroke={C.planned} strokeWidth={1.5} /></Svg>
-                      <Text style={{ fontSize: 7, marginLeft: 3, marginRight: 12 }}>Planned</Text>
-                      <Svg width={18} height={6}>
-                        <Line x1={0} y1={3} x2={18} y2={3} stroke={C.actual} strokeWidth={1.5} />
-                        <Circle cx={9} cy={3} r={2} fill={C.actual} />
-                      </Svg>
-                      <Text style={{ fontSize: 7, marginLeft: 3 }}>Actual</Text>
-                    </View>
-                    <Text style={{ fontSize: 6.5, color: C.sub, marginTop: 8, width: TABLE_W - 60 }}>
-                      Tasks weighted by duration, same as % Complete above. Actual points are saved schedule versions plus today.
-                    </Text>
-                    {yLabels.map((v) => (
-                      <Text key={v} style={{ position: 'absolute', right: 3, top: yOf(v) - 3.5, fontSize: 6.5, color: C.sub }}>{v}%</Text>
-                    ))}
-                  </View>
-                  {mpH > 0 && (
-                    <View style={{ height: mpH, position: 'relative', paddingLeft: 6, paddingTop: 5, borderTopWidth: 0.5, borderColor: C.border }}>
-                      <Text style={{ fontSize: 8, fontFamily: 'Helvetica-Bold' }}>Manpower loading (pax/day)</Text>
-                      <Text style={{ fontSize: 7, color: C.sub, marginTop: 3 }}>
-                        {sc.peak ? `Peak ${sc.peak.pax} pax on ${mspDate(sc.peak.date)}` : ''} · {Math.round(sc.totalManDays).toLocaleString()} man-days total
-                      </Text>
-                      <Text style={{ position: 'absolute', right: 3, top: 3, fontSize: 6.5, color: C.sub }}>{maxPax}</Text>
-                      <Text style={{ position: 'absolute', right: 3, bottom: 2, fontSize: 6.5, color: C.sub }}>0</Text>
-                    </View>
-                  )}
-                  <View style={{ height: TIER_H, borderTopWidth: 0.5, borderColor: C.border }} />
-                </View>
-
-                <View style={{ width: CHART_W }}>
-                  <View style={{ height: scPlotH, position: 'relative' }}>
-                    <Svg width={CHART_W} height={scPlotH} style={{ position: 'absolute', top: 0, left: 0 }}>
-                      {yLabels.map((v) => <Line key={v} x1={0} y1={yOf(v)} x2={CHART_W} y2={yOf(v)} stroke={C.grid} strokeWidth={0.5} />)}
-                      {todayX !== null && <Line x1={todayX} y1={0} x2={todayX} y2={scPlotH} stroke={C.today} strokeWidth={0.6} strokeDasharray="2,1.5" />}
-                      <Path d={plannedD} fill="none" stroke={C.planned} strokeWidth={1.4} />
-                      {actual.length > 1 && <Path d={actualD} fill="none" stroke={C.actual} strokeWidth={1.4} />}
-                      {actual.map((a, i) => <Circle key={i} cx={a.x} cy={a.y} r={2.2} fill={C.actual} stroke="#ffffff" strokeWidth={0.8} />)}
-                    </Svg>
-                    {lastA && (
-                      <Text style={{ position: 'absolute', left: Math.min(lastA.x + 4, CHART_W - 30), top: lastA.y - 10, fontSize: 7, fontFamily: 'Helvetica-Bold', color: C.text }}>
-                        {lastA.pct.toFixed(1)}%
-                      </Text>
-                    )}
-                  </View>
-                  {mpH > 0 && (
-                    <View style={{ height: mpH, borderTopWidth: 0.5, borderColor: C.border }}>
-                      <Svg width={CHART_W} height={mpH}>
-                        {todayX !== null && <Line x1={todayX} y1={0} x2={todayX} y2={mpH} stroke={C.today} strokeWidth={0.6} strokeDasharray="2,1.5" />}
-                        {sc.daily.filter((d) => d.pax > 0).map((d) => {
-                          const h = (d.pax / maxPax) * (mpH - 8);
-                          return (
-                            <Rect
-                              key={d.date}
-                              x={daysBetween(range.start, toDate(d.date)) * dayW + barGap / 2}
-                              y={mpH - h} width={Math.max(0.4, dayW - barGap)} height={h} fill={C.manpower}
-                            />
-                          );
-                        })}
-                      </Svg>
-                    </View>
-                  )}
-                  <View style={{ borderTopWidth: 0.5, borderColor: C.border }}>{tierRow(tiers.bottom, 'center')}</View>
-                </View>
-              </View>
-            );
-          })()}
-
           {/* Legend */}
           <View style={{ height: FOOTER_H, flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
             {[
@@ -457,6 +351,129 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
           </View>
         </View>
       </Page>
+      {/* Page 2 — S-Curve (project % complete) */}
+      {sc && (() => {
+        const scDayW = SC_PLOT_W / totalDays;
+        const scTiers = timescaleTiers(zoom, range.start, totalDays, scDayW);
+        const mpH = sc.hasManpower ? 150 : 0;
+        const plotH = PAGE_H - MARGIN * 2 - HEADER_H - SC_LEGEND_H - TIER_H * 2 - 2 - (mpH ? mpH + 22 : 0);
+        const x0 = (d: string) => daysBetween(range.start, toDate(d)) * scDayW;
+        const xEnd = (d: string) => x0(d) + scDayW;
+        const yOf = (pv: number) => SC_PAD + (1 - pv / 100) * (plotH - SC_PAD - 2);
+        const first = sc.daily[0];
+        const plannedD = [`M ${x0(first.date)} ${yOf(0)}`, ...sc.daily.map((d) => `L ${xEnd(d.date)} ${yOf(d.plannedPct)}`)].join(' ');
+        const actual = sc.actualPoints.map((a) => ({ x: xEnd(a.date), y: yOf(a.pct), pct: a.pct }));
+        const actualD = actual.map((a, i) => `${i ? 'L' : 'M'} ${a.x} ${a.y}`).join(' ');
+        const lastA = actual[actual.length - 1];
+        const variance = sc.actualToday - sc.plannedToday;
+        const tX = today >= range.start && today <= range.end ? daysBetween(range.start, today) * scDayW + scDayW / 2 : null;
+        const maxPax = Math.max(1, ...sc.daily.map((d) => d.pax));
+        const paxTicks = Array.from(new Set([0, Math.round(maxPax / 2), maxPax]));
+        const barGap = Math.min(1, scDayW * 0.18);
+        const pctTicks = [0, 25, 50, 75, 100];
+        const kpis: [string, string][] = [
+          ['Planned to date', `${sc.plannedToday.toFixed(1)}%`],
+          ['Actual to date', `${sc.actualToday.toFixed(1)}%`],
+          ['Variance', `${variance > 0 ? '+' : ''}${variance.toFixed(1)} pts ${Math.abs(variance) < 0.5 ? '(on plan)' : variance > 0 ? '(ahead)' : '(behind)'}`],
+          ...(sc.hasManpower ? [
+            ['Peak manpower', sc.peak ? `${sc.peak.pax} pax · ${mspDate(sc.peak.date)}` : '—'] as [string, string],
+            ['Total man-days', Math.round(sc.totalManDays).toLocaleString()] as [string, string],
+          ] : []),
+        ];
+        const tierAt = (segs: TimescaleSeg[], align: 'left' | 'center') => (
+          <View style={{ position: 'relative', height: TIER_H, marginLeft: SC_GUTTER, borderBottomWidth: 0.5, borderColor: C.border }}>
+            {segs.map((sg) => (
+              <View key={sg.key} style={{ position: 'absolute', left: sg.left, width: sg.width, top: 0, height: TIER_H, borderRightWidth: 0.5, borderColor: C.border, justifyContent: 'center', alignItems: align === 'center' ? 'center' : 'flex-start', paddingLeft: align === 'center' ? 0 : 3 }}>
+                <Text style={{ fontSize: 7 }}>{sg.width >= sg.label.length * 7 * 0.55 + 6 ? sg.label : ''}</Text>
+              </View>
+            ))}
+          </View>
+        );
+        return (
+          <Page size="A3" orientation="landscape" style={{ padding: MARGIN, fontFamily: 'Helvetica', color: C.text }}>
+            <View wrap={false}>
+              <View style={{ height: HEADER_H, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <View>
+                  <Text style={{ fontSize: 16, fontFamily: 'Helvetica-Bold', color: C.primary }}>S-Curve — Project % Complete</Text>
+                  <Text style={{ fontSize: 9, color: C.sub, marginTop: 2 }}>{project.code} — {project.name}</Text>
+                </View>
+                <View style={{ flexDirection: 'row' }}>
+                  {kpis.map(([k, v]) => (
+                    <View key={k} style={{ marginLeft: 18 }}>
+                      <Text style={{ fontSize: 7, color: C.sub }}>{k}</Text>
+                      <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', marginTop: 1 }}>{v}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+
+              <View style={{ height: SC_LEGEND_H, flexDirection: 'row', alignItems: 'center' }}>
+                <Svg width={18} height={6}><Line x1={0} y1={3} x2={18} y2={3} stroke={C.planned} strokeWidth={1.8} /></Svg>
+                <Text style={{ fontSize: 8, marginLeft: 4, marginRight: 16 }}>Planned</Text>
+                <Svg width={18} height={6}>
+                  <Line x1={0} y1={3} x2={18} y2={3} stroke={C.actual} strokeWidth={1.8} />
+                  <Circle cx={9} cy={3} r={2.4} fill={C.actual} />
+                </Svg>
+                <Text style={{ fontSize: 8, marginLeft: 4, marginRight: 16 }}>Actual</Text>
+                <Svg width={18} height={6}><Line x1={0} y1={3} x2={18} y2={3} stroke={C.today} strokeWidth={0.8} strokeDasharray="2,1.5" /></Svg>
+                <Text style={{ fontSize: 8, marginLeft: 4, marginRight: 24 }}>Today</Text>
+                <Text style={{ fontSize: 7, color: C.sub }}>
+                  Tasks weighted by duration, same as % Complete on the Gantt. Actual points are saved schedule versions plus today.
+                </Text>
+              </View>
+
+              {/* % complete plot */}
+              <View style={{ flexDirection: 'row', height: plotH }}>
+                <View style={{ width: SC_GUTTER, position: 'relative' }}>
+                  {pctTicks.map((v) => (
+                    <Text key={v} style={{ position: 'absolute', right: 4, top: yOf(v) - 4, fontSize: 7.5, color: C.sub }}>{v}%</Text>
+                  ))}
+                </View>
+                <View style={{ width: SC_PLOT_W, position: 'relative', borderLeftWidth: 0.5, borderColor: C.border }}>
+                  <Svg width={SC_PLOT_W} height={plotH} style={{ position: 'absolute', top: 0, left: 0 }}>
+                    {pctTicks.map((v) => <Line key={v} x1={0} y1={yOf(v)} x2={SC_PLOT_W} y2={yOf(v)} stroke={C.grid} strokeWidth={0.6} />)}
+                    {tX !== null && <Line x1={tX} y1={0} x2={tX} y2={plotH} stroke={C.today} strokeWidth={0.8} strokeDasharray="3,2" />}
+                    <Path d={plannedD} fill="none" stroke={C.planned} strokeWidth={1.8} />
+                    {actual.length > 1 && <Path d={actualD} fill="none" stroke={C.actual} strokeWidth={1.8} />}
+                    {actual.map((a, i) => <Circle key={i} cx={a.x} cy={a.y} r={3} fill={C.actual} stroke="#ffffff" strokeWidth={1} />)}
+                  </Svg>
+                  {lastA && (
+                    <Text style={{ position: 'absolute', left: Math.min(lastA.x + 5, SC_PLOT_W - 34), top: lastA.y - 13, fontSize: 8.5, fontFamily: 'Helvetica-Bold' }}>
+                      {lastA.pct.toFixed(1)}%
+                    </Text>
+                  )}
+                </View>
+              </View>
+              {/* Manpower loading */}
+              {mpH > 0 && (
+                <View style={{ marginTop: 10 }}>
+                  <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', marginBottom: 3, marginLeft: SC_GUTTER }}>Manpower loading (pax/day)</Text>
+                  <View style={{ flexDirection: 'row', height: mpH - 12 }}>
+                    <View style={{ width: SC_GUTTER, position: 'relative' }}>
+                      {paxTicks.map((v) => (
+                        <Text key={v} style={{ position: 'absolute', right: 4, top: (mpH - 12) - (v / maxPax) * (mpH - 20) - 4, fontSize: 7.5, color: C.sub }}>{v}</Text>
+                      ))}
+                    </View>
+                    <View style={{ width: SC_PLOT_W, borderLeftWidth: 0.5, borderBottomWidth: 0.5, borderColor: C.border }}>
+                      <Svg width={SC_PLOT_W} height={mpH - 12}>
+                        {paxTicks.map((v) => <Line key={v} x1={0} y1={(mpH - 12) - (v / maxPax) * (mpH - 20)} x2={SC_PLOT_W} y2={(mpH - 12) - (v / maxPax) * (mpH - 20)} stroke={C.grid} strokeWidth={0.6} />)}
+                        {tX !== null && <Line x1={tX} y1={0} x2={tX} y2={mpH - 12} stroke={C.today} strokeWidth={0.8} strokeDasharray="3,2" />}
+                        {sc.daily.filter((d) => d.pax > 0).map((d) => {
+                          const h = (d.pax / maxPax) * (mpH - 20);
+                          return <Rect key={d.date} x={x0(d.date) + barGap / 2} y={(mpH - 12) - h} width={Math.max(0.5, scDayW - barGap)} height={h} fill={C.manpower} />;
+                        })}
+                      </Svg>
+                    </View>
+                  </View>
+                </View>
+              )}
+              <View style={{ borderTopWidth: 0.5, borderColor: C.border, marginLeft: SC_GUTTER }} />
+              {tierAt(scTiers.bottom, 'center')}
+              {tierAt(scTiers.top, 'left')}
+            </View>
+          </Page>
+        );
+      })()}
     </Document>
   );
 }
