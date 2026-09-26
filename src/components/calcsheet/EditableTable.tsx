@@ -58,6 +58,9 @@ interface Props<T extends { id: string }> {
   // Row appears as a single spanning, bold label (bound to `description`)
   // instead of the normal per-column cells — used for BOM section headers.
   isHeaderRow?: (row: T) => boolean;
+  // Second-level header — same spanning-label treatment as isHeaderRow, just
+  // indented and lighter to read as nested under a preceding header row.
+  isChildHeaderRow?: (row: T) => boolean;
   // Right-click on any row — return null/[] to suppress the menu for that row.
   getContextMenu?: (row: T, idx: number) => ContextMenuItem[] | null | undefined;
   subheader?: (row: T, idx: number) => string | undefined;
@@ -127,11 +130,12 @@ interface SortableRowProps<T extends { id: string }> {
   onDelete: (idx: number) => void;
   readOnly?: boolean;
   isHeader?: boolean;
+  isChildHeader?: boolean;
   onContextMenu?: (e: ReactMouseEvent, row: T, idx: number) => void;
 }
 
 function SortableRow<T extends { id: string }>({
-  row, idx, columns, draggable, onChange, onDelete, readOnly, isHeader, onContextMenu,
+  row, idx, columns, draggable, onChange, onDelete, readOnly, isHeader, isChildHeader, onContextMenu,
 }: SortableRowProps<T>) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: row.id, disabled: readOnly });
   const style: CSSProperties = {
@@ -141,7 +145,7 @@ function SortableRow<T extends { id: string }>({
     backgroundColor: isDragging ? '#F0F4FF' : undefined,
   };
 
-  if (isHeader) {
+  if (isHeader || isChildHeader) {
     return (
       <TableRow ref={setNodeRef} style={style} hover onContextMenu={(e) => onContextMenu?.(e, row, idx)}>
         {draggable && (
@@ -155,15 +159,26 @@ function SortableRow<T extends { id: string }>({
             </TableCell>
           )
         )}
-        <TableCell colSpan={columns.length} sx={{ bgcolor: 'grey.100', p: '4px 8px' }}>
+        <TableCell colSpan={columns.length} sx={{ bgcolor: isChildHeader ? 'grey.50' : 'grey.100', p: '4px 8px', pl: isChildHeader ? 4 : '8px' }}>
           <TextField
             value={(row as any).description ?? ''}
             onChange={(e) => onChange(idx, 'description' as keyof T, e.target.value)}
             variant="standard"
             fullWidth
             disabled={readOnly}
-            placeholder="Section header"
-            InputProps={{ disableUnderline: true, readOnly, sx: { fontSize: '0.8125rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3 } }}
+            placeholder={isChildHeader ? 'Sub-section header' : 'Section header'}
+            InputProps={{
+              disableUnderline: true,
+              readOnly,
+              sx: {
+                fontSize: isChildHeader ? '0.78125rem' : '0.8125rem',
+                fontWeight: isChildHeader ? 600 : 700,
+                textTransform: isChildHeader ? 'none' : 'uppercase',
+                letterSpacing: isChildHeader ? 0 : 0.3,
+                fontStyle: isChildHeader ? 'italic' : 'normal',
+                color: isChildHeader ? 'text.secondary' : undefined,
+              },
+            }}
             inputProps={{ style: { padding: '6px 4px' } }}
           />
         </TableCell>
@@ -252,7 +267,7 @@ function SortableRow<T extends { id: string }>({
 
 export function EditableTable<T extends { id: string }>({
   rows, columns, onChange, onDelete, onReorder, emptyMessage = 'No items', footer, draggable = true, readOnly = false,
-  isHeaderRow, getContextMenu, subheader,
+  isHeaderRow, isChildHeaderRow, getContextMenu, subheader,
 }: Props<T>) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -318,6 +333,7 @@ export function EditableTable<T extends { id: string }>({
                       onDelete={onDelete}
                       readOnly={readOnly}
                       isHeader={isHeaderRow?.(row)}
+                      isChildHeader={isChildHeaderRow?.(row)}
                       onContextMenu={handleRowContextMenu}
                     />
                   </Fragment>

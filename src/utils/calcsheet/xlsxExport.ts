@@ -165,13 +165,13 @@ export async function exportQuotationXlsx(
       }
     });
     contractComponents.forEach((l, index) => {
-      if (l.isHeader) {
+      if (l.isHeader || l.isChildHeader) {
         ws.mergeCells(`A${r}:F${r}`);
         const c = ws.getCell(`A${r}`);
         c.value = l.description;
-        c.font = { bold: true };
+        c.font = l.isChildHeader ? { bold: true, italic: true, size: 9 } : { bold: true };
         c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: grayBg } };
-        c.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+        c.alignment = { vertical: 'middle', horizontal: 'left', indent: l.isChildHeader ? 3 : 1 };
         r++;
         return;
       }

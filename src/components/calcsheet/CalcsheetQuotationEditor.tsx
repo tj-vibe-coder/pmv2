@@ -952,6 +952,19 @@ export default function QuotationEditor() {
     } as ComponentLine);
     commit('components', list);
   };
+  // Child (second-level) header — same label-only, excluded-from-totals row as
+  // insertHeaderComponent, just nested under a preceding header (see
+  // ComponentLine.isChildHeader).
+  const insertChildHeaderComponent = (idx: number, position: 'above' | 'below') => {
+    const insertAt = position === 'above' ? idx : idx + 1;
+    const list = [...quotation.components];
+    list.splice(insertAt, 0, {
+      id: id(), code: '', description: '', brand: '', partNo: '',
+      qty: 0, uom: '', unitCost: 0, forex: 1, contingencyPct: 0, discountPct: 0,
+      isChildHeader: true,
+    } as ComponentLine);
+    commit('components', list);
+  };
 
   const clearSelectedSubheaders = (section: 'components' | 'services') => {
     const selected = section === 'components' ? selectedCompIds : selectedSvcIds;
@@ -961,7 +974,7 @@ export default function QuotationEditor() {
   const getComponentContextMenu = (row: ComponentLine, idx: number): ContextMenuItem[] => {
     if (isLegacy) return [];
     const items: ContextMenuItem[] = [];
-    if (!row.isHeader) {
+    if (!row.isHeader && !row.isChildHeader) {
       items.push({
         label: `Group selected (${selectedCompIds.size})`,
         disabled: selectedCompIds.size < 2,
@@ -974,6 +987,8 @@ export default function QuotationEditor() {
     items.push(
       { label: 'Insert header above', dividerBefore: true, onClick: () => insertHeaderComponent(idx, 'above') },
       { label: 'Insert header below', onClick: () => insertHeaderComponent(idx, 'below') },
+      { label: 'Insert child header above', onClick: () => insertChildHeaderComponent(idx, 'above') },
+      { label: 'Insert child header below', onClick: () => insertChildHeaderComponent(idx, 'below') },
     );
     items.push({ label: 'Delete row', dividerBefore: true, danger: true, onClick: () => deleteRow('components', idx) });
     return items;
@@ -1947,6 +1962,7 @@ export default function QuotationEditor() {
           emptyMessage="No components — typical for IOCT services-only quotes"
           readOnly={isLegacy}
           isHeaderRow={(r) => !!r.isHeader}
+          isChildHeaderRow={(r) => !!r.isChildHeader}
           getContextMenu={getComponentContextMenu}
           footer={
             <>

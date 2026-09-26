@@ -164,6 +164,16 @@ function buildStyles(scale: number) {
       padding: `${s(3)} ${s(8)}`,
     },
     cHeaderLabel: { fontSize: s(8.5), fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3 },
+    // Child (second-level) header — same tinted bar, indented and lighter so
+    // it reads as nested under a preceding trHeader bar.
+    trChildHeader: {
+      flexDirection: 'row',
+      backgroundColor: SECTION_BG,
+      borderBottom: `0.5px solid ${BORDER}`,
+      padding: `${s(2.5)} ${s(8)}`,
+      paddingLeft: s(20),
+    },
+    cChildHeaderLabel: { fontSize: s(8), fontWeight: 600, fontStyle: 'italic', color: TEXT_LIGHT },
 
     // Table — clean, no cell borders
     tableWrap: {},
@@ -326,7 +336,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
   const contractComponents = quotation.components.filter((l) => !l.optional);
   const optionalComponents = quotation.components.filter((l) => l.optional);
   // Header rows are label-only dividers — never numbered, never priced.
-  const codesB = autoNumber('B', contractComponents.filter((l) => !l.isHeader));
+  const codesB = autoNumber('B', contractComponents.filter((l) => !l.isHeader && !l.isChildHeader));
   const codesOpt = autoNumber('OP', optionalComponents);
 
   // Section presence
@@ -486,10 +496,10 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                   <Text style={styles.cTotal}>Total , PhP</Text>
                 </View>
                 {contractComponents.map((l, index) => {
-                  if (l.isHeader) {
+                  if (l.isHeader || l.isChildHeader) {
                     return (
-                      <View style={styles.trHeader} key={l.id}>
-                        <Text style={styles.cHeaderLabel}>{l.description}</Text>
+                      <View style={l.isChildHeader ? styles.trChildHeader : styles.trHeader} key={l.id}>
+                        <Text style={l.isChildHeader ? styles.cChildHeaderLabel : styles.cHeaderLabel}>{l.description}</Text>
                       </View>
                     );
                   }
