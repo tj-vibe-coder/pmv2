@@ -917,8 +917,10 @@ export default function QuotationEditor() {
     // Amount is the single source of truth (calc + PDF/Excel print it directly),
     // so markup edits recompute it: per-line override, else the global Labor Markup %.
     // EWT (IOCT-only, invisible on the PDF) rides along as an extra factor —
-    // see Quotation.ewtPct.
-    if (perLinePricing && (key === 'days' || key === 'markupPct')) {
+    // see Quotation.ewtPct. Guarded on teamDailyRate > 0: with no manpower cost
+    // basis there's nothing valid to derive, so leave a manually-typed Amount
+    // alone instead of clobbering it to 0.
+    if (perLinePricing && teamDailyRate > 0 && (key === 'days' || key === 'markupPct')) {
       const mult = (1 + (((row.markupPct ?? quotation.laborMarkupPct) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100));
       row.amount = (row.days || 0) * teamDailyRate * mult;
     }
@@ -1227,6 +1229,9 @@ export default function QuotationEditor() {
   const recalcServiceAmounts = (manpowerRows: ManpowerEntry[]) => {
     if (!perLinePricing) return;
     const rate = manpowerDailyRate(manpowerRows);
+    // No valid cost basis yet (e.g. mid-edit, or manpower cleared) — leave
+    // whatever amounts are already there instead of zeroing them out.
+    if (rate <= 0) return;
     const mult = 1 + (quotation.laborMarkupPct || 0) / 100;
     const updated = quotation.services.map((s) =>
       (s.days || 0) > 0 ? { ...s, amount: (s.days || 0) * rate * mult } : s,
@@ -1834,7 +1839,7 @@ export default function QuotationEditor() {
             <NumField label="Product Markup %" value={quotation.productMarkupPct} onChange={(v) => setField('productMarkupPct', v)} disabled={componentsLocked} sx={{ width: '100%' }} />
             <NumField label="Product Contingency %" value={quotation.productContingencyPct ?? 0} onChange={setProductContingency} helperText="Default for product rows" disabled={componentsLocked} sx={{ width: '100%' }} />
             <NumField label="General Req. Markup %" value={quotation.generalReqMarkupPct} onChange={(v) => setField('generalReqMarkupPct', v)} disabled={generalReqtsLocked} sx={{ width: '100%' }} />
-            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = (1 + (((s.markupPct ?? v) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100)); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={servicesLocked} sx={{ width: '100%' }} />
+            <NumField label="Labor Markup %" value={quotation.laborMarkupPct} onChange={(v) => { setField('laborMarkupPct', v); if (perLinePricing && teamDailyRate > 0) { setField('services', quotation.services.map((s) => { if ((s.days || 0) <= 0) return s; const mult = (1 + (((s.markupPct ?? v) || 0) / 100)) * (1 + ((quotation.ewtPct || 0) / 100)); return { ...s, amount: (s.days || 0) * teamDailyRate * mult }; })); } }} helperText="Applied on top of manpower cost" disabled={servicesLocked} sx={{ width: '100%' }} />
             <NumField label="Labor Contingency %" value={quotation.globalContingencyPct} onChange={(v) => setField('globalContingencyPct', v)} helperText="Reserve, not applied to pricing" disabled={servicesLocked} sx={{ width: '100%' }} />
             <NumField
               label="Discount %"
@@ -1853,7 +1858,7 @@ export default function QuotationEditor() {
               value={quotation.ewtPct ?? 0}
               onChange={(v) => {
                 setField('ewtPct', v);
-                if (perLinePricing) {
+                if (perLinePricing && teamDailyRate > 0) {
                   setField('services', quotation.services.map((s) => {
                     if ((s.days || 0) <= 0) return s;
                     const mult = (1 + (((s.markupPct ?? quotation.laborMarkupPct) || 0) / 100)) * (1 + ((v || 0) / 100));
