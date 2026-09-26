@@ -321,6 +321,14 @@ export interface Quotation {
    * member's own qty + UOM while still pricing the group as one combined
    * amount. */
   componentGroupDisplay?: Record<string, 'lot' | 'itemized'>;
+  /** How per-line-priced Engineering Services rows render on the PDF/Excel.
+   * Unset/false (the default) collapses every row to a single "1.00 LOT" line
+   * priced at the line's amount — the pre-QTY/UOM behavior. true shows each
+   * row's real QTY/UOM, with the per-unit price derived from amount ÷ qty so
+   * the printed unit × qty still reconciles to the line total; grouped rows
+   * still collapse to one combined price on the group's middle row, same as
+   * componentGroupDisplay's 'itemized' mode. */
+  servicesItemizedExport?: boolean;
   /** Controls the value reported in Sales and synced to the Project List. */
   salesValueScope?: SalesValueScope;
   /** Suppresses component part numbers from the customer-facing PDF only. */
