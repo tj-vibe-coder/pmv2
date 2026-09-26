@@ -5,6 +5,7 @@ import type { TreeRow } from './scheduleTree';
 import { daysBetween, durationOf, toDate, todayStr, workingDaysBetween } from './scheduleDates';
 import { dayAt, mspDate, snapRange, timescaleTiers, type GanttZoom, type TimescaleSeg } from './scheduleTimescale';
 import { computeSCurve, type SCurveSnapshot } from './scheduleSCurve';
+import { leafWeights, projectPercent } from './scheduleWeights';
 
 type ScheduleProjectRef = { code?: string; name?: string };
 
@@ -55,6 +56,7 @@ const COLS: Col[] = [
   { key: 'pred', label: 'Predecessors', w: 50 },
   { key: 'mp', label: 'Manpower', w: 44, align: 'right' },
   { key: 'pct', label: '% Comp.', w: 36, align: 'right' },
+  { key: 'wt', label: 'Weight', w: 38, align: 'right' },
 ];
 const TABLE_W = COLS.reduce((s, c) => s + c.w, 0);
 const CHART_W = PAGE_W - MARGIN * 2 - TABLE_W;
@@ -118,16 +120,24 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
   // Project roll-up for the header line.
   let pStart = '';
   let pEnd = '';
-  let wProg = 0;
-  let wDays = 0;
   for (const t of leaves) {
     if (!pStart || t.startDate < pStart) pStart = t.startDate;
     if (!pEnd || t.endDate > pEnd) pEnd = t.endDate;
-    const d = t.isMilestone ? 1 : durationOf(t.startDate, t.endDate);
-    wProg += (t.progressPct || 0) * d;
-    wDays += d;
   }
-  const pct = wDays ? Math.round(wProg / wDays) : 0;
+  const allTasks = rows.map((r) => r.task);
+  const pct = Math.round(projectPercent(allTasks) ?? 0);
+
+  // Each task's share of project progress; a phase's share is its tasks' sum.
+  const { mode: wMode, weights, total: wTotal } = leafWeights(allTasks);
+  const share = new Map<string, number>();
+  rows.forEach((r, i) => {
+    if (!r.isSummary) { share.set(r.task.id, wTotal > 0 ? ((weights.get(r.task.id) || 0) / wTotal) * 100 : 0); return; }
+    let sum = 0;
+    for (let j = i + 1; j < rows.length && rows[j].depth > r.depth; j++) {
+      if (!rows[j].isSummary) sum += wTotal > 0 ? ((weights.get(rows[j].task.id) || 0) / wTotal) * 100 : 0;
+    }
+    share.set(r.task.id, sum);
+  });
 
   const cellText = (r: TreeRow, c: Col): string => {
     const t = r.task;
@@ -138,8 +148,9 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
       case 'start': return mspDate(t.startDate);
       case 'finish': return mspDate(t.endDate);
       case 'pred': return fit((t.predecessors || []).map((p) => idNum.get(p)).filter((n) => n != null).join(','), c.w, fs);
-      case 'mp': return !r.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? `${t.manpower} pax` : '';
+      case 'mp': return !r.isSummary && !t.isMilestone && (t.manpower || 0) > 0 ? String(t.manpower) : '';
       case 'pct': return `${Math.round(t.progressPct || 0)}%`;
+      case 'wt': return share.has(t.id) ? `${(share.get(t.id) || 0).toFixed(1)}%` : '';
       default: return '';
     }
   };
@@ -219,6 +230,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                   ['Finish', mspDate(pEnd)],
                   ['Duration', `${workingDaysBetween(pStart, pEnd, opts.workingDays)} days`],
                   ['% Complete', `${pct}%`],
+                  ['Weighting', wMode === 'manual' ? 'Manual weights' : 'By duration'],
                   ['Tasks', String(leaves.length)],
                 ].map(([k, v]) => (
                   <View key={k} style={{ marginLeft: 18 }}>
@@ -322,7 +334,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                   if (r.isSummary || fs < 4) return null;
                   const { left, width } = barGeom(t);
                   const x = t.isMilestone ? left + dayW / 2 + rowH * 0.45 : left + width + 3;
-                  const label = t.isMilestone ? `${toDate(t.startDate).getMonth() + 1}/${toDate(t.startDate).getDate()}` : [t.category, (t.manpower || 0) > 0 ? `[${t.manpower} pax]` : ''].filter(Boolean).join(' ');
+                  const label = t.isMilestone ? `${toDate(t.startDate).getMonth() + 1}/${toDate(t.startDate).getDate()}` : [t.category, (t.manpower || 0) > 0 ? `[${t.manpower}]` : ''].filter(Boolean).join(' ');
                   if (!label || x > CHART_W - 10) return null;
                   return (
                     <Text key={`lbl${t.id}`} style={{ position: 'absolute', left: x, top: i * rowH + (rowH - fs) / 2 - 0.5, fontSize: fs * 0.9, color: C.text }}>
@@ -376,7 +388,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
           ['Actual to date', `${sc.actualToday.toFixed(1)}%`],
           ['Variance', `${variance > 0 ? '+' : ''}${variance.toFixed(1)} pts ${Math.abs(variance) < 0.5 ? '(on plan)' : variance > 0 ? '(ahead)' : '(behind)'}`],
           ...(sc.hasManpower ? [
-            ['Peak manpower', sc.peak ? `${sc.peak.pax} pax · ${mspDate(sc.peak.date)}` : '—'] as [string, string],
+            ['Peak manpower', sc.peak ? `${sc.peak.pax} · ${mspDate(sc.peak.date)}` : '—'] as [string, string],
             ['Total man-days', Math.round(sc.totalManDays).toLocaleString()] as [string, string],
           ] : []),
         ];
@@ -418,7 +430,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
                 <Svg width={18} height={6}><Line x1={0} y1={3} x2={18} y2={3} stroke={C.today} strokeWidth={0.8} strokeDasharray="2,1.5" /></Svg>
                 <Text style={{ fontSize: 8, marginLeft: 4, marginRight: 24 }}>Today</Text>
                 <Text style={{ fontSize: 7, color: C.sub }}>
-                  Tasks weighted by duration, same as % Complete on the Gantt. Actual points are saved schedule versions plus today.
+                  Tasks weighted {sc.weighting === 'manual' ? 'by entered progress weights' : 'by duration'}, same as % Complete on the Gantt. Actual points are saved schedule versions plus today.
                 </Text>
               </View>
 
@@ -447,7 +459,7 @@ function ScheduleDoc({ project, rows, opts }: { project: ScheduleProjectRef; row
               {/* Manpower loading */}
               {mpH > 0 && (
                 <View style={{ marginTop: 10 }}>
-                  <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', marginBottom: 3, marginLeft: SC_GUTTER }}>Manpower loading (pax/day)</Text>
+                  <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', marginBottom: 3, marginLeft: SC_GUTTER }}>Manpower loading (per day)</Text>
                   <View style={{ flexDirection: 'row', height: mpH - 12 }}>
                     <View style={{ width: SC_GUTTER, position: 'relative' }}>
                       {paxTicks.map((v) => (

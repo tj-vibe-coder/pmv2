@@ -23,6 +23,10 @@ export interface ScheduleTask {
    *  Man-days = manpower × working days; drives the S-Curve weighting and the
    *  manpower histogram. Unset/0 = no labor (e.g. procurement lead time). */
   manpower?: number;
+  /** Progress weight (any unit — %, cost, man-hours). Once any task has one,
+   *  project/phase % complete weigh each task by weight ÷ total instead of by
+   *  duration; see utils/calcsheet/scheduleWeights. Leaf tasks only. */
+  weight?: number;
   createdAt?: string;
   updatedAt?: string;
 }

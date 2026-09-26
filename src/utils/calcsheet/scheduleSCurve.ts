@@ -1,15 +1,15 @@
 import type { ScheduleTask } from '../../types/ScheduleTask';
 import { addDays, durationOf, formatLocalDate, isWeekend, toDate, todayStr, workingDaysBetween } from './scheduleDates';
 import { leafTasks } from './scheduleTree';
+import { leafWeights, projectPercent, type WeightMode } from './scheduleWeights';
 
 // S-Curve of project % completion + manpower loading, computed from the schedule.
 //
-// % completion uses the same weighting as the Gantt page's "Overall progress":
-// every leaf task is weighted by its duration in calendar days (milestones
-// count as 1). The planned curve spreads each task's weight evenly across its
-// working days (calendar days when the working-day calendar is off); the
-// actual curve applies the same weighting to each saved version's progress,
-// so "actual to date" always equals the page's Overall progress.
+// % completion uses the schedule's weight system (scheduleWeights) — the same
+// one behind the Gantt page's "Overall progress". The planned curve spreads
+// each task's weight evenly across its working days (calendar days when the
+// working-day calendar is off); the actual curve scores each saved version
+// with the same weights, so "actual to date" always equals Overall progress.
 //
 // Manpower (pax per working day) only drives the loading histogram.
 
@@ -29,6 +29,8 @@ export interface SCurveSnapshot { date: string; tasks: ScheduleTask[] }
 
 export interface SCurveResult {
   granularity: 'day' | 'week';
+  /** How tasks are weighted for % complete (see scheduleWeights). */
+  weighting: WeightMode;
   buckets: SCurveBucket[];
   /** Per-day planned % complete (cumulative) and manpower, for precise plotting. */
   daily: { date: string; plannedPct: number; pax: number }[];
@@ -49,20 +51,11 @@ function labelFor(d: string): string {
   return `${MONTH_SHORT[x.getMonth()]} ${x.getDate()}`;
 }
 
-// Same weighting as the page's Overall progress (and the server's roll-up).
-function weightOf(t: ScheduleTask): number {
-  return t.isMilestone ? 1 : Math.max(1, durationOf(t.startDate, t.endDate));
-}
-
-export function percentComplete(tasks: ScheduleTask[]): number | null {
-  let w = 0;
-  let e = 0;
-  for (const t of leafTasks(tasks)) {
-    const weight = weightOf(t);
-    w += weight;
-    e += weight * Math.min(100, Math.max(0, t.progressPct || 0));
-  }
-  return w > 0 ? e / w : null;
+// % complete uses the schedule's weight system (scheduleWeights): manual task
+// weights once any are entered, otherwise duration. Snapshots are scored
+// with the CURRENT plan's weights so the actual line stays comparable.
+export function percentComplete(tasks: ScheduleTask[], reference?: ScheduleTask[]): number | null {
+  return projectPercent(tasks, reference);
 }
 
 export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snapshots: SCurveSnapshot[]): SCurveResult | null {
@@ -79,10 +72,12 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
   }
 
   // Planned % earned per day: each task's weight spread over its earning days.
+  const { weights, mode: weighting } = leafWeights(tasks);
   const earnedOn = new Map<string, number>();
   let totalWeight = 0;
   for (const t of leaves) {
-    const weight = weightOf(t);
+    const weight = weights.get(t.id) || 0;
+    if (weight <= 0) continue;
     totalWeight += weight;
     if (t.isMilestone) {
       earnedOn.set(t.startDate, (earnedOn.get(t.startDate) || 0) + weight);
@@ -137,7 +132,7 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
   const bucketOf = (date: string) => buckets.find((b) => b.start <= date && date <= b.end)
     || (date > end ? buckets[buckets.length - 1] : null);
   const actualToday = percentComplete(tasks) ?? 0;
-  const points = [...snapshots.map((s) => ({ date: s.date, pct: percentComplete(s.tasks) })), { date: today, pct: actualToday }]
+  const points = [...snapshots.map((s) => ({ date: s.date, pct: percentComplete(s.tasks, tasks) })), { date: today, pct: actualToday }]
     .filter((p): p is { date: string; pct: number } => p.pct !== null && p.date >= start && p.date <= today)
     .sort((a, b) => a.date.localeCompare(b.date));
   for (const p of points) {
@@ -147,6 +142,7 @@ export function computeSCurve(tasks: ScheduleTask[], workingDays: boolean, snaps
 
   return {
     granularity,
+    weighting,
     buckets,
     daily,
     actualPoints: points,
