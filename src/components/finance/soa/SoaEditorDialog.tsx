@@ -73,7 +73,7 @@ export default function SoaEditorDialog({
   const [recipientContactName, setRecipientContactName] = useState('Lindsey Salilig');
   const [recipientContactPhone, setRecipientContactPhone] = useState('0917-5046701');
   const [recipientAddress, setRecipientAddress] = useState(
-    'Block 13 Lot 8, Mindanao Ave., Gavino Maderan, Gen. Mariano Alvarez, Cavite, Region IV-A (Calabarzon), 4117'
+    'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite 4117, Philippines'
   );
   const [subject, setSubject] = useState('Consolidated Statement of Account – Outstanding Billings');
   const [salutation, setSalutation] = useState('Dear Sir Lindsey,');
@@ -116,7 +116,7 @@ export default function SoaEditorDialog({
         setRecipientContactName('Lindsey Salilig');
         setRecipientContactPhone('0917-5046701');
         setRecipientAddress(
-          'Block 13 Lot 8, Mindanao Ave., Gavino Maderan, Gen. Mariano Alvarez, Cavite, Region IV-A (Calabarzon), 4117'
+          'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite 4117, Philippines'
         );
         setSubject('Consolidated Statement of Account – Outstanding Billings');
         setSalutation('Dear Sir Lindsey,');

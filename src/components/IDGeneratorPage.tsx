@@ -53,7 +53,7 @@ const COMPANY_PRESETS: Record<CompanyKey, { name: string; logo: string; address:
   ACTI: {
     name: 'Advance Controle Technologie Inc',
     logo: '/logo-acti.png',
-    address: 'Block 13 Lot 8, Mindanao Ave., Gavino Maderan, Gen. Mariano Alvarez, Cavite',
+    address: 'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite',
     tin: '008-133-926-000',
   },
   IOCT: {
