@@ -28,7 +28,7 @@ type CertCompanyKey = 'ACTI' | 'IOCT';
 const CERT_COMPANY_PRESETS: Record<CertCompanyKey, { name: string; address: string; logo: string; docPrefix: string }> = {
   ACTI: {
     name: 'Advance Controle Technologie Inc',
-    address: 'Block 13 Lot 8, Mindanao Ave., Gavino Maderan, Gen. Mariano Alvarez, Cavite, Region IV-A (Calabarzon), 4117',
+    address: 'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite 4117, Philippines',
     logo: '/logo-acti.png',
     docPrefix: 'ACT-SC',
   },
@@ -48,7 +48,7 @@ const DEFAULT_SAFETY_CERTIFICATE = {
   recipientName: '',
   trainingTitle: 'Mandatory Eight-Hour Safety and Health Training for Workers',
   legalText: 'Pursuant to the provision of Republic Act 11058 otherwise known as "An act strengthening compliance with Occupational Safety and Health Standards and providing penalties for violations thereof" and Department Order 198-18.',
-  awardLocation: 'Block 13 Lot 8, Mindanao Ave., Gavino Maderan, Gen. Mariano Alvarez, Cavite',
+  awardLocation: 'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite',
   awardDate: '',
   signatory1Name: 'Arnel Bautista Jr.',
   signatory1Title: 'Safety Officer II',

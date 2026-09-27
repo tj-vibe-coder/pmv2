@@ -36,7 +36,11 @@ const ISSUER_INFO = {
   },
   ACTI: {
     name: 'Advance Controle Technologie Inc.',
-    addressLines: ['Block 13, Mindanao Ave., Cavite, Philippines'],
+    addressLines: [
+      'Blk. 13 Lot 5, Mindanao Ave.,',
+      'Gavino Maderan, General Mariano Alvarez,',
+      'Cavite 4117, Philippines',
+    ],
     tin: '',
     logo: '/logo-acti.png',
     footer: 'Advance Controle Technologie, Inc.',

@@ -56,7 +56,7 @@ export async function exportQuotationXlsx(
   ws.getCell('A1').font = { name: 'Inter', size: 14, bold: true, color: { argb: navy } };
 
   ws.mergeCells('A2:F2');
-  ws.getCell('A2').value = quotation.kind === 'IOCT' ? 'B63 Biñan, Laguna · TIN: 697-029-976-00000' : 'Block 13, Mindanao Ave., Cavite';
+  ws.getCell('A2').value = quotation.kind === 'IOCT' ? 'B63 Biñan, Laguna · TIN: 697-029-976-00000' : 'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite 4117, Philippines';
   ws.getCell('A2').font = { name: 'Inter', size: 8, color: { argb: 'FF666666' } };
 
   ws.getCell('E1').value = 'QUOTATION';

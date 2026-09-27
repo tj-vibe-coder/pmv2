@@ -63,7 +63,7 @@ export interface StatementOfAccount {
   recipientContactName: string;       // "Lindsey Salilig"
   recipientContactPhone?: string;     // "0917-5046701"
   recipientContactEmail?: string;
-  recipientAddress: string;           // "Block 13 Lot 8, Mindanao Ave., Cavite..."
+  recipientAddress: string;           // "Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, …"
 
   // Salutation & Subject
   subject: string;                    // "Consolidated Statement of Account – Outstanding Billings"

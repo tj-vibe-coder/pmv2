@@ -35,7 +35,11 @@ const COC_ISSUER = {
     useDirectLoad: true as const,
   },
   ACT: {
-    addressLines: ['Block 13, Mindanao Ave., Cavite, Philippines'],
+    addressLines: [
+      'Blk. 13 Lot 5, Mindanao Ave.,',
+      'Gavino Maderan, General Mariano Alvarez,',
+      'Cavite 4117, Philippines',
+    ],
     tin: '',
     logoFile: '/logo-acti.png',
     logoW: 22,
