@@ -438,36 +438,30 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     return matches ? matches.length : 0;
   };
 
+  // Top-level items (no parent in the list). A row with a blank code can't be a
+  // parent or a child, so it always counts as top-level.
+  const wbsTopLevelItems = useMemo(() => wbsItems.filter((item) => {
+    const code = (item.code || '').trim();
+    if (!code) return true;
+    return !wbsItems.some((other) => {
+      const otherCode = (other.code || '').trim();
+      if (!otherCode || otherCode === code) return false;
+      return code.startsWith(otherCode + '.');
+    });
+  }), [wbsItems]);
+
+  const wbsTotalWeight = useMemo(() => wbsTopLevelItems.reduce((sum, item) => {
+    const code = (item.code || '').trim();
+    if (isParentItem(code, wbsItems)) {
+      return sum + calculateParentTotals(code, wbsItems).weight;
+    }
+    return sum + parseWBSNum(item.weight);
+  }, 0), [wbsTopLevelItems, wbsItems, isParentItem, calculateParentTotals]);
+
   const wbsOverallProgress = useMemo(() => {
     if (wbsItems.length === 0) return 0;
-    // Only count top-level items (items without a parent) for overall progress
-    const topLevelItems = wbsItems.filter((item) => {
-      const code = (item.code || '').trim();
-      if (!code) return false;
-      // Check if this is a top-level item (no parent exists)
-      return !wbsItems.some((other) => {
-        const otherCode = (other.code || '').trim();
-        if (!otherCode || otherCode === code) return false;
-        return code.startsWith(otherCode + '.');
-      });
-    });
-    
-    if (topLevelItems.length === 0) {
-      // Fallback to all items if no hierarchy detected
-      const totalWeight = wbsItems.reduce((s, i) => s + parseWBSNum(i.weight), 0);
-      const weightedSum = wbsItems.reduce((s, i) => s + (parseWBSNum(i.weight) * parseWBSNum(i.progress)) / 100, 0);
-      if (totalWeight > 0) return (weightedSum / totalWeight) * 100;
-      return wbsItems.reduce((s, i) => s + parseWBSNum(i.progress), 0) / wbsItems.length;
-    }
-    
-    const totalWeight = topLevelItems.reduce((s, i) => {
-      const code = (i.code || '').trim();
-      if (isParentItem(code, wbsItems)) {
-        return s + calculateParentTotals(code, wbsItems).weight;
-      }
-      return s + parseWBSNum(i.weight);
-    }, 0);
-    
+    const topLevelItems = wbsTopLevelItems;
+    const totalWeight = wbsTotalWeight;
     const weightedSum = topLevelItems.reduce((s, i) => {
       const code = (i.code || '').trim();
       let weight: number;
@@ -492,34 +486,17 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       }
       return s + parseWBSNum(i.progress);
     }, 0) / topLevelItems.length;
-  }, [calculateParentTotals, isParentItem, wbsItems]);
+  }, [calculateParentTotals, isParentItem, wbsItems, wbsTopLevelItems, wbsTotalWeight]);
 
   const validationWarnings = useMemo(() => {
     const warnings: string[] = [];
     if (wbsItems.length === 0) warnings.push('No WBS items added');
     if (!pbInput.trim()) warnings.push('PB# not set');
-    // Calculate total weight from top-level items
-    const topLevelItems = wbsItems.filter((item) => {
-      const code = (item.code || '').trim();
-      if (!code) return false;
-      return !wbsItems.some((other) => {
-        const otherCode = (other.code || '').trim();
-        if (!otherCode || otherCode === code) return false;
-        return code.startsWith(otherCode + '.');
-      });
-    });
-    const totalWeight = topLevelItems.reduce((sum, item) => {
-      const code = (item.code || '').trim();
-      if (isParentItem(code, wbsItems)) {
-        return sum + calculateParentTotals(code, wbsItems).weight;
-      }
-      return sum + parseWBSNum(item.weight);
-    }, 0);
-    if (wbsItems.length > 0 && Math.abs(totalWeight - 100) > 0.01) {
-      warnings.push(`Weight total is ${totalWeight.toFixed(1)}% — should be 100%`);
+    if (wbsItems.length > 0 && Math.abs(wbsTotalWeight - 100) > 0.01) {
+      warnings.push(`Weight total is ${wbsTotalWeight.toFixed(1)}% — should be 100%`);
     }
     return warnings;
-  }, [wbsItems, pbInput, isParentItem, calculateParentTotals]);
+  }, [wbsItems, pbInput, wbsTotalWeight]);
 
   const hasBlockingWarnings = wbsItems.length === 0;
 
@@ -1665,25 +1642,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                   )}
                 </TableBody>
                 {wbsItems.length > 0 && (() => {
-                  // Calculate total weight from top-level items only
-                  const topLevelItems = wbsItems.filter((item) => {
-                    const code = (item.code || '').trim();
-                    if (!code) return false;
-                    // Check if this is a top-level item (no parent exists)
-                    return !wbsItems.some((other) => {
-                      const otherCode = (other.code || '').trim();
-                      if (!otherCode || otherCode === code) return false;
-                      return code.startsWith(otherCode + '.');
-                    });
-                  });
-
-                  const totalWeight = topLevelItems.reduce((sum, item) => {
-                    const code = (item.code || '').trim();
-                    if (isParentItem(code, wbsItems)) {
-                      return sum + calculateParentTotals(code, wbsItems).weight;
-                    }
-                    return sum + parseWBSNum(item.weight);
-                  }, 0);
+                  const totalWeight = wbsTotalWeight;
 
                   return (
                     <TableFooter>
