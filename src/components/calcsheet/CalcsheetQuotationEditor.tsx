@@ -172,6 +172,17 @@ const firstLastKey = (value: string | undefined | null) => {
 // Keeps its own text buffer instead of deriving the display string from `value` on every
 // keystroke — otherwise typing a trailing "0" after a decimal point (e.g. "11.50") gets
 // immediately stripped back to "11.5" because String(11.5) === '11.5'.
+const LIVE_SYNC_USERNAMES = ['RJR'];
+
+/** JSON with sorted keys, so server and locally built copies compare equal. */
+function stableKey(value: unknown): string {
+  return JSON.stringify(value, (_k, v) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
+}
+
 function NumField({
   label, value, onChange, integer = false, sx, helperText, disabled,
 }: { label: string; value: number; onChange: (v: number) => void; integer?: boolean; sx?: any; helperText?: string; disabled?: boolean }) {
@@ -355,6 +366,7 @@ export default function QuotationEditor() {
   const presets = useQuotationStore((s) => s.laborPresets);
   const update = useQuotationStore((s) => s.updateQuotation);
   const fetchQuotationVersions = useQuotationStore((s) => s.fetchQuotationVersions);
+  const fetchQuotationFresh = useQuotationStore((s) => s.fetchQuotationFresh);
   const deleteQuotationVersion = useQuotationStore((s) => s.deleteQuotationVersion);
 
   const [draft, setDraft] = useState<Quotation | undefined>(saved);
@@ -445,6 +457,54 @@ export default function QuotationEditor() {
   }, [isDirty]);
 
   const [saving, setSaving] = useState(false);
+
+  // Live sync: poll the server while on so rows written outside the UI (e.g. an
+  // agent building a BOM) show up without a reload. It never overwrites unsaved
+  // edits: while the draft is dirty a newer server copy only raises a chip.
+  const [liveSync, setLiveSync] = useState(false);
+  const [remoteWaiting, setRemoteWaiting] = useState(false);
+  const liveRef = useRef({ isDirty, saving, savedKey: '', lastRemote: '', busy: false });
+  liveRef.current.isDirty = isDirty;
+  liveRef.current.saving = saving;
+  liveRef.current.savedKey = saved ? stableKey(saved) : '';
+  const liveQid = saved?.id;
+  const liveProjectId = saved?.projectId;
+  useEffect(() => {
+    if (!liveSync || !liveQid || !liveProjectId) return;
+    const ref = liveRef.current;
+    ref.lastRemote = '';
+    const tick = async () => {
+      if (ref.busy || ref.saving) return;
+      ref.busy = true;
+      try {
+        const fresh = await fetchQuotationFresh(liveQid, liveProjectId);
+        if (!fresh || ref.saving) return;
+        const key = stableKey(fresh);
+        if (key === ref.lastRemote || key === ref.savedKey) {
+          ref.lastRemote = key;
+          setRemoteWaiting(false);
+          return;
+        }
+        if (ref.isDirty) {
+          setRemoteWaiting(true);
+          return;
+        }
+        ref.lastRemote = key;
+        setRemoteWaiting(false);
+        useQuotationStore.setState((st) => ({
+          quotations: st.quotations.map((q) => (q.id === fresh.id ? fresh : q)),
+        }));
+        setDraft(fresh);
+      } catch {
+        // Transient network error: try again on the next tick.
+      } finally {
+        ref.busy = false;
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => { void tick(); }, 2000);
+    return () => window.clearInterval(timer);
+  }, [liveSync, liveQid, liveProjectId, fetchQuotationFresh]);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [timingComponentId, setTimingComponentId] = useState<string | null>(null);
 
@@ -523,6 +583,9 @@ export default function QuotationEditor() {
   // keep these above the early-return guard below.
   const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken } = useOneDriveAuth();
   const { user: currentUser } = useAuth();
+  // Live sync is an RJR-only tool for now. Client-side visibility only: it just
+  // re-reads the quotation through the normal API, so it grants no extra access.
+  const canLiveSync = LIVE_SYNC_USERNAMES.includes(String(currentUser?.username || '').toUpperCase());
   const [toast, setToast] = useState<{ msg: string; sev: 'success' | 'warning' | 'info' } | null>(null);
   const effectiveSalesContacts = useMemo<SalesContact[]>(() => {
     const userName = (currentUser?.full_name?.trim() || currentUser?.username || currentUser?.email || '').trim();
@@ -1388,6 +1451,15 @@ export default function QuotationEditor() {
           <Typography variant="body2" color="text.secondary">
             Recipient: {recipient?.name ?? '— not set —'}
           </Typography>
+          {remoteWaiting && isDirty && (
+            <Chip
+              size="small"
+              label="Newer version on server - save or discard to sync"
+              color="info"
+              variant="outlined"
+              sx={{ alignSelf: 'flex-start', mt: 0.5 }}
+            />
+          )}
           {isDirty && !isLegacy && (
             <Chip
               size="small"
@@ -1399,6 +1471,15 @@ export default function QuotationEditor() {
           )}
         </Stack>
         <Stack direction="row" spacing={1} alignItems="center">
+          {!isLegacy && canLiveSync && (
+            <Tooltip title="Refresh this quotation from the server every 2 seconds, so rows added by an agent appear live. Unsaved edits are never overwritten.">
+              <FormControlLabel
+                sx={{ mr: 0 }}
+                control={<Switch size="small" checked={liveSync} onChange={(e) => setLiveSync(e.target.checked)} />}
+                label={<Typography variant="body2">Live sync</Typography>}
+              />
+            </Tooltip>
+          )}
           {!isLegacy && (
             <>
               <Button
