@@ -920,7 +920,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       const isParent = isParentItem(code, wbsItems);
       const indentLevel = getIndentLevel(code);
       const indentSpaces = '  '.repeat(indentLevel);
-      const name = (i.name || '—').slice(0, 50);
+      const name = i.name || '—';
       const indentedName = indentSpaces + name;
       
       let weight: string;
@@ -946,7 +946,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
 
     const totalPct = wbsOverallProgress.toFixed(2);
     const dataRows = wbsRows.map((r) => [r.code, r.name, r.weight, r.progress]);
-    const totalRow = ['', 'Total', '', `${totalPct}%`];
+    const totalRow = ['', 'Total', `${wbsTotalWeight.toFixed(2)}%`, `${totalPct}%`];
 
     // Parent-only summary for last page (code, name, weight, progress)
     const parentOnlyRows = wbsRows.filter((r) => r.isParent);
@@ -1129,7 +1129,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           const rowIndex = data.row.index;
           // Last row is the Total row
           if (rowIndex === allBodyRows.length - 1 && dataRows.length > 0) {
+            // helvetica: ArialNarrow has no real bold variant
+            data.cell.styles.font = 'helvetica';
             data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.fillColor = [235, 241, 250];
           } else if (rowIndex < wbsRows.length) {
             const rowData = wbsRows[rowIndex];
             if (rowData.isParent) {
