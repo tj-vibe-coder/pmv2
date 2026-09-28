@@ -43,7 +43,7 @@ export const seedSalesContacts = (): SalesContact[] => [
     id: nanoid(8),
     name: 'Tyrone James Caballero',
     position: 'General Manager',
-    email: '',
+    email: 'tj@iocontroltech.com',
     phone: '+63 969 162 2660',
     actiPosition: 'Technical Manager - Automation',
     actiEmail: 'tj@advancecontrole.com',

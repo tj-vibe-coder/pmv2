@@ -5,7 +5,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { Client, ComponentLine, Project, QuotationKind, Quotation, SalesContact } from '../../types/Quotation';
 import { resolveContact } from '../../types/Client';
 import {
-  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, PHP, NUM,
+  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, serviceLineAmount, PHP, NUM,
   formatDiscountPct,
 } from './calc';
 import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
@@ -36,7 +36,11 @@ const ISSUER_INFO = {
   },
   ACTI: {
     name: 'Advance Controle Technologie Inc.',
-    addressLines: ['Block 13, Mindanao Ave., Cavite, Philippines'],
+    addressLines: [
+      'Blk. 13 Lot 5, Mindanao Ave.,',
+      'Gavino Maderan, General Mariano Alvarez,',
+      'Cavite 4117, Philippines',
+    ],
     tin: '',
     logo: '/logo-acti.png',
     footer: 'Advance Controle Technologie, Inc.',
@@ -154,6 +158,26 @@ function buildStyles(scale: number) {
       backgroundColor: PRIMARY, color: 'white', fontWeight: 700,
       fontSize: s(9.5), padding: `${s(2)} ${s(8)}`,
     },
+    // Section-header row inside a table (BOM sub-heading) — a plain tinted bar
+    // spanning the full row, no item number / qty / price columns.
+    trHeader: {
+      flexDirection: 'row',
+      backgroundColor: SECTION_BG,
+      borderTop: `0.5px solid ${BORDER}`,
+      borderBottom: `0.5px solid ${BORDER}`,
+      padding: `${s(3)} ${s(8)}`,
+    },
+    cHeaderLabel: { fontSize: s(8.5), fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3, color: PRIMARY },
+    // Child (second-level) header — same tinted bar, indented and lighter so
+    // it reads as nested under a preceding trHeader bar.
+    trChildHeader: {
+      flexDirection: 'row',
+      backgroundColor: SECTION_BG,
+      borderBottom: `0.5px solid ${BORDER}`,
+      padding: `${s(2.5)} ${s(8)}`,
+      paddingLeft: s(20),
+    },
+    cChildHeaderLabel: { fontSize: s(8), fontWeight: 600, fontStyle: 'italic', color: '#4f7bc8' },
 
     // Table — clean, no cell borders
     tableWrap: {},
@@ -271,6 +295,9 @@ interface Props {
 
 function QuotationDoc({ quotation, project, recipient, customer, salesContacts, layout }: Props) {
   const totals = computeTotals(quotation);
+  // IOCT-only pricing buffer folded into markup — never printed as its own
+  // line/label. See Quotation.ewtPct.
+  const ewtPct = quotation.ewtPct || 0;
   const issuer = ISSUER_INFO[quotation.kind];
 
   const totalRows = quotation.generalReqts.length + quotation.components.length + quotation.services.length;
@@ -306,13 +333,14 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
   }
 
   const codesA = autoNumber('A', quotation.generalReqts);
-  const codesC = autoNumber('C', quotation.services);
+  const codesC = autoNumber('C', quotation.services.filter((l) => !l.isHeader && !l.isChildHeader));
 
   // Optional components are priced for reference only — pulled out of Section B
   // and listed in their own "Optional Items" section (not in the contract total).
   const contractComponents = quotation.components.filter((l) => !l.optional);
   const optionalComponents = quotation.components.filter((l) => l.optional);
-  const codesB = autoNumber('B', contractComponents);
+  // Header rows are label-only dividers — never numbered, never priced.
+  const codesB = autoNumber('B', contractComponents.filter((l) => !l.isHeader && !l.isChildHeader));
   const codesOpt = autoNumber('OP', optionalComponents);
 
   // Section presence
@@ -472,6 +500,13 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                   <Text style={styles.cTotal}>Total , PhP</Text>
                 </View>
                 {contractComponents.map((l, index) => {
+                  if (l.isHeader || l.isChildHeader) {
+                    return (
+                      <View style={l.isChildHeader ? styles.trChildHeader : styles.trHeader} key={l.id}>
+                        <Text style={l.isChildHeader ? styles.cChildHeaderLabel : styles.cHeaderLabel}>{l.description}</Text>
+                      </View>
+                    );
+                  }
                   const subheader = subheaderBefore(contractComponents, index);
                   if (l.group) {
                     const members = compGroups.get(l.group)!;
@@ -479,7 +514,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                     const isMid = members[midIdx].id === l.id;
                     const isFirst = members[0].id === l.id;
                     const groupTotal = isMid
-                      ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
+                      ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct, ewtPct), 0)
                       : 0;
                     // 'itemized' shows each member's own qty + UOM; the group is
                     // still priced as one combined amount on the middle row, so
@@ -504,8 +539,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                       <ComponentDesc l={l} styles={styles} hidePartNumbers={!!quotation.hidePartNumbersInPdf} />
                       <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                       <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
-                      <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
-                      <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct))}</Text>
+                      <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct, ewtPct))}</Text>
+                      <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct, ewtPct))}</Text>
                     </View>
                   </View>;
                 })}
@@ -552,8 +587,20 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                     {(() => {
                       const rendered: React.ReactNode[] = [];
                       quotation.services.forEach((l, index) => {
+                        if (l.isHeader || l.isChildHeader) {
+                          rendered.push(
+                            <View style={l.isChildHeader ? styles.trChildHeader : styles.trHeader} key={l.id}>
+                              <Text style={l.isChildHeader ? styles.cChildHeaderLabel : styles.cHeaderLabel}>{l.description}</Text>
+                            </View>,
+                          );
+                          return;
+                        }
                         const subheader = subheaderBefore(quotation.services, index);
                         if (subheader) rendered.push(<Text style={styles.inlineSubheader} key={`subheader-${l.id}`}>{subheader}</Text>);
+                        const itemized = !!quotation.servicesItemizedExport;
+                        const rawQty = l.qty ?? l.days ?? 0;
+                        const lineQty = rawQty > 0 ? rawQty : 1;
+                        const lineUom = (l.uom || 'lot').toUpperCase();
                         if (l.group) {
                           const members = groups.get(l.group)!;
                           const midIdx = groupedLotDisplayIndex(members.length);
@@ -564,10 +611,23 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                             <View style={styles.tr} key={l.id}>
                               <Text style={styles.cItem}>{isFirst ? codesC.get(l.id) : ''}</Text>
                               <Text style={styles.cDesc}>{l.description}</Text>
-                              <Text style={styles.cQty}>{isMid ? NUM(1) : ''}</Text>
-                              <Text style={styles.cUom}>{isMid ? 'LOT' : ''}</Text>
+                              <Text style={styles.cQty}>{itemized ? NUM(lineQty) : (isMid ? NUM(1) : '')}</Text>
+                              <Text style={styles.cUom}>{itemized ? lineUom : (isMid ? 'LOT' : '')}</Text>
                               <Text style={styles.cUnit}>{isMid ? NUM(groupTotal) : ''}</Text>
                               <Text style={styles.cTotal}>{isMid ? NUM(groupTotal) : ''}</Text>
+                            </View>,
+                          );
+                        } else if (itemized) {
+                          // Real QTY/UOM, with unit price derived from amount ÷ qty
+                          // so unit × qty still reconciles to the printed total.
+                          rendered.push(
+                            <View style={styles.tr} key={l.id}>
+                              <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
+                              <Text style={styles.cDesc}>{l.description}</Text>
+                              <Text style={styles.cQty}>{NUM(lineQty)}</Text>
+                              <Text style={styles.cUom}>{lineUom}</Text>
+                              <Text style={styles.cUnit}>{NUM((l.amount || 0) / lineQty)}</Text>
+                              <Text style={styles.cTotal}>{NUM(l.amount)}</Text>
                             </View>,
                           );
                         } else {
@@ -600,36 +660,59 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                   <Text style={styles.cTotal}>Total , PhP</Text>
                 </View>
                 {quotation.servicesFromManpower ? (
-                  quotation.services.map((l, i) => {
-                    const showLotTotal = i === groupedLotDisplayIndex(quotation.services.length);
+                  (() => {
+                    // Header rows are display-only dividers here — the LOT total's
+                    // display position is picked among priced (non-header) rows only,
+                    // so an interspersed header can't hijack the one row that prints it.
+                    const priced = quotation.services.filter((l) => !l.isHeader && !l.isChildHeader);
+                    const midId = priced[groupedLotDisplayIndex(priced.length)]?.id;
+                    return quotation.services.map((l, i) => {
+                      if (l.isHeader || l.isChildHeader) {
+                        return (
+                          <View style={l.isChildHeader ? styles.trChildHeader : styles.trHeader} key={l.id}>
+                            <Text style={l.isChildHeader ? styles.cChildHeaderLabel : styles.cHeaderLabel}>{l.description}</Text>
+                          </View>
+                        );
+                      }
+                      const showLotTotal = l.id === midId;
+                      return (
+                        <View key={l.id}>
+                          {subheaderBefore(quotation.services, i) && <Text style={styles.inlineSubheader}>{subheaderBefore(quotation.services, i)}</Text>}
+                          <View style={styles.tr}>
+                            <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
+                            <Text style={styles.cDesc}>{l.description}</Text>
+                            <Text style={styles.cQty}>{showLotTotal ? NUM(engineeringServicesQty) : ''}</Text>
+                            <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
+                            <Text style={styles.cUnit}>{showLotTotal ? NUM(engineeringServicesUnitPrice) : ''}</Text>
+                            <Text style={styles.cTotal}>{showLotTotal ? NUM(totals.servicesSubtotal) : ''}</Text>
+                          </View>
+                        </View>
+                      );
+                    });
+                  })()
+                ) : (
+                  quotation.services.map((l, index) => {
+                    if (l.isHeader || l.isChildHeader) {
+                      return (
+                        <View style={l.isChildHeader ? styles.trChildHeader : styles.trHeader} key={l.id}>
+                          <Text style={l.isChildHeader ? styles.cChildHeaderLabel : styles.cHeaderLabel}>{l.description}</Text>
+                        </View>
+                      );
+                    }
                     return (
                       <View key={l.id}>
-                        {subheaderBefore(quotation.services, i) && <Text style={styles.inlineSubheader}>{subheaderBefore(quotation.services, i)}</Text>}
-                        <View style={styles.tr}>
-                          <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
-                          <Text style={styles.cDesc}>{l.description}</Text>
-                          <Text style={styles.cQty}>{showLotTotal ? NUM(engineeringServicesQty) : ''}</Text>
-                          <Text style={styles.cUom}>{showLotTotal ? 'LOT' : ''}</Text>
-                          <Text style={styles.cUnit}>{showLotTotal ? NUM(engineeringServicesUnitPrice) : ''}</Text>
-                          <Text style={styles.cTotal}>{showLotTotal ? NUM(totals.servicesSubtotal) : ''}</Text>
-                        </View>
+                        {subheaderBefore(quotation.services, index) && <Text style={styles.inlineSubheader}>{subheaderBefore(quotation.services, index)}</Text>}
+                      <View style={styles.tr}>
+                        <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
+                        <Text style={styles.cDesc}>{l.description}</Text>
+                        <Text style={styles.cQty}>{NUM(1)}</Text>
+                        <Text style={styles.cUom}>LOT</Text>
+                        <Text style={styles.cUnit}>{NUM(serviceLineAmount(l, ewtPct))}</Text>
+                        <Text style={styles.cTotal}>{NUM(serviceLineAmount(l, ewtPct))}</Text>
+                      </View>
                       </View>
                     );
                   })
-                ) : (
-                  quotation.services.map((l, index) => (
-                    <View key={l.id}>
-                      {subheaderBefore(quotation.services, index) && <Text style={styles.inlineSubheader}>{subheaderBefore(quotation.services, index)}</Text>}
-                    <View style={styles.tr}>
-                      <Text style={styles.cItem}>{codesC.get(l.id)}</Text>
-                      <Text style={styles.cDesc}>{l.description}</Text>
-                      <Text style={styles.cQty}>{NUM(1)}</Text>
-                      <Text style={styles.cUom}>LOT</Text>
-                      <Text style={styles.cUnit}>{NUM(l.amount)}</Text>
-                      <Text style={styles.cTotal}>{NUM(l.amount)}</Text>
-                    </View>
-                    </View>
-                  ))
                 )}
               </>
             )}
@@ -693,17 +776,29 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
               </View>
             </>
           )}
+          {(totals.deliveryFee ?? 0) > 0 && (
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>DELIVERY FEE</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.deliveryFee ?? 0)}</Text>
+            </View>
+          )}
+          {(totals.smallOrderSurcharge ?? 0) > 0 && (
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>SMALL-ORDER SURCHARGE</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.smallOrderSurcharge ?? 0)}</Text>
+            </View>
+          )}
           {quotation.vatPct > 0 && (
-            <>
-              <View style={styles.sumFooterRow}>
-                <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
-                <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
-              </View>
-              <View style={styles.sumFooterRow}>
-                <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP (VAT-IN)</Text>
-                <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
-              </View>
-            </>
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
+            </View>
+          )}
+          {(quotation.vatPct > 0 || (totals.deliveryTotal ?? 0) > 0) && (
+            <View style={styles.sumFooterRow}>
+              <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP{quotation.vatPct > 0 ? ' (VAT-IN)' : ''}</Text>
+              <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
+            </View>
           )}
         </View>
 
@@ -730,8 +825,8 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                 <ComponentDesc l={l} styles={styles} hidePartNumbers={!!quotation.hidePartNumbersInPdf} />
                 <Text style={styles.cQty}>{NUM(l.qty)}</Text>
                 <Text style={styles.cUom}>{(l.uom ?? '').toUpperCase()}</Text>
-                <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct))}</Text>
-                <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct))}</Text>
+                <Text style={styles.cUnit}>{NUM(componentSellingUnit(l, quotation.productMarkupPct, ewtPct))}</Text>
+                <Text style={styles.cTotal}>{NUM(componentLineTotal(l, quotation.productMarkupPct, ewtPct))}</Text>
               </View>
               </View>
             ))}

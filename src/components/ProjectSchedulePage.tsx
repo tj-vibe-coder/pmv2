@@ -45,7 +45,7 @@ export default function ProjectSchedulePage() {
       projectId={String(project.id)}
       code={project.project_no || ''}
       name={project.project_name || ''}
-      backHref="/dashboard"
+      backHref={`/projects/${encodeURIComponent(String(project.id))}`}
     />
   );
 }

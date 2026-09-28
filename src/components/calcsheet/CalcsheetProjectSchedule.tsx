@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
-  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, IconButton, LinearProgress, MenuItem, Paper, Slider, Stack, TextField,
-  Tooltip, Typography, Table, TableBody, TableCell, TableHead, TableRow,
+  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
+  FormControlLabel, IconButton, LinearProgress, Menu, MenuItem, Paper, Slider, Stack, TextField,
+  Tab, Tabs, ToggleButton, ToggleButtonGroup, Tooltip, Typography, Table, TableBody, TableCell, TableHead, TableRow,
+  Popover, Snackbar,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
-import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import PlaylistAddIcon from '@mui/icons-material/PlaylistAdd';
@@ -16,25 +17,63 @@ import HistoryIcon from '@mui/icons-material/History';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
-import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
+import BalanceIcon from '@mui/icons-material/Balance';
+import BorderColorIcon from '@mui/icons-material/BorderColor';
+import KeyboardIcon from '@mui/icons-material/Keyboard';
+import SearchIcon from '@mui/icons-material/Search';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import FitScreenIcon from '@mui/icons-material/FitScreen';
+import TodayIcon from '@mui/icons-material/Today';
+import ZoomInIcon from '@mui/icons-material/ZoomIn';
+import ZoomOutIcon from '@mui/icons-material/ZoomOut';
 import FormatIndentIncreaseIcon from '@mui/icons-material/FormatIndentIncrease';
 import FormatIndentDecreaseIcon from '@mui/icons-material/FormatIndentDecrease';
+import FlagIcon from '@mui/icons-material/Flag';
+import RedoIcon from '@mui/icons-material/Redo';
+import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
+import OutlinedFlagIcon from '@mui/icons-material/OutlinedFlag';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { ServiceLine, Quotation } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { blurNumberInputOnWheel } from '../../utils/calcsheet/numberInput';
 import {
-  MS_PER_DAY, addDays, daysBetween, durationOf, fmt, toDate, todayStr,
+  MS_PER_DAY, addDays, daysBetween, durationOf, fmt, formatLocalDate, toDate, todayStr,
   addWorkingDays, nextWorkingDay, workingDaysBetween,
 } from '../../utils/calcsheet/scheduleDates';
 import { exportScheduleXlsx } from '../../utils/calcsheet/scheduleXlsxExport';
-import { exportSchedulePdf } from '../../utils/calcsheet/schedulePdfExport';
-import { autoSchedule, wouldCycle, criticalPath } from '../../utils/calcsheet/scheduleAuto';
-import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../../utils/calcsheet/scheduleTree';
+import type { ScheduleExportData } from '../../utils/calcsheet/schedulePdfExport';
+import { autoSchedule, wouldCycle, criticalPath, scheduleFloat } from '../../utils/calcsheet/scheduleAuto';
+import { LINK_TYPES, formatLink, linkFields, linksOf, parseLinkToken, type LinkType, type TaskLink } from '../../utils/calcsheet/scheduleLinks';
+import ScheduleTaskInspector, { type InspectorPatch } from './ScheduleTaskInspector';
+import GanttViewControls from './GanttViewControls';
 import {
-  SCHEDULE_CATEGORY_COLORS, SCHEDULE_TASK_CATEGORIES, type ScheduleTask,
+  BUILTIN_VIEWS, DEFAULT_COLUMNS, DEFAULT_DISPLAY, loadCustomViews, sanitizeColumns, saveCustomViews,
+  type GanttColumn, type GanttDisplay, type GanttView,
+} from '../../utils/calcsheet/ganttViews';
+import { rollUp, flattenTree, leafTasks, descendantIds, type TreeRow } from '../../utils/calcsheet/scheduleTree';
+import { durationWeight, leafWeights, projectPercent } from '../../utils/calcsheet/scheduleWeights';
+import MsProjectGantt, { GANTT_GRID_MAX_W, type GanttNav, type GanttZoom } from './MsProjectGantt';
+import { MAX_DAY_W, MIN_DAY_W, ZOOM_PRESETS, snapRange, tierFor } from '../../utils/calcsheet/scheduleTimescale';
+import ScheduleSCurve from './ScheduleSCurve';
+import ScheduleExportDialog from './ScheduleExportDialog';
+import { baselineFromVersion, finishVariance, matchBaseline, varianceLabel, type ScheduleBaseline } from '../../utils/calcsheet/scheduleBaseline';
+import { computeSCurve, type SCurveSnapshot } from '../../utils/calcsheet/scheduleSCurve';
+import {
+  SCHEDULE_CATEGORY_COLORS, SCHEDULE_TASK_CATEGORIES, TASK_HIGHLIGHTS, crewTotal, type CrewMember, type ScheduleTask, type TaskHighlight,
 } from '../../types/ScheduleTask';
+import CrewEditor from './CrewEditor';
+
+// Remembered Gantt layout (columns, display options, current view) — per browser.
+type GanttLayout = { columns?: GanttColumn[]; display?: Partial<GanttDisplay>; viewId?: string | null };
+function readGanttLayout(): GanttLayout {
+  try { return (JSON.parse(localStorage.getItem('gantt-layout') || 'null') as GanttLayout) || {}; } catch { return {}; }
+}
+// Table width in px: ID + indicator columns plus the visible configurable ones.
+const tableWidth = (cols: GanttColumn[], baselineShown: boolean) =>
+  66 + cols.filter((c) => baselineShown || (c.key !== 'bfin' && c.key !== 'fvar')).reduce((sum, c) => sum + c.w, 0);
 
 const NET_PACIFIC_COLORS = {
   primary: '#2c5aa0',
@@ -63,7 +102,42 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
   return res.json();
 }
 
-const DAY_WIDTH = 28;
+// MS Project-style highlight filters: matching tasks are tinted, not hidden.
+type HighlightFilter = 'none' | 'critical' | 'overdue' | 'dueSoon' | 'inProgress' | 'notStarted' | 'completed' | 'milestones';
+const HIGHLIGHT_FILTERS: { value: HighlightFilter; label: string }[] = [
+  { value: 'none', label: 'No highlight filter' },
+  { value: 'critical', label: 'Critical tasks' },
+  { value: 'overdue', label: 'Overdue' },
+  { value: 'dueSoon', label: 'Due in next 7 days' },
+  { value: 'inProgress', label: 'In progress' },
+  { value: 'notStarted', label: 'Not started' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'milestones', label: 'Milestones' },
+];
+
+const SHORTCUTS: [string, string][] = [
+  ['↑ / ↓', 'Select previous / next task'],
+  ['Shift + ↑ / ↓', 'Extend the selection'],
+  ['Shift + click · Ctrl/⌘ + click', 'Select a range · add/remove a task'],
+  ['Home / End', 'First / last task'],
+  ['Ctrl/⌘ + A', 'Select all tasks'],
+  ['Ctrl/⌘ + Z · Ctrl/⌘ + Shift + Z (or Y)', 'Undo · Redo'],
+  ['I', 'Show / hide the task inspector'],
+  ['← / →', 'Collapse / expand a phase (← on a task jumps to its phase)'],
+  ['Enter · F2 · double-click', 'Task Information (edit)'],
+  ['Insert · Ctrl/⌘ + Enter', 'Insert a new task below the selected one'],
+  ['Delete · Backspace', 'Delete the selected task(s)'],
+  ['Alt + Shift + → / ←', 'Indent / outdent'],
+  ['Alt + Shift + ↑ / ↓', 'Move the task up / down'],
+  ['H', 'Highlight the selected task(s) (press again to clear)'],
+  ['S', 'Scroll the chart to the selected task'],
+  ['Ctrl/⌘ + F', 'Find a task (Enter = next, Shift + Enter = previous)'],
+  ['= / −  ·  Ctrl/⌘ + wheel', 'Zoom the timescale in / out (wheel zooms around the pointer)'],
+  ['Shift + wheel', 'Scroll the timeline sideways'],
+  ['T · F', 'Go to today · Fit the whole project'],
+  ['Esc', 'Clear the selection'],
+  ['?', 'Show these shortcuts'],
+];
 
 interface TaskFormState {
   name: string;
@@ -73,12 +147,23 @@ interface TaskFormState {
   progressPct: number;
   isMilestone: boolean;
   notes: string;
-  predecessors: string[];
+  links: TaskLink[];
+  /** Predecessors as typed row IDs, e.g. "3, 5SS, 7FS+2d" (MS Project style). */
+  predText: string;
+  mode: 'auto' | 'manual';
+  /** Finish date — entered directly for manually scheduled tasks. */
+  finishDate: string;
   parentId: string | null;
+  manpower: number;
+  crew: CrewMember[];
+  weight: number;
 }
 
+// Durations are whole or half days (min 0.5).
+const normDuration = (v: number): number => Math.max(0.5, Math.round((Number(v) || 0) * 2) / 2);
+
 const emptyForm = (): TaskFormState => ({
-  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', predecessors: [], parentId: null,
+  name: '', category: 'Engineering', startDate: todayStr(), durationDays: 1, progressPct: 0, isMilestone: false, notes: '', links: [], predText: '', mode: 'auto', finishDate: todayStr(), parentId: null, manpower: 0, crew: [], weight: 0,
 });
 
 // Best-effort category guess from a service line's description, so imported
@@ -103,6 +188,8 @@ interface ScheduleVersion {
   label: string | null;
   taskCount: number;
   overallProgress: number;
+  /** The project's baseline (at most one) — see utils/calcsheet/scheduleBaseline. */
+  isBaseline?: boolean;
 }
 
 interface DiffRow {
@@ -136,6 +223,61 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const [tasks, setTasks] = useState<ScheduleTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  // Latest tasks for async handlers (drag end, undo) that outlive a render.
+  const tasksRef = useRef<ScheduleTask[]>(tasks);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+  const [toast, setToast] = useState('');
+
+  // ── Undo / Redo ─────────────────────────────────────────────────────
+  // Snapshot-based: record(label) keeps the task list as it was before a
+  // change; undo writes that snapshot back (ids preserved, via the sync
+  // endpoint) and keeps the current state for redo. Session-only.
+  type UndoEntry = { label: string; snap: ScheduleTask[] };
+  const undoStack = useRef<UndoEntry[]>([]);
+  const redoStack = useRef<UndoEntry[]>([]);
+  const [, setUndoTick] = useState(0);
+  const [undoBusy, setUndoBusy] = useState(false);
+  const record = (label: string, snap: ScheduleTask[] = tasksRef.current) => {
+    undoStack.current.push({ label, snap });
+    if (undoStack.current.length > 60) undoStack.current.shift();
+    redoStack.current = [];
+    setUndoTick((n) => n + 1);
+  };
+  const dropLastRecord = () => { undoStack.current.pop(); setUndoTick((n) => n + 1); };
+  const clearUndo = () => { undoStack.current = []; redoStack.current = []; setUndoTick((n) => n + 1); };
+  const sameTask = (a: ScheduleTask, b: ScheduleTask) => {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    return Array.from(keys).every((k) => JSON.stringify((a as unknown as Record<string, unknown>)[k] ?? null) === JSON.stringify((b as unknown as Record<string, unknown>)[k] ?? null));
+  };
+  const syncTo = async (target: ScheduleTask[]) => {
+    const cur = tasksRef.current;
+    const curById = new Map(cur.map((t) => [t.id, t]));
+    const keep = new Set(target.map((t) => t.id));
+    const upsert = target.filter((t) => { const c = curById.get(t.id); return !c || !sameTask(c, t); });
+    const remove = cur.filter((t) => !keep.has(t.id)).map((t) => t.id);
+    setTasks(target);
+    if (upsert.length || remove.length) await api('POST', '/api/schedule-tasks/sync', { projectId: id, upsert, remove });
+  };
+  const stepHistory = async (dir: 'undo' | 'redo') => {
+    const from = dir === 'undo' ? undoStack.current : redoStack.current;
+    const to = dir === 'undo' ? redoStack.current : undoStack.current;
+    const entry = from.pop();
+    if (!entry || undoBusy) return;
+    to.push({ label: entry.label, snap: tasksRef.current });
+    setUndoTick((n) => n + 1);
+    setUndoBusy(true);
+    try {
+      await syncTo(entry.snap);
+      setToast(`${dir === 'undo' ? 'Undid' : 'Redid'}: ${entry.label}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : `${dir === 'undo' ? 'Undo' : 'Redo'} failed`);
+      load(); // eslint-disable-line @typescript-eslint/no-use-before-define
+    } finally {
+      setUndoBusy(false);
+    }
+  };
+  const undoLabel = undoStack.current[undoStack.current.length - 1]?.label;
+  const redoLabel = redoStack.current[redoStack.current.length - 1]?.label;
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -155,8 +297,65 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   // View filters (quick wins): narrow the rows shown without touching the data
   const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set()); // empty = all
   const [milestonesOnly, setMilestonesOnly] = useState(false);
-  const [showCritical, setShowCritical] = useState(false);
+  const [showCritical, setShowCritical] = useState<boolean>(() => !!readGanttLayout().display?.critical);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set()); // collapsed summary ids
+
+  // MS Project-style view state: timescale zoom, grid/chart divider, selected
+  // row, right-click menu, and "Scroll to Task" requests.
+  // Zoom is continuous (pixels per day); the timescale style follows it.
+  const [dayW, setDayWRaw] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem('gantt-dayw'));
+      if (v > 0) return v;
+      return ZOOM_PRESETS[(localStorage.getItem('gantt-zoom') || 'day') as GanttZoom] ?? ZOOM_PRESETS.day;
+    } catch { return ZOOM_PRESETS.day; }
+  });
+  const setDayW = (v: number) => setDayWRaw(Math.round(Math.max(MIN_DAY_W, Math.min(MAX_DAY_W, v)) * 100) / 100);
+  useEffect(() => { try { localStorage.setItem('gantt-dayw', String(dayW)); } catch { /* ignore */ } }, [dayW]);
+  const zoom: GanttZoom = tierFor(dayW);
+  // A view stores its zoom as a preset name, or pixels-per-day for anything in between.
+  const zoomKey = (Object.keys(ZOOM_PRESETS) as GanttZoom[]).find((k) => ZOOM_PRESETS[k] === dayW) ?? String(dayW);
+  const [navReq, setNavReq] = useState<(GanttNav & { n: number }) | null>(null);
+  const nav = (n: GanttNav) => setNavReq((p) => ({ ...n, n: (p?.n ?? 0) + 1 }));
+  const [chartViewW, setChartViewW] = useState(900);
+  const dayWRef = useRef(dayW);
+  useEffect(() => { dayWRef.current = dayW; }, [dayW]);
+  const [gridWidth, setGridWidth] = useState<number>(() => {
+    try { const v = Number(localStorage.getItem('gantt-grid-w')); return v >= 160 && v <= GANTT_GRID_MAX_W ? v : 582; } catch { return 582; }
+  });
+  useEffect(() => { try { localStorage.setItem('gantt-grid-w', String(gridWidth)); } catch { /* ignore */ } }, [gridWidth]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; row: TreeRow } | null>(null);
+  const [weightsOpen, setWeightsOpen] = useState(false);
+  const [weightDraft, setWeightDraft] = useState<Record<string, number>>({});
+  const [weightsSaving, setWeightsSaving] = useState(false);
+  const [scrollReq, setScrollReq] = useState<{ id: string; n: number } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const anchorRef = useRef<string | null>(null);
+  const [revealReq, setRevealReq] = useState<{ id: string; n: number } | null>(null);
+  const [hlFilter, setHlFilter] = useState<HighlightFilter>('none');
+  const [lastHighlight, setLastHighlight] = useState<TaskHighlight>(() => {
+    try { const v = localStorage.getItem('gantt-hl'); return v && v in TASK_HIGHLIGHTS ? v as TaskHighlight : 'yellow'; } catch { return 'yellow'; }
+  });
+  const [hlMenu, setHlMenu] = useState<HTMLElement | null>(null);
+  const [search, setSearch] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [bulkDelete, setBulkDelete] = useState<ScheduleTask[] | null>(null);
+  const insertAfterRef = useRef<ScheduleTask | null>(null);
+  const [view, setView] = useState<'gantt' | 'scurve'>(() => {
+    try { return localStorage.getItem('gantt-view') === 'scurve' ? 'scurve' : 'gantt'; } catch { return 'gantt'; }
+  });
+  useEffect(() => { try { localStorage.setItem('gantt-view', view); } catch { /* ignore */ } }, [view]);
+
+  // Saved versions double as dated status snapshots for the S-Curve's actual line.
+  const loadSnapshots = async (): Promise<SCurveSnapshot[]> => {
+    const r = await api<{ success: boolean; versions: ScheduleVersion[] }>('GET', `/api/schedule-versions?projectId=${encodeURIComponent(id)}`);
+    return Promise.all((r.versions || []).map(async (v) => {
+      const d = await api<{ success: boolean; version: { tasks?: ScheduleTask[] } }>('GET', `/api/schedule-versions/${v.id}`);
+      return { date: formatLocalDate(new Date(v.savedAt)), tasks: d.version.tasks || [] };
+    }));
+  };
 
   // Working-day calendar: durations & auto-scheduling skip weekends. Persisted per project.
   const [workingDays, setWorkingDays] = useState<boolean>(() => {
@@ -183,8 +382,44 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const [compareTasks, setCompareTasks] = useState<ScheduleTask[]>([]);
   const [compareLoading, setCompareLoading] = useState(false);
 
+  // Baseline: the version flagged isBaseline, shown as grey bars + variance.
+  const [baseline, setBaseline] = useState<ScheduleBaseline | null>(null);
+  const [showBaseline, setShowBaseline] = useState<boolean>(() => {
+    try { return localStorage.getItem('gantt-show-baseline') !== '0'; } catch { return true; }
+  });
+  useEffect(() => { try { localStorage.setItem('gantt-show-baseline', showBaseline ? '1' : '0'); } catch { /* ignore */ } }, [showBaseline]);
+  const [saveAsBaseline, setSaveAsBaseline] = useState(false);
+
+  // ── Views: columns + display options + filters + zoom ───────────────
+  const [columns, setColumns] = useState<GanttColumn[]>(() => sanitizeColumns(readGanttLayout().columns ?? DEFAULT_COLUMNS));
+  const [displayOpts, setDisplayOpts] = useState<GanttDisplay>(() => ({ ...DEFAULT_DISPLAY, ...(readGanttLayout().display || {}) }));
+  const [viewId, setViewId] = useState<string | null>(() => { const l = readGanttLayout(); return l.viewId === undefined ? 'full' : l.viewId; });
+  const [customViews, setCustomViews] = useState<GanttView[]>(() => loadCustomViews());
+  // Critical path / baseline keep their own state (also toggled from the filter row).
+  const display: GanttDisplay = { ...displayOpts, critical: showCritical, baseline: showBaseline };
+  useEffect(() => {
+    try { localStorage.setItem('gantt-layout', JSON.stringify({ columns, display, viewId })); } catch { /* ignore */ }
+  }, [columns, displayOpts, showCritical, showBaseline, viewId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setDisplayOption = (key: keyof GanttDisplay, value: boolean) => {
+    if (key === 'critical') setShowCritical(value);
+    else if (key === 'baseline') setShowBaseline(value);
+    else setDisplayOpts((d) => ({ ...d, [key]: value }));
+  };
+  const loadBaseline = async () => {
+    if (!id) return;
+    try {
+      const r = await api<{ success: boolean; versions: ScheduleVersion[] }>('GET', `/api/schedule-versions?projectId=${encodeURIComponent(id)}`);
+      const b = (r.versions || []).find((v) => v.isBaseline);
+      if (!b) { setBaseline(null); return; }
+      const d = await api<{ success: boolean; version: ScheduleVersion & { tasks?: ScheduleTask[] } }>('GET', `/api/schedule-versions/${b.id}`);
+      setBaseline(baselineFromVersion(d.version));
+    } catch { /* baseline is optional — the Gantt works without it */ }
+  };
+  useEffect(() => { void loadBaseline(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const load = () => {
     if (!id) return;
+    clearUndo(); // a reload (or restore) replaces the tasks — old snapshots no longer apply
     setLoading(true);
     setErr('');
     api<{ success: boolean; tasks: ScheduleTask[] }>('GET', `/api/schedule-tasks?projectId=${encodeURIComponent(id)}`)
@@ -216,51 +451,36 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       if (s < min) min = s;
       if (e > max) max = e;
     }
-    // pad a few days either side so bars don't touch the edges
-    min = new Date(min.getTime() - 2 * MS_PER_DAY);
-    max = new Date(max.getTime() + 2 * MS_PER_DAY);
+    // Snap to whole timescale units (weeks, or months when zoomed out) like MS
+    // Project, with a little lead-in so the first bar doesn't touch the edge,
+    // and run the chart out far enough that it never looks cut short.
+    // Always include today, and leave room to page past the finish.
+    const today = toDate(todayStr());
+    if (today < min) min = today;
+    if (today > max) max = today;
+    max = new Date(max.getFullYear(), max.getMonth(), max.getDate() + Math.ceil((chartViewW * 0.6) / dayW));
+    ({ start: min, end: max } = snapRange(min, max, zoom));
+    const minDays = Math.ceil(Math.max(1400, chartViewW + 60) / dayW);
+    if (daysBetween(min, max) < minDays) max = new Date(min.getFullYear(), min.getMonth(), min.getDate() + minDays);
     return { start: min, end: max };
-  }, [tasks]);
+  }, [tasks, zoom, dayW, chartViewW]);
 
-  const totalDays = Math.max(1, daysBetween(range.start, range.end));
+  // Fit: zoom so the whole project fills the visible timeline, then show its start.
+  const fitProject = () => {
+    const leaves = leafTasks(tasks);
+    if (leaves.length === 0) return;
+    let lo = leaves[0].startDate;
+    let hi = leaves[0].endDate;
+    leaves.forEach((t) => { if (t.startDate < lo) lo = t.startDate; if (t.endDate > hi) hi = t.endDate; });
+    const days = daysBetween(toDate(lo), toDate(hi)) + 1;
+    setDayW((Math.max(200, chartViewW) - 36) / (days + 2));
+    nav({ kind: 'date', date: addDays(lo, -1) });
+  };
+  const zoomBy = (f: number) => setDayW(dayW * f);
 
-  const months = useMemo(() => {
-    const out: { label: string; offsetDays: number; days: number }[] = [];
-    let cursor = new Date(range.start.getFullYear(), range.start.getMonth(), 1);
-    if (cursor < range.start) { /* keep as-is, first segment gets clipped below */ }
-    while (cursor <= range.end) {
-      const segStart = cursor > range.start ? cursor : range.start;
-      const nextMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-      const segEnd = nextMonth < range.end ? nextMonth : range.end;
-      out.push({
-        label: cursor.toLocaleDateString(undefined, { month: 'short', year: 'numeric' }),
-        offsetDays: daysBetween(range.start, segStart),
-        days: Math.max(1, daysBetween(segStart, segEnd)),
-      });
-      cursor = nextMonth;
-    }
-    return out;
-  }, [range]);
+  const totalDays = Math.max(1, daysBetween(range.start, range.end) + 1);
 
-  // ── Quick-win derived data ──────────────────────────────────────────────
   const todayDate = useMemo(() => toDate(todayStr()), []);
-  // Pixel offset of the "today" line inside the timeline, or null when today
-  // falls outside the visible range.
-  const todayOffset = useMemo(() => {
-    if (todayDate < range.start || todayDate > range.end) return null;
-    return daysBetween(range.start, todayDate) * DAY_WIDTH;
-  }, [todayDate, range]);
-
-  // Weekend day offsets across the range, for column shading.
-  const weekendOffsets = useMemo(() => {
-    const out: number[] = [];
-    for (let i = 0; i < totalDays; i++) {
-      const d = new Date(range.start.getTime() + i * MS_PER_DAY);
-      const dow = d.getDay();
-      if (dow === 0 || dow === 6) out.push(i);
-    }
-    return out;
-  }, [range, totalDays]);
 
   // A dated (non-milestone) task is overdue when its end date has passed and
   // it isn't finished.
@@ -275,6 +495,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   // WBS: summary tasks carry rolled-up dates/progress; rows are the flattened
   // tree (respecting collapse) after the category / milestones-only filters.
   const rolledTasks = useMemo(() => rollUp(tasks), [tasks]);
+  const baselineMap = useMemo(() => matchBaseline(rolledTasks, baseline), [rolledTasks, baseline]);
   const visibleRows = useMemo(() => {
     const rows = flattenTree(rolledTasks, collapsed);
     return rows.filter((r) => {
@@ -285,25 +506,34 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     });
   }, [rolledTasks, collapsed, milestonesOnly, categoryFilter]);
 
-  // Finish-to-start dependency connectors between visible bars.
-  const depArrows = useMemo(() => {
-    const idxById = new Map(visibleRows.map((r, i) => [r.task.id, i]));
-    const out: { key: string; x1: number; y1: number; x2: number; y2: number; pid: string; sid: string }[] = [];
-    visibleRows.forEach((row, si) => {
-      const s = row.task;
-      (s.predecessors || []).forEach((pid) => {
-        const pi = idxById.get(pid);
-        if (pi === undefined) return;
-        const p = visibleRows[pi].task;
-        const pStartX = daysBetween(range.start, toDate(p.startDate)) * DAY_WIDTH;
-        const x1 = p.isMilestone ? pStartX + DAY_WIDTH : pStartX + Math.max(DAY_WIDTH, (daysBetween(toDate(p.startDate), toDate(p.endDate)) + 1) * DAY_WIDTH);
-        const sStartX = daysBetween(range.start, toDate(s.startDate)) * DAY_WIDTH;
-        const x2 = s.isMilestone ? sStartX + DAY_WIDTH / 2 : sStartX;
-        out.push({ key: `${pid}-${s.id}`, x1, y1: pi * 44 + 22, x2, y2: si * 44 + 22, pid, sid: s.id });
-      });
-    });
+  // Tasks matching the highlight filter (tinted in the table, not hidden).
+  const filterHits = useMemo(() => {
+    if (hlFilter === 'none') return undefined;
+    const leaves = leafTasks(tasks);
+    const crit = hlFilter === 'critical' ? criticalPath(leaves, workingDays) : null;
+    const today = todayStr();
+    const soon = addDays(today, 7);
+    const out = new Set<string>();
+    for (const t of leaves) {
+      const pc = t.progressPct || 0;
+      const hit = hlFilter === 'critical' ? !!crit?.has(t.id)
+        : hlFilter === 'overdue' ? isOverdue(t)
+          : hlFilter === 'dueSoon' ? pc < 100 && t.endDate >= today && t.endDate <= soon
+            : hlFilter === 'inProgress' ? pc > 0 && pc < 100
+              : hlFilter === 'notStarted' ? pc === 0 && !t.isMilestone
+                : hlFilter === 'completed' ? pc >= 100
+                  : hlFilter === 'milestones' ? t.isMilestone : false;
+      if (hit) out.add(t.id);
+    }
     return out;
-  }, [visibleRows, range]);
+  }, [hlFilter, tasks, workingDays]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // MS Project row IDs: position in the fully expanded outline, so they stay
+  // stable when summaries are collapsed or rows are filtered out.
+  const idNumbers = useMemo(
+    () => new Map(flattenTree(rolledTasks, new Set()).map((r, i) => [r.task.id, i + 1])),
+    [rolledTasks],
+  );
 
   // Critical path over LEAF tasks (summaries roll up, aren't scheduled).
   const criticalIds = useMemo(
@@ -317,25 +547,66 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     if (leaves.length === 0) return null;
     let minStart = leaves[0].startDate;
     let maxEnd = leaves[0].endDate;
-    let weightedProgress = 0;
-    let weightDays = 0;
     let overdue = 0;
     for (const t of leaves) {
       if (t.startDate < minStart) minStart = t.startDate;
       if (t.endDate > maxEnd) maxEnd = t.endDate;
-      const dur = t.isMilestone ? 1 : Math.max(1, durationOf(t.startDate, t.endDate));
-      weightedProgress += (t.progressPct || 0) * dur;
-      weightDays += dur;
       if (isOverdue(t)) overdue += 1;
     }
     return {
       start: minStart,
       end: maxEnd,
       durationDays: daysBetween(toDate(minStart), toDate(maxEnd)) + 1,
-      pctComplete: weightDays > 0 ? Math.round(weightedProgress / weightDays) : 0,
+      pctComplete: Math.round(projectPercent(tasks) ?? 0),
       overdue,
     };
   }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Baseline finish vs current finish (project level).
+  const baselineSummary = useMemo(() => {
+    if (!baseline || !summary) return null;
+    const leaves = leafTasks(baseline.tasks);
+    if (leaves.length === 0) return null;
+    const end = leaves.reduce((m, t) => (t.endDate > m ? t.endDate : m), leaves[0].endDate);
+    return { end, variance: finishVariance(summary.end, end, workingDays) };
+  }, [baseline, summary, workingDays]);
+
+  // KPI strip: planned / baseline % today, variance, days remaining, peak
+  // manpower, next milestone.
+  const [scurveFocus, setScurveFocus] = useState<{ date: string; n: number } | null>(null);
+  const kpis = useMemo(() => {
+    const sc = computeSCurve(tasks, workingDays, [], baseline?.tasks);
+    const today = todayStr();
+    const actual = projectPercent(tasks) ?? 0;
+    const planned = sc?.plannedToday ?? 0;
+    const baselinePct = sc?.hasBaseline ? sc.baselineToday : null;
+    const leaves = leafTasks(tasks);
+    const finish = summary?.end ?? today;
+    const remaining = actual >= 100 ? { label: 'Complete', late: false }
+      : finish < today ? { label: `${workingDaysBetween(addDays(finish, 1), today, workingDays)} d past finish`, late: true }
+        : { label: `${workingDaysBetween(today, finish, workingDays)} days`, late: false };
+    const ms = leaves.filter((t) => t.isMilestone && (t.progressPct || 0) < 100 && t.startDate >= today).sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+    return {
+      planned, baselinePct, variance: actual - (baselinePct ?? planned), remaining,
+      peak: sc?.peak ?? null,
+      nextMs: ms ? { task: ms, inDays: daysBetween(toDate(today), toDate(ms.startDate)) } : null,
+    };
+  }, [tasks, workingDays, baseline, summary]);
+
+  // Each task's share of project progress (%), phases = sum of their tasks.
+  const weightInfo = useMemo(() => {
+    const { mode, weights, total } = leafWeights(tasks);
+    const share = new Map<string, number>();
+    weights.forEach((w, tid) => share.set(tid, total > 0 ? (w / total) * 100 : 0));
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    weights.forEach((_, tid) => {
+      let p = byId.get(tid)?.parentId;
+      const pct = share.get(tid) || 0;
+      while (p && byId.has(p)) { share.set(p, (share.get(p) || 0) + pct); p = byId.get(p)?.parentId; }
+    });
+    const unweighted = mode === 'manual' ? leafTasks(tasks).filter((t) => !(Number(t.weight) > 0)).length : 0;
+    return { mode, share, total, unweighted };
+  }, [tasks]);
 
   const toggleCategoryFilter = (c: string) => setCategoryFilter((prev) => {
     const next = new Set(prev);
@@ -360,10 +631,387 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     }
     if (!parent) return;
     const p = parent;
+    record(`Indent "${row.task.name}"`);
     try {
       await api('PUT', `/api/schedule-tasks/${row.task.id}`, { parentId: p });
       setTasks((prev) => prev.map((t) => (t.id === row.task.id ? { ...t, parentId: p } : t)));
     } catch (e) { setErr(e instanceof Error ? e.message : 'Indent failed'); }
+  };
+
+  // ── Progress weights dialog ───────────────────────────────────────────
+  const openWeights = () => {
+    const d: Record<string, number> = {};
+    leafTasks(tasks).forEach((t) => { d[t.id] = Math.max(0, Number(t.weight) || 0); });
+    setWeightDraft(d);
+    setWeightsOpen(true);
+  };
+  // Weights as percentages summing to 100 (2 dp), from a raw per-task basis.
+  const toPercents = (basis: Record<string, number>) => {
+    const total = Object.values(basis).reduce((a, b) => a + b, 0);
+    const out: Record<string, number> = {};
+    Object.entries(basis).forEach(([k, v]) => { out[k] = total > 0 ? Math.round((v / total) * 10000) / 100 : 0; });
+    return out;
+  };
+  const saveWeights = async () => {
+    const changed = leafTasks(tasks).filter((t) => (Math.max(0, Number(t.weight) || 0)) !== (weightDraft[t.id] || 0));
+    setWeightsSaving(true);
+    record('Set progress weights');
+    try {
+      await Promise.all(changed.map((t) => api('PUT', `/api/schedule-tasks/${t.id}`, { weight: weightDraft[t.id] || 0 })));
+      setTasks((prev) => prev.map((t) => (t.id in weightDraft ? { ...t, weight: weightDraft[t.id] || 0 } : t)));
+      setWeightsOpen(false);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to save weights');
+    } finally {
+      setWeightsSaving(false);
+    }
+  };
+
+  // ── Selection (single, Shift-range, Ctrl/⌘-toggle) ──────────────────
+  const selectOne = (tid: string | null) => {
+    setSelectedId(tid);
+    setSelectedIds(tid ? new Set([tid]) : new Set());
+    anchorRef.current = tid;
+  };
+  const selectRow = (tid: string, mods?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => {
+    const order = visibleRows.map((r) => r.task.id);
+    if (mods?.shiftKey && anchorRef.current && order.includes(anchorRef.current)) {
+      const a = order.indexOf(anchorRef.current);
+      const b = order.indexOf(tid);
+      setSelectedIds(new Set(order.slice(Math.min(a, b), Math.max(a, b) + 1)));
+      setSelectedId(tid);
+      return;
+    }
+    if (mods?.metaKey || mods?.ctrlKey) {
+      setSelectedIds((prev) => { const n = new Set(prev); if (n.has(tid)) n.delete(tid); else n.add(tid); return n; });
+      setSelectedId(tid);
+      anchorRef.current = tid;
+      return;
+    }
+    selectOne(tid);
+  };
+  const selectedTasks = tasks.filter((t) => selectedIds.has(t.id));
+
+  // ── Highlight ────────────────────────────────────────────────────────
+  const applyHighlight = async (color: TaskHighlight | null, targets: ScheduleTask[] = selectedTasks) => {
+    if (targets.length === 0) return;
+    const ids = new Set(targets.map((t) => t.id));
+    const before = tasks;
+    record(`${color ? 'Highlight' : 'Clear highlight on'} ${targets.length === 1 ? `"${targets[0].name}"` : `${targets.length} tasks`}`);
+    setTasks((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, highlight: color } : t)));
+    if (color) {
+      setLastHighlight(color);
+      try { localStorage.setItem('gantt-hl', color); } catch { /* ignore */ }
+    }
+    try {
+      await Promise.all(Array.from(ids).map((tid) => api('PUT', `/api/schedule-tasks/${tid}`, { highlight: color })));
+    } catch (e) {
+      dropLastRecord();
+      setTasks(before);
+      setErr(e instanceof Error ? e.message : 'Failed to save highlight');
+    }
+  };
+
+  // ── Find ─────────────────────────────────────────────────────────────
+  const searchMatches = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [] as string[];
+    return flattenTree(rolledTasks, new Set()).filter((r) => r.task.name.toLowerCase().includes(q)).map((r) => r.task.id);
+  }, [search, rolledTasks]);
+  const gotoMatch = (dir: 1 | -1) => {
+    if (searchMatches.length === 0) return;
+    const cur = selectedId ? searchMatches.indexOf(selectedId) : -1;
+    const next = cur < 0 ? (dir === 1 ? 0 : searchMatches.length - 1) : (cur + dir + searchMatches.length) % searchMatches.length;
+    const tid = searchMatches[next];
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const ancestors: string[] = [];
+    let p = byId.get(tid)?.parentId ?? null;
+    while (p) { ancestors.push(p); p = byId.get(p)?.parentId ?? null; }
+    if (ancestors.some((a) => collapsed.has(a))) {
+      setCollapsed((prev) => { const n = new Set(prev); ancestors.forEach((a) => n.delete(a)); return n; });
+    }
+    selectOne(tid);
+    setScrollReq((pr) => ({ id: tid, n: (pr?.n ?? 0) + 1 }));
+  };
+
+  // ── Keyboard shortcuts (see SHORTCUTS) ───────────────────────────────
+  const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyHandler.current = (e: KeyboardEvent) => {
+    if (view !== 'gantt') return;
+    if (dialogOpen || deleteTarget || bulkDelete || weightsOpen || importOpen || saveVerOpen || historyOpen || compareVersion || helpOpen || ctxMenu || hlMenu || pdfOpen || linkPop) return;
+    const target = e.target as HTMLElement | null;
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
+    if (target && target.tagName === 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) return;
+    if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); void stepHistory(e.shiftKey ? 'redo' : 'undo'); return; }
+    if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); void stepHistory('redo'); return; }
+    if (!mod && !e.altKey && e.key.toLowerCase() === 'i') { e.preventDefault(); setInspectorOpen((v) => !v); return; }
+    if (!mod && !e.altKey && e.key.toLowerCase() === 't') { e.preventDefault(); nav({ kind: 'today' }); return; }
+    if (!mod && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); fitProject(); return; }
+
+    const order = visibleRows.map((r) => r.task.id);
+    const idx = selectedId ? order.indexOf(selectedId) : -1;
+    const row = idx >= 0 ? visibleRows[idx] : null;
+    const raw = row ? tasks.find((t) => t.id === row.task.id) || row.task : null;
+    const go = (i: number, extend: boolean) => {
+      if (order.length === 0) return;
+      const tid = order[Math.max(0, Math.min(order.length - 1, i))];
+      if (extend) selectRow(tid, { shiftKey: true }); else selectOne(tid);
+      setRevealReq((pr) => ({ id: tid, n: (pr?.n ?? 0) + 1 }));
+    };
+
+    if (e.altKey && e.shiftKey && row) {
+      if (e.key === 'ArrowRight') { e.preventDefault(); void indentTask(row); return; }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); void outdentTask(row); return; }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const parent = row.task.parentId ?? null;
+        const sibs = flattenTree(rolledTasks, new Set()).map((r) => r.task).filter((t) => (t.parentId ?? null) === parent);
+        const k = sibs.findIndex((t) => t.id === row.task.id);
+        const other = sibs[e.key === 'ArrowUp' ? k - 1 : k + 1];
+        if (other) void moveTask(row.task.id, other.id, e.key === 'ArrowUp' ? 'above' : 'below', false);
+        return;
+      }
+    }
+
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); go(idx < 0 ? 0 : idx + 1, e.shiftKey); return;
+      case 'ArrowUp': e.preventDefault(); go(idx < 0 ? 0 : idx - 1, e.shiftKey); return;
+      case 'Home': e.preventDefault(); go(0, e.shiftKey); return;
+      case 'End': e.preventDefault(); go(order.length - 1, e.shiftKey); return;
+      case 'ArrowLeft':
+        if (!row) return;
+        e.preventDefault();
+        if (row.hasChildren && !collapsed.has(row.task.id)) toggleCollapse(row.task.id);
+        else if (row.task.parentId && order.includes(row.task.parentId)) go(order.indexOf(row.task.parentId), false);
+        return;
+      case 'ArrowRight':
+        if (!row || !row.hasChildren) return;
+        e.preventDefault();
+        if (collapsed.has(row.task.id)) toggleCollapse(row.task.id); else go(idx + 1, false);
+        return;
+      case 'Enter':
+        if (mod) { e.preventDefault(); openAdd(raw); return; }
+        if (raw) { e.preventDefault(); openEdit(raw); }
+        return;
+      case 'F2': if (raw) { e.preventDefault(); openEdit(raw); } return;
+      case 'Insert': e.preventDefault(); openAdd(raw); return;
+      case 'Delete':
+      case 'Backspace':
+        if (selectedTasks.length === 0) return;
+        e.preventDefault();
+        if (selectedTasks.length === 1) setDeleteTarget(selectedTasks[0]); else setBulkDelete(selectedTasks);
+        return;
+      case 'Escape': selectOne(null); return;
+      case '?': e.preventDefault(); setHelpOpen(true); return;
+      case '=': case '+': e.preventDefault(); zoomBy(1.25); return;
+      case '-': case '_': e.preventDefault(); zoomBy(1 / 1.25); return;
+      default: break;
+    }
+    if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); setSelectedIds(new Set(order)); if (!selectedId && order[0]) setSelectedId(order[0]); return; }
+    if (!mod && !e.altKey && e.key.toLowerCase() === 'h' && selectedTasks.length) {
+      e.preventDefault();
+      const all = selectedTasks.every((t) => t.highlight === lastHighlight);
+      void applyHighlight(all ? null : lastHighlight);
+      return;
+    }
+    if (!mod && !e.altKey && e.key.toLowerCase() === 's' && raw) {
+      e.preventDefault();
+      setScrollReq((pr) => ({ id: raw.id, n: (pr?.n ?? 0) + 1 }));
+    }
+  };
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => keyHandler.current(e);
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
+
+  // ── Views (apply / save / delete) ───────────────────────────────────
+  const allViews = useMemo(() => [...BUILTIN_VIEWS, ...customViews], [customViews]);
+  const layoutSig = (v: { columns: GanttColumn[]; display: GanttDisplay; filters: { categories: string[]; milestonesOnly: boolean; highlight: string }; zoom: string }) => JSON.stringify({
+    c: sanitizeColumns(v.columns).map((c) => [c.key, c.w]),
+    d: { ...DEFAULT_DISPLAY, ...v.display },
+    f: { categories: [...v.filters.categories].sort(), milestonesOnly: !!v.filters.milestonesOnly, highlight: v.filters.highlight || 'none' },
+    z: v.zoom,
+  });
+  const currentFilters = { categories: Array.from(categoryFilter), milestonesOnly, highlight: hlFilter };
+  const currentView = allViews.find((v) => v.id === viewId) || null;
+  const viewModified = !!currentView && layoutSig({ columns, display, filters: currentFilters, zoom: zoomKey }) !== layoutSig(currentView);
+  const applyView = (v: GanttView) => {
+    const cols = sanitizeColumns(v.columns);
+    setColumns(cols);
+    setDisplayOpts({ ...DEFAULT_DISPLAY, ...v.display });
+    setShowCritical(!!v.display.critical);
+    setShowBaseline(!!v.display.baseline);
+    setCategoryFilter(new Set(v.filters?.categories || []));
+    setMilestonesOnly(!!v.filters?.milestonesOnly);
+    setHlFilter((HIGHLIGHT_FILTERS.some((f) => f.value === v.filters?.highlight) ? v.filters.highlight : 'none') as HighlightFilter);
+    if (v.zoom in ZOOM_PRESETS) setDayW(ZOOM_PRESETS[v.zoom as GanttZoom]);
+    else if (Number(v.zoom) > 0) setDayW(Number(v.zoom));
+    setViewId(v.id);
+    // Show the whole table for the view (up to about half the screen).
+    setGridWidth(Math.max(240, Math.min(tableWidth(cols, !!baseline && !!v.display.baseline), Math.round(window.innerWidth * 0.55))));
+  };
+  const saveViewAs = (name: string) => {
+    const existing = customViews.find((v) => v.name.toLowerCase() === name.toLowerCase());
+    const view: GanttView = { id: existing?.id ?? `v${Date.now()}`, name, columns, display, filters: currentFilters, zoom: zoomKey };
+    const next = existing ? customViews.map((v) => (v.id === view.id ? view : v)) : [...customViews, view];
+    setCustomViews(next);
+    saveCustomViews(next);
+    setViewId(view.id);
+    setToast(`Saved view “${name}”`);
+  };
+  const deleteView = (vid: string) => {
+    const next = customViews.filter((v) => v.id !== vid);
+    setCustomViews(next);
+    saveCustomViews(next);
+    if (viewId === vid) setViewId(null);
+  };
+  const changeColumns = (cols: GanttColumn[]) => {
+    const shownB = !!baseline && showBaseline;
+    // If the whole table was showing, keep showing all of it.
+    if (gridWidth >= tableWidth(columns, shownB) - 2) setGridWidth(tableWidth(cols, shownB));
+    setColumns(cols);
+  };
+
+  // ── Task inspector (side panel) ─────────────────────────────────────
+  const [inspectorOpen, setInspectorOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem('gantt-inspector') === '1'; } catch { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem('gantt-inspector', inspectorOpen ? '1' : '0'); } catch { /* ignore */ } }, [inspectorOpen]);
+  const floatMap = useMemo(() => scheduleFloat(leafTasks(tasks), workingDays), [tasks, workingDays]);
+
+  // One undoable edit from the inspector. Date edits follow the task mode:
+  // auto tasks keep start + duration as the source of truth (a finish edit
+  // changes the duration); manual tasks keep the dates as typed.
+  const applyEdit = async (tid: string, patch: InspectorPatch, label: string) => {
+    const cur = tasks.find((t) => t.id === tid);
+    if (!cur) return;
+    let next: ScheduleTask = { ...cur, ...patch };
+    if ('startDate' in patch || 'endDate' in patch || 'durationDays' in patch || 'mode' in patch) {
+      const manual = (next.mode ?? 'auto') === 'manual';
+      const curDur = cur.durationDays ?? workingDaysBetween(cur.startDate, cur.endDate, workingDays);
+      if (next.isMilestone) {
+        const st = manual ? next.startDate : nextWorkingDay(next.startDate, workingDays);
+        next = { ...next, startDate: st, endDate: st };
+      } else if (manual) {
+        if ('durationDays' in patch) next.endDate = addWorkingDays(next.startDate, normDuration(patch.durationDays as number), workingDays);
+        else if ('startDate' in patch && !('endDate' in patch)) next.endDate = addWorkingDays(next.startDate, curDur, workingDays);
+        next.durationDays = workingDaysBetween(next.startDate, next.endDate, workingDays);
+      } else {
+        const st = nextWorkingDay(next.startDate, workingDays);
+        let dur = curDur;
+        if ('durationDays' in patch) dur = normDuration(patch.durationDays as number);
+        if ('endDate' in patch) dur = Math.max(1, workingDaysBetween(st, patch.endDate as string, workingDays));
+        next = { ...next, startDate: st, durationDays: dur, endDate: addWorkingDays(st, dur, workingDays) };
+      }
+    }
+    const body: Record<string, unknown> = {};
+    (Object.keys(next) as (keyof ScheduleTask)[]).forEach((k) => { if (next[k] !== cur[k]) body[k] = next[k]; });
+    if (Object.keys(body).length === 0) return;
+    record(label);
+    const before = tasks;
+    const working = tasks.map((t) => (t.id === tid ? next : t));
+    setTasks(working);
+    try {
+      await api('PUT', `/api/schedule-tasks/${tid}`, body);
+      if ('startDate' in body || 'endDate' in body || 'durationDays' in body || 'mode' in body) await cascade(working);
+    } catch (e) {
+      dropLastRecord();
+      setTasks(before);
+      setErr(e instanceof Error ? e.message : 'Failed to save the change');
+    }
+  };
+
+  // ── Links (drawn on the chart, or edited from the inspector) ─────────
+  const [linkPop, setLinkPop] = useState<{ predId: string; succId: string; type: LinkType; lag: string; x: number; y: number; existing: boolean } | null>(null);
+  const openLinkEditor = (predId: string, succId: string, x: number, y: number, type?: LinkType) => {
+    const succ = tasks.find((t) => t.id === succId);
+    if (!succ || !tasks.some((t) => t.id === predId) || predId === succId) return;
+    const existing = linksOf(succ).find((l) => l.id === predId);
+    if (!existing) {
+      if (tasks.some((t) => t.parentId === predId)) { setToast('Link from one of the phase’s tasks, not the phase itself.'); return; }
+      if (descendantIds(tasks, succId).has(predId)) { setToast('A phase can’t depend on one of its own tasks.'); return; }
+      if (wouldCycle(tasks, succId, predId)) { setToast('That link would create a loop.'); return; }
+    }
+    setLinkPop({ predId, succId, type: existing?.type ?? type ?? 'FS', lag: String(existing?.lag ?? 0), x, y, existing: !!existing });
+  };
+  const writeLinks = async (succId: string, links: TaskLink[], label: string) => {
+    const fields = linkFields(links);
+    record(label);
+    const working = tasks.map((t) => (t.id === succId ? { ...t, ...fields } : t));
+    setTasks(working);
+    try {
+      await api('PUT', `/api/schedule-tasks/${succId}`, fields);
+      await cascade(working);
+    } catch (e) {
+      dropLastRecord();
+      setErr(e instanceof Error ? e.message : 'Failed to save the link');
+      load();
+    }
+  };
+  const linkName = (predId: string, succId: string) => `${idNumbers.get(predId) ?? '?'} → ${idNumbers.get(succId) ?? '?'}`;
+  const saveLinkPop = async (remove = false) => {
+    if (!linkPop) return;
+    const { predId, succId, type } = linkPop;
+    const succ = tasks.find((t) => t.id === succId);
+    setLinkPop(null);
+    if (!succ) return;
+    const lag = Math.round(Number(linkPop.lag) || 0);
+    const cur = linksOf(succ);
+    const links = remove ? cur.filter((l) => l.id !== predId)
+      : cur.some((l) => l.id === predId) ? cur.map((l) => (l.id === predId ? { id: predId, type, lag } : l))
+        : [...cur, { id: predId, type, lag }];
+    const tag = type !== 'FS' || lag ? ` (${formatLink('', { type, lag })})` : '';
+    await writeLinks(succId, links, remove ? `Remove link ${linkName(predId, succId)}` : `${linkPop.existing ? 'Change link' : 'Link'} ${linkName(predId, succId)}${tag}`);
+  };
+  const removeLink = (predId: string, succId: string) => {
+    const succ = tasks.find((t) => t.id === succId);
+    if (succ) void writeLinks(succId, linksOf(succ).filter((l) => l.id !== predId), `Remove link ${linkName(predId, succId)}`);
+  };
+
+  // Drag-to-reorder: place `dragId` above/below `targetId` as its sibling
+  // (dragging a phase carries its subtasks). Dropping just below an expanded
+  // phase's header makes the task that phase's first subtask, matching where
+  // the drop line is drawn.
+  const moveTask = async (dragId: string, targetId: string, pos: 'above' | 'below', allowInto = true) => {
+    if (dragId === targetId || descendantIds(tasks, dragId).has(targetId)) return;
+    const target = tasks.find((t) => t.id === targetId);
+    if (!target) return;
+    const intoPhase = allowInto && pos === 'below' && tasks.some((t) => t.parentId === targetId) && !collapsed.has(targetId);
+    const newParent = intoPhase ? targetId : (target.parentId ?? null);
+    const outline = flattenTree(rolledTasks, new Set()).map((r) => r.task.id);
+    const sibs = outline.filter((tid) => {
+      const t = tasks.find((x) => x.id === tid);
+      return t && (t.parentId ?? null) === newParent && tid !== dragId;
+    });
+    const at = intoPhase ? 0 : sibs.indexOf(targetId) + (pos === 'below' ? 1 : 0);
+    const nextOrder = [...sibs.slice(0, at), dragId, ...sibs.slice(at)];
+
+    const before = tasks;
+    const updated = tasks.map((t) => {
+      const i = nextOrder.indexOf(t.id);
+      if (i < 0) return t;
+      return { ...t, order: i, ...(t.id === dragId ? { parentId: newParent } : {}) };
+    });
+    const changed = updated.filter((t) => {
+      const o = before.find((x) => x.id === t.id);
+      return o && ((o.order ?? 0) !== (t.order ?? 0) || (o.parentId ?? null) !== (t.parentId ?? null));
+    });
+    if (changed.length === 0) return;
+    record(`Move "${tasks.find((t) => t.id === dragId)?.name ?? 'task'}"`);
+    setTasks(updated);
+    selectOne(dragId);
+    try {
+      await Promise.all(changed.map((t) => api('PUT', `/api/schedule-tasks/${t.id}`, {
+        order: t.order, ...(t.id === dragId ? { parentId: t.parentId ?? null } : {}),
+      })));
+    } catch (e) {
+      dropLastRecord();
+      setTasks(before);
+      setErr(e instanceof Error ? e.message : 'Failed to move task');
+    }
   };
 
   // Outdent: move up one level (new parent = current grandparent, or top level).
@@ -371,15 +1019,22 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     const cur = tasks.find((t) => t.id === row.task.id);
     if (!cur || !cur.parentId) return;
     const grand = tasks.find((t) => t.id === cur.parentId)?.parentId ?? null;
+    record(`Outdent "${row.task.name}"`);
     try {
       await api('PUT', `/api/schedule-tasks/${row.task.id}`, { parentId: grand });
       setTasks((prev) => prev.map((t) => (t.id === row.task.id ? { ...t, parentId: grand } : t)));
     } catch (e) { setErr(e instanceof Error ? e.message : 'Outdent failed'); }
   };
 
-  const openAdd = () => {
+  // Insert a task; with `after`, it lands right below that task in the same
+  // phase, starting the working day after it finishes.
+  const openAdd = (after?: ScheduleTask | null) => {
+    insertAfterRef.current = after ?? null;
     setEditingId(null);
-    setForm(emptyForm());
+    setForm({
+      ...emptyForm(),
+      ...(after ? (() => { const sd = nextWorkingDay(addDays(after.endDate, 1), workingDays); return { parentId: after.parentId ?? null, category: after.category || 'Engineering', startDate: sd, finishDate: sd }; })() : {}),
+    });
     setFormErr('');
     setDialogOpen(true);
   };
@@ -390,8 +1045,14 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       name: t.name, category: t.category || 'Other', startDate: t.startDate,
       durationDays: t.isMilestone ? 1 : (t.durationDays ?? workingDaysBetween(t.startDate, t.endDate, workingDays)),
       progressPct: t.progressPct, isMilestone: t.isMilestone, notes: t.notes || '',
-      predecessors: t.predecessors || [],
+      links: linksOf(t),
+      predText: linksOf(t).filter((l) => idNumbers.has(l.id)).map((l) => formatLink(idNumbers.get(l.id) as number, l)).join(', '),
+      mode: t.mode ?? 'auto',
+      finishDate: t.endDate,
       parentId: t.parentId ?? null,
+      manpower: t.manpower ?? 0,
+      crew: t.crew || [],
+      weight: t.weight ?? 0,
     });
     setFormErr('');
     setDialogOpen(true);
@@ -416,8 +1077,10 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   // task's end from its duration, cascade dependencies, and persist what moved.
   const applyCalendar = async (nextWd: boolean) => {
     const oldWd = wdRef.current;
+    record(nextWd ? 'Switch to working days' : 'Switch to calendar days');
     const working = tasks.map((t) => {
       if (t.isMilestone) return { ...t, endDate: t.startDate };
+      if (t.mode === 'manual') return t;
       const dur = t.durationDays ?? workingDaysBetween(t.startDate, t.endDate, oldWd);
       return { ...t, durationDays: dur, endDate: addWorkingDays(t.startDate, dur, nextWd) };
     });
@@ -433,63 +1096,118 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     ));
   };
 
+  // Predecessors typed as row IDs ("3, 5") → task ids, with validation.
+  const parsePredecessors = (text: string, selfId: string | null): { links: TaskLink[]; error: string } => {
+    const byNumber = new Map(Array.from(idNumbers.entries()).map(([tid, n]) => [n, tid]));
+    const summaryIds = new Set(tasks.filter((t) => t.parentId).map((t) => t.parentId as string));
+    const links: TaskLink[] = [];
+    // Comma/semicolon separated; plain "3 5" (space separated numbers) still works.
+    const parts = text.split(/[,;]+/).flatMap((c) => (/^\s*\d+(\s+\d+)+\s*$/.test(c) ? c.trim().split(/\s+/) : [c])).map((c) => c.trim()).filter(Boolean);
+    for (const part of parts) {
+      const tok = parseLinkToken(part);
+      if (!tok) return { links, error: `"${part}" isn't a row number (e.g. 3, 3SS, 3FS+2d)` };
+      const tid = byNumber.get(tok.n);
+      if (!tid) return { links, error: `There's no row ${tok.n}` };
+      if (tid === selfId) return { links, error: `Row ${tok.n} is this task` };
+      if (summaryIds.has(tid)) return { links, error: `Row ${tok.n} is a phase — link to one of its tasks` };
+      if (selfId && wouldCycle(tasks, selfId, tid)) return { links, error: `Row ${tok.n} would create a circular link` };
+      if (!links.some((l) => l.id === tid)) links.push({ id: tid, type: tok.type, lag: tok.lag });
+    }
+    return { links, error: '' };
+  };
+
   const save = async () => {
     if (!form.name.trim()) { setFormErr('Task name is required.'); return; }
-    const startDate = nextWorkingDay(form.startDate, workingDays);
-    const duration = form.isMilestone ? 1 : Math.max(1, Math.round(form.durationDays) || 1);
-    const endDate = form.isMilestone ? startDate : addWorkingDays(startDate, duration, workingDays);
+    const predCheck = parsePredecessors(form.predText, editingId);
+    if (predCheck.error) { setFormErr(`Predecessors: ${predCheck.error}.`); return; }
+    // Manual tasks keep the dates as entered; auto tasks derive the finish from
+    // the duration (and the scheduler then moves them after their predecessors).
+    const manual = form.mode === 'manual';
+    const startDate = manual ? form.startDate : nextWorkingDay(form.startDate, workingDays);
+    if (manual && !form.isMilestone && form.finishDate < startDate) { setFormErr('Finish date must be on or after the start date.'); return; }
+    const endDate = form.isMilestone ? startDate
+      : manual ? form.finishDate
+        : addWorkingDays(startDate, normDuration(form.durationDays), workingDays);
+    const duration = form.isMilestone ? 1 : manual ? workingDaysBetween(startDate, endDate, workingDays) : normDuration(form.durationDays);
     const payload = {
+      mode: form.mode,
       name: form.name, category: form.category, startDate, endDate, durationDays: duration,
       progressPct: form.progressPct, isMilestone: form.isMilestone, notes: form.notes,
-      predecessors: form.predecessors, parentId: form.parentId,
+      ...linkFields(form.links), parentId: form.parentId,
+      manpower: form.isMilestone ? 0 : form.crew.length ? crewTotal(form.crew) : Math.max(0, Math.round((form.manpower || 0) * 10) / 10),
+      crew: form.isMilestone ? [] : form.crew,
+      weight: Math.max(0, Number(form.weight) || 0),
     };
     setSaving(true);
     setFormErr('');
+    record(editingId ? `Edit "${form.name}"` : `Add "${form.name}"`);
     try {
       let working: ScheduleTask[];
       if (editingId) {
         const r = await api<{ success: boolean; task: ScheduleTask }>('PUT', `/api/schedule-tasks/${editingId}`, payload);
         working = tasks.map((t) => (t.id === editingId ? r.task : t));
       } else {
+        const after = insertAfterRef.current;
+        const sameParent = !!after && (after.parentId ?? null) === (form.parentId ?? null);
         const r = await api<{ success: boolean; task: ScheduleTask }>('POST', '/api/schedule-tasks', {
-          ...payload, projectId: id, order: tasks.length,
+          ...payload, projectId: id, order: sameParent && after ? (after.order ?? 0) + 0.5 : tasks.length,
         });
         working = [...tasks, r.task];
+        if (sameParent) {
+          // Renumber the phase's tasks to whole numbers with the new one in place.
+          const sibs = working
+            .filter((t) => (t.parentId ?? null) === (r.task.parentId ?? null))
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+          const moved = sibs.filter((t, i) => (t.order ?? 0) !== i);
+          const orderOf = new Map(sibs.map((t, i) => [t.id, i]));
+          working = working.map((t) => (orderOf.has(t.id) ? { ...t, order: orderOf.get(t.id) ?? t.order } : t));
+          await Promise.all(moved.map((t) => api('PUT', `/api/schedule-tasks/${t.id}`, { order: orderOf.get(t.id) }).catch(() => {})));
+        }
+        selectOne(r.task.id);
       }
       await cascade(working);
+      insertAfterRef.current = null;
       setDialogOpen(false);
     } catch (e) {
+      dropLastRecord();
       setFormErr(e instanceof Error ? e.message : 'Save failed');
     } finally {
       setSaving(false);
     }
   };
 
-  const confirmDelete = async () => {
-    if (!deleteTarget) return;
-    const goneId = deleteTarget.id;
+  // Delete tasks, strip them from successors' predecessors, then re-schedule.
+  const deleteTasks = async (goneIds: string[]) => {
+    const gone = new Set(goneIds);
+    record(goneIds.length === 1 ? `Delete "${tasks.find((t) => t.id === goneIds[0])?.name ?? 'task'}"` : `Delete ${goneIds.length} tasks`);
     try {
-      await api('DELETE', `/api/schedule-tasks/${goneId}`);
-      // Drop the deleted task and strip it from any successor's predecessors,
-      // persisting those predecessor changes, then re-schedule.
+      await Promise.all(goneIds.map((tid) => api('DELETE', `/api/schedule-tasks/${tid}`)));
       const affected: ScheduleTask[] = [];
-      const working = tasks.filter((t) => t.id !== goneId).map((t) => {
-        if (t.predecessors?.includes(goneId)) {
-          const next = { ...t, predecessors: t.predecessors.filter((p) => p !== goneId) };
+      const working = tasks.filter((t) => !gone.has(t.id)).map((t) => {
+        if (t.predecessors?.some((p) => gone.has(p))) {
+          const next = { ...t, ...linkFields(linksOf(t).filter((l) => !gone.has(l.id))) };
           affected.push(next);
           return next;
         }
         return t;
       });
       await Promise.all(affected.map((t) =>
-        api('PUT', `/api/schedule-tasks/${t.id}`, { predecessors: t.predecessors }).catch(() => {}),
+        api('PUT', `/api/schedule-tasks/${t.id}`, { predecessors: t.predecessors, linkTypes: t.linkTypes }).catch(() => {}),
       ));
       await cascade(working);
+      setSelectedIds(new Set());
+      setSelectedId(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Delete failed');
-    } finally {
-      setDeleteTarget(null);
+      load();
     }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const tid = deleteTarget.id;
+    setDeleteTarget(null);
+    await deleteTasks([tid]);
   };
 
   const defaultDurationsFor = (services: ServiceLine[]): Record<string, number> => {
@@ -525,6 +1243,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     if (rows.length === 0) { setImportErr('Select at least one work item to import.'); return; }
     setImportBusy(true);
     setImportErr('');
+    record(`Import ${rows.length} task${rows.length === 1 ? '' : 's'}`);
     try {
       let cursor = importStartDate;
       const created: ScheduleTask[] = [];
@@ -571,25 +1290,25 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     }
   };
 
-  const runExportPdf = async () => {
-    setExportBusy('pdf');
-    setExportErr('');
-    try {
-      await exportSchedulePdf({ code, name }, flattenTree(rolledTasks, new Set()).map((r) => r.task));
-    } catch (e) {
-      setExportErr(e instanceof Error ? e.message : 'PDF export failed');
-    } finally {
-      setExportBusy(null);
-    }
-  };
+  // PDF export goes through the Export dialog (settings + live preview).
+  const [pdfOpen, setPdfOpen] = useState(false);
+  const exportRows = useMemo(() => (pdfOpen ? flattenTree(rolledTasks, new Set()) : []), [pdfOpen, rolledTasks]);
+  const loadExportData = async (): Promise<ScheduleExportData> => ({
+    workingDays,
+    // Always computed, so the dialog's Critical path toggle works even when it's off on the page.
+    criticalIds: criticalPath(leafTasks(tasks), workingDays),
+    snapshots: await loadSnapshots().catch(() => []),
+    baseline,
+  });
 
   // ── Version history ─────────────────────────────────────────────────────
   const saveVersion = async () => {
     setSavingVer(true);
     try {
-      await api('POST', '/api/schedule-versions', { projectId: id, label: verLabel.trim() || undefined });
+      await api('POST', '/api/schedule-versions', { projectId: id, label: verLabel.trim() || undefined, baseline: saveAsBaseline || undefined });
       setSaveVerOpen(false);
       setVerLabel('');
+      if (saveAsBaseline) { setShowBaseline(true); await loadBaseline(); }
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to save version');
     } finally {
@@ -626,12 +1345,31 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     }
   };
 
+  const toggleBaseline = async (v: ScheduleVersion) => {
+    const on = !v.isBaseline;
+    if (on && versions.some((x) => x.isBaseline)) {
+      // eslint-disable-next-line no-alert
+      if (!window.confirm('Replace the current baseline with this version?')) return;
+    }
+    try {
+      await api('POST', `/api/schedule-versions/${v.id}/baseline`, { on });
+      setVersions((prev) => prev.map((x) => ({ ...x, isBaseline: on ? x.id === v.id : x.id === v.id ? false : x.isBaseline })));
+      if (on) setShowBaseline(true);
+      await loadBaseline();
+    } catch (e) {
+      setHistoryErr(e instanceof Error ? e.message : 'Failed to set baseline');
+    }
+  };
+
   const deleteVersion = async (v: ScheduleVersion) => {
     // eslint-disable-next-line no-alert
-    if (!window.confirm('Permanently delete this saved version? This cannot be undone.')) return;
+    if (!window.confirm(v.isBaseline
+      ? 'This version is the baseline — deleting it removes the baseline too. Permanently delete it?'
+      : 'Permanently delete this saved version? This cannot be undone.')) return;
     try {
       await api('DELETE', `/api/schedule-versions/${v.id}`);
       setVersions((prev) => prev.filter((x) => x.id !== v.id));
+      if (v.isBaseline) setBaseline(null);
     } catch (e) {
       setHistoryErr(e instanceof Error ? e.message : 'Delete failed');
     }
@@ -689,17 +1427,21 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   // instant visual feedback; the PUT to persist fires on mouseup, reading
   // the final dragged state off tasksRef (not the closure, which would be
   // stale by the time the listener runs).
-  const tasksRef = useRef<ScheduleTask[]>(tasks);
-  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
 
   const dragRef = useRef<{
     taskId: string;
-    mode: 'move' | 'resize';
+    mode: 'move' | 'resize' | 'progress';
     startX: number;
     origStart: string;
     origEnd: string;
     isMilestone: boolean;
     offsetDays: number;
+    /** Progress drag: starting %, bar width in px, current % (null until moved). */
+    origPct: number;
+    barPx: number;
+    pct: number | null;
+    /** Tasks before the drag, for Undo. */
+    snap: ScheduleTask[];
   } | null>(null);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
 
@@ -708,7 +1450,14 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       const d = dragRef.current;
       if (!d) return;
       const deltaX = e.clientX - d.startX;
-      const offsetDays = Math.round(deltaX / DAY_WIDTH);
+      if (d.mode === 'progress') {
+        const pct = Math.max(0, Math.min(100, Math.round((d.origPct + (deltaX / Math.max(1, d.barPx)) * 100) / 5) * 5));
+        if (pct === (d.pct ?? d.origPct)) return;
+        d.pct = pct;
+        setTasks((prev) => prev.map((t) => (t.id === d.taskId ? { ...t, progressPct: pct } : t)));
+        return;
+      }
+      const offsetDays = Math.round(deltaX / dayWRef.current);
       if (offsetDays === d.offsetDays) return;
       d.offsetDays = offsetDays;
       setTasks((prev) => prev.map((t) => {
@@ -731,10 +1480,23 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       if (!d) return;
       const current = tasksRef.current.find((t) => t.id === d.taskId);
       if (!current) return;
-      if (d.offsetDays === 0) {
-        openEdit(current);
+      // A click without movement selects the task and shows it in the
+      // inspector (double-click opens Task Information).
+      if (d.mode === 'progress') {
+        if (d.pct === null || d.pct === d.origPct) { selectOne(current.id); setInspectorOpen(true); return; }
+        record(`Progress of "${current.name}" → ${d.pct}%`, d.snap);
+        api('PUT', `/api/schedule-tasks/${current.id}`, { progressPct: d.pct }).catch((e) => {
+          setErr(e instanceof Error ? e.message : 'Failed to save progress');
+          load();
+        });
         return;
       }
+      if (d.offsetDays === 0) {
+        selectOne(current.id);
+        setInspectorOpen(true);
+        return;
+      }
+      record(d.mode === 'move' ? `Reschedule "${current.name}"` : `Change duration of "${current.name}"`, d.snap);
       // Resizing changes the duration; recompute it from the new dates so it
       // stays the source of truth. Reflect it in state before the cascade.
       const dur = current.isMilestone ? 1 : workingDaysBetween(current.startDate, current.endDate, wdRef.current);
@@ -756,12 +1518,17 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const startDrag = (e: React.MouseEvent, task: ScheduleTask, mode: 'move' | 'resize') => {
+  const startDrag = (e: React.MouseEvent, task: ScheduleTask, mode: 'move' | 'resize' | 'progress') => {
     e.preventDefault();
     e.stopPropagation();
+    const half = task.startDate === task.endDate && !task.isMilestone && task.durationDays != null && task.durationDays > 0 && task.durationDays < 1;
     dragRef.current = {
       taskId: task.id, mode, startX: e.clientX, origStart: task.startDate, origEnd: task.endDate,
       isMilestone: task.isMilestone, offsetDays: 0,
+      origPct: task.progressPct || 0,
+      barPx: (half ? (task.durationDays as number) : durationOf(task.startDate, task.endDate)) * dayWRef.current,
+      pct: null,
+      snap: tasksRef.current,
     };
     setDraggingTaskId(task.id);
     document.body.style.userSelect = 'none';
@@ -788,7 +1555,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             History
           </Button>
           <Button
-            variant="outlined" startIcon={<SaveIcon />} onClick={() => { setVerLabel(''); setSaveVerOpen(true); }}
+            variant="outlined" startIcon={<SaveIcon />} onClick={() => { setVerLabel(''); setSaveAsBaseline(false); setSaveVerOpen(true); }}
             disabled={sorted.length === 0}
           >
             Save version
@@ -800,10 +1567,10 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             {exportBusy === 'xlsx' ? 'Exporting…' : 'Export Excel'}
           </Button>
           <Button
-            variant="outlined" startIcon={<PictureAsPdfIcon />} onClick={() => void runExportPdf()}
+            variant="outlined" startIcon={<PictureAsPdfIcon />} onClick={() => setPdfOpen(true)}
             disabled={sorted.length === 0 || exportBusy !== null}
           >
-            {exportBusy === 'pdf' ? 'Exporting…' : 'Export PDF'}
+            Export PDF
           </Button>
           {quotations.length > 0 && (
             <Button
@@ -812,7 +1579,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               Import from Calcsheet
             </Button>
           )}
-          <Button variant="contained" startIcon={<AddIcon />} onClick={openAdd} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => openAdd()} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>
             Add Task
           </Button>
         </Stack>
@@ -822,43 +1589,75 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
       {exportErr && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setExportErr('')}>{exportErr}</Alert>}
       {loading && <LinearProgress sx={{ mb: 1.5 }} />}
 
-      {/* Summary roll-up */}
-      {summary && (
-        <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5 }}>
-          <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap alignItems="center">
-            {[
-              { label: 'Start', value: fmt(toDate(summary.start)) },
-              { label: 'Finish', value: fmt(toDate(summary.end)) },
-              { label: 'Duration', value: `${summary.durationDays} day${summary.durationDays === 1 ? '' : 's'}` },
-              { label: 'Tasks', value: String(tasks.length) },
-            ].map((s) => (
-              <Box key={s.label}>
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{s.label}</Typography>
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>{s.value}</Typography>
-              </Box>
-            ))}
-            <Box sx={{ minWidth: 160 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                Overall progress — {summary.pctComplete}%
-              </Typography>
-              <LinearProgress
-                variant="determinate"
-                value={summary.pctComplete}
-                sx={{ height: 8, borderRadius: 4, mt: 0.5, '& .MuiLinearProgress-bar': { bgcolor: NET_PACIFIC_COLORS.success } }}
-              />
+      {/* Summary roll-up — KPI cards; the clickable ones jump to the detail */}
+      {summary && (() => {
+        const kpi = (label: string, value: ReactNode, o: { onClick?: () => void; tip?: string; color?: string; sub?: ReactNode } = {}) => (
+          <Tooltip key={label} title={o.tip || ''}>
+            <Box
+              onClick={o.onClick}
+              sx={{
+                px: 1, py: 0.5, mx: -1, borderRadius: 1, cursor: o.onClick ? 'pointer' : 'default',
+                ...(o.onClick ? { '&:hover': { bgcolor: 'action.hover' } } : {}),
+              }}
+            >
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'nowrap' }}>{label}</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600, color: o.color, whiteSpace: 'nowrap' }}>{value}</Typography>
+              {o.sub && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'nowrap' }}>{o.sub}</Typography>}
             </Box>
-            <Box>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Overdue</Typography>
-              <Chip
-                size="small"
-                label={summary.overdue}
-                color={summary.overdue > 0 ? 'error' : 'default'}
-                variant={summary.overdue > 0 ? 'filled' : 'outlined'}
-              />
-            </Box>
-          </Stack>
-        </Paper>
-      )}
+          </Tooltip>
+        );
+        const toSCurve = () => setView('scurve');
+        const v = kpis.variance;
+        return (
+          <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5 }}>
+            <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap alignItems="flex-start">
+              {kpi('Start', fmt(toDate(summary.start)))}
+              {kpi('Finish', fmt(toDate(summary.end)), { sub: `${summary.durationDays} days` })}
+              {kpi('Days remaining', kpis.remaining.label, { color: kpis.remaining.late ? 'error.main' : undefined, tip: 'Working days from today to the finish' })}
+              <Tooltip title="Open the S-Curve">
+                <Box onClick={toSCurve} sx={{ minWidth: 150, px: 1, py: 0.5, mx: -1, borderRadius: 1, cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Actual — {summary.pctComplete}%</Typography>
+                  <LinearProgress
+                    variant="determinate" value={summary.pctComplete}
+                    sx={{ height: 8, borderRadius: 4, mt: 0.75, '& .MuiLinearProgress-bar': { bgcolor: NET_PACIFIC_COLORS.success } }}
+                  />
+                </Box>
+              </Tooltip>
+              {kpi('Planned', `${kpis.planned.toFixed(0)}%`, { onClick: toSCurve, tip: 'Where the current plan says you should be today', sub: kpis.baselinePct != null ? `baseline ${kpis.baselinePct.toFixed(0)}%` : undefined })}
+              {kpi(kpis.baselinePct != null ? 'Variance vs baseline' : 'Variance', `${v > 0 ? '+' : ''}${v.toFixed(1)} pts`, {
+                onClick: toSCurve, color: Math.abs(v) < 0.5 ? undefined : v > 0 ? 'success.main' : 'error.main',
+                sub: Math.abs(v) < 0.5 ? 'on plan' : v > 0 ? 'ahead' : 'behind',
+              })}
+              {kpis.peak && kpi('Peak manpower', `${kpis.peak.pax}`, {
+                onClick: () => { setView('scurve'); setScurveFocus((p) => ({ date: (kpis.peak as { date: string }).date, n: (p?.n ?? 0) + 1 })); },
+                tip: 'Show the tasks behind the peak', sub: fmt(toDate(kpis.peak.date)),
+              })}
+              {kpis.nextMs && kpi('Next milestone', kpis.nextMs.task.name.length > 22 ? `${kpis.nextMs.task.name.slice(0, 21)}…` : kpis.nextMs.task.name, {
+                onClick: () => { const tid = (kpis.nextMs as { task: ScheduleTask }).task.id; setView('gantt'); selectOne(tid); setScrollReq((p) => ({ id: tid, n: (p?.n ?? 0) + 1 })); setRevealReq((p) => ({ id: tid, n: (p?.n ?? 0) + 1 })); },
+                tip: kpis.nextMs.task.name, sub: `${fmt(toDate(kpis.nextMs.task.startDate))} · ${kpis.nextMs.inDays === 0 ? 'today' : `in ${kpis.nextMs.inDays} d`}`,
+              })}
+              {baselineSummary ? (
+                kpi('Baseline finish', fmt(toDate(baselineSummary.end)), {
+                  color: baselineSummary.variance > 0 ? 'error.main' : baselineSummary.variance < 0 ? 'success.main' : undefined,
+                  sub: `${varianceLabel(baselineSummary.variance)}${baselineSummary.variance > 0 ? ' late' : baselineSummary.variance < 0 ? ' early' : ''}`,
+                })
+              ) : (
+                <Tooltip title="Freeze the current plan as the baseline to track slippage against it">
+                  <Button
+                    size="small" startIcon={<OutlinedFlagIcon />} sx={{ alignSelf: 'center' }}
+                    onClick={() => { setVerLabel('Baseline'); setSaveAsBaseline(true); setSaveVerOpen(true); }}
+                  >
+                    Set baseline
+                  </Button>
+                </Tooltip>
+              )}
+              {kpi('Overdue', (
+                <Chip size="small" label={summary.overdue} color={summary.overdue > 0 ? 'error' : 'default'} variant={summary.overdue > 0 ? 'filled' : 'outlined'} />
+              ), summary.overdue > 0 ? { onClick: () => { setView('gantt'); setHlFilter((f) => (f === 'overdue' ? 'none' : 'overdue')); }, tip: 'Highlight overdue tasks' } : {})}
+            </Stack>
+          </Paper>
+        );
+      })()}
 
       {/* Filters */}
       {sorted.length > 0 && (
@@ -888,6 +1687,21 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             <Chip label="Clear" size="small" variant="outlined" onClick={() => setCategoryFilter(new Set())} />
           )}
           <Box sx={{ flexGrow: 1 }} />
+          {view === 'gantt' && (
+            <GanttViewControls
+              views={allViews}
+              viewId={viewId}
+              modified={viewModified}
+              onApply={applyView}
+              onSaveAs={saveViewAs}
+              onDelete={deleteView}
+              columns={columns}
+              onColumnsChange={changeColumns}
+              display={display}
+              onDisplayChange={setDisplayOption}
+              hasBaseline={!!baseline}
+            />
+          )}
           <Tooltip title="When on, durations count working days and the whole schedule recomputes to skip weekends">
             <FormControlLabel
               control={<Checkbox size="small" checked={workingDays} onChange={(e) => { setWorkingDays(e.target.checked); void applyCalendar(e.target.checked); }} />}
@@ -898,6 +1712,13 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             <FormControlLabel
               control={<Checkbox size="small" checked={showCritical} onChange={(e) => setShowCritical(e.target.checked)} />}
               label={<Typography variant="body2">Critical path</Typography>}
+            />
+          </Tooltip>
+          <Tooltip title={baseline ? `Grey bars show the baseline${baseline.label ? ` “${baseline.label}”` : ''} saved ${new Date(baseline.savedAt).toLocaleDateString()}` : 'No baseline yet — use Set baseline, or History → Set as baseline'}>
+            <FormControlLabel
+              disabled={!baseline}
+              control={<Checkbox size="small" checked={!!baseline && showBaseline} onChange={(e) => setShowBaseline(e.target.checked)} />}
+              label={<Typography variant="body2">Baseline</Typography>}
             />
           </Tooltip>
           <FormControlLabel
@@ -913,152 +1734,269 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         </Paper>
       )}
 
-      {sorted.length > 0 && visibleRows.length === 0 && (
+      {view === 'gantt' && sorted.length > 0 && visibleRows.length === 0 && (
         <Paper sx={{ p: 3, textAlign: 'center' }}>
           <Typography color="text.secondary">No tasks match the current filters.</Typography>
         </Paper>
       )}
 
-      {visibleRows.length > 0 && (
-        <Paper sx={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-          <Box sx={{ display: 'flex', minWidth: 340 + totalDays * DAY_WIDTH }}>
-            {/* Task label column */}
-            <Box sx={{ width: 340, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', position: 'sticky', left: 0, bgcolor: 'background.paper', zIndex: 2 }}>
-              <Box sx={{ height: 48, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', px: 1.5 }}>
-                <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>TASK</Typography>
-              </Box>
-              {visibleRows.map((row) => {
-                const t = row.task;
-                return (
-                  <Box key={t.id} sx={{ height: 44, display: 'flex', alignItems: 'center', pr: 1, borderBottom: '1px solid', borderColor: 'divider', gap: 0.25, pl: `${8 + row.depth * 16}px` }}>
-                    {row.hasChildren ? (
-                      <IconButton size="small" sx={{ p: 0.25 }} onClick={() => toggleCollapse(t.id)}>
-                        {collapsed.has(t.id) ? <KeyboardArrowRightIcon sx={{ fontSize: 18 }} /> : <KeyboardArrowDownIcon sx={{ fontSize: 18 }} />}
-                      </IconButton>
-                    ) : <Box sx={{ width: 22, flexShrink: 0 }} />}
-                    {!row.isSummary && (
-                      <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: SCHEDULE_CATEGORY_COLORS[t.category || 'Other'] || NET_PACIFIC_COLORS.info, flexShrink: 0 }} />
-                    )}
-                    <Tooltip title={isOverdue(t) ? `${t.name} — overdue` : t.name}>
-                      <Typography variant="body2" noWrap sx={{ flex: 1, fontWeight: (row.isSummary || t.isMilestone) ? 700 : 400, color: isOverdue(t) ? 'error.main' : 'inherit' }}>
-                        {t.name}
-                      </Typography>
-                    </Tooltip>
-                    <Tooltip title="Outdent"><IconButton size="small" sx={{ p: 0.25 }} onClick={() => void outdentTask(row)}><FormatIndentDecreaseIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
-                    <Tooltip title="Indent"><IconButton size="small" sx={{ p: 0.25 }} onClick={() => void indentTask(row)}><FormatIndentIncreaseIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip>
-                    <IconButton size="small" sx={{ p: 0.25 }} onClick={() => openEdit(t)}><EditIcon sx={{ fontSize: 15 }} /></IconButton>
-                    <IconButton size="small" sx={{ p: 0.25 }} onClick={() => setDeleteTarget(t)}><DeleteIcon sx={{ fontSize: 15 }} /></IconButton>
-                  </Box>
-                );
-              })}
-            </Box>
-
-            {/* Timeline */}
-            <Box sx={{ position: 'relative' }}>
-              {/* Weekend shading (behind the rows) */}
-              {weekendOffsets.map((d) => (
-                <Box key={`we-${d}`} sx={{ position: 'absolute', top: 48, left: d * DAY_WIDTH, width: DAY_WIDTH, height: visibleRows.length * 44, bgcolor: 'rgba(0,0,0,0.035)', pointerEvents: 'none', zIndex: 0 }} />
-              ))}
-              {/* Today marker (on top, non-interactive) */}
-              {todayOffset !== null && (
-                <Box sx={{ position: 'absolute', top: 0, left: todayOffset, width: 2, height: 48 + visibleRows.length * 44, bgcolor: NET_PACIFIC_COLORS.error, pointerEvents: 'none', zIndex: 3 }}>
-                  <Box sx={{ position: 'absolute', top: 2, left: 3, px: 0.5, borderRadius: 0.5, bgcolor: NET_PACIFIC_COLORS.error, color: '#fff', fontSize: '0.6rem', fontWeight: 700, lineHeight: 1.4, whiteSpace: 'nowrap' }}>
-                    Today
-                  </Box>
-                </Box>
-              )}
-              {/* Dependency connectors (finish-to-start) */}
-              {depArrows.length > 0 && (
-                <svg
-                  style={{ position: 'absolute', top: 48, left: 0, width: totalDays * DAY_WIDTH, height: visibleRows.length * 44, pointerEvents: 'none', zIndex: 2, overflow: 'visible' }}
-                >
-                  <defs>
-                    <marker id="depArrowHead" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
-                      <path d="M0,0 L6,3 L0,6 Z" fill="#8a8a8a" />
-                    </marker>
-                    <marker id="depArrowHeadCrit" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
-                      <path d="M0,0 L6,3 L0,6 Z" fill="#d32f2f" />
-                    </marker>
-                  </defs>
-                  {depArrows.map((a) => {
-                    const crit = criticalIds.has(a.pid) && criticalIds.has(a.sid);
-                    return (
-                      <path
-                        key={a.key}
-                        d={`M ${a.x1} ${a.y1} H ${a.x1 + 8} V ${a.y2} H ${a.x2}`}
-                        fill="none" stroke={crit ? '#d32f2f' : '#8a8a8a'} strokeWidth={crit ? 2 : 1.5}
-                        markerEnd={crit ? 'url(#depArrowHeadCrit)' : 'url(#depArrowHead)'}
-                      />
-                    );
-                  })}
-                </svg>
-              )}
-              <Box sx={{ display: 'flex', height: 48, borderBottom: '1px solid', borderColor: 'divider', position: 'relative', zIndex: 1 }}>
-                {months.map((m, i) => (
-                  <Box key={i} sx={{ width: m.days * DAY_WIDTH, flexShrink: 0, borderRight: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>{m.label}</Typography>
-                  </Box>
-                ))}
-              </Box>
-              {visibleRows.map((row) => {
-                const t = row.task;
-                const offset = daysBetween(range.start, toDate(t.startDate)) * DAY_WIDTH;
-                const width = Math.max(DAY_WIDTH, (daysBetween(toDate(t.startDate), toDate(t.endDate)) + 1) * DAY_WIDTH);
-                const overdue = isOverdue(t);
-                const color = overdue ? '#e53935' : (SCHEDULE_CATEGORY_COLORS[t.category || 'Other'] || NET_PACIFIC_COLORS.info);
-                const critical = criticalIds.has(t.id);
-                const isDragging = draggingTaskId === t.id;
-                return (
-                  <Box key={t.id} sx={{ height: 44, position: 'relative', borderBottom: '1px solid', borderColor: 'divider' }}>
-                    {row.isSummary ? (
-                      <Tooltip title={`${t.name} — ${fmt(toDate(t.startDate))} to ${fmt(toDate(t.endDate))} (${t.progressPct}%)`}>
-                        <Box sx={{ position: 'absolute', left: offset, top: 17, width, height: 10, bgcolor: '#616161', borderRadius: 0.5, overflow: 'hidden' }}>
-                          <Box sx={{ height: '100%', width: `${Math.min(100, Math.max(0, t.progressPct))}%`, bgcolor: '#2f2f2f' }} />
-                        </Box>
-                      </Tooltip>
-                    ) : t.isMilestone ? (
-                      <Tooltip title={isDragging ? '' : `${t.name} — ${fmt(toDate(t.startDate))} · drag to move`}>
-                        <Box
-                          onMouseDown={(e) => startDrag(e, t, 'move')}
-                          sx={{
-                            position: 'absolute', left: offset + DAY_WIDTH / 2 - 7, top: 12, width: 14, height: 14,
-                            bgcolor: color, transform: 'rotate(45deg)', cursor: isDragging ? 'grabbing' : 'grab',
-                            boxShadow: critical ? '0 0 0 2px #d32f2f' : isDragging ? '0 0 0 3px rgba(0,0,0,0.15)' : 'none',
-                          }}
-                        />
-                      </Tooltip>
-                    ) : (
-                      <Tooltip title={isDragging ? '' : `${t.name} — ${fmt(toDate(t.startDate))} to ${fmt(toDate(t.endDate))} (${t.progressPct}%) · drag to move, edge to resize`}>
-                        <Box
-                          onMouseDown={(e) => startDrag(e, t, 'move')}
-                          sx={{
-                            position: 'absolute', left: offset, top: 10, width, height: 24, borderRadius: 1,
-                            bgcolor: `${color}33`, border: critical ? '2px solid #d32f2f' : `1px solid ${color}`, cursor: isDragging ? 'grabbing' : 'grab',
-                            overflow: 'hidden',
-                            boxShadow: isDragging ? '0 0 0 2px rgba(0,0,0,0.15)' : 'none',
-                          }}
-                        >
-                          <Box sx={{ height: '100%', width: `${Math.min(100, Math.max(0, t.progressPct))}%`, bgcolor: color }} />
-                          <Box
-                            onMouseDown={(e) => startDrag(e, t, 'resize')}
-                            sx={{
-                              position: 'absolute', right: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              '&:hover > div, &:active > div': { opacity: 1 },
-                            }}
-                          >
-                            <Box sx={{ width: 2, height: '60%', bgcolor: color, opacity: 0, borderRadius: 1 }} />
-                          </Box>
-                        </Box>
-                      </Tooltip>
-                    )}
-                  </Box>
-                );
-              })}
-            </Box>
-          </Box>
-        </Paper>
+      {sorted.length > 0 && (
+        <Tabs value={view} onChange={(_, v) => setView(v)} sx={{ minHeight: 36, mb: 1, '& .MuiTab-root': { minHeight: 36, textTransform: 'none', fontWeight: 600 } }}>
+          <Tab value="gantt" label="Gantt Chart" />
+          <Tab value="scurve" label="S-Curve & Manpower" />
+        </Tabs>
       )}
+
+      {view === 'scurve' && sorted.length > 0 && (
+        <ScheduleSCurve
+          tasks={tasks} workingDays={workingDays} loadSnapshots={loadSnapshots} baselineTasks={showBaseline ? baseline?.tasks : undefined}
+          projectId={id} focus={scurveFocus}
+        />
+      )}
+
+      {view === 'gantt' && visibleRows.length > 0 && (() => {
+        const selRow = visibleRows.find((r) => r.task.id === selectedId) || null;
+        const tb = { size: 'small' as const, variant: 'text' as const, sx: { minWidth: 0, px: 1, color: 'text.primary', textTransform: 'none' } };
+        return (
+          <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* Ribbon-style task toolbar, acting on the selected row */}
+            <Stack direction="row" alignItems="center" spacing={0.5} sx={{ px: 1, py: 0.5, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#FAFAFA', flexWrap: 'wrap' }} useFlexGap>
+              <Tooltip title={undoLabel ? `Undo: ${undoLabel} (Ctrl+Z)` : 'Nothing to undo'}>
+                <span><IconButton size="small" disabled={!undoLabel || undoBusy} onClick={() => void stepHistory('undo')}><UndoIcon fontSize="small" /></IconButton></span>
+              </Tooltip>
+              <Tooltip title={redoLabel ? `Redo: ${redoLabel} (Ctrl+Shift+Z)` : 'Nothing to redo'}>
+                <span><IconButton size="small" disabled={!redoLabel || undoBusy} onClick={() => void stepHistory('redo')}><RedoIcon fontSize="small" /></IconButton></span>
+              </Tooltip>
+              <Divider orientation="vertical" flexItem />
+              <Button {...tb} startIcon={<FormatIndentDecreaseIcon />} disabled={!selRow || !selRow.task.parentId} onClick={() => selRow && void outdentTask(selRow)}>Outdent</Button>
+              <Button {...tb} startIcon={<FormatIndentIncreaseIcon />} disabled={!selRow} onClick={() => selRow && void indentTask(selRow)}>Indent</Button>
+              <Divider orientation="vertical" flexItem />
+              <Button {...tb} startIcon={<InfoOutlinedIcon />} disabled={!selRow} onClick={() => selRow && openEdit(tasks.find((t) => t.id === selRow.task.id) || selRow.task)}>Information</Button>
+              <Button {...tb} startIcon={<CenterFocusStrongIcon />} disabled={!selRow} onClick={() => selRow && setScrollReq((p) => ({ id: selRow.task.id, n: (p?.n ?? 0) + 1 }))}>Scroll to Task</Button>
+              <Tooltip title={weightInfo.mode === 'manual'
+                ? `Progress is weighted by the task weights you entered${weightInfo.unweighted ? ` — ${weightInfo.unweighted} task(s) have no weight and count 0` : ''}`
+                : 'Progress is weighted by task duration. Set weights to control each task\'s share.'}>
+                <Button {...tb} startIcon={<BalanceIcon />} onClick={openWeights}
+                  sx={{ ...tb.sx, ...(weightInfo.unweighted ? { color: 'warning.dark' } : {}) }}>
+                  Weights: {weightInfo.mode === 'manual' ? 'Manual' : 'By duration'}{weightInfo.unweighted ? ` (${weightInfo.unweighted} missing)` : ''}
+                </Button>
+              </Tooltip>
+              <Button
+                {...tb} startIcon={<BorderColorIcon sx={{ color: `${TASK_HIGHLIGHTS[lastHighlight]} !important`, filter: 'saturate(3) brightness(0.8)' }} />}
+                disabled={selectedTasks.length === 0} onClick={(e) => setHlMenu(e.currentTarget)}
+              >
+                Highlight
+              </Button>
+              <Button
+                {...tb} startIcon={<DeleteIcon />} disabled={selectedTasks.length === 0}
+                onClick={() => (selectedTasks.length === 1 ? setDeleteTarget(selectedTasks[0]) : setBulkDelete(selectedTasks))}
+              >
+                Delete
+              </Button>
+              {selectedTasks.length > 1 && <Typography variant="caption" color="text.secondary">{selectedTasks.length} selected</Typography>}
+              <Box sx={{ flexGrow: 1 }} />
+              <TextField
+                select size="small" value={hlFilter} onChange={(e) => setHlFilter(e.target.value as HighlightFilter)}
+                sx={{ minWidth: 170, '& .MuiInputBase-input': { py: 0.5, fontSize: 12 } }}
+                SelectProps={{ renderValue: (v) => (v === 'none' ? 'Highlight: none' : `Highlight: ${HIGHLIGHT_FILTERS.find((f) => f.value === v)?.label}`) }}
+              >
+                {HIGHLIGHT_FILTERS.map((f) => <MenuItem key={f.value} value={f.value} dense>{f.label}</MenuItem>)}
+              </TextField>
+              <TextField
+                size="small" placeholder="Find task (Ctrl+F)" value={search} inputRef={searchRef}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); gotoMatch(e.shiftKey ? -1 : 1); }
+                  if (e.key === 'Escape') { setSearch(''); (e.target as HTMLInputElement).blur(); }
+                }}
+                InputProps={{
+                  startAdornment: <SearchIcon sx={{ fontSize: 16, color: 'text.secondary', mr: 0.5 }} />,
+                  endAdornment: search.trim() ? (
+                    <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                      {searchMatches.length === 0 ? 'none' : `${Math.max(1, searchMatches.indexOf(selectedId || '') + 1)}/${searchMatches.length}`}
+                    </Typography>
+                  ) : undefined,
+                }}
+                sx={{ width: 190, '& .MuiInputBase-input': { py: 0.5, fontSize: 12 } }}
+              />
+              <Tooltip title={inspectorOpen ? 'Hide task inspector (I)' : 'Show task inspector (I)'}>
+                <IconButton size="small" color={inspectorOpen ? 'primary' : 'default'} onClick={() => setInspectorOpen((v) => !v)}><ViewSidebarOutlinedIcon fontSize="small" /></IconButton>
+              </Tooltip>
+              <Tooltip title="Keyboard shortcuts (?)">
+                <IconButton size="small" onClick={() => setHelpOpen(true)}><KeyboardIcon fontSize="small" /></IconButton>
+              </Tooltip>
+              {/* Timeline navigation — kept together, right-aligned over the timeline */}
+              <Stack direction="row" alignItems="center" spacing={0.5} sx={{ ml: 'auto' }}>
+              <Divider orientation="vertical" flexItem />
+              <Tooltip title="Previous period"><IconButton size="small" onClick={() => nav({ kind: 'page', dir: -1 })}><ChevronLeftIcon fontSize="small" /></IconButton></Tooltip>
+              <Tooltip title="Go to today (T)"><Button {...tb} startIcon={<TodayIcon />} onClick={() => nav({ kind: 'today' })}>Today</Button></Tooltip>
+              <Tooltip title="Next period"><IconButton size="small" onClick={() => nav({ kind: 'page', dir: 1 })}><ChevronRightIcon fontSize="small" /></IconButton></Tooltip>
+              <Tooltip title="Fit the whole project in view (F)"><Button {...tb} startIcon={<FitScreenIcon />} onClick={fitProject}>Fit</Button></Tooltip>
+              <ToggleButtonGroup
+                size="small" exclusive value={(Object.keys(ZOOM_PRESETS) as GanttZoom[]).find((k) => ZOOM_PRESETS[k] === dayW) ?? null}
+                onChange={(_, v: GanttZoom | null) => { if (v) setDayW(ZOOM_PRESETS[v]); }}
+                sx={{ '& .MuiToggleButton-root': { py: 0.25, px: 1, textTransform: 'none', fontSize: 12 } }}
+              >
+                <ToggleButton value="day">Day</ToggleButton>
+                <ToggleButton value="week">Week</ToggleButton>
+                <ToggleButton value="month">Month</ToggleButton>
+                <ToggleButton value="quarter">Quarter</ToggleButton>
+              </ToggleButtonGroup>
+              <Tooltip title="Zoom out (−)"><span><IconButton size="small" disabled={dayW <= MIN_DAY_W} onClick={() => zoomBy(1 / 1.25)}><ZoomOutIcon fontSize="small" /></IconButton></span></Tooltip>
+              <Tooltip title="Zoom in (=)"><span><IconButton size="small" disabled={dayW >= MAX_DAY_W} onClick={() => zoomBy(1.25)}><ZoomInIcon fontSize="small" /></IconButton></span></Tooltip>
+              </Stack>
+            </Stack>
+            <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
+            <MsProjectGantt
+              onLinkDraw={(fromId, toId, fromEnd, toEnd, x, y) => openLinkEditor(fromId, toId, x, y, `${fromEnd === 'start' ? 'S' : 'F'}${toEnd === 'start' ? 'S' : 'F'}` as LinkType)}
+              onLinkOpen={(predId, succId, x, y) => openLinkEditor(predId, succId, x, y)}
+              columns={columns}
+              onColumnsChange={changeColumns}
+              display={display}
+              floatMap={floatMap}
+              baseline={showBaseline && baseline ? baselineMap : null}
+              rows={visibleRows}
+              idNumbers={idNumbers}
+              range={range}
+              totalDays={totalDays}
+              dayW={dayW}
+              onZoom={setDayW}
+              navRequest={navReq}
+              onViewportWidth={setChartViewW}
+              workingDays={workingDays}
+              criticalIds={criticalIds}
+              isOverdue={isOverdue}
+              collapsed={collapsed}
+              onToggleCollapse={toggleCollapse}
+              selectedId={selectedId}
+              selectedIds={selectedIds}
+              onSelect={selectRow}
+              filterHits={filterHits}
+              searchQuery={search}
+              revealRequest={revealReq}
+              onOpen={(t) => openEdit(tasks.find((x) => x.id === t.id) || t)}
+              onRowContextMenu={(e, row) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, row }); }}
+              onReorder={(d, t, pos) => void moveTask(d, t, pos)}
+              weightShare={weightInfo.share}
+              weightMode={weightInfo.mode}
+              onBarMouseDown={startDrag}
+              draggingTaskId={draggingTaskId}
+              gridWidth={gridWidth}
+              onGridWidthChange={setGridWidth}
+              scrollRequest={scrollReq}
+            />
+            {inspectorOpen && (() => {
+              const rolled = rolledTasks.find((t) => t.id === selectedId);
+              if (!rolled) {
+                return (
+                  <Box sx={{ width: 340, flexShrink: 0, borderLeft: '1px solid', borderColor: 'divider', p: 3, color: 'text.secondary', textAlign: 'center' }}>
+                    <Typography variant="body2">Select a task — click its bar or row — to see and edit it here.</Typography>
+                    <Button size="small" sx={{ mt: 1 }} onClick={() => setInspectorOpen(false)}>Hide panel</Button>
+                  </Box>
+                );
+              }
+              const isSum = tasks.some((t) => t.parentId === rolled.id);
+              const raw = tasks.find((t) => t.id === rolled.id) || rolled;
+              return (
+                <ScheduleTaskInspector
+                  task={isSum ? { ...raw, startDate: rolled.startDate, endDate: rolled.endDate, progressPct: rolled.progressPct } : raw}
+                  isSummary={isSum}
+                  tasks={tasks}
+                  idNumbers={idNumbers}
+                  workingDays={workingDays}
+                  baseline={showBaseline ? baselineMap.get(rolled.id) ?? null : null}
+                  float={floatMap.get(rolled.id) ?? null}
+                  onChange={(patch, label) => void applyEdit(rolled.id, patch, label)}
+                  onEditLink={(predId, succId, e) => openLinkEditor(predId, succId, e.clientX, e.clientY)}
+                  onRemoveLink={removeLink}
+                  onGoto={(tid) => { selectOne(tid); setRevealReq((p) => ({ id: tid, n: (p?.n ?? 0) + 1 })); setScrollReq((p) => ({ id: tid, n: (p?.n ?? 0) + 1 })); }}
+                  onOpenDialog={() => openEdit(raw)}
+                  onClose={() => setInspectorOpen(false)}
+                />
+              );
+            })()}
+            </Box>
+          </Paper>
+        );
+      })()}
+
+      <Popover
+        open={!!linkPop}
+        onClose={() => setLinkPop(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={linkPop ? { top: linkPop.y, left: linkPop.x } : undefined}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+      >
+        {linkPop && (
+          <Box sx={{ p: 2, width: 320 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              {linkPop.existing ? 'Task dependency' : 'New dependency'} · {linkName(linkPop.predId, linkPop.succId)}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+              From “{tasks.find((t) => t.id === linkPop.predId)?.name}” to “{tasks.find((t) => t.id === linkPop.succId)?.name}”
+            </Typography>
+            <ToggleButtonGroup
+              size="small" exclusive fullWidth value={linkPop.type}
+              onChange={(_, v: LinkType | null) => v && setLinkPop((p) => (p ? { ...p, type: v } : p))}
+            >
+              {LINK_TYPES.map((t) => <ToggleButton key={t.value} value={t.value} sx={{ py: 0.25 }}>{t.value}</ToggleButton>)}
+            </ToggleButtonGroup>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, mb: 1.5 }}>
+              {LINK_TYPES.find((t) => t.value === linkPop.type)?.label}: the successor {LINK_TYPES.find((t) => t.value === linkPop.type)?.hint}.
+            </Typography>
+            <TextField
+              size="small" fullWidth type="number" label="Lag (working days)" value={linkPop.lag}
+              onChange={(e) => setLinkPop((p) => (p ? { ...p, lag: e.target.value } : p))}
+              onKeyDown={(e) => { if (e.key === 'Enter') void saveLinkPop(); }}
+              helperText="Negative = lead (overlap)"
+              onWheel={blurNumberInputOnWheel}
+            />
+            <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+              {linkPop.existing && <Button color="error" size="small" onClick={() => void saveLinkPop(true)}>Delete link</Button>}
+              <Box sx={{ flexGrow: 1 }} />
+              <Button size="small" onClick={() => setLinkPop(null)}>Cancel</Button>
+              <Button size="small" variant="contained" onClick={() => void saveLinkPop()}>{linkPop.existing ? 'Save' : 'Add link'}</Button>
+            </Stack>
+          </Box>
+        )}
+      </Popover>
+      <Snackbar open={!!toast} autoHideDuration={3500} onClose={() => setToast('')} message={toast} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }} />
+
+      <Menu
+        open={!!ctxMenu}
+        onClose={() => setCtxMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={ctxMenu ? { top: ctxMenu.y, left: ctxMenu.x } : undefined}
+        slotProps={{ list: { dense: true } }}
+      >
+        {ctxMenu && [
+          <MenuItem key="info" onClick={() => { const r = ctxMenu.row; setCtxMenu(null); openEdit(tasks.find((t) => t.id === r.task.id) || r.task); }}>Information…</MenuItem>,
+          <MenuItem key="scroll" onClick={() => { const r = ctxMenu.row; setCtxMenu(null); setScrollReq((p) => ({ id: r.task.id, n: (p?.n ?? 0) + 1 })); }}>Scroll to Task</MenuItem>,
+          <Divider key="d1" />,
+          <MenuItem key="insert" onClick={() => { const r = ctxMenu.row; setCtxMenu(null); openAdd(tasks.find((t) => t.id === r.task.id) || r.task); }}>Insert Task Below</MenuItem>,
+          <MenuItem key="indent" onClick={() => { const r = ctxMenu.row; setCtxMenu(null); void indentTask(r); }}>Indent Task</MenuItem>,
+          <MenuItem key="outdent" disabled={!ctxMenu.row.task.parentId} onClick={() => { const r = ctxMenu.row; setCtxMenu(null); void outdentTask(r); }}>Outdent Task</MenuItem>,
+          <Divider key="d2" />,
+          <Box key="hl" sx={{ px: 2, py: 0.75, display: 'flex', alignItems: 'center', gap: 0.75 }}>
+            <Typography variant="body2" sx={{ mr: 0.5 }}>Highlight</Typography>
+            {(Object.keys(TASK_HIGHLIGHTS) as TaskHighlight[]).map((c) => (
+              <Box
+                key={c} title={c}
+                onClick={() => { setCtxMenu(null); void applyHighlight(c); }}
+                sx={{ width: 16, height: 16, borderRadius: '50%', bgcolor: TASK_HIGHLIGHTS[c], border: '1px solid rgba(0,0,0,0.25)', cursor: 'pointer', '&:hover': { transform: 'scale(1.2)' } }}
+              />
+            ))}
+          </Box>,
+          <MenuItem key="clearhl" onClick={() => { setCtxMenu(null); void applyHighlight(null); }}>Clear Highlight</MenuItem>,
+          <Divider key="d3" />,
+          <MenuItem
+            key="delete" sx={{ color: 'error.main' }}
+            onClick={() => { const r = ctxMenu.row; setCtxMenu(null); if (selectedTasks.length > 1) setBulkDelete(selectedTasks); else setDeleteTarget(tasks.find((t) => t.id === r.task.id) || r.task); }}
+          >
+            {selectedTasks.length > 1 ? `Delete ${selectedTasks.length} Tasks` : 'Delete Task'}
+          </MenuItem>,
+        ]}
+      </Menu>
 
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>{editingId ? 'Edit Task' : 'Add Task'}</DialogTitle>
@@ -1082,24 +2020,94 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                 sx={{ whiteSpace: 'nowrap' }}
               />
             </Stack>
+            <Stack direction="row" spacing={1.5} alignItems="center">
+              <Typography variant="body2" color="text.secondary">Task mode</Typography>
+              <ToggleButtonGroup
+                size="small" exclusive value={form.mode}
+                onChange={(_, v: 'auto' | 'manual' | null) => {
+                  if (!v) return;
+                  setForm((f) => (v === 'manual'
+                    ? { ...f, mode: v, finishDate: f.isMilestone ? f.startDate : addWorkingDays(nextWorkingDay(f.startDate, workingDays), normDuration(f.durationDays), workingDays) }
+                    : { ...f, mode: v, durationDays: f.finishDate >= f.startDate ? workingDaysBetween(f.startDate, f.finishDate, workingDays) : f.durationDays }));
+                }}
+                sx={{ '& .MuiToggleButton-root': { py: 0.25, px: 1.5, textTransform: 'none' } }}
+              >
+                <ToggleButton value="auto">Auto scheduled</ToggleButton>
+                <ToggleButton value="manual">Manually scheduled</ToggleButton>
+              </ToggleButtonGroup>
+              <Typography variant="caption" color="text.secondary">
+                {form.mode === 'auto' ? 'Dates follow the predecessors.' : 'Your dates stand; predecessors won’t move it.'}
+              </Typography>
+            </Stack>
             <Stack direction="row" spacing={2}>
               <TextField
                 label="Start date" type="date" value={form.startDate} fullWidth InputLabelProps={{ shrink: true }}
-                disabled={form.predecessors.length > 0}
-                helperText={form.predecessors.length > 0 ? 'Driven by predecessors' : ' '}
+                disabled={form.mode === 'auto' && form.links.length > 0}
+                helperText={form.mode === 'auto' && form.links.length > 0 ? 'Driven by predecessors' : ' '}
                 onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
               />
+              {form.mode === 'manual' ? (
+                <TextField
+                  label="Finish date" type="date" value={form.isMilestone ? form.startDate : form.finishDate} fullWidth InputLabelProps={{ shrink: true }}
+                  disabled={form.isMilestone}
+                  error={!form.isMilestone && form.finishDate < form.startDate}
+                  helperText={!form.isMilestone && form.finishDate >= form.startDate ? `${workingDaysBetween(form.startDate, form.finishDate, workingDays)} day(s)` : ' '}
+                  onChange={(e) => setForm((f) => ({ ...f, finishDate: e.target.value }))}
+                />
+              ) : (
+                <TextField
+                  label="Duration (days)" type="number" value={form.durationDays} fullWidth
+                  disabled={form.isMilestone}
+                  inputProps={{ min: 0.5, step: 0.5 }}
+                  helperText="Half days allowed (e.g. 0.5, 1.5)"
+                  onChange={(e) => setForm((f) => ({ ...f, durationDays: Number(e.target.value) }))}
+                  onWheel={blurNumberInputOnWheel}
+                />
+              )}
               <TextField
-                label="Duration (days)" type="number" value={form.durationDays} fullWidth
-                disabled={form.isMilestone}
-                inputProps={{ min: 1 }}
-                onChange={(e) => setForm((f) => ({ ...f, durationDays: Math.max(1, Number(e.target.value) || 1) }))}
+                label="Manpower" type="number" value={form.crew.length ? crewTotal(form.crew) : form.manpower} fullWidth
+                disabled={form.isMilestone || form.crew.length > 0}
+                inputProps={{ min: 0, step: 1 }}
+                helperText={form.crew.length ? 'Total of the crew below' : 'Headcount per working day'}
+                onChange={(e) => setForm((f) => ({ ...f, manpower: Math.max(0, Number(e.target.value) || 0) }))}
                 onWheel={blurNumberInputOnWheel}
               />
             </Stack>
             {!form.isMilestone && (
+              <Box>
+                <Typography variant="body2" color="text.secondary">Crew by role (optional — splits the manpower chart by discipline)</Typography>
+                <CrewEditor
+                  crew={form.crew}
+                  knownRoles={Array.from(new Set(tasks.flatMap((t) => (t.crew || []).map((c) => c.role))))}
+                  onCommit={(crew) => setForm((f) => ({ ...f, crew }))}
+                />
+              </Box>
+            )}
+            {(() => {
+              const isPhase = !!editingId && tasks.some((t) => t.parentId === editingId);
+              const others = leafTasks(tasks).filter((t) => t.id !== editingId).reduce((sum, t) => sum + Math.max(0, Number(t.weight) || 0), 0);
+              const w = Math.max(0, Number(form.weight) || 0);
+              const help = isPhase
+                ? "A phase's weight is the sum of its tasks' weights — set weights on its tasks."
+                : w > 0
+                  ? `≈ ${((w / (others + w)) * 100).toFixed(1)}% of project progress`
+                  : weightInfo.mode === 'manual'
+                    ? 'No weight — this task counts 0 toward progress'
+                    : 'Blank = weigh by duration (current method)';
+              return (
+                <TextField
+                  label="Progress weight" type="number" value={isPhase ? '' : form.weight || ''} fullWidth
+                  disabled={isPhase}
+                  inputProps={{ min: 0, step: 0.1 }}
+                  helperText={help}
+                  onChange={(e) => setForm((f) => ({ ...f, weight: Math.max(0, Number(e.target.value) || 0) }))}
+                  onWheel={blurNumberInputOnWheel}
+                />
+              );
+            })()}
+            {!form.isMilestone && form.mode === 'auto' && (
               <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-                Ends {fmt(toDate(addWorkingDays(nextWorkingDay(form.startDate, workingDays), Math.max(1, Math.round(form.durationDays) || 1), workingDays)))}
+                Ends {fmt(toDate(addWorkingDays(nextWorkingDay(form.startDate, workingDays), normDuration(form.durationDays), workingDays)))}
                 {workingDays ? ' · working days' : ''}
               </Typography>
             )}
@@ -1122,30 +2130,24 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               );
             })()}
             {(() => {
-              const summaryIds = new Set(tasks.filter((t) => t.parentId).map((t) => t.parentId));
-              const cands = tasks.filter((t) => t.id !== editingId && !summaryIds.has(t.id) && (!editingId || !wouldCycle(tasks, editingId, t.id)));
+              const check = parsePredecessors(form.predText, editingId);
+              const names = check.links.map((l) => {
+                const n = tasks.find((t) => t.id === l.id)?.name;
+                return n ? `${n}${l.type !== 'FS' || l.lag ? ` (${formatLink('', l)})` : ''}` : '';
+              }).filter(Boolean).join(', ');
               return (
                 <TextField
-                  select fullWidth label="Predecessors (finish-to-start)"
-                  value={form.predecessors}
-                  SelectProps={{
-                    multiple: true,
-                    renderValue: (sel) => {
-                      const arr = sel as string[];
-                      return arr.length === 0 ? 'None' : arr.map((pid) => tasks.find((t) => t.id === pid)?.name || '?').join(', ');
-                    },
+                  fullWidth label="Predecessors (row IDs)" placeholder="e.g. 3, 5SS, 7FS+2d"
+                  value={form.predText}
+                  error={!!check.error}
+                  onChange={(e) => {
+                    const text = e.target.value;
+                    const next = parsePredecessors(text, editingId);
+                    setForm((f) => ({ ...f, predText: text, links: next.error ? f.links : next.links }));
                   }}
-                  onChange={(e) => setForm((f) => ({ ...f, predecessors: e.target.value as unknown as string[] }))}
-                  helperText={form.predecessors.length > 0 ? 'This task starts after the selected task(s) finish.' : 'Optional — link this task to start after others.'}
-                >
-                  {cands.length === 0 && <MenuItem disabled value="">No other tasks to depend on</MenuItem>}
-                  {cands.map((t) => (
-                    <MenuItem key={t.id} value={t.id}>
-                      <Checkbox checked={form.predecessors.includes(t.id)} size="small" sx={{ py: 0 }} />
-                      {t.name}
-                    </MenuItem>
-                  ))}
-                </TextField>
+                  helperText={check.error
+                    || (names ? `Linked to: ${names}` : 'Row IDs, comma-separated. Optional type + lag: 3SS, 4FS+2d, 5FF-1d (default FS).')}
+                />
               );
             })()}
             <Box>
@@ -1261,9 +2263,165 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         </DialogActions>
       </Dialog>
 
+      <Dialog open={!!bulkDelete} onClose={() => setBulkDelete(null)}>
+        <DialogTitle>Delete {bulkDelete?.length} tasks?</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ mb: 1 }}>These tasks will be removed from the schedule. This can't be undone.</Typography>
+          {bulkDelete?.slice(0, 8).map((t) => <Typography key={t.id} variant="body2" color="text.secondary">• {t.name}</Typography>)}
+          {(bulkDelete?.length || 0) > 8 && <Typography variant="body2" color="text.secondary">…and {(bulkDelete?.length || 0) - 8} more</Typography>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkDelete(null)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={() => { const ids = (bulkDelete || []).map((t) => t.id); setBulkDelete(null); void deleteTasks(ids); }}>Delete</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Menu anchorEl={hlMenu} open={!!hlMenu} onClose={() => setHlMenu(null)} slotProps={{ list: { dense: true } }}>
+        {(Object.keys(TASK_HIGHLIGHTS) as TaskHighlight[]).map((c) => (
+          <MenuItem key={c} onClick={() => { setHlMenu(null); void applyHighlight(c); }}>
+            <Box sx={{ width: 16, height: 16, borderRadius: '3px', bgcolor: TASK_HIGHLIGHTS[c], border: '1px solid rgba(0,0,0,0.2)', mr: 1.25 }} />
+            {c.charAt(0).toUpperCase() + c.slice(1)}{c === lastHighlight ? '  (H)' : ''}
+          </MenuItem>
+        ))}
+        <Divider />
+        <MenuItem onClick={() => { setHlMenu(null); void applyHighlight(null); }}>No highlight</MenuItem>
+      </Menu>
+
+      <Dialog open={helpOpen} onClose={() => setHelpOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Keyboard shortcuts</DialogTitle>
+        <DialogContent>
+          <Table size="small">
+            <TableBody>
+              {SHORTCUTS.map(([k, d]) => (
+                <TableRow key={k}>
+                  <TableCell sx={{ whiteSpace: 'nowrap', width: '40%' }}>
+                    <Box component="kbd" sx={{ fontFamily: 'monospace', fontSize: 12, px: 0.75, py: 0.25, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'grey.50' }}>{k}</Box>
+                  </TableCell>
+                  <TableCell>{d}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </DialogContent>
+        <DialogActions><Button onClick={() => setHelpOpen(false)}>Close</Button></DialogActions>
+      </Dialog>
+
+      {/* Progress weights */}
+      <Dialog open={weightsOpen} onClose={() => !weightsSaving && setWeightsOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Progress weights</DialogTitle>
+        <DialogContent>
+          {(() => {
+            const rows = flattenTree(rolledTasks, new Set());
+            const total = Object.values(weightDraft).reduce((a, b) => a + b, 0);
+            const manual = total > 0;
+            const durBasis: Record<string, number> = {};
+            leafTasks(tasks).forEach((t) => { durBasis[t.id] = durationWeight(t); });
+            const durTotal = Object.values(durBasis).reduce((a, b) => a + b, 0);
+            const missing = manual ? Object.values(weightDraft).filter((v) => !(v > 0)).length : 0;
+            const shareOf = (tid: string) => (manual ? (total > 0 ? ((weightDraft[tid] || 0) / total) * 100 : 0) : (durTotal > 0 ? (durBasis[tid] / durTotal) * 100 : 0));
+            return (
+              <>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  Each task's share of project progress = its weight ÷ total weight. Enter any consistent unit — percentages,
+                  contract value, or man-hours. Leave every weight blank to weigh tasks by duration.
+                  Project % complete = Σ (share × task % complete); phases roll up the same way.
+                </Typography>
+                <Stack direction="row" spacing={1} sx={{ mb: 1.5 }} flexWrap="wrap" useFlexGap>
+                  <Button size="small" variant="outlined" onClick={() => setWeightDraft(toPercents(durBasis))}>Fill from duration</Button>
+                  <Button size="small" variant="outlined" onClick={() => {
+                    const ids = Object.keys(weightDraft);
+                    setWeightDraft(toPercents(Object.fromEntries(ids.map((k) => [k, 1]))));
+                  }}>Distribute evenly</Button>
+                  {manual && Math.abs(total - 100) > 0.01 && (
+                    <Button size="small" variant="outlined" onClick={() => setWeightDraft(toPercents(weightDraft))}>Scale to 100</Button>
+                  )}
+                  <Button size="small" color="inherit" onClick={() => setWeightDraft(Object.fromEntries(Object.keys(weightDraft).map((k) => [k, 0])))}>Clear (use duration)</Button>
+                </Stack>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ width: 40 }}>ID</TableCell>
+                      <TableCell>Task</TableCell>
+                      <TableCell align="right" sx={{ width: 90 }}>Duration</TableCell>
+                      <TableCell align="right" sx={{ width: 130 }}>Weight</TableCell>
+                      <TableCell align="right" sx={{ width: 100 }}>Share</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {rows.map((r, i) => {
+                      const t = r.task;
+                      if (r.isSummary) {
+                        const sub = Array.from(descendantIds(tasks, t.id));
+                        const phaseShare = sub.reduce((a, tid) => a + (tid in weightDraft ? shareOf(tid) : 0), 0);
+                        const phaseWeight = sub.reduce((a, tid) => a + (weightDraft[tid] || 0), 0);
+                        return (
+                          <TableRow key={t.id} sx={{ bgcolor: 'grey.50' }}>
+                            <TableCell>{i + 1}</TableCell>
+                            <TableCell sx={{ fontWeight: 700, pl: `${16 + r.depth * 16}px` }}>{t.name}</TableCell>
+                            <TableCell />
+                            <TableCell align="right" sx={{ fontWeight: 700 }}>{manual ? Math.round(phaseWeight * 100) / 100 : ''}</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700 }}>{phaseShare.toFixed(1)}%</TableCell>
+                          </TableRow>
+                        );
+                      }
+                      return (
+                        <TableRow key={t.id}>
+                          <TableCell>{i + 1}</TableCell>
+                          <TableCell sx={{ pl: `${16 + r.depth * 16}px` }}>{t.name}</TableCell>
+                          <TableCell align="right">{t.isMilestone ? '0 days' : `${t.durationDays != null && t.durationDays < 1 ? t.durationDays : durationOf(t.startDate, t.endDate)} d`}</TableCell>
+                          <TableCell align="right">
+                            <TextField
+                              size="small" type="number" variant="standard" value={weightDraft[t.id] || ''}
+                              placeholder={manual ? '0' : (durTotal > 0 ? ((durBasis[t.id] / durTotal) * 100).toFixed(2) : '')}
+                              inputProps={{ min: 0, step: 0.1, style: { textAlign: 'right' } }}
+                              onChange={(e) => setWeightDraft((d) => ({ ...d, [t.id]: Math.max(0, Number(e.target.value) || 0) }))}
+                              onWheel={blurNumberInputOnWheel}
+                              sx={{ width: 100 }}
+                            />
+                          </TableCell>
+                          <TableCell align="right" sx={{ color: manual ? (weightDraft[t.id] > 0 ? 'text.primary' : 'warning.dark') : 'text.secondary' }}>
+                            {shareOf(t.id).toFixed(1)}%
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    <TableRow>
+                      <TableCell />
+                      <TableCell sx={{ fontWeight: 700 }}>Total{manual ? '' : ' (weighted by duration)'}</TableCell>
+                      <TableCell />
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>{manual ? Math.round(total * 100) / 100 : '—'}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>100.0%</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+                {/* Below the table so it never shifts the rows while typing */}
+                {missing > 0 && (
+                  <Alert severity="warning" sx={{ mt: 1.5 }}>{missing} task{missing === 1 ? ' has' : 's have'} no weight and will count 0 toward progress.</Alert>
+                )}
+              </>
+            );
+          })()}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setWeightsOpen(false)} disabled={weightsSaving}>Cancel</Button>
+          <Button variant="contained" onClick={() => void saveWeights()} disabled={weightsSaving}>{weightsSaving ? 'Saving…' : 'Save weights'}</Button>
+        </DialogActions>
+      </Dialog>
+
+      <ScheduleExportDialog
+        open={pdfOpen}
+        onClose={() => setPdfOpen(false)}
+        projectId={id}
+        project={{ code, name }}
+        rows={exportRows}
+        loadData={loadExportData}
+        initial={{ showCritical, showBaseline: showBaseline && !!baseline }}
+        hasBaseline={!!baseline}
+      />
+
       {/* Save version dialog */}
       <Dialog open={saveVerOpen} onClose={() => !savingVer && setSaveVerOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>Save schedule version</DialogTitle>
+        <DialogTitle>{saveAsBaseline ? 'Set baseline' : 'Save schedule version'}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Freezes the current schedule ({sorted.length} task{sorted.length === 1 ? '' : 's'}) as a named version you can restore later.
@@ -1275,11 +2433,21 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             onChange={(e) => setVerLabel(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void saveVersion(); }}
           />
+          <FormControlLabel
+            sx={{ mt: 1 }}
+            control={<Checkbox size="small" checked={saveAsBaseline} onChange={(e) => setSaveAsBaseline(e.target.checked)} />}
+            label={<Typography variant="body2">Set as the baseline</Typography>}
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 4 }}>
+            {baseline
+              ? `Replaces the current baseline (saved ${new Date(baseline.savedAt).toLocaleDateString()}).`
+              : 'The baseline is the reference plan — it stays put while the schedule changes.'}
+          </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSaveVerOpen(false)} disabled={savingVer}>Cancel</Button>
           <Button variant="contained" onClick={() => void saveVersion()} disabled={savingVer} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>
-            {savingVer ? 'Saving…' : 'Save version'}
+            {savingVer ? 'Saving…' : saveAsBaseline ? 'Set baseline' : 'Save version'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1321,10 +2489,14 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
                       {v.label && (
                         <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>“{v.label}”</Typography>
                       )}
+                      {v.isBaseline && <Chip size="small" icon={<FlagIcon />} label="Baseline" color="primary" variant="outlined" sx={{ ml: 1, height: 20 }} />}
                     </TableCell>
                     <TableCell align="right">{v.taskCount}</TableCell>
                     <TableCell align="right">{v.overallProgress}%</TableCell>
                     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                      <Button size="small" startIcon={v.isBaseline ? <FlagIcon /> : <OutlinedFlagIcon />} onClick={() => void toggleBaseline(v)}>
+                        {v.isBaseline ? 'Clear baseline' : 'Set as baseline'}
+                      </Button>
                       <Button size="small" startIcon={<CompareArrowsIcon />} onClick={() => void openCompare(v)}>
                         Compare
                       </Button>

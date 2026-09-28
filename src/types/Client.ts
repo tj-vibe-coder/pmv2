@@ -19,6 +19,12 @@ export interface Client {
   code: string;              // 3-char code (e.g. "ADI"). Empty allowed for legacy docs.
   name: string;
   address?: string;
+  /** Physical plant/site this client (buyer company) operates at. Free text,
+   * shared across multiple separate Client records when one plant has
+   * several distinct buyer entities — use the same value on each so they can
+   * be found together via the Clients page search/filter. Not a foreign key
+   * to any other collection; just a grouping label. */
+  plant?: string;
   paymentTerms?: string;
   am?: string;               // IOCT-side Account Manager
   contacts: ClientContact[];

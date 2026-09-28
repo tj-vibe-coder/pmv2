@@ -109,6 +109,18 @@ export function FloatingTotalsWidget({
               <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'error.main' }}>− {PHP(totals.discount)}</Typography>
             </Stack>
           )}
+          {(totals.deliveryFee ?? 0) > 0 && (
+            <Stack direction="row" justifyContent="space-between">
+              <Typography variant="caption" color="text.secondary">Delivery Fee</Typography>
+              <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{PHP(totals.deliveryFee ?? 0)}</Typography>
+            </Stack>
+          )}
+          {(totals.smallOrderSurcharge ?? 0) > 0 && (
+            <Stack direction="row" justifyContent="space-between">
+              <Typography variant="caption" color="text.secondary">Small-order surcharge</Typography>
+              <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{PHP(totals.smallOrderSurcharge ?? 0)}</Typography>
+            </Stack>
+          )}
           {quotation.vatPct > 0 && (
             <Stack direction="row" justifyContent="space-between">
               <Typography variant="caption" color="text.secondary">VAT ({quotation.vatPct}%)</Typography>

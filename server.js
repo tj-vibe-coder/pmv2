@@ -954,7 +954,7 @@ app.get('/api/clients/:id', async (req, res) => {
 });
 
 app.post('/api/clients', async (req, res) => {
-  const { code, name, address, paymentTerms, am, contacts } = req.body || {};
+  const { code, name, address, plant, paymentTerms, am, contacts } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Client name is required' });
   if (!Array.isArray(contacts) || contacts.length === 0) {
     return res.status(400).json({ error: 'At least one contact is required' });
@@ -965,6 +965,7 @@ app.post('/api/clients', async (req, res) => {
       code: (code || '').trim().toUpperCase().slice(0, 4),
       name: name.trim(),
       address: address || '',
+      plant: (plant || '').trim(),
       paymentTerms: paymentTerms || '',
       am: am || '',
       contacts: contacts.map((c) => ({
@@ -992,7 +993,7 @@ app.post('/api/clients', async (req, res) => {
 
 app.put('/api/clients/:id', async (req, res) => {
   const { id } = req.params;
-  const { code, name, address, paymentTerms, am, contacts } = req.body || {};
+  const { code, name, address, plant, paymentTerms, am, contacts } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Client name is required' });
   if (!Array.isArray(contacts) || contacts.length === 0) {
     return res.status(400).json({ error: 'At least one contact is required' });
@@ -1018,6 +1019,7 @@ app.put('/api/clients/:id', async (req, res) => {
       code: (code || '').trim().toUpperCase().slice(0, 4),
       name: trimmedName,
       address: address || '',
+      plant: (plant || '').trim(),
       paymentTerms: paymentTerms || '',
       am: am || '',
       contacts: cleanedContacts,
@@ -3511,7 +3513,15 @@ function quotationGrandTotal(q) {
   const servicesLineSum = () => services.reduce((s, l) => s + num(l.amount), 0);
   const finish = (subtotal) => {
     const afterDiscount = subtotal * (1 - num(q.discountPct) / 100);
-    return afterDiscount * (1 + num(q.vatPct) / 100);
+    // Delivery fee + minimum-order surcharge (opt-in). Mirror calc.ts: tested on
+    // the goods+services subtotal, VAT-able (added before VAT), pass-through.
+    const deliveryEnabled = q.deliveryTermsEnabled === true;
+    const minOrderThreshold = Number.isFinite(Number(q.minOrderThreshold)) ? Number(q.minOrderThreshold) : 50000;
+    const deliveryFee = deliveryEnabled ? num(q.deliveryFee) : 0;
+    const smallOrderFee = Number.isFinite(Number(q.smallOrderFee)) ? Number(q.smallOrderFee) : 5000;
+    const surcharge = deliveryEnabled && subtotal < minOrderThreshold ? smallOrderFee : 0;
+    const deliveryTotal = deliveryFee + surcharge;
+    return (afterDiscount + deliveryTotal) * (1 + num(q.vatPct) / 100);
   };
 
   if (q.formulaVersion === 'legacy') {
@@ -4015,37 +4025,41 @@ async function syncScheduleProgressToMonitoringProject(projectId) {
   if (!projDoc.exists) return;
   const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
   if (snap.empty) return;
-  // Only leaf tasks contribute — WBS summary tasks roll up and would double-count.
-  const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  const parents = new Set(rows.filter((t) => t.parentId).map((t) => String(t.parentId)));
-  const leaves = rows.filter((t) => !parents.has(String(t.id)));
-  let weighted = 0;
-  let weight = 0;
-  for (const t of leaves) {
-    const start = new Date(t.startDate).getTime();
-    const end = new Date(t.endDate).getTime();
-    const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
-    weighted += (Number(t.progressPct) || 0) * days;
-    weight += days;
-  }
-  if (weight <= 0) return;
-  const pct = Math.max(0, Math.min(100, Math.round(weighted / weight)));
+  const rows = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
+  const pct = scheduleTasksOverallProgress(rows);
+  if (pct === null) return;
   const status = pct <= 0 ? 'Not Started' : pct >= 100 ? 'Completed' : 'In Progress';
   await projDoc.ref.update({ actual_site_progress_percent: pct, project_status: status, updated_at: new Date().toISOString() });
 }
 
 // Progress-weighted overall % across a task array (milestones weigh 1 day).
+// Project % complete from schedule tasks. Only leaf tasks count (WBS summary
+// tasks roll up and would double-count). Weighted by each task's manual
+// `weight` once any leaf has one (leaves left unweighted then count 0);
+// otherwise by duration in days (milestones = 1). Mirrors
+// src/utils/calcsheet/scheduleWeights.ts. Returns null with nothing to weigh.
 function scheduleTasksOverallProgress(tasks) {
+  const parents = new Set(tasks.filter((t) => t.parentId).map((t) => String(t.parentId)));
+  const leaves = tasks.filter((t) => !parents.has(String(t.id)));
+  const manual = leaves.some((t) => Number(t.weight) > 0);
   let weighted = 0;
   let weight = 0;
-  for (const t of tasks) {
-    const start = new Date(t.startDate).getTime();
-    const end = new Date(t.endDate).getTime();
-    const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
-    weighted += (Number(t.progressPct) || 0) * days;
-    weight += days;
+  for (const t of leaves) {
+    let w;
+    if (manual) {
+      w = Math.max(0, Number(t.weight) || 0);
+    } else {
+      const start = new Date(t.startDate).getTime();
+      const end = new Date(t.endDate).getTime();
+      const dd = Number(t.durationDays);
+      w = t.isMilestone || !(end >= start) ? 1
+        : dd > 0 && dd < 1 ? dd // half-day task
+          : Math.max(1, Math.round((end - start) / 86400000) + 1);
+    }
+    weighted += (Number(t.progressPct) || 0) * w;
+    weight += w;
   }
-  return weight > 0 ? Math.max(0, Math.min(100, Math.round(weighted / weight))) : 0;
+  return weight > 0 ? Math.max(0, Math.min(100, Math.round(weighted / weight))) : null;
 }
 
 // Freeze a project's whole Gantt (all tasks) into a named version snapshot.
@@ -4060,12 +4074,27 @@ async function snapshotScheduleVersion(projectId, label, savedBy) {
     savedBy: savedBy || null,
     label: (label && String(label).trim()) || null,
     taskCount: tasks.length,
-    overallProgress: scheduleTasksOverallProgress(tasks),
+    overallProgress: scheduleTasksOverallProgress(tasks) ?? 0,
     tasks,
   };
   const ref = await db.collection('calcsheet_schedule_versions').add(doc);
   const { tasks: _t, ...meta } = doc;
   return { ...meta, id: ref.id };
+}
+
+// Make one version the project's baseline (MS Project "Set Baseline") — at most
+// one per project, so any other flagged version is cleared. versionId null
+// clears the baseline.
+async function setScheduleBaseline(projectId, versionId) {
+  const snap = await db.collection('calcsheet_schedule_versions').where('projectId', '==', String(projectId)).get();
+  const now = new Date().toISOString();
+  const batch = db.batch();
+  snap.docs.forEach((dd) => {
+    const on = dd.id === versionId;
+    if (on) batch.update(dd.ref, { isBaseline: true, baselineSetAt: now });
+    else if (dd.data().isBaseline) batch.update(dd.ref, { isBaseline: false });
+  });
+  await batch.commit();
 }
 
 // ── Projects ─────────────────────────────────────────────────────────────────
@@ -4448,6 +4477,63 @@ app.delete('/api/calcsheet/presets/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to delete preset' }); }
 });
 
+// ── Scope Library (reusable inclusion bundles) ───────────────────────────────
+// Team-shared named sets of general requirements / components / services /
+// manpower (+ optional scope/exclusions text) that can be inserted into any
+// quotation. Mirrors the presets CRUD. Collection: calcsheet_scope_library.
+app.get('/api/calcsheet/scope-library', async (req, res) => {
+  try {
+    const snap = await db.collection('calcsheet_scope_library').get();
+    // Spread data first so a stray stored `id` can't clobber the doc id; sort
+    // newest-first in memory (avoids requiring an `updatedAt` field/index on
+    // every doc, matching the version-history read pattern).
+    const bundles = snap.docs
+      .map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; })
+      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    res.json({ success: true, bundles });
+  } catch (err) { res.status(500).json({ error: 'Failed to get scope library' }); }
+});
+
+app.post('/api/calcsheet/scope-library', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    // Strip any client-supplied `id`, and stamp attribution + timestamps
+    // server-side so the created bundle's id is the canonical Firestore ref.id.
+    const { id: _ignored, ...data } = req.body || {};
+    const now = new Date().toISOString();
+    const doc = {
+      ...data,
+      createdBy: user.id || null,
+      createdByName: user.full_name || user.username || null,
+      createdAt: data.createdAt || now,
+      updatedAt: now,
+    };
+    const ref = await db.collection('calcsheet_scope_library').add(doc);
+    res.json({ success: true, bundle: { ...doc, id: ref.id } });
+  } catch (err) { res.status(500).json({ error: 'Failed to save scope bundle' }); }
+});
+
+app.put('/api/calcsheet/scope-library/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { id: _ignored, ...patch } = req.body || {};
+    await db.collection('calcsheet_scope_library').doc(req.params.id)
+      .update({ ...patch, updatedAt: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update scope bundle' }); }
+});
+
+app.delete('/api/calcsheet/scope-library/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    await db.collection('calcsheet_scope_library').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete scope bundle' }); }
+});
+
 // ── Project work schedule (Gantt) tasks ───────────────────────────────────────
 // Equality-only filter on projectId, sorted in memory — no composite index
 // needed (see project_expenses above for why that matters on this repo's
@@ -4510,6 +4596,47 @@ app.put('/api/schedule-tasks/:id', async (req, res) => {
   }
 });
 
+// Write an exact set of task snapshots (keeping their ids) and delete others —
+// used by the Gantt's Undo / Redo. Each upserted doc is replaced wholesale, so
+// fields added since the snapshot are dropped too. Every task must belong to
+// `projectId`.
+app.post('/api/schedule-tasks/sync', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { projectId, upsert = [], remove = [] } = req.body || {};
+    if (!projectId || !Array.isArray(upsert) || !Array.isArray(remove)) {
+      return res.status(400).json({ success: false, error: 'projectId, upsert[] and remove[] are required' });
+    }
+    const pid = String(projectId);
+    const idOk = (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
+    if (!upsert.every((t) => t && idOk(t.id) && String(t.projectId) === pid) || !remove.every(idOk)) {
+      return res.status(400).json({ success: false, error: 'Invalid task ids or project' });
+    }
+    const col = db.collection('calcsheet_schedule_tasks');
+    // Don't let a sync touch another project's tasks.
+    const existing = await col.where('projectId', '==', pid).get();
+    const mine = new Set(existing.docs.map((d) => d.id));
+    const foreign = await Promise.all(upsert.filter((t) => !mine.has(t.id)).map((t) => col.doc(t.id).get()));
+    if (foreign.some((d) => d.exists)) return res.status(409).json({ success: false, error: 'A task id belongs to another project' });
+    const now = new Date().toISOString();
+    const ops = [
+      ...upsert.map((t) => (b) => { const { id, ...data } = t; b.set(col.doc(id), stripUndefinedFields({ ...data, projectId: pid, updatedAt: now })); }),
+      ...remove.filter((id) => mine.has(id)).map((id) => (b) => b.delete(col.doc(id))),
+    ];
+    for (let i = 0; i < ops.length; i += 450) {
+      const batch = db.batch();
+      ops.slice(i, i + 450).forEach((op) => op(batch));
+      await batch.commit();
+    }
+    await syncScheduleProgressToMonitoringProject(pid).catch((e) => console.error('Schedule progress sync failed:', e.message));
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error syncing schedule tasks:', err);
+    res.status(500).json({ success: false, error: 'Failed to sync schedule tasks' });
+  }
+});
+
 app.delete('/api/schedule-tasks/:id', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
@@ -4533,9 +4660,13 @@ app.post('/api/schedule-versions', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    const { projectId, label } = req.body || {};
+    const { projectId, label, baseline } = req.body || {};
     if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
     const version = await snapshotScheduleVersion(projectId, label, user.full_name || user.username || null);
+    if (baseline === true) {
+      await setScheduleBaseline(projectId, version.id);
+      version.isBaseline = true;
+    }
     res.json({ success: true, version });
   } catch (err) {
     console.error('Error saving schedule version:', err);
@@ -4593,10 +4724,14 @@ app.post('/api/schedule-versions/:id/restore', async (req, res) => {
     const items = (v.tasks || []).map((t) => ({ t, ref: db.collection('calcsheet_schedule_tasks').doc() }));
     const idMap = new Map(items.filter((it) => it.t.id).map((it) => [it.t.id, it.ref.id]));
     items.forEach(({ t, ref }) => {
-      const { id: _i, projectId: _p, createdAt: _c, updatedAt: _u, predecessors, parentId, ...rest } = t;
+      const { id: _i, projectId: _p, createdAt: _c, updatedAt: _u, predecessors, parentId, linkTypes, ...rest } = t;
       const remapped = Array.isArray(predecessors) ? predecessors.map((p) => idMap.get(p)).filter(Boolean) : undefined;
       const newParent = parentId ? (idMap.get(parentId) || null) : null;
-      batch.set(ref, stripUndefinedFields({ ...rest, predecessors: remapped, parentId: newParent, projectId, createdAt: now, updatedAt: now }));
+      // Link type/lag map is keyed by predecessor id — remap its keys too.
+      const newLinkTypes = linkTypes && typeof linkTypes === 'object'
+        ? Object.fromEntries(Object.entries(linkTypes).filter(([k]) => idMap.has(k)).map(([k, v]) => [idMap.get(k), v]))
+        : undefined;
+      batch.set(ref, stripUndefinedFields({ ...rest, predecessors: remapped, linkTypes: newLinkTypes, parentId: newParent, projectId, createdAt: now, updatedAt: now }));
     });
     await batch.commit();
     await syncScheduleProgressToMonitoringProject(projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
@@ -4604,6 +4739,22 @@ app.post('/api/schedule-versions/:id/restore', async (req, res) => {
   } catch (err) {
     console.error('Error restoring schedule version:', err);
     res.status(500).json({ success: false, error: 'Failed to restore schedule version' });
+  }
+});
+
+// Set (on: true) or clear (on: false) an existing version as the baseline.
+app.post('/api/schedule-versions/:id/baseline', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const vdoc = await db.collection('calcsheet_schedule_versions').doc(req.params.id).get();
+    if (!vdoc.exists) return res.status(404).json({ success: false, error: 'Version not found' });
+    const on = !(req.body && req.body.on === false);
+    await setScheduleBaseline(vdoc.data().projectId, on ? vdoc.id : null);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error setting schedule baseline:', err);
+    res.status(500).json({ success: false, error: 'Failed to set baseline' });
   }
 });
 

@@ -7,8 +7,10 @@ import type {
   Project,
   Quotation,
   QuotationKind,
+  QuotationScopeCategory,
   QuotationVersion,
   SalesContact,
+  ScopeBundle,
 } from '../types/Quotation';
 import { seedClients, seedSalesContacts } from '../data/quotationClients';
 import { seedLaborPresets, starterGeneralReqts } from '../data/quotationPresets';
@@ -68,6 +70,7 @@ interface State {
   clients: Client[];
   salesContacts: SalesContact[];
   laborPresets: LaborRolePreset[];
+  scopeBundles: ScopeBundle[];
   projects: Project[];
   quotations: Quotation[];
   seq: number;
@@ -91,7 +94,7 @@ interface Actions {
   syncMainProject: (id: ID, opts?: { force?: boolean }) => Promise<SyncMainProjectResult>;
 
   // Quotations
-  createQuotation: (projectId: ID, kind: QuotationKind, recipientId: ID | null) => Promise<Quotation>;
+  createQuotation: (projectId: ID, kind: QuotationKind, recipientId: ID | null, scopeCategory?: QuotationScopeCategory) => Promise<Quotation>;
   // `remarks` is an optional changelog note for this save — recorded on the
   // version snapshot the server takes of the pre-save state, not stored on
   // the quotation itself.
@@ -110,6 +113,11 @@ interface Actions {
   updatePreset: (id: ID, patch: Partial<LaborRolePreset>) => Promise<void>;
   deletePreset: (id: ID) => Promise<void>;
   resetPresets: () => Promise<void>;
+
+  // Scope Library (reusable inclusion bundles)
+  addScopeBundle: (b: Omit<ScopeBundle, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'createdByName'>) => Promise<ScopeBundle>;
+  updateScopeBundle: (id: ID, patch: Partial<ScopeBundle>) => Promise<void>;
+  deleteScopeBundle: (id: ID) => Promise<void>;
 
   // Settings
   updateSettings: (patch: CalcsheetSettings) => Promise<void>;
@@ -171,7 +179,11 @@ function mergeSalesContactsWithUsers(
       merged[idx] = {
         ...merged[idx],
         position: patch.position || merged[idx].position,
-        email: patch.email || merged[idx].email,
+        // Email is the opposite priority from position/phone: a hand-curated
+        // seed email (e.g. tj@iocontroltech.com) is the deliberate signing
+        // identity for PDFs and must win over whatever's on the person's
+        // Firestore user account (which may be a personal/login address).
+        email: merged[idx].email || patch.email,
         phone: patch.phone || merged[idx].phone,
       };
     } else {
@@ -192,10 +204,12 @@ const blankQuotation = (
   // editable inline on the quotation; this only sets the seed value so the
   // PDF "Prepared by:" defaults to the AM without manual intervention.
   defaultSignatoryName: string = '',
+  scopeCategory: QuotationScopeCategory = 'both',
 ): Quotation => ({
   id,
   projectId,
   kind,
+  scopeCategory,
   revision: '00',
   recipientId,
   validityDays: 30,
@@ -206,10 +220,23 @@ const blankQuotation = (
   productContingencyPct: 0,
   laborMarkupPct: 100,
   generalReqMarkupPct: 0,
+  // 5% EWT gross-up on new IOCT quotations only (ACTI quotes never get a
+  // default — see the Quotation.ewtPct doc comment).
+  ewtPct: kind === 'IOCT' ? 5 : undefined,
   globalContingencyPct: 0,
   discountPct: 0,
   vatPct: 0,
-  generalReqts: starterGeneralReqts(),
+  // Any scope that can include physical goods (Supply only, or Both) defaults
+  // the delivery fee + minimum-order surcharge on — the team can still switch
+  // it off inline (this is just the starting value, not locked like the
+  // section editability above). Services-only starts off, since there's
+  // nothing to deliver.
+  deliveryTermsEnabled: scopeCategory !== 'services',
+  // Supply-only locks Section A in the editor (see CalcsheetQuotationEditor's
+  // generalReqtsLocked) — seeding it with starter rows there would create a
+  // quotation that's already "stuck": data visible in a section the team can
+  // neither edit nor clear. Every other scope keeps the usual starter rows.
+  generalReqts: scopeCategory === 'supply' ? [] : starterGeneralReqts(),
   components: [],
   services: [],
   manpower: [],
@@ -234,6 +261,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
   clients: seedClients(),
   salesContacts: seedSalesContacts(),
   laborPresets: seedLaborPresets(),
+  scopeBundles: [],
   projects: [],
   quotations: [],
   seq: 1,
@@ -245,7 +273,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
     if (initInFlight) return initInFlight;
     initInFlight = (async () => {
     try {
-      const [pRes, qRes, cRes, prRes, sRes, staffRes, stRes] = await Promise.all([
+      const [pRes, qRes, cRes, prRes, sRes, staffRes, stRes, slRes] = await Promise.all([
         api<{ projects: Project[] }>('GET', '/projects'),
         api<{ quotations: Quotation[] }>('GET', '/quotations'),
         api<{ clients: Client[] }>('GET', '/clients'),
@@ -253,6 +281,9 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
         api<{ seq: number }>('GET', '/seq'),
         api<{ contacts: Array<{ id: string; full_name?: string | null; username?: string; email?: string | null; designation?: string | null; contact_number?: string | null }> }>('GET', '/api/users/staff-contacts').catch(() => ({ contacts: [] })),
         api<{ settings: CalcsheetSettings }>('GET', '/settings').catch(() => ({ settings: {} })),
+        // Scope Library is optional — an older server without the endpoint must
+        // not break init, so swallow failures into an empty library.
+        api<{ bundles: ScopeBundle[] }>('GET', '/scope-library').catch(() => ({ bundles: [] })),
       ]);
       const salesContacts = mergeSalesContactsWithUsers(seedSalesContacts(), staffRes.contacts ?? []);
       let laborPresets: LaborRolePreset[];
@@ -281,6 +312,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
         clients: cRes.clients.length ? cRes.clients : seedClients(),
         salesContacts,
         laborPresets,
+        scopeBundles: slRes.bundles ?? [],
         seq: sRes.seq ?? 1,
         settings: stRes.settings ?? {},
         initialized: true,
@@ -552,7 +584,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
 
   // ── Quotations ─────────────────────────────────────────────────────────────
 
-  createQuotation: async (projectId, kind, recipientId) => {
+  createQuotation: async (projectId, kind, recipientId, scopeCategory = 'both') => {
     // Resolve the project's account manager (salesContact) name and seed it into
     // both signatory fields. Editor remains editable; this just gives a sensible
     // default so the PDF "Prepared by:" starts populated with the AM.
@@ -561,7 +593,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       ? (get().salesContacts.find((sc) => sc.id === project.salesContactId)?.name ?? '')
       : '';
     const defaultTitle = get().settings.defaultJobTitles?.[kind] || undefined;
-    const q: Quotation = { ...blankQuotation(projectId, kind, recipientId, nanoid(8), amName), preparedByTitle: defaultTitle };
+    const q: Quotation = { ...blankQuotation(projectId, kind, recipientId, nanoid(8), amName, scopeCategory), preparedByTitle: defaultTitle };
     const res = await api<{ quotation: Quotation }>('POST', '/quotations', q);
     const saved = res.quotation ?? q;
     set({ quotations: [...get().quotations, saved] });
@@ -673,6 +705,27 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       defaults.map((p) => api<{ preset: LaborRolePreset }>('POST', '/presets', p).then((r) => r.preset ?? p)),
     );
     set({ laborPresets: saved });
+  },
+
+  // ── Scope Library ────────────────────────────────────────────────────────────
+  addScopeBundle: async (b) => {
+    const res = await api<{ bundle: ScopeBundle }>('POST', '/scope-library', b);
+    // The server stamps id/createdBy/timestamps and echoes the full bundle back.
+    // Guard against a malformed 200 so we never push an undefined row into state
+    // (which would crash the library list on the next render).
+    const saved = res.bundle;
+    if (!saved || !saved.id) throw new Error('Server did not return the saved bundle');
+    set({ scopeBundles: [saved, ...get().scopeBundles] });
+    return saved;
+  },
+  updateScopeBundle: async (id, patch) => {
+    await api('PUT', `/scope-library/${id}`, patch);
+    const now = new Date().toISOString();
+    set({ scopeBundles: get().scopeBundles.map((b) => (b.id === id ? { ...b, ...patch, updatedAt: now } : b)) });
+  },
+  deleteScopeBundle: async (id) => {
+    await api('DELETE', `/scope-library/${id}`);
+    set({ scopeBundles: get().scopeBundles.filter((b) => b.id !== id) });
   },
 
   updateSettings: async (patch) => {

@@ -51,7 +51,8 @@ export function prevWorkingDay(s: string, wd: boolean): string {
 
 // Date of the `count`-th working day, counting the (snapped) start as day 1.
 export function addWorkingDays(startDate: string, count: number, wd: boolean): string {
-  const n = Math.max(1, Math.round(count));
+  // Fractional durations (e.g. 0.5, 1.5 days) still occupy whole dates.
+  const n = Math.max(1, Math.ceil(count - 1e-9));
   if (!wd) return addDays(startDate, n - 1);
   let cur = nextWorkingDay(startDate, true);
   let remaining = n - 1;

@@ -23,7 +23,7 @@ type CompanyKey = 'ACTI' | 'IOCT';
 const COMPANY_PRESETS: Record<CompanyKey, { name: string; address: string; tin: string; logo: string }> = {
   ACTI: {
     name: 'Advance Controle Technologie Inc',
-    address: 'Block 13 Lot 8, Mindanao Ave., Gavino Maderan, Gen. Mariano Alvarez, Cavite, Region IV-A (Calabarzon), 4117',
+    address: 'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite 4117, Philippines',
     tin: '008-133-926-000',
     logo: '/logo-acti.png',
   },

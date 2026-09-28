@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 import type { Client, Project, Quotation } from '../../types/Quotation';
 import { PROJECT_STATUSES } from '../../types/Quotation';
 import {
-  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, manpowerCost,
+  computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, serviceLineAmount, manpowerCost,
   formatDiscountPct,
 } from './calc';
 import { quotationRefNo } from './codes';
@@ -26,6 +26,9 @@ export async function exportQuotationXlsx(
   wb.created = new Date();
 
   const totals = computeTotals(quotation);
+  // IOCT-only pricing buffer folded into markup — never printed as its own
+  // line/label. See Quotation.ewtPct.
+  const ewtPct = quotation.ewtPct || 0;
   const refNo = quotationRefNo(project.code, recipient?.code, quotation.revision);
   const generalReqtsExportQty = Math.max(1, quotation.generalReqtsExportQty || 1);
   const generalReqtsExportUnitPrice = totals.generalReqtsSubtotal / generalReqtsExportQty;
@@ -53,7 +56,7 @@ export async function exportQuotationXlsx(
   ws.getCell('A1').font = { name: 'Inter', size: 14, bold: true, color: { argb: navy } };
 
   ws.mergeCells('A2:F2');
-  ws.getCell('A2').value = quotation.kind === 'IOCT' ? 'B63 Biñan, Laguna · TIN: 697-029-976-00000' : 'Block 13, Mindanao Ave., Cavite';
+  ws.getCell('A2').value = quotation.kind === 'IOCT' ? 'B63 Biñan, Laguna · TIN: 697-029-976-00000' : 'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite 4117, Philippines';
   ws.getCell('A2').font = { name: 'Inter', size: 8, color: { argb: 'FF666666' } };
 
   ws.getCell('E1').value = 'QUOTATION';
@@ -162,6 +165,16 @@ export async function exportQuotationXlsx(
       }
     });
     contractComponents.forEach((l, index) => {
+      if (l.isHeader || l.isChildHeader) {
+        ws.mergeCells(`A${r}:F${r}`);
+        const c = ws.getCell(`A${r}`);
+        c.value = l.description;
+        c.font = l.isChildHeader ? { bold: true, italic: true, size: 9, color: { argb: 'FF4F7BC8' } } : { bold: true, color: { argb: 'FF2C5AA0' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: grayBg } };
+        c.alignment = { vertical: 'middle', horizontal: 'left', indent: l.isChildHeader ? 3 : 1 };
+        r++;
+        return;
+      }
       const subheader = subheaderBefore(contractComponents, index);
       if (subheader) inlineSubheader(subheader);
       // Item name on the first line; brand + part number on a wrapped
@@ -176,7 +189,7 @@ export async function exportQuotationXlsx(
         // as one combined amount on the middle row (no per-unit price shown).
         const itemized = quotation.componentGroupDisplay?.[l.group] === 'itemized';
         const groupTotal = isMid
-          ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct), 0)
+          ? members.reduce((s, m) => s + componentLineTotal(m, quotation.productMarkupPct, ewtPct), 0)
           : 0;
         if (itemized) {
           // Group price shows in both Unit Price and Total on the middle row,
@@ -194,7 +207,7 @@ export async function exportQuotationXlsx(
           ws.getRow(r).values = [l.code, desc, '', '', '', ''];
         }
       } else {
-        ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct), componentLineTotal(l, quotation.productMarkupPct)];
+        ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct, ewtPct), componentLineTotal(l, quotation.productMarkupPct, ewtPct)];
         ws.getCell(r, 5).numFmt = PHP_FMT;
         ws.getCell(r, 6).numFmt = PHP_FMT;
       }
@@ -227,9 +240,28 @@ export async function exportQuotationXlsx(
           groups.set(l.group, arr);
         }
       });
+      // Per-line-pricing-from-manpower amounts already have EWT baked in at
+      // edit time (CalcsheetQuotationEditor's updateServiceRow); manual
+      // lump-sum amounts don't, so it's applied here at display time —
+      // grouping is only reachable in per-line-pricing mode, manual-mode
+      // lines are never grouped (no UI path to set l.group there).
       quotation.services.forEach((l, index) => {
+        if (l.isHeader || l.isChildHeader) {
+          ws.mergeCells(`A${r}:F${r}`);
+          const c = ws.getCell(`A${r}`);
+          c.value = l.description;
+          c.font = l.isChildHeader ? { bold: true, italic: true, size: 9, color: { argb: 'FF4F7BC8' } } : { bold: true, color: { argb: 'FF2C5AA0' } };
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: grayBg } };
+          c.alignment = { vertical: 'middle', horizontal: 'left', indent: l.isChildHeader ? 3 : 1 };
+          r++;
+          return;
+        }
         const subheader = subheaderBefore(quotation.services, index);
         if (subheader) inlineSubheader(subheader);
+        const itemized = !!quotation.servicesPerLinePricing && !!quotation.servicesItemizedExport;
+        const rawQty = l.qty ?? l.days ?? 0;
+        const lineQty = rawQty > 0 ? rawQty : 1;
+        const lineUom = (l.uom || 'lot').toLowerCase();
         if (l.group) {
           const members = groups.get(l.group)!;
           const midIdx = Math.max(0, Math.floor((members.length - 1) / 2));
@@ -239,12 +271,23 @@ export async function exportQuotationXlsx(
             ws.getRow(r).values = [l.code, l.description, 1, 'lot', groupTotal, groupTotal];
             ws.getCell(r, 5).numFmt = PHP_FMT;
             ws.getCell(r, 6).numFmt = PHP_FMT;
+          } else if (itemized) {
+            ws.getRow(r).values = [l.code, l.description, lineQty, lineUom, '', ''];
           } else {
             ws.getRow(r).values = [l.code, l.description, '', '', '', ''];
           }
           r++;
+        } else if (itemized) {
+          // Real QTY/UOM, with unit price derived from amount ÷ qty so
+          // unit × qty still reconciles to the printed total.
+          const amt = l.amount || 0;
+          ws.getRow(r).values = [l.code, l.description, lineQty, lineUom, amt / lineQty, amt];
+          ws.getCell(r, 5).numFmt = PHP_FMT;
+          ws.getCell(r, 6).numFmt = PHP_FMT;
+          r++;
         } else {
-          ws.getRow(r).values = [l.code, l.description, 1, 'lot', l.amount, l.amount];
+          const amt = quotation.servicesPerLinePricing ? (l.amount || 0) : serviceLineAmount(l, ewtPct);
+          ws.getRow(r).values = [l.code, l.description, 1, 'lot', amt, amt];
           ws.getCell(r, 5).numFmt = PHP_FMT;
           ws.getCell(r, 6).numFmt = PHP_FMT;
           r++;
@@ -263,6 +306,8 @@ export async function exportQuotationXlsx(
     ['Subtotal (VAT-EX)', totals.subtotal, true],
   ];
   if (quotation.discountPct > 0) totalsBlock.push([`Discount (${formatDiscountPct(quotation.discountPct)}%)`, -totals.discount]);
+  if ((totals.deliveryFee ?? 0) > 0) totalsBlock.push(['Delivery Fee', totals.deliveryFee ?? 0]);
+  if ((totals.smallOrderSurcharge ?? 0) > 0) totalsBlock.push(['Small-order surcharge', totals.smallOrderSurcharge ?? 0]);
   if (quotation.vatPct > 0) totalsBlock.push([`VAT (${quotation.vatPct}%)`, totals.vat]);
   totalsBlock.push(['GRAND TOTAL (PHP)', totals.grandTotal, true]);
 
@@ -293,7 +338,7 @@ export async function exportQuotationXlsx(
       if (subheader) inlineSubheader(subheader);
       const compSub = [l.brand, l.partNo].filter(Boolean).join(', ');
       const desc = compSub ? `${l.description}\n${compSub}` : l.description;
-      ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct), componentLineTotal(l, quotation.productMarkupPct)];
+      ws.getRow(r).values = [l.code, desc, l.qty, l.uom, componentSellingUnit(l, quotation.productMarkupPct, ewtPct), componentLineTotal(l, quotation.productMarkupPct, ewtPct)];
       if (compSub) ws.getCell(r, 2).alignment = { wrapText: true, vertical: 'top' };
       ws.getCell(r, 5).numFmt = PHP_FMT;
       ws.getCell(r, 6).numFmt = PHP_FMT;

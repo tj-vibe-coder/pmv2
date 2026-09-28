@@ -2,6 +2,15 @@ export type ID = string;
 
 export type QuotationKind = 'IOCT' | 'ACTI';
 
+// Chosen once at quotation creation (alongside kind/recipient) and fixed for
+// that quotation's life — same convention as `kind` itself, which also can't
+// be changed after creation. Governs which sections are editable in
+// CalcsheetQuotationEditor: 'supply' locks A (General Requirements) and C
+// (Services/Manpower), leaving only B (Components) editable; 'services' locks
+// only B, leaving A and C editable; 'both' (the default, including every
+// quotation created before this field existed) locks nothing.
+export type QuotationScopeCategory = 'supply' | 'services' | 'both';
+
 export type ProjectStatus = 'draft' | 'for_review' | 'sent' | 'won' | 'lost' | 'inactive';
 
 // Single runtime source of truth for the status set, in lifecycle order. Status
@@ -173,12 +182,25 @@ export interface ComponentLine {
   /** A calculation-neutral label rendered above this contiguous block of items. */
   subheader?: string;
   markupPct?: number;
+  /** Per-line EWT override — same resolution pattern as markupPct (falls
+   * back to Quotation.ewtPct when unset). See Quotation.ewtPct. */
+  ewtPct?: number;
   expectedPurchaseDate?: string;
   historicalPriceSource?: HistoricalPriceSource;
   /** Optional item: priced for reference but NOT included in the contract
    * cost/subtotal/grand total. Listed in a separate "Optional Items" section
    * on exports so the client can add it if they avail. */
   optional?: boolean;
+  /** Section-header row: a label-only line (uses `description`) inserted to
+   * break the BOM into named sections on screen and on export. Carries no
+   * qty/cost and is excluded from every totals calculation. */
+  isHeader?: boolean;
+  /** Child (second-level) header — nests under a preceding `isHeader` row to
+   * break a section into named sub-groups (e.g. a "FIELD INSTRUMENTS" header
+   * with "Temperature" / "Pressure" child headers underneath). Same label-only,
+   * no qty/cost, excluded-from-totals behavior as `isHeader`, just rendered
+   * indented one level. */
+  isChildHeader?: boolean;
 }
 
 export interface ServiceLine {
@@ -186,11 +208,29 @@ export interface ServiceLine {
   code: string;
   description: string;
   amount: number;
+  /** @deprecated superseded by `qty` (per-line pricing is now QTY x Unit
+   * Price, not day-count). Kept so older quotations' stored values still
+   * read correctly; still feeds the delivery-terms installation-duration
+   * estimate, which is specifically calendar days. */
   days?: number;
+  /** Per-line pricing: quantity of units (e.g. days, lots, pax) — see `uom`. */
+  qty?: number;
+  /** Per-line pricing: unit of measure for `qty` (e.g. "day", "lot", "pax"). */
+  uom?: string;
+  /** Per-line pricing: price per unit. Falls back to the shared team daily
+   * rate (manpowerDailyRate) when unset — same override pattern as
+   * markupPct falling back to Quotation.laborMarkupPct. */
+  unitPrice?: number;
   group?: string;
   /** A calculation-neutral label rendered above this contiguous block of items. */
   subheader?: string;
   markupPct?: number;
+  /** Section-header row — same label-only, excluded-from-totals row as
+   * ComponentLine.isHeader, for breaking Engineering Services into named
+   * sections. */
+  isHeader?: boolean;
+  /** Child (second-level) header — see ComponentLine.isChildHeader. */
+  isChildHeader?: boolean;
 }
 
 export interface ManpowerEntry {
@@ -216,6 +256,10 @@ export interface Quotation {
   id: ID;
   projectId: ID;
   kind: QuotationKind;
+  // Absent = 'both' (every quotation created before this field existed, and
+  // the default for new ones). See QuotationScopeCategory for what each value
+  // locks.
+  scopeCategory?: QuotationScopeCategory;
   revision: string;
   recipientId: ID | null;
   contactId?: ID;            // Which contact at the recipient client this quotation addresses
@@ -229,9 +273,28 @@ export interface Quotation {
   productContingencyPct?: number;
   laborMarkupPct: number;
   generalReqMarkupPct: number;
+  /** Expanded Withholding Tax gross-up (IOCT quotations). Layered invisibly
+   * onto the existing markup for General Requirements, Supply of Components
+   * and Engineering Services — never printed as its own line/label on the
+   * PDF or Excel export. New IOCT quotations default to 5%; ACTI quotations
+   * and quotations created before this field existed read as 0 (unaffected)
+   * unless set explicitly. */
+  ewtPct?: number;
   globalContingencyPct: number;
   discountPct: number;
   vatPct: number;
+  // ── Delivery fee & minimum-order surcharge (opt-in per quotation) ──
+  // When `deliveryTermsEnabled` is true, a manual `deliveryFee` (VAT-ex freight
+  // charge) is added to the quote, and orders whose goods+services subtotal
+  // falls below `minOrderThreshold` (default ₱50,000) get an automatic
+  // `smallOrderFee` surcharge (default ₱5,000). Delivery + surcharge are
+  // VAT-able (added before VAT) and do NOT affect margin/budget (pass-through).
+  // Absent/false on every existing quotation, so totals are unchanged until a
+  // user opts in.
+  deliveryTermsEnabled?: boolean;
+  deliveryFee?: number;
+  minOrderThreshold?: number;
+  smallOrderFee?: number;
   generalReqts: GeneralReqLine[];
   components: ComponentLine[];
   services: ServiceLine[];
@@ -258,6 +321,14 @@ export interface Quotation {
    * member's own qty + UOM while still pricing the group as one combined
    * amount. */
   componentGroupDisplay?: Record<string, 'lot' | 'itemized'>;
+  /** How per-line-priced Engineering Services rows render on the PDF/Excel.
+   * Unset/false (the default) collapses every row to a single "1.00 LOT" line
+   * priced at the line's amount — the pre-QTY/UOM behavior. true shows each
+   * row's real QTY/UOM, with the per-unit price derived from amount ÷ qty so
+   * the printed unit × qty still reconciles to the line total; grouped rows
+   * still collapse to one combined price on the group's middle row, same as
+   * componentGroupDisplay's 'itemized' mode. */
+  servicesItemizedExport?: boolean;
   /** Controls the value reported in Sales and synced to the Project List. */
   salesValueScope?: SalesValueScope;
   /** Suppresses component part numbers from the customer-facing PDF only. */
@@ -267,6 +338,29 @@ export interface Quotation {
   generalReqContingencyMode?: 'standard' | 'baked';
   importedFrom?: QuotationImportMeta;
   legacyTotalsSnapshot?: QuotationTotals;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// A reusable "scope bundle" saved to the shared Scope Library — a named set of
+// inclusions (general requirements, components, services, manpower) plus
+// optional scope-of-work / exclusions text — that can be inserted into any
+// quotation. Team-shared like labor presets; stored in `calcsheet_scope_library`.
+export interface ScopeBundle {
+  id: ID;
+  name: string;
+  category?: string;          // free-text grouping, e.g. "SCADA", "Panel Build", "General Requirements"
+  notes?: string;
+  generalReqts: GeneralReqLine[];
+  components: ComponentLine[];
+  services: ServiceLine[];
+  manpower: ManpowerEntry[];
+  terms?: {
+    scopeOfWork?: string;
+    exclusions?: string;
+  };
+  createdBy?: string | null;
+  createdByName?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -304,6 +398,12 @@ export interface QuotationTotals {
 
   subtotal: number;
   discount: number;
+  // Delivery fee & small-order surcharge (0 when the feature is off). Folded
+  // into `grandTotal` before VAT; excluded from `subtotal`/margin/budget.
+  // Optional so frozen legacy snapshots (which predate the feature) still type.
+  deliveryFee?: number;
+  smallOrderSurcharge?: number;
+  deliveryTotal?: number;
   vat: number;
   grandTotal: number;
 }

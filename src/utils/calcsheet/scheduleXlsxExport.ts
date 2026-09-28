@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { SCHEDULE_CATEGORY_COLORS, type ScheduleTask } from '../../types/ScheduleTask';
 import { addDays, daysBetween, durationOf, formatLocalDate, MS_PER_DAY, toDate } from './scheduleDates';
+import { leafWeights } from './scheduleWeights';
 
 type ScheduleProjectRef = { code?: string; name?: string };
 
@@ -51,12 +52,19 @@ export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: Sch
     { header: 'Start', key: 'start', width: 12 },
     { header: 'End', key: 'end', width: 12 },
     { header: 'Duration (days)', key: 'duration', width: 14 },
+    { header: 'Manpower', key: 'manpower', width: 14 },
     { header: 'Progress (%)', key: 'progress', width: 12 },
+    { header: 'Weight', key: 'weight', width: 10 },
+    { header: 'Share (%)', key: 'share', width: 11 },
     { header: 'Notes', key: 'notes', width: 40 },
   ];
   const tsHeader = ts.getRow(1);
   tsHeader.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   tsHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2C5AA0' } };
+  // Each leaf task's share of project progress (see scheduleWeights).
+  const lw = leafWeights(tasks);
+  const shareMap = new Map<string, number>();
+  lw.weights.forEach((w, id) => shareMap.set(id, lw.total > 0 ? (w / lw.total) * 100 : 0));
   for (const t of tasks) {
     ts.addRow({
       name: t.name,
@@ -65,11 +73,14 @@ export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: Sch
       start: t.startDate,
       end: t.isMilestone ? '' : t.endDate,
       duration: t.isMilestone ? '' : durationOf(t.startDate, t.endDate),
+      manpower: t.isMilestone ? '' : (t.manpower || ''),
       progress: t.progressPct,
+      weight: shareMap.has(t.id) ? (Number(t.weight) || '') : '',
+      share: shareMap.has(t.id) ? Math.round(shareMap.get(t.id)! * 100) / 100 : '',
       notes: t.notes || '',
     });
   }
-  ts.autoFilter = { from: 'A1', to: 'H1' };
+  ts.autoFilter = { from: 'A1', to: 'K1' };
 
   // ── Gantt sheet ──────────────────────────────────────────────────────────
   const range = computeRange(tasks);
@@ -125,6 +136,19 @@ export async function exportScheduleXlsx(project: ScheduleProjectRef, tasks: Sch
       if (t.isMilestone) cell.value = '◆';
     }
     rowIdx++;
+  }
+
+  // Print (and Excel's "Save as PDF") on a single A3 landscape page.
+  for (const ws of [ts, gs]) {
+    ws.pageSetup = {
+      ...ws.pageSetup,
+      paperSize: 8, // A3
+      orientation: 'landscape',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 1,
+      margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 },
+    };
   }
 
   const buffer = await wb.xlsx.writeBuffer();

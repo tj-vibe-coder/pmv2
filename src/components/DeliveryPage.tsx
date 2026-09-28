@@ -29,7 +29,7 @@ import { ORDER_TRACKER_STORAGE_KEY, type OrderRecord } from './OrderTrackerPage'
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 
 const REPORT_COMPANY_ADDRESS: Record<ReportCompanyKey, string> = {
-  ACT: 'Block 13 Lot 8, Mindanao Ave., Gavino Maderan, Gen. Mariano Alvarez, Cavite, Region IV-A (Calabarzon), 4117',
+  ACT: 'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite 4117, Philippines',
   IOCT: 'B63, L7 Dynamism Jubilation Enclave, Santo Niño, City of Biñan, Laguna, Region IV-A (Calabarzon), 4024',
 };
 
