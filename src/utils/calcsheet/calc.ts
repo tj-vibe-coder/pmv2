@@ -346,8 +346,10 @@ export function formatDiscountPct(pct: number): string {
 export function discountPctFromAmount(subtotal: number, discountAmount: number): number {
   if (!Number.isFinite(subtotal) || subtotal <= 0) return 0;
   const amt = Math.min(Math.max(0, Number(discountAmount) || 0), subtotal);
-  // Keep enough precision so peso round-trip stays within ¢1 for typical quotes.
-  return Math.min(100, Math.max(0, Math.round((amt / subtotal) * 1e8) / 1e8));
+  // discountPct is a PERCENT (computeTotals applies subtotal × pct / 100), so
+  // scale the fraction by 100. Keep 8 decimals of a percent so the peso
+  // round-trip stays within ¢1 even on nine-figure quotes.
+  return Math.min(100, Math.max(0, Math.round((amt / subtotal) * 100 * 1e8) / 1e8));
 }
 
 /** discountPct to store when the user picks a target net total (VAT-ex). */
