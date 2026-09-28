@@ -12,10 +12,14 @@ import {
   RadioGroup,
   FormControlLabel,
   Radio,
+  Button,
+  InputAdornment,
+  Tooltip,
 } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import { Project } from '../types/Project';
 import type { Client } from '../types/Client';
+import type { Project as CalcsheetProject } from '../types/Quotation';
 import { resolveContact } from '../types/Client';
 import dataService from '../services/dataService';
 import { useAuth } from '../contexts/AuthContext';
@@ -144,6 +148,61 @@ const ReportsPage: React.FC = () => {
 
   const setReportCompany = (v: ReportCompanyKey) => setReportCompanyState(v);
 
+  // Customer PO shown on every report. On ACTI-fronted jobs this is the end
+  // customer's PO to ACTI (project.po_number), never ACTI's PO to IOCT. When the
+  // project has none yet, suggest the latest PO number attached in Calcsheet.
+  // Saving writes it back to the project so Project Info stays in step.
+  const [poInput, setPoInput] = useState('');
+  const [poSuggestedFrom, setPoSuggestedFrom] = useState<'calcsheet' | null>(null);
+  const [poSaving, setPoSaving] = useState(false);
+  const [poError, setPoError] = useState('');
+  const savedPo = (selectedProject?.po_number || '').trim();
+  const actiToIoctPo = (selectedProject?.commercial_trail?.acti_to_ioct_po_number || '').trim();
+
+  useEffect(() => {
+    setPoInput(savedPo);
+    setPoSuggestedFrom(null);
+    setPoError('');
+    const calcId = selectedProject?.calcsheet_project_id;
+    if (savedPo || !calcId) return;
+    let cancelled = false;
+    fetch('/api/calcsheet/projects')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { projects?: CalcsheetProject[] } | null) => {
+        if (cancelled) return;
+        const cp = data?.projects?.find((p) => p.id === calcId);
+        const suggestion = [...(cp?.customerPOs || [])]
+          .reverse()
+          .map((po) => (po.poNumber || '').trim())
+          .find((n) => n && n !== actiToIoctPo);
+        if (suggestion) {
+          setPoInput(suggestion);
+          setPoSuggestedFrom('calcsheet');
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [selectedProject?.id, selectedProject?.calcsheet_project_id, savedPo, actiToIoctPo]);
+
+  const poDirty = poInput.trim() !== savedPo;
+
+  const savePo = async () => {
+    if (!selectedProject || !poDirty) return;
+    const po_number = poInput.trim();
+    setPoSaving(true);
+    setPoError('');
+    const res = await dataService.updateProject(selectedProject.id, { po_number });
+    setPoSaving(false);
+    if (!res.success) {
+      setPoError(res.error || 'Could not save PO');
+      return;
+    }
+    const updated = { ...selectedProject, po_number };
+    setSelectedProject(updated);
+    setProjects((list) => list.map((p) => (p.id === updated.id ? updated : p)));
+    setPoSuggestedFrom(null);
+  };
+
   const handleTabChange = (_: React.SyntheticEvent, newValue: string) => {
     navigate(`/reports/${newValue}${selectedProject ? `?projectId=${selectedProject.id}` : ''}`);
   };
@@ -208,6 +267,40 @@ const ReportsPage: React.FC = () => {
             <FormControlLabel value="IOCT" control={<Radio size="small" />} label="IOCT" />
             <FormControlLabel value="ACT" control={<Radio size="small" />} label="ACTI" />
           </RadioGroup>
+          {selectedProject && (
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+              <TextField
+                size="small"
+                label={selectedProject.with_acti ? 'Customer PO No. (to ACTI)' : 'Customer PO No.'}
+                value={poInput}
+                onChange={(e) => { setPoInput(e.target.value); setPoSuggestedFrom(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') void savePo(); }}
+                placeholder="Not set — enter PO No."
+                error={!!poError}
+                helperText={
+                  poError
+                  || (poSuggestedFrom === 'calcsheet' ? 'From Calcsheet — save to add it to the project' : '')
+                  || (poDirty ? 'Unsaved — also updates the project info' : '')
+                  || (selectedProject.with_acti && actiToIoctPo ? `ACTI PO to IOCT: ${actiToIoctPo} (not shown on reports)` : '')
+                }
+                InputProps={{
+                  endAdornment: !savedPo && !poDirty ? (
+                    <InputAdornment position="end">
+                      <Tooltip title={selectedProject.with_acti ? "Enter the end customer's PO to ACTI, not ACTI's PO to IOCT" : "Enter the customer's PO number"}>
+                        <Typography variant="caption" color="warning.main" sx={{ fontWeight: 600, cursor: 'default' }}>Missing</Typography>
+                      </Tooltip>
+                    </InputAdornment>
+                  ) : undefined,
+                }}
+                sx={{ width: 280 }}
+              />
+              {poDirty && (
+                <Button variant="contained" size="small" onClick={() => { void savePo(); }} disabled={poSaving} sx={{ mt: 0.25 }}>
+                  {poSaving ? 'Saving…' : 'Save PO'}
+                </Button>
+              )}
+            </Box>
+          )}
         </Paper>
       </Box>
 
