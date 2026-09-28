@@ -946,7 +946,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
 
     const totalPct = wbsOverallProgress.toFixed(2);
     const dataRows = wbsRows.map((r) => [r.code, r.name, r.weight, r.progress]);
-    const totalRow = ['', 'Total', wbsTotalWeight.toFixed(2), totalPct];
+    const totalRow = ['', 'Total', `${wbsTotalWeight.toFixed(2)}%`, `${totalPct}%`];
 
     // Parent-only summary for last page (code, name, weight, progress)
     const parentOnlyRows = wbsRows.filter((r) => r.isParent);
