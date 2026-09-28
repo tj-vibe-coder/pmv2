@@ -118,7 +118,7 @@ async function exportFirestoreDatabase(db, admin, options = {}) {
     collections,
   };
 
-  const snapshotJson = JSON.stringify(snapshot, null, 2);
+  const snapshotJson = JSON.stringify(snapshot);
   const sizeBytes = Buffer.byteLength(snapshotJson, 'utf8');
   const sha256 = crypto.createHash('sha256').update(snapshotJson).digest('hex');
   const totalDocs = countDocumentsDeep(collections);
