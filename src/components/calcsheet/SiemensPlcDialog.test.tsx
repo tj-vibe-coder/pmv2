@@ -59,7 +59,7 @@ it('adds another CPU model, an HMI by size and a WinCC license — unpriced ones
   fireEvent.click(screen.getByRole('option', { name: /WinCC V8\.1/ }));
   fireEvent.mouseDown(screen.getByRole('combobox', { name: /Edition/i }));
   fireEvent.click(screen.getByRole('option', { name: /Asia edition/ }));
-  expect(screen.getAllByText('For inquiry').length).toBe(3);                  // CPU, HMI, WinCC
+  expect(screen.getAllByText('For inquiry').length).toBe(4);                  // CPU, HMI, WinCC, CPU→HMI patch cord
 
   fireEvent.click(screen.getByRole('button', { name: /to components/i }));
   const [{ rows }] = submitted(onSubmit);

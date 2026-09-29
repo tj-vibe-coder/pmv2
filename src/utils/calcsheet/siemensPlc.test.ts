@@ -436,3 +436,48 @@ describe('optimizing: local expansion, cheapest module sizes, auto CPU, auto mem
     expect(qty(opt({ family: 'S7-1200', di: 10, memoryCard: true }), 'memCard4')).toBe(1);
   });
 });
+
+describe('Siemens PLC — PROFINET cabling and 24 V UPS', () => {
+  it('counts one cable per link: daisy-chain without switches, star + switch links with them', () => {
+    const chain = cfg({ pnCabling: true, hmi: 'ktp700' });                     // CPU → HMI
+    expect(chain.profinet).toEqual({ links: 1, patch: 1, field: 0, cableM: 0 });
+    expect(qty(chain, 'pnPatch2m')).toBe(1);
+    expect(qty(chain, 'pnCable')).toBe(0);
+
+    // CPU + 6 SCADA stations on 2 switches: 7 device links + 1 switch-to-switch
+    const star = cfg({ pnCabling: true, switchQty: 2, scada: 'wincc81', scadaQty: 6, pnFieldLinks: 6, pnFieldM: 40 });
+    expect(star.profinet).toEqual({ links: 8, patch: 2, field: 6, cableM: Math.ceil(6 * 40 * 1.1) });
+    expect(qty(star, 'pnPatch2m')).toBe(2);
+    expect(qty(star, 'pnCable')).toBe(264);
+    expect(qty(star, 'pnPlug')).toBe(12);
+    expect(SIEMENS_PARTS.pnCable.uom).toBe('m');
+  });
+
+  it('adds no cabling for a lone CPU or when switched off', () => {
+    expect(cfg({ pnCabling: true }).profinet).toBeNull();
+    expect(cfg({ hmi: 'ktp700' }).profinet).toBeNull();
+    expect(qty(cfg({ hmi: 'ktp700' }), 'pnPatch2m')).toBe(0);
+  });
+
+  it('sizes the UPS1600 by the buffered load and the UPS1100 battery by the backup time', () => {
+    const small = cfg({ ups: true, upsMinutes: 10, di: 16 });
+    expect(small.ups!.loadA).toBeGreaterThan(0);
+    expect(small.ups!.ah).toBeCloseTo((small.ups!.loadA * 10) / 60 / 0.7, 1);
+    expect(qty(small, 'ups10')).toBe(1);
+    const bats = ['bat1_2', 'bat3_2', 'bat7', 'bat12'].filter((k) => qty(small, k) > 0);
+    expect(bats).toHaveLength(1);
+
+    // The whole 24 V load with many outputs needs a bigger unit; a long backup parallels 12 Ah modules.
+    const all = cfg({ ups: true, upsLoad: 'all', upsMinutes: 120, family: 'S7-1500', do: 256 });
+    expect(all.ups!.loadA).toBeGreaterThan(estimate24V({ ...DEFAULT_PLC_INPUTS, sparePct: 0, family: 'S7-1500', do: 256 }, all).totalA - 0.01);
+    expect(qty(all, 'ups10')).toBe(0);
+    expect(qty(all, 'bat12')).toBe(Math.ceil(all.ups!.ah / 12));
+    expect(qty(all, 'bat1_2')).toBe(0);
+  });
+
+  it('adds no UPS unless asked', () => {
+    const c = cfg({ di: 16 });
+    expect(c.ups).toBeNull();
+    expect(c.lines.some((l) => /^(ups|bat)/.test(l.key))).toBe(false);
+  });
+});

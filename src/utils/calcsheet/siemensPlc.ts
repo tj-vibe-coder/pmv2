@@ -358,6 +358,18 @@ const CATALOG: SiemensPart[] = [
   { key: 'sm1232aq4', partNo: '6ES7232-4HD32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Analog output SM 1232, 4 AO, +/-10 V or 0-20 mA, 14 bit' },
   { key: 'sb1231ai1', partNo: '6ES7231-4HA30-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Signal board SB 1231, 1 AI, +/-10 V or 0-20 mA, 12 bit' },
   { key: 'sb1232aq1', partNo: '6ES7232-4HA30-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Signal board SB 1232, 1 AO, +/-10 V or 0-20 mA, 12 bit' },
+  // SITOP UPS1600 DC UPS + UPS1100 battery modules (24 V buffering).
+  { key: 'ups10', partNo: '6EP4134-3AB00-0AY0', price: 0, description: 'SITOP UPS1600 10 A DC UPS, input 24 V DC, output 24 V DC / 10 A, for UPS1100 battery modules' },
+  { key: 'ups20', partNo: '6EP4136-3AB00-0AY0', price: 0, description: 'SITOP UPS1600 20 A DC UPS, input 24 V DC, output 24 V DC / 20 A, for UPS1100 battery modules' },
+  { key: 'ups40', partNo: '6EP4137-3AB00-0AY0', price: 0, verify: true, description: 'SITOP UPS1600 40 A DC UPS, input 24 V DC, output 24 V DC / 40 A, for UPS1100 battery modules' },
+  { key: 'bat1_2', partNo: '6EP4131-0GB00-0AY0', price: 0, verify: true, description: 'SITOP UPS1100 battery module 24 V / 1.2 Ah, maintenance-free lead battery' },
+  { key: 'bat3_2', partNo: '6EP4133-0GB00-0AY0', price: 0, description: 'SITOP UPS1100 battery module 24 V / 3.2 Ah, maintenance-free lead battery' },
+  { key: 'bat7', partNo: '6EP4134-0GB00-0AY0', price: 0, verify: true, description: 'SITOP UPS1100 battery module 24 V / 7 Ah, maintenance-free lead battery' },
+  { key: 'bat12', partNo: '6EP4135-0GB00-0AY0', price: 0, verify: true, description: 'SITOP UPS1100 battery module 24 V / 12 Ah, maintenance-free lead battery' },
+  // PROFINET cabling
+  { key: 'pnPatch2m', partNo: '6XV1870-3QH20', price: 0, description: 'SIMATIC NET IE TP Cord RJ45/RJ45, TP cable 4x2 with 2 RJ45 connectors, 2 m (patch cable inside the panel)' },
+  { key: 'pnCable', partNo: '6XV1840-2AH10', price: 0, uom: 'm', description: 'SIMATIC NET IE FC TP Standard Cable GP 2x2 (PROFINET Type A), Cat 5e, shielded, sold by the metre' },
+  { key: 'pnPlug', partNo: '6GK1901-1BB10-2AA0', price: 0, description: 'SIMATIC NET IE FC RJ45 Plug 180 2x2, RJ45 connector with metal enclosure and FastConnect, 180° cable outlet' },
   { key: 'cm1241', partNo: '6ES7241-1CH32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Communication module CM 1241, RS-422/485, 9-pin sub D (Modbus RTU / Freeport)' },
   { key: 'ai8u', partNo: '6ES7134-6FF00-0AA1', price: 0,
     description: 'SIMATIC ET 200SP, Analog input module, AI 8xU Basic, 0-10 V / ±10 V, suitable for BU type A0, A1, Color code CC01, Module diagnostics, 16 bit' },
@@ -556,6 +568,16 @@ export function genericDescription(key: string): string {
     sb1231ai1: 'PLC signal board, 1 analog input 0–10 V / 4–20 mA',
     sb1232aq1: 'PLC signal board, 1 analog output 0–10 V / 4–20 mA',
     cm1241: 'PLC communication module RS-422 / RS-485 (Modbus RTU)',
+    ups10: 'DC UPS 24 V DC, 10 A (battery buffered)',
+    ups20: 'DC UPS 24 V DC, 20 A (battery buffered)',
+    ups40: 'DC UPS 24 V DC, 40 A (battery buffered)',
+    bat1_2: 'UPS battery module 24 V, 1.2 Ah',
+    bat3_2: 'UPS battery module 24 V, 3.2 Ah',
+    bat7: 'UPS battery module 24 V, 7 Ah',
+    bat12: 'UPS battery module 24 V, 12 Ah',
+    pnPatch2m: 'Industrial Ethernet patch cable RJ45/RJ45, shielded, 2 m',
+    pnCable: 'Industrial Ethernet cable 2x2, shielded, Cat 5e (per metre)',
+    pnPlug: 'Industrial Ethernet RJ45 field plug, metal, 180°',
   };
   return GENERIC[key] ?? '';
 }
@@ -588,6 +610,15 @@ export interface PlcInputs {
   moduleSizes: 'auto' | 'standard';
   /** With cpu 'auto': pick among fail-safe (F) CPUs. */
   failSafe: boolean;
+  /** 24 V DC UPS (SITOP UPS1600 + battery) and the backup time wanted (minutes). */
+  ups: boolean;
+  upsMinutes: number;
+  /** What the UPS buffers: the controller electronics only, or the whole 24 V load (incl. DO / field loads). */
+  upsLoad: 'controller' | 'all';
+  /** PROFINET cabling: patch cables inside the panel; links leaving it get FC cable + field plugs. */
+  pnCabling: boolean;
+  pnFieldLinks: number;
+  pnFieldM: number;
   /** HMI_PANELS key, or 'none'. */
   hmi: string;
   hmiQty: number;
@@ -624,7 +655,8 @@ export interface PlcInputs {
 }
 
 export const DEFAULT_PLC_INPUTS: PlcInputs = {
-  family: 'S7-1200', cpu: 'cpu1214', redundancy: 'none', expansion: 'et200sp', moduleSizes: 'standard', failSafe: false, di: 0, do: 0, analog: noAnalog(), sparePct: 10,
+  family: 'S7-1200', cpu: 'cpu1214', redundancy: 'none', expansion: 'et200sp', moduleSizes: 'standard', failSafe: false,
+  ups: false, upsMinutes: 10, upsLoad: 'controller', pnCabling: false, pnFieldLinks: 0, pnFieldM: 50, di: 0, do: 0, analog: noAnalog(), sparePct: 10,
   modbus: 'none', modbusPorts: 1, sitop: 'none', memoryCard: false, memCard: 'memCard',
   hmi: 'none', hmiQty: 1, scada: 'none', winccLicense: 'RC', licenseEdition: 'standard', scadaPackage: '2048', scadaQty: 1,
   scadaClients: 0, scadaRedundant: false, scadaLogging: 'none', scadaDbStorage: false,
@@ -653,6 +685,9 @@ export interface PlcConfig {
   expansion: 'local' | 'et200sp' | 'none';
   /** S7-1200 local expansion: signal modules used / CPU slots, and 5 V backplane current (mA) used / available. */
   local: { modules: number; slots: number; busMa: number; busMaxMa: number } | null;
+  /** PROFINET links (patch inside the panel, field runs) and the UPS sizing, when asked for. */
+  profinet: { links: number; patch: number; field: number; cableM: number } | null;
+  ups: { loadA: number; ah: number; minutes: number } | null;
   channels: { di: PlcChannels; do: PlcChannels; ai: PlcChannels; ao: PlcChannels };
   /** Channels needed (incl. spare) per analog type and wiring. */
   analog: Record<AnalogKey, AnalogCount>;
@@ -1051,7 +1086,22 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
     ai: onboardAiUsed + spCh(spAiI, { ai8: 8, ai4i: 4 }) + spCh(spAiU, { ai8u: 8, ai4u: 4 }) + (rtd8Mods + tcMods) * CHANNELS.rtd8 + rtd4Mods * CHANNELS.rtd4 + localCh.ai,
     ao: cpu.onboard.ao + spCh(spAq, { aq4: 4, aq2: 2 }) + localCh.ao,
   };
-  return {
+  // ── PROFINET cabling: one cable per link. With switches every device goes
+  // to a switch (+ the switch-to-switch links, closed into a ring for MRP);
+  // without, the devices are daisy-chained through the 2-port interfaces.
+  let profinet: PlcConfig['profinet'] = null;
+  if (inp.pnCabling && devices > 1) {
+    const links = sw.qty > 0 ? devices + Math.max(0, sw.qty - 1) + (redundant && sw.qty > 2 ? 1 : 0) : devices - 1;
+    const field = Math.min(links, whole(inp.pnFieldLinks));
+    const patch = links - field;
+    const cableM = Math.ceil(field * Math.max(0, Number(inp.pnFieldM) || 0) * 1.1);
+    profinet = { links, patch, field, cableM };
+    add('pnPatch2m', patch, `${links} PROFINET link${links === 1 ? '' : 's'} — ${patch} inside the panel`);
+    add('pnCable', cableM, `${field} link${field === 1 ? '' : 's'} leaving the panel × ${inp.pnFieldM} m (+10%)`);
+    add('pnPlug', field * 2, 'Two field plugs per cable run');
+  }
+
+  const result: PlcConfig = {
     lines,
     cpuKey: cpu.key,
     expansion: useLocal ? 'local' : ioModules > 0 ? 'et200sp' : 'none',
@@ -1069,8 +1119,32 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
     network: { switchKey: netSwitch?.key ?? null, qty: netSwitch ? sw.qty : 0, devices, portsPerSwitch },
     wiring,
     panelIo,
+    profinet,
+    ups: null,
     notes,
   };
+
+  // ── 24 V UPS: SITOP UPS1600 sized for the buffered load, UPS1100 battery
+  // for the backup time (Ah = A × h ÷ 0.7 for ageing / temperature derating).
+  if (inp.ups) {
+    const load = estimate24V(raw, result);
+    const loadA = inp.upsLoad === 'all' ? load.totalA : Math.round((panelHeat(load).electronicsW / 24) * 100) / 100;
+    const minutes = Math.max(1, whole(inp.upsMinutes) || 10);
+    const ah = Math.round(((loadA * minutes) / 60 / 0.7) * 100) / 100;
+    const upsKey = loadA * 1.2 <= 10 ? 'ups10' : loadA * 1.2 <= 20 ? 'ups20' : 'ups40';
+    const BATS: [string, number][] = [['bat1_2', 1.2], ['bat3_2', 3.2], ['bat7', 7], ['bat12', 12]];
+    // The 1.2 Ah module only suits the 10 A unit (charge / discharge current).
+    const usable = BATS.filter(([k]) => upsKey === 'ups10' || k !== 'bat1_2');
+    const bat = usable.find(([, a]) => a >= ah);
+    const [batKey, batAh] = bat ?? usable[usable.length - 1];
+    const batQty = bat ? 1 : Math.ceil(ah / batAh);
+    result.ups = { loadA, ah, minutes };
+    add(upsKey, 1, `24 V DC UPS — ${loadA} A buffered (${inp.upsLoad === 'all' ? 'whole 24 V load' : 'controller electronics'}) × 1.2`);
+    add(batKey, batQty, `${minutes} min backup at ${loadA} A → ${ah} Ah incl. 30% derating${batQty > 1 ? ` (${batQty} in parallel)` : ''}`);
+    notes.push(`UPS: size the 24 V supply for the load plus battery charging (≈ ${upsKey === 'ups10' ? 1 : 2} A extra).`);
+    if (loadA * 1.2 > 40) notes.push(`${loadA} A buffered is beyond one 40 A UPS1600 — split the buffered loads.`);
+  }
+  return result;
 }
 
 // ── 24 V DC load estimate (for choosing the supply) ──────────────────────
