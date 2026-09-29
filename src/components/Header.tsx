@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   AppBar,
@@ -21,9 +21,17 @@ import {
   Logout as LogoutIcon,
   AccessTime as AccessTimeIcon,
   Person as PersonIcon,
-  Menu as MenuIcon
+  Menu as MenuIcon,
+  StickyNote2 as StickyNote2Icon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import WhiteboardDialog from './WhiteboardDialog';
+
+// Shown once per browser tab session, right after login — sessionStorage
+// clears itself when the tab/window closes, so it naturally re-shows on the
+// next login without needing any server-side "seen" tracking. The button
+// below reopens it any time regardless of this flag.
+const WHITEBOARD_SEEN_KEY = 'pmv2_whiteboard_shown';
 
 interface HeaderProps {
   /** Mobile: toggle the navigation drawer. */
@@ -40,6 +48,17 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
   const isAdminUser = user?.role === 'superadmin' || user?.role === 'admin';
   const workspace = isEmployeeWorkspace ? 'employee' : isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects';
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
+  const [whiteboardOpen, setWhiteboardOpen] = useState(false);
+
+  // Auto-popup once per login session (see WHITEBOARD_SEEN_KEY above) — not on
+  // every route change, since this effect only re-runs when isAuthenticated
+  // itself flips (its only dependency), not on navigation.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    if (sessionStorage.getItem(WHITEBOARD_SEEN_KEY)) return;
+    sessionStorage.setItem(WHITEBOARD_SEEN_KEY, '1');
+    setWhiteboardOpen(true);
+  }, [isAuthenticated]);
 
   const handleUserMenuClick = (event: React.MouseEvent<HTMLElement>) => {
     setUserMenuAnchor(event.currentTarget);
@@ -163,7 +182,15 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
                   fontSize: '0.75rem'
                 }}
               />
-              
+
+              <IconButton
+                onClick={() => setWhiteboardOpen(true)}
+                title="Whiteboard — notes, to-dos & updates"
+                sx={{ color: '#2c5aa0' }}
+              >
+                <StickyNote2Icon />
+              </IconButton>
+
               <IconButton
                 onClick={handleUserMenuClick}
                 sx={{ p: 0.5 }}
@@ -225,6 +252,9 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
         </Box>
       </Toolbar>
     </AppBar>
+    {isAuthenticated && (
+      <WhiteboardDialog open={whiteboardOpen} onClose={() => setWhiteboardOpen(false)} />
+    )}
     </>
   );
 };
