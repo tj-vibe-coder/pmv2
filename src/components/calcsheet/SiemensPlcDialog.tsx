@@ -9,15 +9,18 @@ import type { ComponentLine } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import {
-  CPU_MODELS, DEFAULT_CPU, DEFAULT_PLC_INPUTS, HMI_LINES, HMI_PANELS, LICENSE_EDITIONS, MEMORY_CARDS, SIEMENS_PARTS, SITOP_LINES,
-  SITOP_OPTIONS, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuModel, estimate24V, onboardText, siemensPrice,
-  type HmiLine, type LicenseEdition, type ModbusMode, type PlcFamily, type PlcInputs, type ScadaKind, type WinccLicense,
+  ANALOG_KINDS, DEFAULT_CPU, DEFAULT_PLC_INPUTS, DEFAULT_REDUNDANT_CPU, HMI_LINES, HMI_PANELS, LICENSE_EDITIONS, MEMORY_CARDS, PSU_LINES,
+  REDUNDANCY_OPTIONS, SIEMENS_PARTS, SITOP_OPTIONS, SWITCHES, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuChoices, cpuModel,
+  effectiveSwitches, estimate24V, noAnalog, onboardText, siemensPrice,
+  type AnalogKey, type HmiLine, type LicenseEdition, type ModbusMode, type PlcFamily, type PlcInputs, type Redundancy, type ScadaKind,
+  type SwitchType, type WinccLicense,
 } from '../../utils/calcsheet/siemensPlc';
 
-// Siemens PLC configurator: I/O counts + PLC family/CPU + Modbus (+ HMI,
-// SCADA license, SITOP) → the module list, priced where we have a quote,
-// added to B. Supply of Components under a "PLC — SIEMENS …" header.
-// Unpriced items go in at ₱0 marked "for inquiry".
+// Siemens PLC configurator: I/O counts (analog by signal type and wiring) +
+// PLC family/CPU/redundancy + Modbus + network (+ HMI, SCADA license, 24 V
+// supply, WAGO terminals & wiring) → the module list, priced where we have a
+// quote or a pricelist item, added to B. Supply of Components under a
+// "PLC — SIEMENS …" header. Unpriced items go in at ₱0 marked "for inquiry".
 
 interface Props {
   open: boolean;
@@ -28,8 +31,10 @@ interface Props {
 
 const id = () => nanoid(6);
 
+const fresh = (): PlcInputs => ({ ...DEFAULT_PLC_INPUTS, analog: noAnalog() });
+
 export default function SiemensPlcDialog({ open, onClose, productContingencyPct, onSubmit }: Props) {
-  const [inp, setInp] = useState<PlcInputs>(DEFAULT_PLC_INPUTS);
+  const [inp, setInp] = useState<PlcInputs>(fresh);
   const set = <K extends keyof PlcInputs>(k: K, v: PlcInputs[K]) => setInp((p) => ({ ...p, [k]: v }));
 
   const catalog = usePricelistStore((s) => s.items);
@@ -38,14 +43,17 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
 
   const cfg = configurePlc(inp);
   const load = estimate24V(inp, cfg);
-  const cpu = cpuModel(inp.family, inp.cpu);
+  const redundant = inp.redundancy !== 'none';
+  const cpu = cpuModel(inp.family, inp.cpu, inp.redundancy);
   const psu = SITOP_OPTIONS.find((s) => s.key === inp.sitop);
   const psuA = psu ? psu.ratingA : null;
   const panel = HMI_PANELS.find((h) => h.key === inp.hmi);
   const [showLoad, setShowLoad] = useState(false);
-  const is1200 = inp.family === 'S7-1200';
-  const hasIo = inp.di + inp.do + inp.ai + inp.ao > 0;
-  const ready = hasIo || inp.modbus === 'rtu' || !!panel || inp.scada !== 'none';
+  const is1200 = inp.family === 'S7-1200' && !redundant;
+  const analogTotal = ANALOG_KINDS.reduce((s, k) => s + inp.analog[k.key].w2 + inp.analog[k.key].w4, 0);
+  const hasIo = inp.di + inp.do + analogTotal > 0;
+  const sw = effectiveSwitches(inp);
+  const ready = hasIo || inp.modbus === 'rtu' || !!panel || inp.scada !== 'none' || sw.qty > 0 || redundant;
   const rows = cfg.lines.map((l) => {
     const part = SIEMENS_PARTS[l.key];
     const p = siemensPrice(part, catalog);
@@ -53,7 +61,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
   });
   const total = rows.reduce((sum, r) => sum + r.lineTotal, 0);
   const inquiry = rows.filter((r) => r.unitCost === 0).length;
-  const header = `PLC — SIEMENS ${inp.family}`;
+  const header = `PLC — SIEMENS ${redundant ? `S7-1500${inp.redundancy}` : inp.family}`;
 
   const dec = (k: 'doLoadA' | 'psuMarginPct', label: string, helper?: string) => (
     <TextField
@@ -62,7 +70,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
       onFocus={(e) => e.target.select()}
     />
   );
-  const num = (k: 'di' | 'do' | 'ai' | 'ao' | 'sparePct' | 'modbusPorts' | 'hmiQty' | 'scadaQty', label: string, helper?: string) => (
+  const num = (k: 'di' | 'do' | 'sparePct' | 'modbusPorts' | 'hmiQty' | 'scadaQty' | 'switchQty' | 'panelW' | 'panelH', label: string, helper?: string) => (
     <TextField
       label={label} size="small" fullWidth type="text" inputMode="numeric"
       value={inp[k] || (k === 'sparePct' ? '0' : '')} placeholder="0" helperText={helper}
@@ -70,8 +78,25 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
       onFocus={(e) => e.target.select()}
     />
   );
+  // Short visible label (the column header names the signal); the full name is the accessible one.
+  const analogNum = (k: AnalogKey, w: 'w2' | 'w4', label: string, fullName: string) => (
+    <TextField
+      label={label} size="small" fullWidth type="text" inputMode="numeric" inputProps={{ 'aria-label': fullName }}
+      value={inp.analog[k][w] || ''} placeholder="0"
+      onChange={(e) => {
+        const v = Math.max(0, Math.round(parseLenientFloat(e.target.value)));
+        setInp((p) => ({ ...p, analog: { ...p.analog, [k]: { ...p.analog[k], [w]: v } } }));
+      }}
+      onFocus={(e) => e.target.select()}
+    />
+  );
 
   const setFamily = (family: PlcFamily) => setInp((p) => ({ ...p, family, cpu: DEFAULT_CPU[family] }));
+  // Redundancy is S7-1500 only; switching it resets the CPU to that mode's default.
+  const setRedundancy = (redundancy: Redundancy) => setInp((p) => {
+    const family: PlcFamily = redundancy === 'none' ? p.family : 'S7-1500';
+    return { ...p, redundancy, family, cpu: redundancy === 'none' ? DEFAULT_CPU[family] : DEFAULT_REDUNDANT_CPU[redundancy] };
+  });
   const setHmiLine = (line: HmiLine | 'none') => set('hmi', line === 'none' ? 'none'
     : (HMI_PANELS.find((h) => h.line === line && h.sizeIn === 7) ?? HMI_PANELS.find((h) => h.line === line))!.key);
   const setScada = (kind: ScadaKind) => setInp((p) => ({
@@ -79,21 +104,21 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
     licenseEdition: kind === 'unifiedPc' && p.licenseEdition === 'dl' ? 'standard' : p.licenseEdition,
   }));
 
-  const close = () => { setInp(DEFAULT_PLC_INPUTS); onClose(); };
+  const close = () => { setInp(fresh()); onClose(); };
   const submit = () => {
     const lines: ComponentLine[] = rows.map((r) => ({
-      id: id(), code: '', description: r.part.description, brand: 'Siemens', partNo: r.part.partNo,
-      qty: r.qty, uom: r.key.startsWith('wincc') || r.key.startsWith('unifiedPc') ? 'lic' : 'pc', unitCost: r.unitCost, forex: 1,
+      id: id(), code: '', description: r.part.description, brand: r.part.brand ?? 'Siemens', partNo: r.part.partNo,
+      qty: r.qty, uom: r.part.uom ?? 'pc', unitCost: r.unitCost, forex: 1,
       contingencyPct: productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0,
     }));
     onSubmit(lines, header);
-    setInp(DEFAULT_PLC_INPUTS);
+    setInp(fresh());
   };
 
-  const psuItems = SITOP_LINES.flatMap((line) => {
+  const psuItems = PSU_LINES.flatMap(({ line, label }) => {
     const opts = SITOP_OPTIONS.filter((s) => s.line === line);
     return [
-      <ListSubheader key={line}>SITOP {line} · {opts[0].input.split(' ')[0]}</ListSubheader>,
+      <ListSubheader key={line}>{label} · {opts[0].input.split(' ')[0]}</ListSubheader>,
       ...opts.map((s) => {
         const priced = siemensPrice(SIEMENS_PARTS[s.key], catalog).price > 0;
         const tag = s.ratingA < load.withMarginA ? ' · too small' : s.ratingA === load.suggestedA ? ' · suggested' : '';
@@ -111,40 +136,60 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
       <DialogTitle>
         Siemens PLC
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Enter the I/O count and pick the PLC — the CPU, ET 200SP remote I/O, BaseUnits, Modbus hardware, HMI, SCADA license and 24 V
-          supply are selected for you and added to B. Supply of Components. Items without a quote go in at ₱0 for inquiry.
+          Enter the I/O count and pick the PLC — the CPU, ET 200SP remote I/O, BaseUnits, Modbus hardware, switches, HMI, SCADA
+          license, 24 V supply and the WAGO terminals &amp; wiring are selected for you and added to B. Supply of Components. Items
+          without a price go in at ₱0 for inquiry.
         </Typography>
       </DialogTitle>
       <DialogContent dividers>
         <Stack spacing={2}>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
             <ToggleButtonGroup
-              size="small" exclusive value={inp.family}
+              size="small" exclusive value={redundant ? 'S7-1500' : inp.family}
               onChange={(_, v: PlcFamily | null) => v && setFamily(v)}
               sx={{ '& .MuiToggleButton-root': { textTransform: 'none', px: 2 } }}
             >
-              <ToggleButton value="S7-1200">S7-1200</ToggleButton>
+              <ToggleButton value="S7-1200" disabled={redundant}>S7-1200</ToggleButton>
               <ToggleButton value="S7-1500">S7-1500</ToggleButton>
             </ToggleButtonGroup>
+            <TextField select label="Redundancy" size="small" sx={{ minWidth: 220 }} value={inp.redundancy} onChange={(e) => setRedundancy(e.target.value as Redundancy)}>
+              {REDUNDANCY_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+            </TextField>
             <TextField select label="CPU" size="small" sx={{ minWidth: 280 }} value={cpu.key} onChange={(e) => set('cpu', e.target.value)}>
-              {CPU_MODELS.filter((m) => m.family === inp.family).map((m) => (
+              {cpuChoices(inp.family, inp.redundancy).map((m) => (
                 <MenuItem key={m.key} value={m.key}>
                   {m.label}{SIEMENS_PARTS[m.key].price > 0 ? '' : ' · for inquiry'}
                 </MenuItem>
               ))}
             </TextField>
             <Typography variant="caption" color="text.secondary">
-              {SIEMENS_PARTS[cpu.key].partNo} · {onboardText(cpu)}{is1200 ? '; the rest on ET 200SP' : '; memory card required'}
+              {SIEMENS_PARTS[cpu.key].partNo} · {redundant
+                ? `${cpu.redundancy === 'H' ? 'bundle of 2 CPUs + sync modules' : '2 CPUs'}; ET 200SP on IM 155-6 PN/2 HF; managed switches`
+                : `${onboardText(cpu)}${is1200 ? '; the rest on ET 200SP' : '; memory card required'}`}
             </Typography>
           </Stack>
 
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(5, 1fr)' }, gap: 2 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
             {num('di', 'DI (digital in)')}
             {num('do', 'DO (digital out)')}
-            {num('ai', 'AI (analog in)', '4–20 mA')}
-            {num('ao', 'AO (analog out)')}
             {num('sparePct', 'Spare %', 'Added to each I/O type')}
           </Box>
+
+          <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Analog I/O by signal type</Typography></Divider>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(6, 1fr)' }, gap: 2 }}>
+            {ANALOG_KINDS.map((k) => (
+              <Stack key={k.key} spacing={1}>
+                <Typography variant="caption" sx={{ fontWeight: 600 }}>{k.label}</Typography>
+                {analogNum(k.key, 'w2', '2-wire', `${k.label} 2-wire`)}
+                {k.w4Label ? analogNum(k.key, 'w4', k.w4Label, `${k.label} ${k.w4Label}`) : null}
+              </Stack>
+            ))}
+          </Box>
+          {is1200 && cpu.onboard.ai > 0 && (
+            <Typography variant="caption" color="text.secondary">
+              The CPU&apos;s {cpu.onboard.ai} on-board AI take 0–10 V inputs first{cpu.onboard.ao ? `; its ${cpu.onboard.ao} on-board AQ take 4–20 mA outputs` : ''}.
+            </Typography>
+          )}
 
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1.4fr 0.8fr 1.2fr' }, gap: 2 }}>
             <TextField select label="Modbus" size="small" fullWidth value={inp.modbus} onChange={(e) => set('modbus', e.target.value as ModbusMode)}>
@@ -162,17 +207,29 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             ) : <Box />}
           </Box>
           {is1200 && (
-            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-              <FormControlLabel
-                control={<Checkbox size="small" checked={inp.useOnboardAi} onChange={(e) => set('useOnboardAi', e.target.checked)} />}
-                label={<Typography variant="body2">Count the CPU&apos;s 2 on-board AI (0–10 V signals only)</Typography>}
-              />
-              <FormControlLabel
-                control={<Checkbox size="small" checked={inp.memoryCard} onChange={(e) => set('memoryCard', e.target.checked)} />}
-                label={<Typography variant="body2">Include memory card</Typography>}
-              />
-            </Stack>
+            <FormControlLabel
+              control={<Checkbox size="small" checked={inp.memoryCard} onChange={(e) => set('memoryCard', e.target.checked)} />}
+              label={<Typography variant="body2">Include memory card</Typography>}
+            />
           )}
+
+          <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Network switches</Typography></Divider>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Box sx={{ width: 140 }}>{num('switchQty', 'Switches', redundant ? 'Min. 2 for redundancy' : undefined)}</Box>
+            <ToggleButtonGroup
+              size="small" exclusive value={sw.type}
+              onChange={(_, v: SwitchType | null) => v && set('switchType', v)}
+              sx={{ '& .MuiToggleButton-root': { textTransform: 'none', px: 2 } }}
+            >
+              <ToggleButton value="unmanaged" disabled={redundant}>Unmanaged</ToggleButton>
+              <ToggleButton value="managed">Managed</ToggleButton>
+            </ToggleButtonGroup>
+            <Typography variant="caption" color="text.secondary">
+              {cfg.network.switchKey
+                ? `${sw.qty} × ${SWITCHES.find((s) => s.key === cfg.network.switchKey)?.model} — ${cfg.network.devices} device${cfg.network.devices === 1 ? '' : 's'} on the network`
+                : 'Enter how many switches — the model is picked from the ports needed'}
+            </Typography>
+          </Stack>
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">HMI &amp; SCADA</Typography></Divider>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: '1.5fr 1.5fr 0.6fr' }, gap: 2 }}>
@@ -216,6 +273,26 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             {inp.scada !== 'none' ? num('scadaQty', 'Stations') : <Box />}
           </Box>
 
+          <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Terminals &amp; wiring (WAGO)</Typography></Divider>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <FormControlLabel
+              control={<Checkbox size="small" checked={inp.terminals} onChange={(e) => set('terminals', e.target.checked)} />}
+              label={<Typography variant="body2">Add terminals, relays, accessories &amp; 0.5 mm² wiring</Typography>}
+            />
+            {inp.terminals && (
+              <>
+                <Box sx={{ width: 130 }}>{num('panelW', 'Panel width (mm)')}</Box>
+                <Box sx={{ width: 130 }}>{num('panelH', 'Panel height (mm)')}</Box>
+              </>
+            )}
+          </Stack>
+          {inp.terminals && (
+            <Typography variant="caption" color="text.secondary">
+              1 DI = 2-level terminal · 1 DO = slim relay (WAGO 857-304) · analog 2-wire = 1 fused + 1 standard, 4-wire = 2 fused + 2 standard ·
+              red 0.5 mm² for +24 V DC, blue for 0 V DC, length from the panel size.
+            </Typography>
+          )}
+
           {ready ? (
             <>
               <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Channels (incl. spare)</Typography></Divider>
@@ -227,6 +304,13 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                   />
                 ))}
                 {cfg.stations > 0 && <Chip size="small" variant="outlined" label={`${cfg.ioModules} ET 200SP module${cfg.ioModules === 1 ? '' : 's'} · ${cfg.stations} station${cfg.stations === 1 ? '' : 's'}`} />}
+                {cfg.wiring && (
+                  <>
+                    <Chip size="small" variant="outlined" label={`${cfg.wiring.terminals} terminals · ${(cfg.wiring.railMm / 1000).toFixed(1)} m DIN rail`} />
+                    <Chip size="small" variant="outlined" sx={{ borderColor: 'error.main' }} label={`Red 0.5 mm²: ${cfg.wiring.redWires} wires ≈ ${cfg.wiring.redM} m`} />
+                    <Chip size="small" variant="outlined" sx={{ borderColor: 'primary.main' }} label={`Blue 0.5 mm²: ${cfg.wiring.blueWires} wires ≈ ${cfg.wiring.blueM} m`} />
+                  </>
+                )}
               </Stack>
               {cfg.notes.map((n) => <Alert key={n} severity="info" sx={{ py: 0 }}>{n}</Alert>)}
 
@@ -243,7 +327,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                     <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3 }}>{load.withMarginA.toFixed(2)} A</Typography>
                   </Box>
                   <Box>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Suggested SITOP</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Suggested supply</Typography>
                     <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3, color: load.suggestedA ? 'success.main' : 'error.main' }}>
                       {load.suggestedA ? `${load.suggestedA} A` : 'over 40 A — split supplies'}
                     </Typography>
@@ -311,12 +395,15 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                     <TableRow key={r.key}>
                       <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                         {r.part.partNo || <Typography variant="body2" color="warning.main">Ask supplier</Typography>}
+                        {r.part.partNo && r.part.verify && r.source !== 'catalog' && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'inherit' }}>verify P/N</Typography>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2">{r.part.description.split(', ').slice(0, 3).join(', ')}</Typography>
                         <Typography variant="caption" color="text.secondary">{r.why}</Typography>
                       </TableCell>
-                      <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{r.qty}</TableCell>
+                      <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{r.qty}{r.part.uom && r.part.uom !== 'pc' ? ` ${r.part.uom}` : ''}</TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap', color: r.unitCost === 0 ? 'warning.main' : undefined }}>
                         {r.unitCost === 0 ? 'For inquiry' : PHP(r.unitCost)}
                         {r.source === 'catalog' && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>catalog</Typography>}
@@ -333,7 +420,8 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
               {inquiry > 0 && (
                 <Alert severity="warning" sx={{ py: 0 }}>
                   {inquiry} item{inquiry === 1 ? '' : 's'} for inquiry — added at ₱0. When the supplier quotes, add the price in Sales → Pricelists
-                  (same part number, so it&apos;s used next time) or on the row. Part numbers were checked in the Siemens TIA Selection Tool.
+                  (same part number, so it&apos;s used next time) or on the row. Siemens part numbers were checked in the TIA Selection Tool;
+                  &quot;verify P/N&quot; ones still need confirming with the supplier.
                 </Alert>
               )}
             </>

@@ -1,5 +1,17 @@
-import { DEFAULT_PLC_INPUTS, SIEMENS_PARTS, configurePlc, estimate24V, siemensPrice, type PlcInputs } from './siemensPlc';
+import {
+  DEFAULT_PLC_INPUTS, SIEMENS_PARTS, configurePlc, estimate24V, noAnalog, siemensPrice,
+  type AnalogCount, type AnalogKey, type PlcInputs,
+} from './siemensPlc';
 
+/** Analog points by type: { aiI: 10 } = 10 × 2-wire, { aiI: { w4: 2 } } = 2 × 4-wire. */
+const an = (p: Partial<Record<AnalogKey, number | Partial<AnalogCount>>>) => {
+  const out = noAnalog();
+  (Object.keys(p) as AnalogKey[]).forEach((k) => {
+    const v = p[k]!;
+    out[k] = typeof v === 'number' ? { w2: v, w4: 0 } : { w2: v.w2 ?? 0, w4: v.w4 ?? 0 };
+  });
+  return out;
+};
 const cfg = (p: Partial<PlcInputs>) => configurePlc({ ...DEFAULT_PLC_INPUTS, sparePct: 0, ...p });
 const qty = (c: ReturnType<typeof configurePlc>, key: string) => c.lines.find((l) => l.key === key)?.qty ?? 0;
 
@@ -15,18 +27,19 @@ describe('Siemens PLC configurator', () => {
   });
 
   it('S7-1200: I/O beyond on-board goes to ET 200SP with BaseUnits', () => {
-    // 40 DI → 14 on board + 26 → 2 × DI16; 20 DO → 10 + 10 → 1 × DQ16; 10 AI (4–20 mA) → 2 × AI8; 3 AO → 1 × AQ4
-    const c = cfg({ family: 'S7-1200', di: 40, do: 20, ai: 10, ao: 3 });
+    // 40 DI → 14 on board + 26 → 2 × DI16; 20 DO → 10 + 10 → 1 × DQ16; 10 AI (4–20 mA) → 2 × AI8; 3 AO 0–10 V → 1 × AQ4
+    const c = cfg({ family: 'S7-1200', di: 40, do: 20, analog: an({ aiI: 10, aoU: 3 }) });
     expect([qty(c, 'di16'), qty(c, 'dq16'), qty(c, 'ai8'), qty(c, 'aq4')]).toEqual([2, 1, 2, 1]);
     expect(qty(c, 'imBundle')).toBe(1);
     expect(qty(c, 'buLight')).toBe(1);
     expect(qty(c, 'buDark')).toBe(5); // 6 modules − 1 light
-    expect(c.channels.ai.provided).toBe(16); // on-board 0–10 V not counted by default
+    expect(c.channels.ai.provided).toBe(16); // on-board AI are 0–10 V only, so they don't take 4–20 mA
   });
 
-  it('S7-1200 on-board AI can be counted when the signals are 0–10 V', () => {
-    expect(qty(cfg({ family: 'S7-1200', ai: 2, useOnboardAi: true }), 'ai8')).toBe(0);
-    expect(qty(cfg({ family: 'S7-1200', ai: 2 }), 'ai8')).toBe(1);
+  it('S7-1200 on-board AI take 0–10 V inputs only', () => {
+    expect(qty(cfg({ family: 'S7-1200', analog: an({ aiU: 2 }) }), 'ai8u')).toBe(0);
+    expect(qty(cfg({ family: 'S7-1200', analog: an({ aiU: 3 }) }), 'ai8u')).toBe(1);
+    expect(qty(cfg({ family: 'S7-1200', analog: an({ aiI: 2 }) }), 'ai8')).toBe(1);
   });
 
   it('S7-1500: all I/O on ET 200SP, memory card always included', () => {
@@ -81,13 +94,13 @@ describe('other CPU models, HMI, SCADA and SITOP choices', () => {
     expect([qty(c, 'di16'), qty(c, 'dq16'), qty(c, 'imBundle')]).toEqual([1, 0, 1]);
   });
 
-  it('1215C on-board AQ covers 2 AO before an AQ4 module is needed', () => {
-    expect(qty(cfg({ family: 'S7-1200', cpu: 'cpu1215', ao: 2 }), 'aq4')).toBe(0);
-    expect(qty(cfg({ family: 'S7-1200', cpu: 'cpu1215', ao: 3 }), 'aq4')).toBe(1);
+  it('1215C on-board AQ (0–20 mA) covers 2 current AO before an AQ4 module is needed', () => {
+    expect(qty(cfg({ family: 'S7-1200', cpu: 'cpu1215', analog: an({ aoI: 2 }) }), 'aq4')).toBe(0);
+    expect(qty(cfg({ family: 'S7-1200', cpu: 'cpu1215', analog: an({ aoI: 3 }) }), 'aq4')).toBe(1);
   });
 
   it('S7-1500 compact CPU counts its on-board I/O (AI are 4–20 mA capable)', () => {
-    const c = cfg({ family: 'S7-1500', cpu: 'cpu1511c', di: 16, do: 16, ai: 4 });
+    const c = cfg({ family: 'S7-1500', cpu: 'cpu1511c', di: 16, do: 16, analog: an({ aiI: 4 }) });
     expect(c.ioModules).toBe(0);
     expect(qty(c, 'memCard')).toBe(1);
   });
@@ -159,7 +172,7 @@ describe('defaults', () => {
 
 describe('24 V load estimate', () => {
   it('adds CPU, modules and field loads, then the margin, and suggests a SITOP rating', () => {
-    const inp = { ...DEFAULT_PLC_INPUTS, sparePct: 0, family: 'S7-1200' as const, di: 40, do: 20, ai: 8, ao: 4, doLoadA: 0.1, psuMarginPct: 25 };
+    const inp = { ...DEFAULT_PLC_INPUTS, sparePct: 0, family: 'S7-1200' as const, di: 40, do: 20, analog: an({ aiI: 8, aoU: 4 }), doLoadA: 0.1, psuMarginPct: 25 };
     const c = configurePlc(inp);
     const e = estimate24V(inp, c);
     // CPU 0.5 + IM 0.2 + 2×DI16 0.1 + 1×DQ16 0.05 + 1×AI8 0.03 + 1×AQ4 0.05
@@ -173,5 +186,90 @@ describe('24 V load estimate', () => {
     const base = { ...DEFAULT_PLC_INPUTS, sparePct: 0, family: 'S7-1500' as const, do: 64 };
     expect(estimate24V({ ...base, doLoadA: 0.3 }, configurePlc({ ...base, doLoadA: 0.3 })).suggestedA).toBe(40);
     expect(estimate24V({ ...base, doLoadA: 0.5 }, configurePlc({ ...base, doLoadA: 0.5 })).suggestedA).toBeNull();
+  });
+});
+
+describe('analog signal types', () => {
+  it('each signal type goes on its own module; 3-/4-wire RTD on the 4-channel HF', () => {
+    const c = cfg({ family: 'S7-1500', analog: an({ aiI: { w2: 5, w4: 4 }, aiU: 3, aiRtd: { w2: 8, w4: 5 }, aoI: 2, aoU: 3 }) });
+    expect(qty(c, 'ai8')).toBe(2);   // 9 × 4–20 mA (2- and 4-wire)
+    expect(qty(c, 'ai8u')).toBe(1);
+    expect(qty(c, 'rtd8')).toBe(1);  // 8 × RTD 2-wire
+    expect(qty(c, 'rtd4')).toBe(2);  // 5 × RTD 3-/4-wire
+    expect(qty(c, 'aq4')).toBe(2);   // 5 AO, U and I share AQ 4xU/I
+    expect(c.channels.ai).toEqual({ needed: 25, provided: 40 });
+  });
+
+  it('thermocouples sit on type A1 BaseUnits (cold-junction sensor)', () => {
+    const c = cfg({ family: 'S7-1500', di: 16, analog: an({ aiTc: { w2: 3, w4: 9 } }) });
+    expect(qty(c, 'rtd8')).toBe(1);        // TC is 2-wire only — the 4-wire field is ignored
+    expect([qty(c, 'buLight'), qty(c, 'buDark'), qty(c, 'buLightA1'), qty(c, 'buDarkA1')]).toEqual([1, 0, 0, 1]);
+    const tcOnly = cfg({ family: 'S7-1500', analog: an({ aiTc: 3 }) });
+    expect([qty(tcOnly, 'buLight'), qty(tcOnly, 'buLightA1')]).toEqual([0, 1]);
+  });
+});
+
+describe('redundancy and network switches', () => {
+  it('S7-1500R: 2 CPUs, 2 memory cards, IM 155-6 PN/2 HF + BusAdapter, 2 managed switches', () => {
+    const c = cfg({ family: 'S7-1200', redundancy: 'R', cpu: 'cpu1214', di: 16 });
+    expect(qty(c, 'cpu1513r')).toBe(2);
+    expect(qty(c, 'cpu1214')).toBe(0);
+    expect(qty(c, 'memCard')).toBe(2);
+    expect([qty(c, 'imHf'), qty(c, 'busAdapter'), qty(c, 'imBundle')]).toEqual([1, 1, 0]);
+    expect(qty(c, 'xc208')).toBe(2);
+    expect(c.notes.join(' ')).toMatch(/at least 2 managed switches/);
+  });
+
+  it('S7-1500H: one bundle (2 CPUs + sync), 2 memory cards; HF stations hold 64 modules', () => {
+    const c = cfg({ redundancy: 'H', di: 40 * 16, switchQty: 3, switchType: 'unmanaged' });
+    expect(qty(c, 'cpu1517h')).toBe(1);
+    expect(qty(c, 'memCard')).toBe(2);
+    expect(c.stations).toBe(1);
+    expect(qty(c, 'xc208')).toBe(3); // unmanaged overridden to managed
+  });
+
+  it('switch model follows the ports needed per switch', () => {
+    expect(qty(cfg({ switchQty: 1, hmi: 'ktp700' }), 'wagoSw5')).toBe(1);   // CPU + HMI + uplink = 3 ports
+    expect(qty(cfg({ switchQty: 1, scada: 'wincc81', scadaQty: 6 }), 'wagoSw8')).toBe(1); // 7 devices + 1
+    const big = cfg({ switchQty: 1, switchType: 'managed', scada: 'wincc81', scadaQty: 20 });
+    expect(qty(big, 'xc216')).toBe(1);
+    expect(big.notes.join(' ')).toMatch(/add more switches/);
+    expect(SIEMENS_PARTS.wagoSw5).toMatchObject({ partNo: '852-111', price: 8328.24, brand: 'WAGO' });
+  });
+});
+
+describe('WAGO terminals and wiring', () => {
+  const c = cfg({ family: 'S7-1500', di: 20, do: 10, analog: an({ aiI: { w2: 4, w4: 2 } }) });
+
+  it('DI → 2-level terminal, DO → slim relay, analog → fused + standard terminals', () => {
+    expect(qty(c, 'tb2Level')).toBe(20);
+    expect(qty(c, 'relay')).toBe(10);
+    expect(qty(c, 'relayJumper')).toBe(9);
+    expect(qty(c, 'tbFuse')).toBe(8);     // 4 × 1 + 2 × 2
+    expect(qty(c, 'fuse5x20')).toBe(8);
+    // 8 analog + 2 × 4 distribution (CPU, IM, light BU, PSU feed)
+    expect(qty(c, 'tbStd')).toBe(16);
+    expect(qty(c, 'tb2LevelEnd')).toBe(1);
+    expect(qty(c, 'tbStdEnd')).toBe(1);
+    expect(qty(c, 'jumper10')).toBe(4);   // 2 DI level + 2 distribution
+    expect(qty(c, 'endStop')).toBe(8);    // 4 groups × 2
+    expect(qty(c, 'markers')).toBe(56);
+  });
+
+  it('0.5 mm² red (+24 V) and blue (0 V) wire sized from the I/O and the panel', () => {
+    expect(c.wiring).toMatchObject({ redWires: 44, blueWires: 13, runM: 1.3, redM: 63, blueM: 19 });
+    expect([qty(c, 'wireRed'), qty(c, 'wireBlue')]).toEqual([1, 1]);
+    expect(qty(c, 'ferrule05')).toBe(200);
+    // a bigger panel means longer wires
+    expect(cfg({ di: 100, panelW: 2000, panelH: 2200 }).wiring!.runM).toBe(2.4);
+  });
+
+  it('can be switched off, and prices come from the WAGO inventory', () => {
+    const off = cfg({ family: 'S7-1500', di: 20, terminals: false });
+    expect(off.wiring).toBeNull();
+    expect(qty(off, 'tb2Level')).toBe(0);
+    expect(siemensPrice(SIEMENS_PARTS.tb2Level, [])).toEqual({ price: 99.41, source: 'quote' });
+    expect(siemensPrice(SIEMENS_PARTS.relay, [])).toEqual({ price: 554.69, source: 'quote' });
+    expect(SIEMENS_PARTS.wagoEco10).toMatchObject({ partNo: '787-732', price: 5337.3, brand: 'WAGO' });
   });
 });
