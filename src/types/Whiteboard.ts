@@ -43,6 +43,24 @@ export function whiteboardPersonOf(user: { full_name?: string | null; username?:
   return match ? match.key : null;
 }
 
+// Optional connection from a note to one Project List project or one
+// calcsheet proposal (not a specific quotation — revisions change, the
+// proposal doesn't). `label` is a snapshot taken when the link was made, so
+// rendering a note never needs to fetch the project; a later rename won't
+// update it until the note is re-linked.
+export type WhiteboardLinkType = 'project' | 'calcsheet';
+export interface WhiteboardLink {
+  type: WhiteboardLinkType;
+  id: string;
+  label: string;
+}
+
+export function whiteboardLinkHref(link: WhiteboardLink): string {
+  return link.type === 'project'
+    ? `/projects/${encodeURIComponent(link.id)}`
+    : `/sales/calcsheet/projects/${encodeURIComponent(link.id)}`;
+}
+
 export interface WhiteboardItem {
   id: string;
   kind: WhiteboardKind;
@@ -62,6 +80,7 @@ export interface WhiteboardItem {
   done?: boolean;
   // Optional deadline, YYYY-MM-DD. Only meaningful when kind === 'todo'.
   dueDate?: string;
+  link?: WhiteboardLink;
   createdBy: string;
   createdByName: string;
   createdAt: string;

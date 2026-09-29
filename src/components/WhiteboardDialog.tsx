@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
-  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
+  Alert, Autocomplete, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
   IconButton, MenuItem, Stack, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -12,12 +12,50 @@ import LockIcon from '@mui/icons-material/Lock';
 import CampaignIcon from '@mui/icons-material/Campaign';
 import NoteIcon from '@mui/icons-material/StickyNote2';
 import ChecklistIcon from '@mui/icons-material/Checklist';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
+import AddIcon from '@mui/icons-material/Add';
+import NewCalcsheetProjectDialog, { type NewProjectNotice } from './calcsheet/NewCalcsheetProjectDialog';
+import type { Project } from '../types/Quotation';
 import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { format } from 'date-fns';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useWhiteboardStore } from '../store/whiteboardStore';
-import { WHITEBOARD_PEOPLE, whiteboardPersonOf } from '../types/Whiteboard';
-import type { WhiteboardItem, WhiteboardKind, WhiteboardPerson, WhiteboardVisibility } from '../types/Whiteboard';
+import { WHITEBOARD_PEOPLE, whiteboardLinkHref, whiteboardPersonOf } from '../types/Whiteboard';
+import type { WhiteboardItem, WhiteboardKind, WhiteboardLink, WhiteboardPerson, WhiteboardVisibility } from '../types/Whiteboard';
+
+const linkIcon = (link: WhiteboardLink) =>
+  link.type === 'project' ? <FolderOutlinedIcon sx={{ fontSize: 14 }} /> : <CalculateOutlinedIcon sx={{ fontSize: 14 }} />;
+
+// Optional "connect this note to…" picker — Project List projects and
+// calcsheet proposals in one searchable list, grouped by type — plus a
+// "New proposal" button for when the project doesn't exist yet.
+function LinkPicker({ value, onChange, options, onCreateNew }: {
+  value: WhiteboardLink | null;
+  onChange: (link: WhiteboardLink | null) => void;
+  options: WhiteboardLink[];
+  onCreateNew: () => void;
+}) {
+  return (
+    <Stack direction="row" spacing={1} alignItems="center">
+      <Autocomplete
+        size="small"
+        options={options}
+        value={value}
+        onChange={(_e, v) => onChange(v)}
+        groupBy={(o) => (o.type === 'project' ? 'Projects' : 'Calcsheet proposals')}
+        getOptionLabel={(o) => o.label}
+        isOptionEqualToValue={(a, b) => a.type === b.type && a.id === b.id}
+        renderInput={(params) => <TextField {...params} label="Link to project / calcsheet (optional)" />}
+        sx={{ minWidth: 240, flex: 1 }}
+      />
+      <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={onCreateNew} sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+        New proposal
+      </Button>
+    </Stack>
+  );
+}
 
 const KIND_OPTIONS: { kind: WhiteboardKind; label: string; icon: ReactElement }[] = [
   { kind: 'update', label: 'Update', icon: <CampaignIcon fontSize="small" /> },
@@ -51,7 +89,7 @@ function dueInfo(item: WhiteboardItem): DueInfo {
 // poster-only, same as editing — server.js enforces it too); private notes
 // never drag, there's no column to drop them in.
 function StickyNote({
-  item, bg, draggable, canToggleDone, canEdit, canDelete, onToggleDone, onEdit, onDelete,
+  item, bg, draggable, canToggleDone, canEdit, canDelete, onToggleDone, onEdit, onDelete, onOpenLink,
 }: {
   item: WhiteboardItem;
   bg: string;
@@ -62,6 +100,7 @@ function StickyNote({
   onToggleDone: (item: WhiteboardItem) => void;
   onEdit: (item: WhiteboardItem) => void;
   onDelete: (item: WhiteboardItem) => void;
+  onOpenLink: (link: WhiteboardLink) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: item.id, disabled: !draggable });
   const due = item.kind === 'todo' ? dueInfo(item) : null;
@@ -101,6 +140,17 @@ function StickyNote({
           >
             {item.text}
           </Typography>
+          {item.link && (
+            <Chip
+              size="small"
+              icon={linkIcon(item.link)}
+              label={item.link.label || (item.link.type === 'project' ? 'Project' : 'Calcsheet')}
+              onClick={() => onOpenLink(item.link!)}
+              title={`Open ${item.link.type === 'project' ? 'project' : 'calcsheet proposal'}`}
+              variant="outlined"
+              sx={{ mt: 0.5, maxWidth: '100%', height: 20, fontSize: 11, bgcolor: 'rgba(255,255,255,0.6)', '& .MuiChip-label': { px: 0.75, overflow: 'hidden', textOverflow: 'ellipsis' } }}
+            />
+          )}
         </Box>
         {canEdit && (
           <IconButton size="small" onClick={() => onEdit(item)} title="Edit" sx={{ p: 0.25 }}>
@@ -137,7 +187,7 @@ function StickyNote({
 // One board column — a drop target for reassigning a sticky note to this
 // person. Highlights while something's dragged over it.
 function WhiteboardColumn({
-  person, items: colItems, canDragItem, canToggleDoneItem, canEditItem, canDeleteItem, onToggleDone, onEdit, onDelete,
+  person, items: colItems, canDragItem, canToggleDoneItem, canEditItem, canDeleteItem, onToggleDone, onEdit, onDelete, onOpenLink,
 }: {
   person: (typeof WHITEBOARD_PEOPLE)[number];
   items: WhiteboardItem[];
@@ -148,6 +198,7 @@ function WhiteboardColumn({
   onToggleDone: (item: WhiteboardItem) => void;
   onEdit: (item: WhiteboardItem) => void;
   onDelete: (item: WhiteboardItem) => void;
+  onOpenLink: (link: WhiteboardLink) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: person.key });
   return (
@@ -175,7 +226,7 @@ function WhiteboardColumn({
             <StickyNote
               key={item.id} item={item} bg={person.lightColor} draggable={canDragItem(item)}
               canToggleDone={canToggleDoneItem(item)} canEdit={canEditItem(item)} canDelete={canDeleteItem(item)}
-              onToggleDone={onToggleDone} onEdit={onEdit} onDelete={onDelete}
+              onToggleDone={onToggleDone} onEdit={onEdit} onDelete={onDelete} onOpenLink={onOpenLink}
             />
           ))
         )}
@@ -197,12 +248,21 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
   const addItem = useWhiteboardStore((s) => s.addItem);
   const updateItem = useWhiteboardStore((s) => s.updateItem);
   const deleteItem = useWhiteboardStore((s) => s.deleteItem);
+  const linkOptions = useWhiteboardStore((s) => s.linkOptions);
+  const fetchLinkOptions = useWhiteboardStore((s) => s.fetchLinkOptions);
+  const addLinkOption = useWhiteboardStore((s) => s.addLinkOption);
+  // Which form asked for a new proposal — the new-post composer or the edit
+  // dialog — so the created proposal gets linked to the right note.
+  const [newProposalFor, setNewProposalFor] = useState<'compose' | 'edit' | null>(null);
+  const [notice, setNotice] = useState<NewProjectNotice | null>(null);
+  const navigate = useNavigate();
 
   const [kind, setKind] = useState<WhiteboardKind>('update');
   const [text, setText] = useState('');
   const [visibility, setVisibility] = useState<WhiteboardVisibility>('public');
   const [assignedTo, setAssignedTo] = useState<WhiteboardPerson>('tj');
   const [dueDate, setDueDate] = useState('');
+  const [link, setLink] = useState<WhiteboardLink | null>(null);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -213,11 +273,27 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
   const [editVisibility, setEditVisibility] = useState<WhiteboardVisibility>('public');
   const [editAssignedTo, setEditAssignedTo] = useState<WhiteboardPerson>('tj');
   const [editDueDate, setEditDueDate] = useState('');
+  const [editLink, setEditLink] = useState<WhiteboardLink | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  useEffect(() => { if (open) fetchItems(); }, [open, fetchItems]);
+  useEffect(() => { if (open) { fetchItems(); fetchLinkOptions(); } }, [open, fetchItems, fetchLinkOptions]);
+
+  // Clicking a note's link chip closes the Whiteboard and opens that page.
+  const openLink = (l: WhiteboardLink) => {
+    onClose();
+    navigate(whiteboardLinkHref(l));
+  };
+
+  // A proposal created from the Whiteboard is linked straight away to the
+  // note that asked for it (not saved yet — the user still posts/saves).
+  const onProposalCreated = (project: Project, createNotice: NewProjectNotice | null) => {
+    const l: WhiteboardLink = { type: 'calcsheet', id: project.id, label: [project.code, project.name].filter(Boolean).join(' – ') };
+    addLinkOption(l);
+    if (newProposalFor === 'edit') setEditLink(l); else setLink(l);
+    setNotice(createNotice ?? { severity: 'success', message: `Created ${l.label} — linked to this note. Post/save to keep it.` });
+  };
 
   const publicByPerson = useMemo(() => {
     const map: Record<WhiteboardPerson, WhiteboardItem[]> = { tj: [], rj: [], renzel: [], nylle: [] };
@@ -253,9 +329,11 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
         assignedTo: visibility === 'public' ? assignedTo : undefined,
         done: kind === 'todo' ? false : undefined,
         dueDate: kind === 'todo' && dueDate ? dueDate : undefined,
+        link: link ?? undefined,
       });
       setText('');
       setDueDate('');
+      setLink(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not post that.');
     } finally {
@@ -285,6 +363,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
     setEditVisibility(item.visibility);
     setEditAssignedTo(item.assignedTo ?? 'tj');
     setEditDueDate(item.dueDate ?? '');
+    setEditLink(item.link ?? null);
   };
 
   const saveEdit = async () => {
@@ -299,6 +378,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
         visibility: editVisibility,
         assignedTo: editVisibility === 'public' ? editAssignedTo : null,
         ...(editing.kind === 'todo' ? { dueDate: editDueDate || null } : {}),
+        link: editLink,
       });
       setEditing(null);
     } catch (e) {
@@ -329,6 +409,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
       </DialogTitle>
       <DialogContent>
         {error && <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setError(null)}>{error}</Alert>}
+        {notice && <Alert severity={notice.severity} sx={{ mb: 1.5 }} onClose={() => setNotice(null)}>{notice.message}</Alert>}
 
         {/* ── Composer ── */}
         <Stack spacing={1} sx={{ mb: 2 }}>
@@ -348,6 +429,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
+          <LinkPicker value={link} onChange={setLink} options={linkOptions} onCreateNew={() => setNewProposalFor('compose')} />
           <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1} justifyContent="space-between">
             <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" gap={1}>
               <Chip
@@ -399,7 +481,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
                   key={p.key} person={p} items={publicByPerson[p.key]}
                   canDragItem={canDrag} canToggleDoneItem={canToggleDone}
                   canEditItem={canEdit} canDeleteItem={canDelete}
-                  onToggleDone={toggleDone} onEdit={startEdit} onDelete={remove}
+                  onToggleDone={toggleDone} onEdit={startEdit} onDelete={remove} onOpenLink={openLink}
                 />
               ))}
             </Box>
@@ -420,12 +502,18 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
               <StickyNote
                 key={item.id} item={item} bg="#f2f2f2" draggable={false}
                 canToggleDone={canToggleDone(item)} canEdit={canEdit(item)} canDelete={canDelete(item)}
-                onToggleDone={toggleDone} onEdit={startEdit} onDelete={remove}
+                onToggleDone={toggleDone} onEdit={startEdit} onDelete={remove} onOpenLink={openLink}
               />
             ))}
           </Box>
         )}
       </DialogContent>
+
+      <NewCalcsheetProjectDialog
+        open={newProposalFor !== null}
+        onClose={() => setNewProposalFor(null)}
+        onCreated={onProposalCreated}
+      />
 
       <Dialog open={!!editing} onClose={() => setEditing(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Edit {editing ? KIND_OPTIONS.find((k) => k.kind === editing.kind)?.label.toLowerCase() : ''}</DialogTitle>
@@ -436,6 +524,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
               value={editText}
               onChange={(e) => setEditText(e.target.value)}
             />
+            <LinkPicker value={editLink} onChange={setEditLink} options={linkOptions} onCreateNew={() => setNewProposalFor('edit')} />
             <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" gap={1}>
               <Chip
                 size="small"
