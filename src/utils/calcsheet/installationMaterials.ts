@@ -10,6 +10,14 @@
 export type PipeSize = '1/2"' | '3/4"' | '1"';
 export const PIPE_SIZES: PipeSize[] = ['1/2"', '3/4"', '1"'];
 
+/** IMC (Intermediate Metal Conduit, PEC Art. 3.42) or EMT (Electrical Metallic
+ *  Tubing, Art. 3.58). Same support/bend rules; different pipe and fittings. */
+export type ConduitType = 'IMC' | 'EMT';
+export const CONDUIT_TYPES: { value: ConduitType; label: string; article: string }[] = [
+  { value: 'IMC', label: 'IMC — Intermediate Metal Conduit', article: 'Art. 3.42' },
+  { value: 'EMT', label: 'EMT — Electrical Metallic Tubing', article: 'Art. 3.58' },
+];
+
 /** How the conduit is fixed: beam/caddy clamps straight to the structure, or
  *  U-bolts on unistrut channel with 1" angle-bar brackets. */
 export type Mounting = 'clamp' | 'unistrut';
@@ -26,11 +34,16 @@ export interface InstallationWorkEntry {
   name: string;
   lengthMeters: number;
   pipeSize: PipeSize;
+  conduitType: ConduitType;
   /** 90° bends (or equivalent) along the run — PEC allows at most 360° between pull points. */
   bends90: number;
   /** Equipment / device end connections made with LQT flex. */
   equipmentConnections: number;
   mounting: Mounting;
+  /** Couplings joining pipe sticks (IMC threaded / EMT). */
+  couplingQty: number | null;
+  /** Box / panel entries: locknut with bushing (IMC) or EMT connector (EMT). */
+  boxFittingQty: number | null;
   lqtMeters: number | null;
   straightConnectorQty: number | null;
   caddyClampQty: number | null;
@@ -40,13 +53,14 @@ export interface InstallationWorkEntry {
 }
 
 export const blankEntry = (): InstallationWorkEntry => ({
-  id: '', name: '', lengthMeters: 0, pipeSize: '1/2"',
+  id: '', name: '', lengthMeters: 0, pipeSize: '1/2"', conduitType: 'IMC',
   bends90: 0, equipmentConnections: 1, mounting: 'clamp',
+  couplingQty: null, boxFittingQty: null,
   lqtMeters: null, straightConnectorQty: null, caddyClampQty: null, uBoltQty: null,
   unistrutChannelQty: null, angleBarQty: null,
 });
 
-export type AccessoryField = 'lqtMeters' | 'straightConnectorQty' | 'caddyClampQty' | 'uBoltQty' | 'unistrutChannelQty' | 'angleBarQty';
+export type AccessoryField = 'couplingQty' | 'boxFittingQty' | 'lqtMeters' | 'straightConnectorQty' | 'caddyClampQty' | 'uBoltQty' | 'unistrutChannelQty' | 'angleBarQty';
 
 // Fixed set of material "slots" this calculator knows how to price and
 // insert — pipe/LQT/Straight Connector/Caddy Clamp/U Bolt each split by size,
@@ -56,6 +70,11 @@ export type AccessoryField = 'lqtMeters' | 'straightConnectorQty' | 'caddyClampQ
 // new slot here never needs a data migration — it just shows ₱0 until priced.
 export type MaterialSlotKey =
   | 'pipe_half' | 'pipe_3q' | 'pipe_1'
+  | 'emtPipe_half' | 'emtPipe_3q' | 'emtPipe_1'
+  | 'imcCoupling_half' | 'imcCoupling_3q' | 'imcCoupling_1'
+  | 'emtCoupling_half' | 'emtCoupling_3q' | 'emtCoupling_1'
+  | 'locknut_half' | 'locknut_3q' | 'locknut_1'
+  | 'emtConnector_half' | 'emtConnector_3q' | 'emtConnector_1'
   | 'junctionBox'
   | 'lqt_half' | 'lqt_3q' | 'lqt_1'
   | 'straightConnector_half' | 'straightConnector_3q' | 'straightConnector_1'
@@ -83,6 +102,21 @@ export const MATERIAL_SLOTS: MaterialSlot[] = [
   { key: 'pipe_half', label: 'IMC Pipe 1/2"', uom: 'pc' },
   { key: 'pipe_3q', label: 'IMC Pipe 3/4"', uom: 'pc' },
   { key: 'pipe_1', label: 'IMC Pipe 1"', uom: 'pc' },
+  { key: 'emtPipe_half', label: 'EMT Pipe 1/2"', uom: 'pc' },
+  { key: 'emtPipe_3q', label: 'EMT Pipe 3/4"', uom: 'pc' },
+  { key: 'emtPipe_1', label: 'EMT Pipe 1"', uom: 'pc' },
+  { key: 'imcCoupling_half', label: 'IMC Coupling 1/2"', uom: 'pc' },
+  { key: 'imcCoupling_3q', label: 'IMC Coupling 3/4"', uom: 'pc' },
+  { key: 'imcCoupling_1', label: 'IMC Coupling 1"', uom: 'pc' },
+  { key: 'emtCoupling_half', label: 'EMT Coupling 1/2"', uom: 'pc' },
+  { key: 'emtCoupling_3q', label: 'EMT Coupling 3/4"', uom: 'pc' },
+  { key: 'emtCoupling_1', label: 'EMT Coupling 1"', uom: 'pc' },
+  { key: 'locknut_half', label: 'Lock Nut with Bushing 1/2"', uom: 'pc' },
+  { key: 'locknut_3q', label: 'Lock Nut with Bushing 3/4"', uom: 'pc' },
+  { key: 'locknut_1', label: 'Lock Nut with Bushing 1"', uom: 'pc' },
+  { key: 'emtConnector_half', label: 'EMT Connector 1/2"', uom: 'pc' },
+  { key: 'emtConnector_3q', label: 'EMT Connector 3/4"', uom: 'pc' },
+  { key: 'emtConnector_1', label: 'EMT Connector 1"', uom: 'pc' },
   { key: 'junctionBox', label: 'Junction Box', uom: 'pc' },
   { key: 'lqt_half', label: 'LQT 1/2"', uom: 'meter' },
   { key: 'lqt_3q', label: 'LQT 3/4"', uom: 'meter' },
@@ -163,9 +197,15 @@ export function supportsNeeded(lengthMeters: number, bends90 = 0): number {
 /** PEC-computed accessory quantities for a run (before any per-run override). */
 export function pecAccessories(e: Pick<InstallationWorkEntry, 'lengthMeters' | 'bends90' | 'equipmentConnections' | 'mounting'>): Record<AccessoryField, number> {
   const supports = supportsNeeded(e.lengthMeters, e.bends90);
+  const pipes = pipesNeeded(e.lengthMeters);
+  const segments = junctionBoxesNeeded(e.lengthMeters, e.bends90);
   const conns = Math.max(0, Math.round(e.equipmentConnections || 0));
   const onUnistrut = e.mounting === 'unistrut';
   return {
+    // Sticks are joined end to end within each box-to-box segment.
+    couplingQty: Math.max(0, pipes - segments),
+    // Every segment enters a box / panel at both ends.
+    boxFittingQty: segments * 2,
     lqtMeters: Math.round(conns * PEC_LQT_PER_CONNECTION_M * 10) / 10,
     straightConnectorQty: conns * 2, // one at each end of every LQT piece
     caddyClampQty: onUnistrut ? 0 : supports,
@@ -180,6 +220,7 @@ export function effectiveAccessories(e: InstallationWorkEntry): Record<Accessory
   const auto = pecAccessories(e);
   const pick = (k: AccessoryField) => (e[k] ?? auto[k]);
   return {
+    couplingQty: pick('couplingQty'), boxFittingQty: pick('boxFittingQty'),
     lqtMeters: pick('lqtMeters'), straightConnectorQty: pick('straightConnectorQty'), caddyClampQty: pick('caddyClampQty'),
     uBoltQty: pick('uBoltQty'), unistrutChannelQty: pick('unistrutChannelQty'), angleBarQty: pick('angleBarQty'),
   };
@@ -193,8 +234,11 @@ export function computeEntryQuantities(e: InstallationWorkEntry): Partial<Record
   const pipes = pipesNeeded(e.lengthMeters);
   const junctions = junctionBoxesNeeded(e.lengthMeters, e.bends90);
   const a = effectiveAccessories(e);
-  if (pipes > 0) out[`pipe_${suffix}` as MaterialSlotKey] = pipes;
+  const emt = e.conduitType === 'EMT';
+  if (pipes > 0) out[`${emt ? 'emtPipe' : 'pipe'}_${suffix}` as MaterialSlotKey] = pipes;
   if (junctions > 0) out.junctionBox = junctions;
+  if (a.couplingQty > 0) out[`${emt ? 'emtCoupling' : 'imcCoupling'}_${suffix}` as MaterialSlotKey] = a.couplingQty;
+  if (a.boxFittingQty > 0) out[`${emt ? 'emtConnector' : 'locknut'}_${suffix}` as MaterialSlotKey] = a.boxFittingQty;
   if (a.lqtMeters > 0) out[`lqt_${suffix}` as MaterialSlotKey] = a.lqtMeters;
   if (a.straightConnectorQty > 0) out[`straightConnector_${suffix}` as MaterialSlotKey] = a.straightConnectorQty;
   if (a.caddyClampQty > 0) out[`caddyClamp_${suffix}` as MaterialSlotKey] = a.caddyClampQty;
@@ -222,6 +266,12 @@ export function aggregateEntries(entries: InstallationWorkEntry[]): Partial<Reco
 // (pricelist_items, see scripts/import-pricelist-materials.js), by catalog no.
 export const SLOT_CATALOG_NO: Record<MaterialSlotKey, string> = {
   pipe_half: 'IMC-0.5', pipe_3q: 'IMC-0.75', pipe_1: 'IMC-1',
+  emtPipe_half: 'EMT-0.5', emtPipe_3q: 'EMT-0.75', emtPipe_1: 'EMT-1',
+  imcCoupling_half: 'IMCCPL-0.5', imcCoupling_3q: 'IMCCPL-0.75', imcCoupling_1: 'IMCCPL-1',
+  // Not in the materials pricelist yet — priced ₱0 until added there (or in Presets).
+  emtCoupling_half: 'EMTCPL-0.5', emtCoupling_3q: 'EMTCPL-0.75', emtCoupling_1: 'EMTCPL-1',
+  locknut_half: 'LOCKNUT-0.5', locknut_3q: 'LOCKNUT-0.75', locknut_1: 'LOCKNUT-1',
+  emtConnector_half: 'EMTCON-0.5', emtConnector_3q: 'EMTCON-0.75', emtConnector_1: 'EMTCON-1',
   junctionBox: 'JBOX-4X4',
   lqt_half: 'LQT-0.5', lqt_3q: 'LQT-0.75', lqt_1: 'LQT-1',
   straightConnector_half: 'LQTCON-0.5', straightConnector_3q: 'LQTCON-0.75', straightConnector_1: 'LQTCON-1',

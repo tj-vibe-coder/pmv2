@@ -60,6 +60,23 @@ it('computes the conduit accessories from PEC and prices every material from the
   expect(byDesc['LQT 1/2"']).toMatchObject({ qty: 0.9, unitCost: 71.43 });
   expect(byDesc['Straight Connector 1/2"']).toMatchObject({ qty: 2, unitCost: 31.25 });
   expect(byDesc['Junction Box']).toMatchObject({ qty: 4, unitCost: 66.54 });
+  expect(byDesc['IMC Coupling 1/2"']).toMatchObject({ qty: 6 });            // 10 sticks, 4 segments
+  expect(byDesc['Lock Nut with Bushing 1/2"']).toMatchObject({ qty: 8 });   // 2 box entries per segment
+});
+
+it('EMT runs use EMT pipe and EMT connectors', () => {
+  const onSubmit = jest.fn();
+  render(<InstallationWorkDialog open onClose={() => {}} productContingencyPct={0} onSubmit={onSubmit} />);
+  fireEvent.change(field(/installation work name/i), { target: { value: 'Office lighting' } });
+  fireEvent.change(field(/total length/i), { target: { value: '30' } });
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /conduit type/i }));
+  fireEvent.click(screen.getByRole('option', { name: /EMT — Electrical Metallic Tubing/i }));
+  expect(field(/emt connector \(pc\)/i).value).toBe('8');
+  fireEvent.click(screen.getByRole('button', { name: /add run/i }));
+  fireEvent.click(screen.getByRole('button', { name: /to components/i }));
+  const descs = (onSubmit.mock.calls[0][0] as Array<{ description: string }>).map((r) => r.description);
+  expect(descs).toEqual(expect.arrayContaining(['EMT Pipe 1/2"', 'EMT Coupling 1/2"', 'EMT Connector 1/2"']));
+  expect(descs).not.toContain('IMC Pipe 1/2"');
 });
 
 it('switching to unistrut mounting swaps caddy clamps for U-bolts, channel and angle bar', () => {

@@ -12,10 +12,10 @@ import type { ComponentLine } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import {
-  PIPE_SIZES, materialSlotByKey, blankEntry, pipesNeeded, junctionBoxesNeeded, supportsNeeded,
+  PIPE_SIZES, CONDUIT_TYPES, materialSlotByKey, blankEntry, pipesNeeded, junctionBoxesNeeded, supportsNeeded,
   computeEntryQuantities, aggregateEntries, pecAccessories, effectiveAccessories, resolveSlotPrice,
   PEC_MAX_SUPPORT_SPACING_M, PEC_SUPPORT_FROM_BOX_M, PEC_LQT_PER_CONNECTION_M,
-  type PipeSize, type InstallationWorkEntry, type AccessoryField, type Mounting, type MaterialSlotKey,
+  type PipeSize, type ConduitType, type InstallationWorkEntry, type AccessoryField, type Mounting, type MaterialSlotKey,
 } from '../../utils/calcsheet/installationMaterials';
 
 const id = () => nanoid(6);
@@ -125,6 +125,8 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
     );
   };
   const onUnistrut = form.mounting === 'unistrut';
+  const isEmt = form.conduitType === 'EMT';
+  const article = CONDUIT_TYPES.find((c) => c.value === form.conduitType)?.article ?? '';
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
@@ -138,7 +140,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
       </DialogTitle>
       <DialogContent dividers>
         <Stack spacing={2}>
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '2fr 1fr 1fr' }, gap: 2 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '2fr 1fr 1fr 1fr' }, gap: 2 }}>
             <TextField
               label="Installation Work Name" size="small" fullWidth
               placeholder="e.g. Panel Room to MCC-1"
@@ -156,6 +158,13 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
               onChange={(e) => setField('pipeSize', e.target.value as PipeSize)}
             >
               {PIPE_SIZES.map((sz) => <MenuItem key={sz} value={sz}>{sz}</MenuItem>)}
+            </TextField>
+            <TextField
+              select label="Conduit type" size="small" fullWidth
+              value={form.conduitType}
+              onChange={(e) => setField('conduitType', e.target.value as ConduitType)}
+            >
+              {CONDUIT_TYPES.map((c) => <MenuItem key={c.value} value={c.value}>{c.label}</MenuItem>)}
             </TextField>
           </Box>
 
@@ -184,15 +193,19 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
 
           {form.lengthMeters > 0 && (
             <Alert severity="info" sx={{ py: 0 }}>
-              This run needs <strong>{previewPipes} {form.pipeSize} pipe{previewPipes === 1 ? '' : 's'}</strong>,{' '}
+              This run needs <strong>{previewPipes} {form.pipeSize} {form.conduitType} pipe{previewPipes === 1 ? '' : 's'}</strong>,{' '}
               <strong>{previewJunctions} junction box{previewJunctions === 1 ? '' : 'es'}</strong> and{' '}
               <strong>{previewSupports} conduit support{previewSupports === 1 ? '' : 's'}</strong>
-              {' '}(3m/pipe, a box every 3 pipes{form.bends90 > 4 ? ' or every 4 bends' : ''}; supports within {PEC_SUPPORT_FROM_BOX_M * 1000} mm of each box and at most {PEC_MAX_SUPPORT_SPACING_M} m apart — PEC 2017).
+              {' '}(3m/pipe, a box every 3 pipes{form.bends90 > 4 ? ' or every 4 bends' : ''}; supports within {PEC_SUPPORT_FROM_BOX_M * 1000} mm of each box and at most {PEC_MAX_SUPPORT_SPACING_M} m apart — PEC 2017 {article}).
             </Alert>
           )}
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Conduit Accessories — PEC 2017 (computed; type to override)</Typography></Divider>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
+            {accField('couplingQty', sizedLabel(`${form.conduitType} Coupling (pc)`), `1 per joint between ${form.conduitType} sticks, within each box-to-box segment`)}
+            {accField('boxFittingQty', sizedLabel(isEmt ? 'EMT Connector (pc)' : 'Lock Nut w/ Bushing (pc)'), isEmt
+              ? '2 per segment — one EMT connector at each box / panel entry'
+              : '2 per segment — a locknut with bushing at each box / panel entry')}
             {accField('lqtMeters', sizedLabel('LQT (m)'), `${PEC_LQT_PER_CONNECTION_M} m per connection — PEC Art. 3.50: up to 900 mm at a terminal may be unsupported`)}
             {accField('straightConnectorQty', sizedLabel('Straight Connector (pc)'), '2 per LQT piece — one at each end')}
             {accField('caddyClampQty', sizedLabel('Caddy Clamp (pc)'), onUnistrut ? '0 when mounted on unistrut — U-bolts hold the conduit' : '1 per support — PEC Art. 3.42 support spacing')}
@@ -214,7 +227,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                   <TableRow>
                     <TableCell>Name</TableCell>
                     <TableCell align="right">Length (m)</TableCell>
-                    <TableCell>Size</TableCell>
+                    <TableCell>Size / type</TableCell>
                     <TableCell align="right">Pipes</TableCell>
                     <TableCell align="right">Junction Boxes</TableCell>
                     <TableCell align="right">Supports</TableCell>
@@ -225,12 +238,12 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                 <TableBody>
                   {entries.map((e) => {
                     const qs = computeEntryQuantities(e);
-                    const pipeKey = Object.keys(qs).find((k) => k.startsWith('pipe_'));
+                    const pipeKey = Object.keys(qs).find((k) => k.startsWith('pipe_') || k.startsWith('emtPipe_'));
                     return (
                       <TableRow key={e.id} hover>
                         <TableCell>{e.name}</TableCell>
                         <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{e.lengthMeters}</TableCell>
-                        <TableCell>{e.pipeSize}</TableCell>
+                        <TableCell>{e.pipeSize} {e.conduitType}</TableCell>
                         <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{pipeKey ? qs[pipeKey as keyof typeof qs] : 0}</TableCell>
                         <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{qs.junctionBox ?? 0}</TableCell>
                         <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
