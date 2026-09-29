@@ -174,7 +174,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
               error={overFill}
               helperText={fill
                 ? (form.pipeSizeAuto ? `Auto — ${fillPct(fill.fillOf(form.pipeSize))} fill` : `${fillPct(fill.fillOf(form.pipeSize))} fill${overFill ? ' — over PEC limit' : ''}`)
-                : 'Add wires below to auto-size'}
+                : 'Add cables below to auto-size'}
             >
               {PIPE_SIZES.map((sz) => <MenuItem key={sz} value={sz}>{sz}</MenuItem>)}
             </TextField>
@@ -190,7 +190,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
           {/* Wires → PEC Chapter 9 conduit fill → recommended pipe size */}
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>Wires in this conduit</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>Cables in this conduit</Typography>
               <Typography variant="caption" color="text.secondary">— sizes the pipe per PEC 2017 Chapter 9 (conduit fill)</Typography>
               <Box sx={{ flexGrow: 1 }} />
               <TextField
@@ -203,13 +203,13 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
             {form.conductors.map((g, i) => (
               <Stack key={i} direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
                 <TextField
-                  select size="small" label="Wire size" value={g.size} sx={{ width: 220 }}
+                  select size="small" label="Cable size" value={g.size} sx={{ width: 220 }}
                   onChange={(e) => setConductor(i, { size: e.target.value as WireSize })}
                 >
                   {WIRE_SIZES.map((w) => <MenuItem key={w.value} value={w.value}>{w.label}</MenuItem>)}
                 </TextField>
                 <TextField
-                  size="small" label="Qty (wires)" type="text" inputMode="numeric" sx={{ width: 120 }}
+                  size="small" label="Cables QTY" type="text" inputMode="numeric" sx={{ width: 120 }}
                   value={g.qty || ''} placeholder="0"
                   onChange={(e) => setConductor(i, { qty: Math.max(0, Math.round(parseLenientFloat(e.target.value))) })}
                 />
@@ -222,7 +222,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
             ))}
             <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
               <Button size="small" startIcon={<AddIcon />} onClick={() => setField('conductors', [...form.conductors, { size: '14', qty: 1 }])}>
-                Add wire size
+                Add cable size
               </Button>
               <Box sx={{ flexGrow: 1 }} />
               {fill && (fill.recommended ? (
@@ -234,13 +234,13 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                     </Button>
                   ) : undefined}
                 >
-                  Recommended <strong>{fill.recommended} {form.conduitType}</strong> — {fill.conductors} wire{fill.conductors === 1 ? '' : 's'},{' '}
+                  Recommended <strong>{fill.recommended} {form.conduitType}</strong> — {fill.conductors} cable{fill.conductors === 1 ? '' : 's'},{' '}
                   {fillPct(fill.fillOf(fill.recommended))} fill (PEC max {fillPct(fill.limit)})
                   {overFill ? `; ${form.pipeSize} would be ${fillPct(fill.fillOf(form.pipeSize))}` : ''}
                 </Alert>
               ) : (
                 <Alert severity="error" sx={{ py: 0 }}>
-                  {fill.conductors} wires need more than a 2" {form.conduitType} ({fillPct(fill.fillOf('2"'))} fill, max {fillPct(fill.limit)}) — split them into separate runs.
+                  {fill.conductors} cables need more than a 2" {form.conduitType} ({fillPct(fill.fillOf('2"'))} fill, max {fillPct(fill.limit)}) — split them into separate runs.
                 </Alert>
               ))}
             </Stack>
@@ -308,7 +308,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                     <TableCell>Name</TableCell>
                     <TableCell align="right">Length (m)</TableCell>
                     <TableCell>Size / type</TableCell>
-                    <TableCell>Wires</TableCell>
+                    <TableCell>Cables</TableCell>
                     <TableCell align="right">Pipes</TableCell>
                     <TableCell align="right">Boxes</TableCell>
                     <TableCell align="right">Supports</TableCell>
