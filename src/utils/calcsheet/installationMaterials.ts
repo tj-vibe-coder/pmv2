@@ -325,7 +325,13 @@ type SectionRow = { id: string; description: string; isHeader?: boolean };
  * header) so repeat adds stay together instead of repeating the header.
  */
 export function withInstallationRows<T extends SectionRow>(components: T[], rows: T[], makeHeader: () => T): T[] {
-  const h = components.findIndex((c) => c.isHeader && c.description.trim().toUpperCase() === INSTALLATION_HEADER);
+  return withSectionRows(components, rows, INSTALLATION_HEADER, makeHeader);
+}
+
+/** Same, for any section header name (e.g. the PLC configurator's). */
+export function withSectionRows<T extends SectionRow>(components: T[], rows: T[], header: string, makeHeader: () => T): T[] {
+  const name = header.trim().toUpperCase();
+  const h = components.findIndex((c) => c.isHeader && c.description.trim().toUpperCase() === name);
   if (h < 0) return [...components, makeHeader(), ...rows];
   let end = components.findIndex((c, i) => i > h && c.isHeader);
   if (end < 0) end = components.length;

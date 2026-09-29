@@ -51,7 +51,9 @@ import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
 import ProductPickerDialog from '../pricelists/ProductPickerDialog';
 import InstallationWorkDialog from './InstallationWorkDialog';
-import { INSTALLATION_HEADER, withInstallationRows } from '../../utils/calcsheet/installationMaterials';
+import { INSTALLATION_HEADER, withInstallationRows, withSectionRows } from '../../utils/calcsheet/installationMaterials';
+import SiemensPlcDialog from './SiemensPlcDialog';
+import MemoryIcon from '@mui/icons-material/Memory';
 import type { PricelistItem } from '../../types/Pricelist';
 import type { ProductHistoryAddSelection } from '../../types/ProductHistory';
 import ComponentTimingDialog, {
@@ -510,6 +512,7 @@ export default function QuotationEditor() {
   }, [liveSync, liveQid, liveProjectId, fetchQuotationFresh]);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [installWorkOpen, setInstallWorkOpen] = useState(false);
+  const [plcOpen, setPlcOpen] = useState(false);
   const [timingComponentId, setTimingComponentId] = useState<string | null>(null);
 
   // "What did you change?" prompt shown on Save — the note is attached to
@@ -883,6 +886,17 @@ export default function QuotationEditor() {
     } as ComponentLine)));
     setInstallWorkOpen(false);
     setToast({ msg: `Added ${rows.length} item${rows.length === 1 ? '' : 's'} from Installation Work ${hadHeader ? 'under' : 'with'} the "${INSTALLATION_HEADER}" header — review and Save.`, sev: 'success' });
+  };
+
+  // Siemens PLC configurator rows, under a "PLC — SIEMENS S7-…" header.
+  const addFromPlc = (rows: ComponentLine[], header: string) => {
+    commit('components', withSectionRows(quotation.components, rows, header, () => ({
+      id: id(), code: '', description: header, brand: '', partNo: '',
+      qty: 0, uom: '', unitCost: 0, forex: 1, contingencyPct: 0, discountPct: 0,
+      isHeader: true,
+    } as ComponentLine)));
+    setPlcOpen(false);
+    setToast({ msg: `Added ${rows.length} Siemens item${rows.length === 1 ? '' : 's'} under "${header}" — review and Save.`, sev: 'success' });
   };
 
   const addFromHistory = (selection: ProductHistoryAddSelection) => {
@@ -2150,6 +2164,9 @@ export default function QuotationEditor() {
                 <Button startIcon={<ConstructionIcon />} size="small" variant="outlined" onClick={() => setInstallWorkOpen(true)}>
                   Installation Work
                 </Button>
+                <Button startIcon={<MemoryIcon />} size="small" variant="outlined" onClick={() => setPlcOpen(true)}>
+                  Siemens PLC
+                </Button>
                 <Button startIcon={<AddIcon />} size="small" onClick={addComponent}>Add row</Button>
               </>
             )}
@@ -2749,6 +2766,12 @@ export default function QuotationEditor() {
         defaultContingencyPct={quotation.productContingencyPct ?? 0}
       />
 
+      <SiemensPlcDialog
+        open={plcOpen}
+        onClose={() => setPlcOpen(false)}
+        productContingencyPct={quotation.productContingencyPct ?? 0}
+        onSubmit={addFromPlc}
+      />
       <InstallationWorkDialog
         open={installWorkOpen}
         onClose={() => setInstallWorkOpen(false)}
