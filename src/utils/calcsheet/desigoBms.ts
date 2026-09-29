@@ -15,6 +15,12 @@
 //    (0–10 V in/out, Pt/Ni RTD, DI); TXM1.8X 8 super-universal (adds 4–20 mA
 //    in/out). Thermocouples are not measured directly — use a transmitter
 //    (counted as a 4–20 mA input).
+//  • Protocols: BACnet/IP and Modbus TCP are built in (Modbus: up to 500
+//    points per station). Each serial trunk — BACnet MS/TP, Modbus RTU or
+//    M-Bus — takes one RS-485 port: PXC4 / PXC5 1, PXC7.E400S / M / L 1 / 2 / 4.
+//    M-Bus is PXC5 / PXC7 only (plus an M-Bus level converter per trunk);
+//    KNX TP1 is on board the PXC4 only. P1 (APOGEE FLN) is only on the
+//    PXC7.A modular station, so it goes in as a gateway for the supplier.
 //  • TXS1.12F10: TX-I/O power supply, AC 24 V in → DC 24 V 1.2 A out for the
 //    modules and field devices; one per ~10 modules beyond what the station
 //    powers itself.
@@ -44,24 +50,28 @@ export interface PxcModel {
   maxTxPoints: number | null;
   /** TX-I/O modules the station powers itself before a TXS1.12F10 is needed. */
   selfPoweredModules: number;
+  /** RS-485 ports for BACnet MS/TP / Modbus RTU / M-Bus trunks. */
+  rs485: number;
+  mbus: boolean;
+  knx: boolean;
   description: string;
   generic: string;
 }
 
 export const PXC_MODELS: PxcModel[] = [
-  { key: 'pxc4', model: 'PXC4.E16-2', partNo: 'S55375-C150', onboard: { uio: 12, suio: 0, di: 0, relay: 4 }, maxModules: 2, maxTxPoints: null, selfPoweredModules: 2,
+  { key: 'pxc4', model: 'PXC4.E16-2', partNo: 'S55375-C150', onboard: { uio: 12, suio: 0, di: 0, relay: 4 }, maxModules: 2, maxTxPoints: null, selfPoweredModules: 2, rs485: 1, mbus: false, knx: true,
     description: 'Desigo PXC4.E16-2 automation station, 16 I/O (12 universal, 4 relay), BACnet/IP, Modbus, extendable with up to 2 TX-I/O modules',
     generic: 'Building automation controller, BACnet/IP, 16 on-board I/O (12 universal, 4 relay), expandable' },
-  { key: 'pxc5', model: 'PXC5.E24', partNo: 'S55375-C104', onboard: { uio: 8, suio: 8, di: 2, relay: 6 }, maxModules: 4, maxTxPoints: null, selfPoweredModules: 4,
+  { key: 'pxc5', model: 'PXC5.E24', partNo: 'S55375-C104', onboard: { uio: 8, suio: 8, di: 2, relay: 6 }, maxModules: 4, maxTxPoints: null, selfPoweredModules: 4, rs485: 1, mbus: true, knx: false,
     description: 'Desigo PXC5.E24 automation station, 24 I/O (8 universal, 8 super-universal, 2 DI, 6 relay), BACnet/IP, BACnet/SC, Modbus, TX-I/O extension',
     generic: 'Building automation controller, BACnet/IP, 24 on-board I/O (8 universal, 8 super-universal, 2 DI, 6 relay), expandable' },
-  { key: 'pxc7s', model: 'PXC7.E400S', partNo: 'S55375-C111', onboard: { uio: 0, suio: 0, di: 0, relay: 0 }, maxModules: null, maxTxPoints: 100, selfPoweredModules: 3,
+  { key: 'pxc7s', model: 'PXC7.E400S', partNo: 'S55375-C111', onboard: { uio: 0, suio: 0, di: 0, relay: 0 }, maxModules: null, maxTxPoints: 100, selfPoweredModules: 3, rs485: 1, mbus: true, knx: false,
     description: 'Desigo PXC7.E400S automation station, BACnet/IP, BACnet/SC, up to 100 TX-I/O points / data points, 1 × RS-485 (Modbus RTU / MS/TP)',
     generic: 'Building automation controller, BACnet/IP, modular I/O up to 100 points' },
-  { key: 'pxc7m', model: 'PXC7.E400M', partNo: 'S55375-C110', onboard: { uio: 0, suio: 0, di: 0, relay: 0 }, maxModules: null, maxTxPoints: 200, selfPoweredModules: 3,
+  { key: 'pxc7m', model: 'PXC7.E400M', partNo: 'S55375-C110', onboard: { uio: 0, suio: 0, di: 0, relay: 0 }, maxModules: null, maxTxPoints: 200, selfPoweredModules: 3, rs485: 2, mbus: true, knx: false,
     description: 'Desigo PXC7.E400M automation station, BACnet/IP, BACnet/SC, up to 200 TX-I/O points (250 data points), 2 × RS-485 (Modbus RTU / MS/TP)',
     generic: 'Building automation controller, BACnet/IP, modular I/O up to 200 points' },
-  { key: 'pxc7l', model: 'PXC7.E400L', partNo: 'S55375-C105', onboard: { uio: 0, suio: 0, di: 0, relay: 0 }, maxModules: null, maxTxPoints: 400, selfPoweredModules: 3,
+  { key: 'pxc7l', model: 'PXC7.E400L', partNo: 'S55375-C105', onboard: { uio: 0, suio: 0, di: 0, relay: 0 }, maxModules: null, maxTxPoints: 400, selfPoweredModules: 3, rs485: 4, mbus: true, knx: false,
     description: 'Desigo PXC7.E400L automation station, BACnet/IP, BACnet/SC, up to 400 TX-I/O points (600 data points), 4 × RS-485 (Modbus RTU / MS/TP)',
     generic: 'Building automation controller, BACnet/IP, modular I/O up to 400 points' },
 ];
@@ -84,6 +94,10 @@ const DESIGO_PARTS_LIST: SiemensPart[] = [
   { key: 'xfmr100', partNo: '', price: 0, brand: '', description: 'Control transformer 230 / 24 V AC, 100 VA', generic: 'Control transformer 230 / 24 V AC, 100 VA' },
   { key: 'xfmr250', partNo: '', price: 0, brand: '', description: 'Control transformer 230 / 24 V AC, 250 VA', generic: 'Control transformer 230 / 24 V AC, 250 VA' },
   { key: 'xfmr500', partNo: '', price: 0, brand: '', description: 'Control transformer 230 / 24 V AC, 500 VA', generic: 'Control transformer 230 / 24 V AC, 500 VA' },
+  { key: 'mbusConverter', partNo: '', price: 0, brand: '', description: 'M-Bus level converter / master (RS-485 ↔ M-Bus) for one M-Bus trunk', generic: 'M-Bus level converter (RS-485 to M-Bus)' },
+  { key: 'p1Gateway', partNo: '', price: 0, brand: '', description: 'P1 (APOGEE FLN) integration — gateway or PXC7.A modular station with a P1 port, per FLN trunk (max. 32 P1 devices)', generic: 'P1 field-bus integration gateway (per trunk)' },
+  { key: 'knxInterface', partNo: '', price: 0, brand: '', description: 'KNX IP interface / router for KNX TP1 integration', generic: 'KNX IP interface' },
+  { key: 'rs485Termination', partNo: '', price: 0, brand: '', description: 'RS-485 bus termination / bias resistor set (120 Ω), 2 per trunk', generic: 'RS-485 bus termination resistor (120 Ω)' },
   { ...DCC, key: 'dccServer', description: 'Desigo CC management station — server base license', generic: 'BMS software — server license' },
   { ...DCC, key: 'dccPoints', description: 'Desigo CC field data points license', generic: 'BMS software — data point license' },
   { ...DCC, key: 'dccClient', description: 'Desigo CC installed client license', generic: 'BMS software — client license' },
@@ -103,8 +117,20 @@ export const DESIGO_PARTS: Record<string, SiemensPart> = (() => {
 })();
 
 // ── Inputs ───────────────────────────────────────────────────────────────
+/** Field-bus integration: serial trunks (one RS-485 port each) and IP protocols. */
+export interface DesigoProtocols {
+  mstp: number;
+  modbusRtu: number;
+  mbus: number;
+  p1: number;
+  modbusTcp: boolean;
+  knx: boolean;
+}
+export const noProtocols = (): DesigoProtocols => ({ mstp: 0, modbusRtu: 0, mbus: 0, p1: 0, modbusTcp: false, knx: false });
+
 export interface DesigoInputs {
   controller: DesigoControllerKey;
+  protocols: DesigoProtocols;
   /** Automation stations wanted; 0 = auto (the fewest that fit). */
   controllers: number;
   di: number;
@@ -130,7 +156,7 @@ export interface DesigoInputs {
 }
 
 export const DEFAULT_DESIGO_INPUTS: DesigoInputs = {
-  controller: 'auto', controllers: 0, di: 0, do: 0, analog: noAnalog(), sparePct: 10,
+  controller: 'auto', protocols: noProtocols(), controllers: 0, di: 0, do: 0, analog: noAnalog(), sparePct: 10,
   dcc: true, integrationPoints: 0, dccClients: 1, dccWebClients: 0, dccRedundant: false, dccHistory: false, dccReports: false,
   switchQty: 0, switchType: 'unmanaged', psu: 'none', terminals: true, panelW: 800, panelH: 1200,
 };
@@ -158,7 +184,7 @@ export interface DesigoConfig {
 const whole = (n: number) => Math.max(0, Math.round(Number(n) || 0));
 const withSpare = (n: number, pct: number) => (n > 0 ? Math.ceil(n * (1 + Math.max(0, pct) / 100)) : 0);
 
-interface Need { di: number; do: number; uio: number; suio: number }
+interface Need { di: number; do: number; uio: number; suio: number; trunks: number; mbus: boolean; knx: boolean }
 
 /** TX-I/O modules for the points left after the on-board I/O of `qty` stations. */
 function txModulesFor(need: Need, m: PxcModel | null, qty: number): Record<TxKey, number> & { points: number } {
@@ -191,6 +217,8 @@ const moduleCount = (m: Record<TxKey, number>) => m.txDi16 + m.txDo6 + m.txU8 + 
 
 /** Whether `qty` stations of model `m` can hold the I/O (on board + TX-I/O). */
 function fits(need: Need, m: PxcModel, qty: number): boolean {
+  if (need.trunks > m.rs485 * qty) return false;
+  if (need.mbus && !m.mbus) return false;
   const tx = txModulesFor(need, m, qty);
   if (m.maxModules !== null) return moduleCount(tx) <= m.maxModules * qty;
   return tx.points <= (m.maxTxPoints ?? 0) * qty;
@@ -207,7 +235,16 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
     di: sp(inp.di), do: sp(inp.do),
     uio: aTot('aiU') + aTot('aiRtd') + aTot('aoU'),
     suio: aTot('aiI') + sp(a.aiTc?.w2 ?? 0) + aTot('aoI'),
+    trunks: 0, mbus: false, knx: false,
   };
+  const pr = { ...noProtocols(), ...(raw.protocols ?? {}) };
+  const mstp = whole(pr.mstp);
+  const rtu = whole(pr.modbusRtu);
+  const mbus = whole(pr.mbus);
+  const p1 = whole(pr.p1);
+  need.trunks = mstp + rtu + mbus;
+  need.mbus = mbus > 0;
+  need.knx = !!pr.knx;
   const points = need.di + need.do + need.uio + need.suio;
   const lines: DesigoLine[] = [];
   const add = (key: string, qty: number, why: string, section: DesigoSection = 'plc') => { if (qty > 0 && DESIGO_PARTS[key]) lines.push({ key, qty, why, section }); };
@@ -217,7 +254,7 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
   // beyond one PXC7.E400L, as many E400L as needed.
   let model: PxcModel | null = null;
   let suggested = 0;
-  if (points > 0) {
+  if (points > 0 || need.trunks > 0 || p1 > 0 || pr.modbusTcp || pr.knx) {
     if (inp.controller !== 'auto') {
       model = PXC_MODELS.find((m) => m.key === inp.controller) ?? null;
     } else {
@@ -245,8 +282,20 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
     add(va <= 100 ? 'xfmr100' : va <= 250 ? 'xfmr250' : 'xfmr500', va <= 500 ? 1 : Math.ceil(va / 500), `24 V AC for ${qty} station${qty === 1 ? '' : 's'}${txs ? ` and ${txs} TX-I/O supply module${txs === 1 ? '' : 's'}` : ''} (≈ ${Math.round(va)} VA incl. 25%)`);
     if (model.maxModules !== null && modules > model.maxModules * qty) notes.push(`${model.model} takes at most ${model.maxModules} TX-I/O modules — pick a bigger station or more stations.`);
     if (model.maxTxPoints !== null && tx.points > model.maxTxPoints * qty) notes.push(`${model.model} takes at most ${model.maxTxPoints} TX-I/O points — pick a bigger station or more stations.`);
+    if (need.mbus && !model.mbus) notes.push(`${model.model} has no M-Bus — pick a PXC5 or PXC7.`);
+    if (need.trunks > model.rs485 * qty) notes.push(`${need.trunks} serial trunks need ${need.trunks} RS-485 ports — ${model.model} has ${model.rs485} each; pick a bigger station or more stations.`);
     if (whole(inp.controllers) > 0 && whole(inp.controllers) < suggested) notes.push(`The I/O needs at least ${suggested} × ${model.model} — using ${suggested}.`);
   }
+  // Protocols
+  add('mbusConverter', mbus, 'One per M-Bus trunk (RS-485 to M-Bus)');
+  add('p1Gateway', p1, 'P1 (APOGEE FLN) is not on the PXC4 / PXC5 / PXC7.E400 — gateway or PXC7.A, up to 32 devices per trunk');
+  add('knxInterface', pr.knx && model && !model.knx ? 1 : 0, `KNX integration — ${model?.model ?? 'this station'} has no on-board KNX`);
+  add('rs485Termination', (mstp + rtu + p1) * 2, 'Termination at both ends of every RS-485 trunk');
+  if (need.trunks + p1 > 0 || pr.modbusTcp || pr.knx) {
+    const list = [mstp && `BACnet MS/TP × ${mstp}`, rtu && `Modbus RTU × ${rtu}`, mbus && `M-Bus × ${mbus}`, p1 && `P1 × ${p1}`, pr.modbusTcp && 'Modbus TCP', pr.knx && 'KNX'].filter(Boolean).join(', ');
+    notes.push(`Integration: ${list}. BACnet/IP and Modbus TCP use the station's Ethernet port (no hardware); each serial trunk uses one RS-485 port.`);
+  }
+  if (pr.knx && model?.knx) notes.push('KNX TP1 connects to the PXC4\'s on-board KNX interface.');
   if ((a.aiRtd?.w4 ?? 0) > 0) notes.push('TX-I/O measures RTDs 2-wire (Pt1000 / Ni1000); 3-/4-wire Pt100 needs a transmitter (then count it as 4–20 mA).');
   if ((a.aiTc?.w2 ?? 0) > 0) notes.push('Thermocouples need a head / rail transmitter to 4–20 mA — counted on super-universal points; add the transmitters.');
 

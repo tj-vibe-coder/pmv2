@@ -1,4 +1,4 @@
-import { DEFAULT_DESIGO_INPUTS, DESIGO_PARTS, configureDesigo, type DesigoInputs } from './desigoBms';
+import { DEFAULT_DESIGO_INPUTS, DESIGO_PARTS, configureDesigo, noProtocols, type DesigoInputs, type DesigoProtocols } from './desigoBms';
 import { noAnalog, type AnalogKey } from './siemensPlc';
 
 const an = (p: Partial<Record<AnalogKey, number>>) => {
@@ -79,5 +79,36 @@ describe('terminals, switches and descriptions', () => {
       expect(p.generic).toBeTruthy();
       expect(p.generic).not.toMatch(/Desigo|Siemens|PXC|TXM|TXS|WAGO|SITOP|SCALANCE/i);
     });
+  });
+});
+
+describe('protocols', () => {
+  const pr = (p: Partial<DesigoProtocols>) => ({ ...noProtocols(), ...p });
+
+  it('each serial trunk takes an RS-485 port — the station is picked to have enough', () => {
+    expect(cfg({ di: 10, protocols: pr({ modbusRtu: 1 }) }).controller?.model).toBe('PXC4.E16-2');
+    // 2 trunks → a PXC4 / PXC5 / PXC7.E400S (1 port each) is not enough → PXC7.E400M
+    expect(cfg({ di: 10, protocols: pr({ mstp: 1, modbusRtu: 1 }) }).controller?.model).toBe('PXC7.E400M');
+    expect(cfg({ di: 10, protocols: pr({ mstp: 4 }) }).controller?.model).toBe('PXC7.E400L');
+    const c = cfg({ di: 10, protocols: pr({ mstp: 1, modbusRtu: 1 }) });
+    expect(qty(c, 'rs485Termination')).toBe(4);
+  });
+
+  it('M-Bus: not on the PXC4, one level converter per trunk', () => {
+    const c = cfg({ di: 10, protocols: pr({ mbus: 1 }) });
+    expect(c.controller?.model).toBe('PXC5.E24');
+    expect(qty(c, 'mbusConverter')).toBe(1);
+  });
+
+  it('P1 goes in as a gateway; KNX is on board the PXC4 only', () => {
+    expect(qty(cfg({ di: 10, protocols: pr({ p1: 2 }) }), 'p1Gateway')).toBe(2);
+    expect(qty(cfg({ di: 10, protocols: pr({ knx: true }) }), 'knxInterface')).toBe(0);           // PXC4
+    expect(qty(cfg({ di: 10, controller: 'pxc7s', protocols: pr({ knx: true }) }), 'knxInterface')).toBe(1);
+  });
+
+  it('Modbus TCP / BACnet/IP need no hardware', () => {
+    const c = cfg({ di: 10, protocols: pr({ modbusTcp: true }) });
+    expect(c.notes.join(' ')).toMatch(/Modbus TCP use the station's Ethernet port/);
+    expect(c.lines.some((l) => ['mbusConverter', 'p1Gateway', 'knxInterface', 'rs485Termination'].includes(l.key))).toBe(false);
   });
 });

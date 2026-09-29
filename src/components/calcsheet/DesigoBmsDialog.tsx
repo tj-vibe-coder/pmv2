@@ -13,8 +13,8 @@ import {
   type AnalogKey, type SwitchType,
 } from '../../utils/calcsheet/siemensPlc';
 import {
-  BMS_HEADER, BMS_SOFTWARE_HEADER, DEFAULT_DESIGO_INPUTS, DESIGO_PARTS, PXC_MODELS, configureDesigo,
-  type DesigoControllerKey, type DesigoInputs, type DesigoSection,
+  BMS_HEADER, BMS_SOFTWARE_HEADER, DEFAULT_DESIGO_INPUTS, DESIGO_PARTS, PXC_MODELS, configureDesigo, noProtocols,
+  type DesigoControllerKey, type DesigoInputs, type DesigoProtocols, type DesigoSection,
 } from '../../utils/calcsheet/desigoBms';
 import type { PlcSubmitSection } from './SiemensPlcDialog';
 
@@ -32,7 +32,7 @@ interface Props {
 }
 
 const id = () => nanoid(6);
-const fresh = (): DesigoInputs => ({ ...DEFAULT_DESIGO_INPUTS, analog: noAnalog() });
+const fresh = (): DesigoInputs => ({ ...DEFAULT_DESIGO_INPUTS, analog: noAnalog(), protocols: noProtocols() });
 const SECTION_ORDER: DesigoSection[] = ['plc', 'bmsSoftware', 'terminals', 'wiring'];
 const SECTION_HEADER: Record<DesigoSection, string> = {
   plc: BMS_HEADER, bmsSoftware: BMS_SOFTWARE_HEADER, terminals: TERMINALS_HEADER, wiring: WIRES_HEADER,
@@ -78,6 +78,14 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
       }}
       onFocus={(e) => e.target.select()}
     />
+  );
+
+  const setProto = <K extends keyof DesigoProtocols>(k: K, v: DesigoProtocols[K]) => setInp((p) => ({ ...p, protocols: { ...p.protocols, [k]: v } }));
+  const trunk = (k: 'mstp' | 'modbusRtu' | 'mbus' | 'p1', label: string) => (
+    <Box sx={{ width: 140 }}>
+      <TextField label={label} size="small" fullWidth type="text" inputMode="numeric" value={inp.protocols[k] || ''} placeholder="0" helperText="trunks"
+        onChange={(e) => setProto(k, Math.max(0, Math.round(parseLenientFloat(e.target.value))))} onFocus={(e) => e.target.select()} />
+    </Box>
   );
 
   const close = () => { setInp(fresh()); onClose(); };
@@ -137,6 +145,22 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
               </Stack>
             ))}
           </Box>
+
+          <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Protocols / integration</Typography></Divider>
+          <Stack direction="row" spacing={2} alignItems="flex-start" flexWrap="wrap" useFlexGap>
+            {trunk('mstp', 'BACnet MS/TP')}
+            {trunk('modbusRtu', 'Modbus RTU')}
+            {trunk('mbus', 'M-Bus')}
+            {trunk('p1', 'P1 (FLN)')}
+            <FormControlLabel control={<Checkbox size="small" checked={inp.protocols.modbusTcp} onChange={(e) => setProto('modbusTcp', e.target.checked)} />}
+              label={<Typography variant="body2">Modbus TCP</Typography>} />
+            <FormControlLabel control={<Checkbox size="small" checked={inp.protocols.knx} onChange={(e) => setProto('knx', e.target.checked)} />}
+              label={<Typography variant="body2">KNX</Typography>} />
+          </Stack>
+          <Typography variant="caption" color="text.secondary">
+            BACnet/IP is always on. Each MS/TP, Modbus RTU or M-Bus trunk uses one RS-485 port (PXC4 / PXC5: 1, PXC7.E400S / M / L: 1 / 2 / 4) — the
+            station is picked to have enough.
+          </Typography>
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Desigo CC (management station)</Typography></Divider>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
