@@ -62,7 +62,7 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
     .filter((g) => g.rows.length > 0);
   const ready = rows.length > 0;
 
-  type NumKey = 'di' | 'do' | 'sparePct' | 'controllers' | 'integrationPoints' | 'dccClients' | 'dccWebClients' | 'switchQty' | 'panelW' | 'panelH';
+  type NumKey = 'di' | 'do' | 'sparePct' | 'controllers' | 'integrationPoints' | 'scadaPoints' | 'dccClients' | 'dccWebClients' | 'switchQty' | 'panelW' | 'panelH';
   const num = (k: NumKey, label: string, helper?: string, placeholder = '0') => (
     <TextField
       label={label} size="small" fullWidth type="text" inputMode="numeric"
@@ -140,6 +140,9 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
           </Stack>
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Analog I/O by signal type</Typography></Divider>
+          <Typography variant="caption" color="text.secondary">
+            RTD 2-wire = Pt1000 / Ni1000 (universal points) · RTD 3-/4-wire = Pt100 (TXM1.8P module) · thermocouples via a 4–20 mA transmitter.
+          </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(6, 1fr)' }, gap: 2 }}>
             {ANALOG_KINDS.map((k) => (
               <Stack key={k.key} spacing={1}>
@@ -174,15 +177,21 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
             />
             {inp.dcc && (
               <>
-                <Box sx={{ width: 150 }}>{num('integrationPoints', 'Integration points', 'Modbus / BACnet')}</Box>
-                <Box sx={{ width: 120 }}>{num('dccClients', 'Clients', 'Installed')}</Box>
-                <Box sx={{ width: 120 }}>{num('dccWebClients', 'Web clients')}</Box>
+                <TextField select label="Edition" size="small" sx={{ minWidth: 200 }} value={inp.dccEdition}
+                  onChange={(e) => set('dccEdition', e.target.value as DesigoInputs['dccEdition'])}
+                  helperText={inp.dccEdition === 'auto' && cfg.dccEdition ? `Auto: ${cfg.dccEdition === 'compact' ? 'Compact' : 'Standard'}` : ' '}>
+                  <MenuItem value="auto">Auto — best fit</MenuItem>
+                  <MenuItem value="compact">Compact (≤ 2,000 points, 3 clients)</MenuItem>
+                  <MenuItem value="standard">Standard</MenuItem>
+                </TextField>
+                <Box sx={{ width: 150 }}>{num('integrationPoints', 'BACnet integration', 'Extra BA points')}</Box>
+                <Box sx={{ width: 150 }}>{num('scadaPoints', 'SCADA points', 'Modbus / OPC / S7 direct')}</Box>
+                <Box sx={{ width: 110 }}>{num('dccClients', 'Clients', 'Installed')}</Box>
+                <Box sx={{ width: 110 }}>{num('dccWebClients', 'Web clients')}</Box>
                 <FormControlLabel control={<Checkbox size="small" checked={inp.dccRedundant} onChange={(e) => set('dccRedundant', e.target.checked)} />}
                   label={<Typography variant="body2">Redundant servers</Typography>} />
-                <FormControlLabel control={<Checkbox size="small" checked={inp.dccHistory} onChange={(e) => set('dccHistory', e.target.checked)} />}
-                  label={<Typography variant="body2">Long-term data logging</Typography>} />
-                <FormControlLabel control={<Checkbox size="small" checked={inp.dccReports} onChange={(e) => set('dccReports', e.target.checked)} />}
-                  label={<Typography variant="body2">Reports</Typography>} />
+                <FormControlLabel control={<Checkbox size="small" checked={inp.dccEngineering} onChange={(e) => set('dccEngineering', e.target.checked)} />}
+                  label={<Typography variant="body2">Engineering license</Typography>} />
               </>
             )}
           </Stack>
@@ -211,7 +220,7 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                 {cfg.points > 0 && <Chip size="small" variant="outlined" color="success" label={`${cfg.points} I/O points incl. spare · ${cfg.txPoints} on TX-I/O`} />}
                 {cfg.modules > 0 && <Chip size="small" variant="outlined" label={`${cfg.modules} TX-I/O module${cfg.modules === 1 ? '' : 's'}`} />}
-                {inp.dcc && cfg.dataPoints > 0 && <Chip size="small" variant="outlined" label={`${cfg.dataPoints} Desigo CC data points`} />}
+                {inp.dcc && cfg.dataPoints > 0 && <Chip size="small" variant="outlined" label={`${cfg.dataPoints} Desigo CC BA points · ${cfg.dccEdition === 'compact' ? 'Compact' : 'Standard'}`} />}
                 {cfg.wiring && <Chip size="small" variant="outlined" label={`${cfg.wiring.terminals} terminals · ${(cfg.wiring.railMm / 1000).toFixed(1)} m DIN rail`} />}
               </Stack>
               {cfg.notes.map((n) => <Alert key={n} severity="info" sx={{ py: 0 }}>{n}</Alert>)}

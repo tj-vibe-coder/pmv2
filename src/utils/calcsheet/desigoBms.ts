@@ -11,6 +11,8 @@
 //    outputs on board, up to 4 TX-I/O modules powered directly.
 //    PXC7.E400S / M / L: no on-board I/O, up to 100 / 200 / 400 TX-I/O points;
 //    the PXC7 powers the first modules (≈ 300 mA) itself.
+//  • RTD: universal points (on board, TXM1.8U) take Pt1000 / Ni1000 2-wire;
+//    Pt100 3-/4-wire needs the TXM1.8P (8 × Pt100 4-wire / 250 Ω).
 //  • TX-I/O: TXM1.16D 16 DI; TXM1.6R 6 relay DO; TXM1.8U 8 universal
 //    (0–10 V in/out, Pt/Ni RTD, DI); TXM1.8X 8 super-universal (adds 4–20 mA
 //    in/out). Thermocouples are not measured directly — use a transmitter
@@ -26,8 +28,8 @@
 //    powers itself.
 //
 // Part numbers: automation stations as in the Siemens HIT catalog (S55375-…);
-// TX-I/O as BPZ:… order codes. Desigo CC licenses are ordered by feature —
-// no public order numbers, so they go in for the supplier to fill. Everything
+// TX-I/O as BPZ:… order codes. Desigo CC licenses as in the Siemens HIT
+// catalog (P55802-…): a feature set + point packs + client add-ons. Everything
 // is ₱0 (for inquiry) until priced in Sales → Pricelists.
 
 import {
@@ -80,14 +82,54 @@ export const TX_MODULES = {
   txDi16: { channels: 16, partNo: 'BPZ:TXM1.16D', description: 'Desigo TX-I/O module TXM1.16D, 16 digital inputs', generic: 'I/O module, 16 digital inputs' },
   txDo6: { channels: 6, partNo: 'BPZ:TXM1.6R', description: 'Desigo TX-I/O module TXM1.6R, 6 relay outputs (changeover / NO)', generic: 'I/O module, 6 relay outputs' },
   txU8: { channels: 8, partNo: 'BPZ:TXM1.8U', description: 'Desigo TX-I/O module TXM1.8U, 8 universal I/O (0–10 V in/out, Pt/Ni RTD, DI)', generic: 'I/O module, 8 universal I/O (0–10 V in/out, RTD, DI)' },
+  txP8: { channels: 8, partNo: 'BPZ:TXM1.8P', description: 'Desigo TX-I/O module TXM1.8P, 8 inputs for Pt100 4-wire / 250 Ω resistance', generic: 'I/O module, 8 × Pt100 (4-wire) temperature inputs' },
   txX8: { channels: 8, partNo: 'BPZ:TXM1.8X', description: 'Desigo TX-I/O module TXM1.8X, 8 super-universal I/O (adds 4–20 mA in/out)', generic: 'I/O module, 8 universal I/O incl. 4–20 mA in/out' },
 } as const;
 type TxKey = keyof typeof TX_MODULES;
 
 const DCC = { brand: 'Siemens', partNo: '', price: 0, uom: 'lic' };
+// Point packs (Siemens HIT, P55802-Y157 BA / P55802-Y124 SCADA).
+export const DCC_BA_PACKS = [
+  { n: 100, partNo: 'P55802-Y157-A412' }, { n: 500, partNo: 'P55802-Y157-A452' }, { n: 1000, partNo: 'P55802-Y157-A413' },
+  { n: 5000, partNo: 'P55802-Y157-A453' }, { n: 10000, partNo: 'P55802-Y157-A414' }, { n: 30000, partNo: 'P55802-Y157-A434' },
+  { n: 100000, partNo: 'P55802-Y157-A415' },
+];
+export const DCC_SCADA_PACKS = [
+  { n: 100, partNo: 'P55802-Y124-A412' }, { n: 500, partNo: 'P55802-Y124-A452' }, { n: 5000, partNo: 'P55802-Y124-A453' },
+];
+/** Compact edition: 500 BA + 500 SCADA points and 3 clients included; BA expandable to 2,000; no redundancy. */
+export const DCC_COMPACT = { baIncluded: 500, baMax: 2000, scadaMax: 500, clientsMax: 3 };
+
+/**
+ * Point packs covering `need` points at the lowest cost. Prices aren't known
+ * here, so a volume-discount curve stands in (pack cost ∝ size^0.85 — bigger
+ * packs are cheaper per point): 900 points → one 1,000 pack rather than
+ * 500 + 4 × 100, but 2,600 → 2 × 1,000 + 500 + 100 rather than 3 × 1,000.
+ */
+export function bestPacks(need: number, sizes: number[]): { n: number; qty: number }[] {
+  if (need <= 0) return [];
+  const unit = Math.min(...sizes);
+  const needU = Math.ceil(need / unit);
+  const maxU = Math.ceil(needU * 1.5) + 1;
+  const coins = sizes.map((x) => x / unit);
+  const cost = sizes.map((x) => Math.pow(x, 0.85));
+  const best: number[] = Array(maxU + 1).fill(Infinity);
+  const pick: number[] = Array(maxU + 1).fill(-1);
+  best[0] = 0;
+  for (let t = 1; t <= maxU; t++) coins.forEach((c, i) => { if (c <= t && best[t - c] + cost[i] < best[t] - 1e-9) { best[t] = best[t - c] + cost[i]; pick[t] = i; } });
+  let target = needU;
+  for (let t = needU; t <= maxU; t++) if (best[t] < best[target] - 1e-9) target = t;
+  const counts = new Map<number, number>();
+  for (let t = target; t > 0; t -= coins[pick[t]]) counts.set(sizes[pick[t]], (counts.get(sizes[pick[t]]) ?? 0) + 1);
+  return Array.from(counts.entries()).sort((x, y) => y[0] - x[0]).map(([n, qty]) => ({ n, qty }));
+}
 const DESIGO_PARTS_LIST: SiemensPart[] = [
   ...PXC_MODELS.map((m) => ({ key: m.key, partNo: m.partNo, price: 0, brand: 'Siemens', description: m.description, generic: m.generic })),
   ...(Object.keys(TX_MODULES) as TxKey[]).map((k) => ({ key: k, partNo: TX_MODULES[k].partNo, price: 0, brand: 'Siemens', description: TX_MODULES[k].description, generic: TX_MODULES[k].generic })),
+  { key: 'txaK12', partNo: 'BPZ:TXA1.K12', price: 0, brand: 'Siemens',
+    description: 'Desigo TX-I/O address keys TXA1.K12, set of keys 1–12 + reset key', generic: 'I/O module address key set, 1–12' },
+  { key: 'txaK24', partNo: 'BPZ:TXA1.K24', price: 0, brand: 'Siemens',
+    description: 'Desigo TX-I/O address keys TXA1.K24, set of keys 1–24 + 2 reset keys', generic: 'I/O module address key set, 1–24' },
   { key: 'txs12f10', partNo: 'BPZ:TXS1.12F10', price: 0, brand: 'Siemens',
     description: 'Desigo TX-I/O power supply module TXS1.12F10, AC 24 V in, DC 24 V 1.2 A out, 10 A fuse',
     generic: 'I/O power supply module, 24 V AC in / 24 V DC 1.2 A out' },
@@ -98,13 +140,19 @@ const DESIGO_PARTS_LIST: SiemensPart[] = [
   { key: 'p1Gateway', partNo: '', price: 0, brand: '', description: 'P1 (APOGEE FLN) integration — gateway or PXC7.A modular station with a P1 port, per FLN trunk (max. 32 P1 devices)', generic: 'P1 field-bus integration gateway (per trunk)' },
   { key: 'knxInterface', partNo: '', price: 0, brand: '', description: 'KNX IP interface / router for KNX TP1 integration', generic: 'KNX IP interface' },
   { key: 'rs485Termination', partNo: '', price: 0, brand: '', description: 'RS-485 bus termination / bias resistor set (120 Ω), 2 per trunk', generic: 'RS-485 bus termination resistor (120 Ω)' },
-  { ...DCC, key: 'dccServer', description: 'Desigo CC management station — server base license', generic: 'BMS software — server license' },
-  { ...DCC, key: 'dccPoints', description: 'Desigo CC field data points license', generic: 'BMS software — data point license' },
-  { ...DCC, key: 'dccClient', description: 'Desigo CC installed client license', generic: 'BMS software — client license' },
-  { ...DCC, key: 'dccWebClient', description: 'Desigo CC web / Windows app client license', generic: 'BMS software — web client license' },
-  { ...DCC, key: 'dccRedundancy', description: 'Desigo CC server redundancy (failover) license', generic: 'BMS software — server redundancy license' },
-  { ...DCC, key: 'dccHistory', description: 'Desigo CC long-term history / trend storage (SQL Server) option', generic: 'BMS software — long-term data logging option' },
-  { ...DCC, key: 'dccReports', description: 'Desigo CC reports option', generic: 'BMS software — reports option' },
+  { ...DCC, key: 'dccCompact', partNo: 'P55802-Y113-A100', description: 'Desigo CC Compact Building Automation feature set (CCA-CMPT-BA): 500 BA + 500 SCADA data points, up to 3 clients, long-term storage, reports, remote notification (max. 2,000 BA points)',
+    generic: 'BMS software — compact edition license (500 points, up to 3 clients)' },
+  { ...DCC, key: 'dccStandard', partNo: 'P55802-Y114-A100', description: 'Desigo CC Standard feature set (CCA-STD-FSET): event management, graphics, scheduler, trends, long-term storage, reports, distributed systems; 1 client',
+    generic: 'BMS software — standard edition license (1 client)' },
+  ...DCC_BA_PACKS.map((p) => ({ ...DCC, key: `dccBa_${p.n}`, partNo: p.partNo,
+    description: `Desigo CC add ${p.n.toLocaleString('en-US')} building automation data points (CCA-${p.n}-BA)`,
+    generic: `BMS software — ${p.n.toLocaleString('en-US')} building automation data points` })),
+  ...DCC_SCADA_PACKS.map((p) => ({ ...DCC, key: `dccScada_${p.n}`, partNo: p.partNo,
+    description: `Desigo CC add ${p.n.toLocaleString('en-US')} SCADA data points (CCA-${p.n}-SCADA) — Modbus / OPC / S7 / SNMP integration`,
+    generic: `BMS software — ${p.n.toLocaleString('en-US')} SCADA integration data points` })),
+  { ...DCC, key: 'dccClient', partNo: 'P55802-Y119-A200', description: 'Desigo CC add 1 client (CCA-1-CL) — installed, web or Windows app client', generic: 'BMS software — 1 additional client license' },
+  { ...DCC, key: 'dccRedundancy', description: 'Desigo CC redundancy option (CCA-OP-REDU) — server failover pair', generic: 'BMS software — server redundancy option' },
+  { ...DCC, key: 'dccEngineering', partNo: 'P55802-Y130-A100', description: 'Desigo CC engineering license (CCA-ENG)', generic: 'BMS software — engineering license' },
 ];
 
 /** Every part the Desigo configurator can add: its own + the shared switches, supplies and terminal strip. */
@@ -139,13 +187,17 @@ export interface DesigoInputs {
   sparePct: number;
   /** Desigo CC management station. */
   dcc: boolean;
+  /** 'auto' = Compact when the points / clients fit, else Standard. */
+  dccEdition: 'auto' | 'compact' | 'standard';
+  /** Points integrated straight into Desigo CC over Modbus / OPC / S7 / SNMP (not via a PXC). */
+  scadaPoints: number;
+  /** One-off engineering license (only if IOCT doesn't have one yet). */
+  dccEngineering: boolean;
   /** Integration points on top of the I/O (Modbus / BACnet from chillers, meters…). */
   integrationPoints: number;
   dccClients: number;
   dccWebClients: number;
   dccRedundant: boolean;
-  dccHistory: boolean;
-  dccReports: boolean;
   switchQty: number;
   switchType: SwitchType;
   /** 24 V DC supply for the field devices / panel (SITOP_OPTIONS key), or 'none'. */
@@ -157,7 +209,8 @@ export interface DesigoInputs {
 
 export const DEFAULT_DESIGO_INPUTS: DesigoInputs = {
   controller: 'auto', protocols: noProtocols(), controllers: 0, di: 0, do: 0, analog: noAnalog(), sparePct: 10,
-  dcc: true, integrationPoints: 0, dccClients: 1, dccWebClients: 0, dccRedundant: false, dccHistory: false, dccReports: false,
+  dcc: true, integrationPoints: 0, dccClients: 1, dccWebClients: 0, dccRedundant: false,
+  dccEdition: 'auto', scadaPoints: 0, dccEngineering: false,
   switchQty: 0, switchType: 'unmanaged', psu: 'none', terminals: true, panelW: 800, panelH: 1200,
 };
 
@@ -177,6 +230,8 @@ export interface DesigoConfig {
   txPoints: number;
   modules: number;
   dataPoints: number;
+  /** Desigo CC edition used (null = not included). */
+  dccEdition: 'compact' | 'standard' | null;
   wiring: WiringSummary | null;
   /** I/O for the Control Panel configurator's terminal strip. */
   panelIo: PanelIo;
@@ -187,7 +242,7 @@ const whole = (n: number) => Math.max(0, Math.round(Number(n) || 0));
 // Integer maths first: n × 1.1 in floating point is 110.00000000000001 for n = 100, which would round up to 111.
 const withSpare = (n: number, pct: number) => (n > 0 ? Math.ceil((n * (100 + Math.max(0, pct))) / 100 - 1e-9) : 0);
 
-interface Need { di: number; do: number; uio: number; suio: number; trunks: number; mbus: boolean; knx: boolean }
+interface Need { di: number; do: number; uio: number; suio: number; pt100: number; trunks: number; mbus: boolean; knx: boolean }
 
 /** TX-I/O modules for the points left after the on-board I/O of `qty` stations. */
 function txModulesFor(need: Need, m: PxcModel | null, qty: number): Record<TxKey, number> & { points: number } {
@@ -212,11 +267,13 @@ function txModulesFor(need: Need, m: PxcModel | null, qty: number): Record<TxKey
     txDo6: Math.ceil(dq / TX_MODULES.txDo6.channels),
     txU8: Math.ceil(uio / TX_MODULES.txU8.channels),
     txX8: Math.ceil(suio / TX_MODULES.txX8.channels),
+    // Pt100 3-/4-wire only on the TXM1.8P — never on the station's universal points.
+    txP8: Math.ceil(need.pt100 / TX_MODULES.txP8.channels),
   };
-  return { ...mods, points: di + dq + uio + suio };
+  return { ...mods, points: di + dq + uio + suio + need.pt100 };
 }
 
-const moduleCount = (m: Record<TxKey, number>) => m.txDi16 + m.txDo6 + m.txU8 + m.txX8;
+const moduleCount = (m: Record<TxKey, number>) => m.txDi16 + m.txDo6 + m.txU8 + m.txX8 + m.txP8;
 
 /** Whether `qty` stations of model `m` can hold the I/O (on board + TX-I/O). */
 function fits(need: Need, m: PxcModel, qty: number): boolean {
@@ -236,8 +293,10 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
   // thermocouples (via a transmitter).
   const need: Need = {
     di: sp(inp.di), do: sp(inp.do),
-    uio: aTot('aiU') + aTot('aiRtd') + aTot('aoU'),
+    // RTD 2-wire = Pt1000 / Ni1000 on universal points; 3-/4-wire = Pt100 on TXM1.8P.
+    uio: aTot('aiU') + sp(a.aiRtd?.w2 ?? 0) + aTot('aoU'),
     suio: aTot('aiI') + sp(a.aiTc?.w2 ?? 0) + aTot('aoI'),
+    pt100: sp(a.aiRtd?.w4 ?? 0),
     trunks: 0, mbus: false, knx: false,
   };
   const pr = { ...noProtocols(), ...(raw.protocols ?? {}) };
@@ -248,7 +307,7 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
   need.trunks = mstp + rtu + mbus;
   need.mbus = mbus > 0;
   need.knx = !!pr.knx;
-  const points = need.di + need.do + need.uio + need.suio;
+  const points = need.di + need.do + need.uio + need.suio + need.pt100;
   const lines: DesigoLine[] = [];
   const add = (key: string, qty: number, why: string, section: DesigoSection = 'plc') => { if (qty > 0 && DESIGO_PARTS[key]) lines.push({ key, qty, why, section }); };
   const notes: string[] = [];
@@ -278,7 +337,14 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
     add('txDi16', tx.txDi16, `${TX_MODULES.txDi16.channels} DI each`);
     add('txDo6', tx.txDo6, `${TX_MODULES.txDo6.channels} relay DO each`);
     add('txU8', tx.txU8, `${TX_MODULES.txU8.channels} universal each — 0–10 V in/out, RTD`);
+    add('txP8', tx.txP8, `${TX_MODULES.txP8.channels} Pt100 (3-/4-wire) inputs each`);
     add('txX8', tx.txX8, `${TX_MODULES.txX8.channels} super-universal each — 4–20 mA in/out${a.aiTc?.w2 ? ', thermocouple transmitters' : ''}`);
+    // Every TX-I/O module needs an address key; one set per station (1–12 or 1–24).
+    if (modules > 0) {
+      const perStation = Math.ceil(modules / qty);
+      if (perStation <= 12) add('txaK12', qty, `Address keys for ${modules} TX-I/O module${modules === 1 ? '' : 's'} — one set per station (up to 12 modules each)`);
+      else add('txaK24', qty * Math.ceil(perStation / 24), `Address keys for ${modules} TX-I/O modules — ${perStation} per station`);
+    }
     add('txs12f10', txs, `Powers the TX-I/O modules beyond the ${model.selfPoweredModules} the station feeds itself (≈ 10 modules each)`);
     // 24 V AC for the stations and TX-I/O supplies: ~25 VA per station, ~50 VA per TXS1.12F10.
     const va = (qty * 25 + txs * 50) * 1.25;
@@ -299,21 +365,36 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
     notes.push(`Integration: ${list}. BACnet/IP and Modbus TCP use the station's Ethernet port (no hardware); each serial trunk uses one RS-485 port.`);
   }
   if (pr.knx && model?.knx) notes.push('KNX TP1 connects to the PXC4\'s on-board KNX interface.');
-  if ((a.aiRtd?.w4 ?? 0) > 0) notes.push('TX-I/O measures RTDs 2-wire (Pt1000 / Ni1000); 3-/4-wire Pt100 needs a transmitter (then count it as 4–20 mA).');
+  if ((a.aiRtd?.w2 ?? 0) > 0) notes.push('RTD 2-wire is taken as Pt1000 / Ni1000 on universal points — enter Pt100 sensors in the 3-/4-wire column (TXM1.8P).');
   if ((a.aiTc?.w2 ?? 0) > 0) notes.push('Thermocouples need a head / rail transmitter to 4–20 mA — counted on super-universal points; add the transmitters.');
 
-  // Desigo CC
+  // Desigo CC: BA points = I/O on the PXCs + BACnet integration; SCADA points
+  // = Modbus / OPC / S7 / SNMP straight into Desigo CC. Clients = installed +
+  // web / Windows app (each concurrent session is a client).
   const dataPoints = points + whole(inp.integrationPoints);
+  const scadaPts = whole(inp.scadaPoints);
+  const clients = Math.max(1, whole(inp.dccClients) + whole(inp.dccWebClients));
+  let dccEdition: 'compact' | 'standard' | null = null;
   if (inp.dcc) {
-    const servers = inp.dccRedundant ? 2 : 1;
-    add('dccServer', servers, inp.dccRedundant ? 'Redundant pair — main + standby server' : 'Management station server', 'bmsSoftware');
-    add('dccPoints', dataPoints > 0 ? 1 : 0, `${dataPoints} field data points (${points} I/O incl. spare + ${whole(inp.integrationPoints)} integration) — license sized to this count`, 'bmsSoftware');
-    add('dccClient', whole(inp.dccClients), 'Installed client workstations', 'bmsSoftware');
-    add('dccWebClient', whole(inp.dccWebClients), 'Web / Windows app clients', 'bmsSoftware');
-    add('dccRedundancy', inp.dccRedundant ? 1 : 0, 'Server failover for the redundant pair', 'bmsSoftware');
-    add('dccHistory', inp.dccHistory ? servers : 0, 'Long-term trend / history storage on SQL Server', 'bmsSoftware');
-    add('dccReports', inp.dccReports ? 1 : 0, 'Scheduled / on-demand reports', 'bmsSoftware');
-    notes.push('Desigo CC licenses are ordered by feature and data-point count — the supplier fills in the order numbers and prices.');
+    const compactFits = !inp.dccRedundant && clients <= DCC_COMPACT.clientsMax && dataPoints <= DCC_COMPACT.baMax && scadaPts <= DCC_COMPACT.scadaMax;
+    dccEdition = inp.dccEdition === 'standard' || (inp.dccEdition === 'auto' && !compactFits) ? 'standard' : 'compact';
+    const sw = 'bmsSoftware' as const;
+    if (dccEdition === 'compact') {
+      add('dccCompact', 1, `${dataPoints} BA points, ${scadaPts} SCADA, ${clients} client${clients === 1 ? '' : 's'} — fits Compact (500 BA / 500 SCADA / 3 clients included)`, sw);
+      bestPacks(Math.max(0, dataPoints - DCC_COMPACT.baIncluded), DCC_BA_PACKS.map((p) => p.n).filter((n) => n <= 1000))
+        .forEach(({ n, qty: q }) => add(`dccBa_${n}`, q, `BA points beyond the 500 included (${dataPoints} total, max. 2,000 on Compact)`, sw));
+      if (inp.dccEdition === 'compact' && !compactFits) notes.push(`Compact takes at most ${DCC_COMPACT.baMax} BA / ${DCC_COMPACT.scadaMax} SCADA points and ${DCC_COMPACT.clientsMax} clients, and no redundancy — this needs Standard.`);
+    } else {
+      add('dccStandard', 1, inp.dccEdition === 'auto'
+        ? `Standard — ${!compactFits ? (inp.dccRedundant ? 'redundancy' : clients > 3 ? `${clients} clients` : `${dataPoints} BA / ${scadaPts} SCADA points`) : ''} is beyond Compact`
+        : 'Standard feature set (1 client included)', sw);
+      bestPacks(dataPoints, DCC_BA_PACKS.map((p) => p.n)).forEach(({ n, qty: q }) => add(`dccBa_${n}`, q, `${dataPoints} BA points (${points} I/O incl. spare + ${whole(inp.integrationPoints)} BACnet integration)`, sw));
+      bestPacks(scadaPts, DCC_SCADA_PACKS.map((p) => p.n)).forEach(({ n, qty: q }) => add(`dccScada_${n}`, q, `${scadaPts} SCADA points (Modbus / OPC / S7 / SNMP direct)`, sw));
+      add('dccClient', clients - 1, `${clients} clients — 1 comes with the Standard feature set`, sw);
+      add('dccRedundancy', inp.dccRedundant ? 1 : 0, 'Server failover pair (main + standby server)', sw);
+    }
+    add('dccEngineering', inp.dccEngineering ? 1 : 0, 'One-off — for engineering the project (skip if IOCT already has one)', sw);
+    notes.push(`Desigo CC ${dccEdition === 'compact' ? 'Compact' : 'Standard'}: long-term storage, trends and reports are included in the feature set.${inp.dccRedundant ? ' Redundancy option order number: ask the supplier.' : ''}`);
   }
 
   // Network: BACnet/IP between stations and the management station.
@@ -348,5 +429,5 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
     strip.lines.forEach((l) => add(l.key, l.qty, l.why, l.section));
   }
 
-  return { lines, controller: model, controllers: qty, suggestedControllers: suggested, points, txPoints: tx.points, modules, dataPoints, wiring, panelIo, notes };
+  return { lines, controller: model, controllers: qty, suggestedControllers: suggested, points, txPoints: tx.points, modules, dataPoints, dccEdition, wiring, panelIo, notes };
 }
