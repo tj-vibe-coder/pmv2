@@ -5832,7 +5832,8 @@ app.get('/api/pricelists/filters', async (req, res) => {
 function pricelistItemFromBody(b) {
   const numOrNull = (v) => (v !== '' && v != null && Number.isFinite(Number(v)) ? Number(v) : null);
   return {
-    supplier: String(b.supplier || 'IOCT').trim(),
+    // The supplier is the vendor — never IOCT itself; blank when unknown.
+    supplier: String(b.supplier || '').trim(),
     brand: String(b.brand || '').trim(),
     pricelistName: String(b.pricelistName || 'Manual entries').trim(),
     pricelistDate: String(b.pricelistDate || new Date().toISOString().slice(0, 7)),
