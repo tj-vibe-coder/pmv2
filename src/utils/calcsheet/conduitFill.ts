@@ -2,6 +2,9 @@
 //   Table 1: max fill = 53% for 1 conductor, 31% for 2, 40% for 3 or more.
 //   Table 4: internal area of IMC (Art. 3.42) and EMT (Art. 3.58) per trade size.
 //   Table 5: conductor area by insulation type and size.
+//   Note 9: a multiconductor cable counts as ONE conductor, its area taken
+//   from its outside diameter (OD) — so a 16 AWG × 20-core control cable is
+//   sized by its ~16 mm OD, not as twenty 16 AWG wires.
 // Used by the Installation Work calculator to recommend the smallest conduit
 // that legally holds a run's wires.
 
@@ -68,10 +71,53 @@ const CONDUIT_AREA_MM2 = Object.fromEntries(
 
 const CONDUIT_ORDER: PipeSize[] = ['1/2"', '3/4"', '1"', '1-1/4"', '1-1/2"', '2"'];
 
-export interface ConductorGroup { size: WireSize; qty: number }
+/**
+ * One line of the cable list: `qty` cables of `size` AWG. `cores` > 1 makes it
+ * a multicore cable (sized by its OD — `odMm` from the datasheet, or the
+ * estimate when blank); 1 / unset = single building wire (Table 5).
+ */
+export interface ConductorGroup { size: WireSize; qty: number; cores?: number; odMm?: number | null }
 
 export function wireAreaMm2(size: WireSize, insulation: Insulation): number {
   return AREA_IN2[insulation][size] * IN2_TO_MM2;
+}
+
+export const isMulticore = (g: Pick<ConductorGroup, 'cores'>) => Math.round(g.cores ?? 1) > 1;
+
+// Diameter of n equal circles packed in the smallest circle, in core
+// diameters (circle-packing values; cabled cores lay very close to these).
+const BUNDLE_FACTOR: Record<number, number> = {
+  2: 2, 3: 2.155, 4: 2.414, 5: 2.701, 6: 3, 7: 3, 8: 3.304, 9: 3.613, 10: 3.813, 11: 3.923, 12: 4.029,
+  13: 4.236, 14: 4.328, 15: 4.521, 16: 4.615, 17: 4.792, 18: 4.863, 19: 4.863, 20: 5.122, 24: 5.545, 30: 6.197, 37: 6.758,
+};
+const bundleFactor = (n: number) => BUNDLE_FACTOR[n] ?? Math.sqrt(n / 0.76);
+
+/**
+ * Estimated OD (mm) of a multicore cable: cores (the Table 5 insulated
+ * diameter for the chosen insulation) packed in a bundle, plus the outer
+ * sheath (1.0 / 1.2 / 1.6 mm by bundle size). Checks out within ~5% of
+ * typical PVC control cable (e.g. 20 × 1.5 mm² ≈ 16 mm, 7 × 2.5 mm² ≈ 11 mm)
+ * — use the datasheet OD when you have it (shielded / armoured cable is bigger).
+ */
+export function estimateCableOdMm(size: WireSize, cores: number, insulation: Insulation): number {
+  const n = Math.max(1, Math.round(cores));
+  const core = Math.sqrt((4 * wireAreaMm2(size, insulation)) / Math.PI);
+  if (n === 1) return Math.round(core * 10) / 10;
+  const bundle = bundleFactor(n) * core;
+  const sheath = bundle <= 10 ? 1.0 : bundle <= 20 ? 1.2 : 1.6;
+  return Math.round((bundle + 2 * sheath) * 10) / 10;
+}
+
+/** OD used for a multicore group: the entered datasheet value, else the estimate. */
+export function cableOdMm(g: ConductorGroup, insulation: Insulation): number {
+  return g.odMm && g.odMm > 0 ? g.odMm : estimateCableOdMm(g.size, g.cores ?? 1, insulation);
+}
+
+/** Fill area of ONE cable of this group (mm²): Table 5 for a single wire, π/4·OD² for a multicore cable. */
+export function groupCableAreaMm2(g: ConductorGroup, insulation: Insulation): number {
+  if (!isMulticore(g)) return wireAreaMm2(g.size, insulation);
+  const od = cableOdMm(g, insulation);
+  return (Math.PI / 4) * od * od;
 }
 
 /** Table 1 fill limit (fraction) for a number of conductors. */
@@ -97,7 +143,11 @@ export interface FillResult {
  * next whole number is permitted (this is how the Annex C tables are built).
  */
 export function maxCables(size: WireSize, insulation: Insulation, type: ConduitType, pipe: PipeSize): number {
-  const a = wireAreaMm2(size, insulation);
+  return maxOfArea(wireAreaMm2(size, insulation), type, pipe);
+}
+
+/** Same count for any one cable area (mm²) — Note 7 covers cables too. */
+export function maxOfArea(a: number, type: ConduitType, pipe: PipeSize): number {
   const area = CONDUIT_AREA_MM2[type][pipe];
   const raw = (0.4 * area) / a;
   const n = raw - Math.floor(raw) >= 0.8 ? Math.ceil(raw) : Math.floor(raw);
@@ -111,18 +161,26 @@ export function capacityBySize(size: WireSize, insulation: Insulation, type: Con
   return CONDUIT_ORDER.map((pipe) => ({ pipe, max: maxCables(size, insulation, type, pipe) }));
 }
 
+/** Cables of this group (single wire or multicore by OD) per pipe, for every pipe size. */
+export function capacityFor(g: ConductorGroup, insulation: Insulation, type: ConduitType): { pipe: PipeSize; max: number }[] {
+  const a = groupCableAreaMm2(g, insulation);
+  return CONDUIT_ORDER.map((pipe) => ({ pipe, max: maxOfArea(a, type, pipe) }));
+}
+
 export function conduitFill(groups: ConductorGroup[], insulation: Insulation, type: ConduitType): FillResult | null {
   const valid = groups.filter((g) => g.qty > 0);
   const conductors = valid.reduce((n, g) => n + Math.round(g.qty), 0);
   if (conductors === 0) return null;
-  const area = valid.reduce((a, g) => a + Math.round(g.qty) * wireAreaMm2(g.size, insulation), 0);
+  // Each multicore cable is one conductor (Note 9) — `qty` counts cables either way.
+  const area = valid.reduce((a, g) => a + Math.round(g.qty) * groupCableAreaMm2(g, insulation), 0);
   const limit = fillLimit(conductors);
   const fillOf = (size: PipeSize) => area / CONDUIT_AREA_MM2[type][size];
-  // All one size → use the per-pipe capacity (incl. Note 7) so the
-  // recommendation agrees with the capacity shown; mixed sizes → by area.
-  const sizes = new Set(valid.map((g) => g.size));
-  const fits = sizes.size === 1
-    ? (pipe: PipeSize) => conductors <= maxCables(valid[0].size, insulation, type, pipe)
+  // All one cable → use the per-pipe capacity (incl. Note 7) so the
+  // recommendation agrees with the capacity shown; mixed cables → by area.
+  const areas = new Set(valid.map((g) => groupCableAreaMm2(g, insulation).toFixed(3)));
+  const one = groupCableAreaMm2(valid[0], insulation);
+  const fits = areas.size === 1
+    ? (pipe: PipeSize) => conductors <= maxOfArea(one, type, pipe)
     : (pipe: PipeSize) => fillOf(pipe) <= limit + 1e-9;
   const recommended = CONDUIT_ORDER.find(fits) ?? null;
   return { conductors, wireAreaMm2: area, limit, recommended, fillOf };
