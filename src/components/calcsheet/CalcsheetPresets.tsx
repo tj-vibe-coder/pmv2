@@ -13,6 +13,7 @@ import { useQuotationStore } from '../../store/quotationStore';
 import type { LaborRolePreset } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
+import { MATERIAL_SLOTS } from '../../utils/calcsheet/installationMaterials';
 
 const empty: Omit<LaborRolePreset, 'id'> = {
   role: '', group: 'engineering', dailyRate: 0, allowance: 0,
@@ -26,6 +27,8 @@ export default function Presets() {
   const resetPresets = useQuotationStore((s) => s.resetPresets);
   const settings = useQuotationStore((s) => s.settings);
   const updateSettings = useQuotationStore((s) => s.updateSettings);
+  const installMaterialPrices = useQuotationStore((s) => s.installMaterialPrices);
+  const updateInstallMaterialPrice = useQuotationStore((s) => s.updateInstallMaterialPrice);
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<LaborRolePreset | null>(null);
@@ -48,6 +51,37 @@ export default function Presets() {
       await updateSettings({ defaultJobTitles: { IOCT: titleDraft.IOCT || undefined, ACTI: titleDraft.ACTI || undefined } });
     } finally {
       setTitleSaving(false);
+    }
+  };
+
+  // Installation Work material pricing — local edit state, same pattern as
+  // the Quotation Defaults titles above: one dirty flag per row, batch-saved.
+  const [materialDraft, setMaterialDraft] = useState<Record<string, { brand: string; unitCost: number }>>(() => {
+    const d: Record<string, { brand: string; unitCost: number }> = {};
+    MATERIAL_SLOTS.forEach((s) => {
+      const existing = installMaterialPrices[s.key];
+      d[s.key] = { brand: existing?.brand ?? '', unitCost: existing?.unitCost ?? 0 };
+    });
+    return d;
+  });
+  const [materialsSaving, setMaterialsSaving] = useState(false);
+  const setMaterialField = (key: string, field: 'brand' | 'unitCost', value: string | number) =>
+    setMaterialDraft((d) => ({ ...d, [key]: { ...d[key], [field]: value } }));
+  const materialRowDirty = (key: string) => {
+    const draft = materialDraft[key];
+    const saved = installMaterialPrices[key];
+    return draft.brand !== (saved?.brand ?? '') || draft.unitCost !== (saved?.unitCost ?? 0);
+  };
+  const materialsDirty = MATERIAL_SLOTS.some((s) => materialRowDirty(s.key));
+  const saveMaterialPrices = async () => {
+    setMaterialsSaving(true);
+    try {
+      const changed = MATERIAL_SLOTS.filter((s) => materialRowDirty(s.key));
+      await Promise.all(changed.map((s) =>
+        updateInstallMaterialPrice(s.key, { brand: materialDraft[s.key].brand || undefined, unitCost: materialDraft[s.key].unitCost }),
+      ));
+    } finally {
+      setMaterialsSaving(false);
     }
   };
 
@@ -172,6 +206,62 @@ export default function Presets() {
 
       <Section title="Engineering / Automation" rows={engineering} color="primary" />
       <Section title="Laborers" rows={labor} color="secondary" />
+
+      {/* ── Installation Work material pricing ── */}
+      <Stack spacing={0.5}>
+        <Typography variant="h5" sx={{ fontWeight: 600 }}>Installation Materials — Unit Pricing</Typography>
+        <Typography variant="body2" color="text.secondary">
+          Brand and unit cost for each conduit material the Installation Work calculator (Section B, "Installation Work")
+          can insert. A material left at ₱0 still inserts into the BOM — just needs pricing filled in here first.
+        </Typography>
+      </Stack>
+      <Paper>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Material</TableCell>
+              <TableCell sx={{ width: 90 }}>UOM</TableCell>
+              <TableCell sx={{ width: 200 }}>Brand</TableCell>
+              <TableCell align="right" sx={{ width: 160 }}>Unit Cost (PHP)</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {MATERIAL_SLOTS.map((s) => (
+              <TableRow key={s.key} hover>
+                <TableCell>{s.label}</TableCell>
+                <TableCell sx={{ color: 'text.secondary' }}>{s.uom}</TableCell>
+                <TableCell>
+                  <TextField
+                    variant="standard" size="small" fullWidth
+                    value={materialDraft[s.key]?.brand ?? ''}
+                    onChange={(e) => setMaterialField(s.key, 'brand', e.target.value)}
+                  />
+                </TableCell>
+                <TableCell align="right">
+                  <TextField
+                    variant="standard" size="small" type="text" inputMode="decimal"
+                    value={materialDraft[s.key]?.unitCost ?? 0}
+                    onChange={(e) => setMaterialField(s.key, 'unitCost', parseLenientFloat(e.target.value))}
+                    inputProps={{ style: { textAlign: 'right' } }}
+                    fullWidth
+                  />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        <Box sx={{ p: 2, display: 'flex', justifyContent: 'flex-end' }}>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<SaveIcon />}
+            disabled={!materialsDirty || materialsSaving}
+            onClick={saveMaterialPrices}
+          >
+            {materialsSaving ? 'Saving…' : 'Save pricing'}
+          </Button>
+        </Box>
+      </Paper>
 
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle>{editing ? 'Edit role preset' : 'New role preset'}</DialogTitle>

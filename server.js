@@ -4534,6 +4534,32 @@ app.delete('/api/calcsheet/scope-library/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to delete scope bundle' }); }
 });
 
+// ── Installation Work calculator — material unit pricing ────────────────────
+// Fixed set of material "slots" (pipe/junction-box/conduit-accessory) defined
+// in code (src/utils/calcsheet/installationMaterials.ts MATERIAL_SLOTS) — this
+// collection only stores the team's brand/unitCost override per slot, doc id
+// = slot key (deterministic, no seeding step needed: a slot with no doc here
+// just reads back as unpriced).
+app.get('/api/calcsheet/install-materials', async (req, res) => {
+  try {
+    const snap = await db.collection('calcsheet_install_materials').get();
+    const prices = {};
+    snap.docs.forEach((d) => { prices[d.id] = d.data(); });
+    res.json({ success: true, prices });
+  } catch (err) { res.status(500).json({ error: 'Failed to get installation material prices' }); }
+});
+
+app.put('/api/calcsheet/install-materials/:key', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { brand, unitCost } = req.body || {};
+    await db.collection('calcsheet_install_materials').doc(req.params.key)
+      .set({ brand: brand || null, unitCost: Number(unitCost) || 0 }, { merge: true });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to save installation material price' }); }
+});
+
 // ── Project work schedule (Gantt) tasks ───────────────────────────────────────
 // Equality-only filter on projectId, sorted in memory — no composite index
 // needed (see project_expenses above for why that matters on this repo's
