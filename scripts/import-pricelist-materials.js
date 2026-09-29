@@ -57,6 +57,9 @@ const ACCESSORIES = [
   ['EMTCON-1', 'EMT Connector - 1"', 'pc', 25.00, 'Panasonic'],
   ['EMTCON-0.5', 'EMT Connector - 1/2"', 'pc', 11.16, 'Panasonic'],
   ['EMTCON-0.75', 'EMT Connector - 3/4"', 'pc', 20.00, 'Panasonic'],
+  // EMT set-screw coupling — price from PO history (Kairos Electrical, 2025-01).
+  // 3/4" and 1" to be added once priced.
+  ['EMTCPL-0.5', 'EMT Set Screw Coupling - 1/2"', 'pc', 7.77, ''],
   ['LQTCON-1', 'LQT Straight Connector - 1"', 'pc', 69.73, 'Mcgill'],
   ['LQTCON-0.5', 'LQT Straight Connector - 1/2"', 'pc', 31.25, 'Mcgill'],
   ['LQTCON-0.75', 'LQT Straight Connector - 3/4"', 'pc', 42.68, 'Mcgill'],

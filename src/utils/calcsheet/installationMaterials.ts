@@ -7,8 +7,24 @@
 // Pure logic only (no React) — see InstallationWorkDialog.tsx for the popup UI
 // and CalcsheetPresets.tsx for where unit pricing is set.
 
-export type PipeSize = '1/2"' | '3/4"' | '1"';
-export const PIPE_SIZES: PipeSize[] = ['1/2"', '3/4"', '1"'];
+import type { ConductorGroup, Insulation } from './conduitFill';
+
+export type PipeSize = '1/2"' | '3/4"' | '1"' | '1-1/4"' | '1-1/2"' | '2"';
+export const PIPE_SIZES: PipeSize[] = ['1/2"', '3/4"', '1"', '1-1/4"', '1-1/2"', '2"'];
+
+// Slot-key suffix per size (the original three keep their old keys, so saved
+// Presets prices still line up) and the size part of catalog numbers.
+type SizeKey = 'half' | '3q' | '1' | '1q' | '1h' | '2';
+const SIZE_KEY: Record<PipeSize, SizeKey> = { '1/2"': 'half', '3/4"': '3q', '1"': '1', '1-1/4"': '1q', '1-1/2"': '1h', '2"': '2' };
+const SIZE_CODE: Record<PipeSize, string> = { '1/2"': '0.5', '3/4"': '0.75', '1"': '1', '1-1/4"': '1.25', '1-1/2"': '1.5', '2"': '2' };
+
+/** IMC (Intermediate Metal Conduit, PEC Art. 3.42) or EMT (Electrical Metallic
+ *  Tubing, Art. 3.58). Same support/bend rules; different pipe and fittings. */
+export type ConduitType = 'IMC' | 'EMT';
+export const CONDUIT_TYPES: { value: ConduitType; label: string; article: string }[] = [
+  { value: 'IMC', label: 'IMC — Intermediate Metal Conduit', article: 'Art. 3.42' },
+  { value: 'EMT', label: 'EMT — Electrical Metallic Tubing', article: 'Art. 3.58' },
+];
 
 /** How the conduit is fixed: beam/caddy clamps straight to the structure, or
  *  U-bolts on unistrut channel with 1" angle-bar brackets. */
@@ -26,11 +42,21 @@ export interface InstallationWorkEntry {
   name: string;
   lengthMeters: number;
   pipeSize: PipeSize;
+  /** true = pipe size follows the PEC conduit-fill recommendation for `conductors`. */
+  pipeSizeAuto: boolean;
+  conduitType: ConduitType;
+  /** Wires pulled through this conduit (for sizing it — PEC Chapter 9). */
+  conductors: ConductorGroup[];
+  insulation: Insulation;
   /** 90° bends (or equivalent) along the run — PEC allows at most 360° between pull points. */
   bends90: number;
   /** Equipment / device end connections made with LQT flex. */
   equipmentConnections: number;
   mounting: Mounting;
+  /** Couplings joining pipe sticks (IMC threaded / EMT). */
+  couplingQty: number | null;
+  /** Box / panel entries: locknut with bushing (IMC) or EMT connector (EMT). */
+  boxFittingQty: number | null;
   lqtMeters: number | null;
   straightConnectorQty: number | null;
   caddyClampQty: number | null;
@@ -40,34 +66,56 @@ export interface InstallationWorkEntry {
 }
 
 export const blankEntry = (): InstallationWorkEntry => ({
-  id: '', name: '', lengthMeters: 0, pipeSize: '1/2"',
+  id: '', name: '', lengthMeters: 0, pipeSize: '1/2"', pipeSizeAuto: true, conduitType: 'IMC',
+  conductors: [{ size: '12', qty: 0 }], insulation: 'THHN',
   bends90: 0, equipmentConnections: 1, mounting: 'clamp',
+  couplingQty: null, boxFittingQty: null,
   lqtMeters: null, straightConnectorQty: null, caddyClampQty: null, uBoltQty: null,
   unistrutChannelQty: null, angleBarQty: null,
 });
 
-export type AccessoryField = 'lqtMeters' | 'straightConnectorQty' | 'caddyClampQty' | 'uBoltQty' | 'unistrutChannelQty' | 'angleBarQty';
+export type AccessoryField = 'couplingQty' | 'boxFittingQty' | 'lqtMeters' | 'straightConnectorQty' | 'caddyClampQty' | 'uBoltQty' | 'unistrutChannelQty' | 'angleBarQty';
 
-// Fixed set of material "slots" this calculator knows how to price and
-// insert — pipe/LQT/Straight Connector/Caddy Clamp/U Bolt each split by size,
-// Junction Box/Unistrut Channel/Angle Bar 1" as single slots. This list is the
-// source of truth for label/uom; CalcsheetPresets only stores a brand/unitCost
-// override per key (see quotationStore's installMaterialPrices), so adding a
-// new slot here never needs a data migration — it just shows ₱0 until priced.
-export type MaterialSlotKey =
-  | 'pipe_half' | 'pipe_3q' | 'pipe_1'
-  | 'junctionBox'
-  | 'lqt_half' | 'lqt_3q' | 'lqt_1'
-  | 'straightConnector_half' | 'straightConnector_3q' | 'straightConnector_1'
-  | 'caddyClamp_half' | 'caddyClamp_3q' | 'caddyClamp_1'
-  | 'uBolt_half' | 'uBolt_3q' | 'uBolt_1'
-  | 'unistrutChannel'
-  | 'angleBar_1';
+// Material "slots" this calculator knows how to price and insert: every
+// size-specific item comes in all PIPE_SIZES; boxes, unistrut channel and
+// angle bar are single slots. MATERIAL_SLOTS is the source of truth for
+// label/uom; CalcsheetPresets only stores a brand/unitCost override per key
+// (see quotationStore's installMaterialPrices), so adding a slot never needs a
+// data migration — it just prices from the catalog, or ₱0 until priced.
+const SIZED_FAMILIES = [
+  { family: 'pipe', label: 'IMC Pipe', uom: 'pc', catalog: 'IMC' },
+  { family: 'emtPipe', label: 'EMT Pipe', uom: 'pc', catalog: 'EMT' },
+  { family: 'imcCoupling', label: 'IMC Coupling', uom: 'pc', catalog: 'IMCCPL' },
+  { family: 'emtCoupling', label: 'EMT Coupling', uom: 'pc', catalog: 'EMTCPL' },
+  { family: 'locknut', label: 'Lock Nut with Bushing', uom: 'pc', catalog: 'LOCKNUT' },
+  { family: 'emtConnector', label: 'EMT Connector', uom: 'pc', catalog: 'EMTCON' },
+  { family: 'lqt', label: 'LQT', uom: 'meter', catalog: 'LQT' },
+  { family: 'straightConnector', label: 'Straight Connector', uom: 'pc', catalog: 'LQTCON' },
+  { family: 'caddyClamp', label: 'Caddy Clamp', uom: 'pc', catalog: 'CADDY' },
+  { family: 'uBolt', label: 'U Bolt', uom: 'pc', catalog: 'UBOLT' },
+] as const;
+type SizedFamily = (typeof SIZED_FAMILIES)[number]['family'];
+
+// Boxes are sized to the conduit's knockout: a 4x4 junction box takes up to
+// 1"; 1-1/4"–1-1/2" go to a 6x6x4 pull box and 2" to an 8x8x4 (site practice).
+const BOX_SLOTS = [
+  { key: 'junctionBox', label: 'Junction Box 4x4', catalog: 'JBOX-4X4' },
+  { key: 'pullBox6', label: 'Pull Box 6x6x4', catalog: 'PULLBOX-6' },
+  { key: 'pullBox8', label: 'Pull Box 8x8x4', catalog: 'PULLBOX-8' },
+] as const;
+type BoxKey = (typeof BOX_SLOTS)[number]['key'];
+export function boxSlotFor(size: PipeSize): BoxKey {
+  return size === '2"' ? 'pullBox8' : size === '1-1/4"' || size === '1-1/2"' ? 'pullBox6' : 'junctionBox';
+}
+
+export type MaterialSlotKey = `${SizedFamily}_${SizeKey}` | BoxKey | 'unistrutChannel' | 'angleBar_1';
 
 export interface MaterialSlot {
   key: MaterialSlotKey;
   label: string;
   uom: 'pc' | 'meter';
+  /** This slot's item number in the IOCT Electrical Materials pricelist. */
+  catalogNo: string;
 }
 
 // Per-slot pricing override, stored server-side (calcsheet_install_materials,
@@ -79,25 +127,23 @@ export interface InstallMaterialPrice {
   unitCost: number;
 }
 
+const sized = (family: SizedFamily): MaterialSlot[] => {
+  const f = SIZED_FAMILIES.find((x) => x.family === family) as (typeof SIZED_FAMILIES)[number];
+  return PIPE_SIZES.map((size) => ({
+    key: `${family}_${SIZE_KEY[size]}` as MaterialSlotKey,
+    label: `${f.label} ${size}`,
+    uom: f.uom,
+    catalogNo: `${f.catalog}-${SIZE_CODE[size]}`,
+  }));
+};
+
 export const MATERIAL_SLOTS: MaterialSlot[] = [
-  { key: 'pipe_half', label: 'IMC Pipe 1/2"', uom: 'pc' },
-  { key: 'pipe_3q', label: 'IMC Pipe 3/4"', uom: 'pc' },
-  { key: 'pipe_1', label: 'IMC Pipe 1"', uom: 'pc' },
-  { key: 'junctionBox', label: 'Junction Box', uom: 'pc' },
-  { key: 'lqt_half', label: 'LQT 1/2"', uom: 'meter' },
-  { key: 'lqt_3q', label: 'LQT 3/4"', uom: 'meter' },
-  { key: 'lqt_1', label: 'LQT 1"', uom: 'meter' },
-  { key: 'straightConnector_half', label: 'Straight Connector 1/2"', uom: 'pc' },
-  { key: 'straightConnector_3q', label: 'Straight Connector 3/4"', uom: 'pc' },
-  { key: 'straightConnector_1', label: 'Straight Connector 1"', uom: 'pc' },
-  { key: 'caddyClamp_half', label: 'Caddy Clamp 1/2"', uom: 'pc' },
-  { key: 'caddyClamp_3q', label: 'Caddy Clamp 3/4"', uom: 'pc' },
-  { key: 'caddyClamp_1', label: 'Caddy Clamp 1"', uom: 'pc' },
-  { key: 'uBolt_half', label: 'U Bolt 1/2"', uom: 'pc' },
-  { key: 'uBolt_3q', label: 'U Bolt 3/4"', uom: 'pc' },
-  { key: 'uBolt_1', label: 'U Bolt 1"', uom: 'pc' },
-  { key: 'unistrutChannel', label: 'Unistrut Channel Slotted', uom: 'pc' },
-  { key: 'angleBar_1', label: 'Angle Bar 1"', uom: 'pc' },
+  ...sized('pipe'), ...sized('emtPipe'), ...sized('imcCoupling'), ...sized('emtCoupling'),
+  ...sized('locknut'), ...sized('emtConnector'),
+  ...BOX_SLOTS.map((b) => ({ key: b.key as MaterialSlotKey, label: b.label, uom: 'pc' as const, catalogNo: b.catalog })),
+  ...sized('lqt'), ...sized('straightConnector'), ...sized('caddyClamp'), ...sized('uBolt'),
+  { key: 'unistrutChannel', label: 'Unistrut Channel Slotted', uom: 'pc', catalogNo: 'UNISTRUT-SLOT' },
+  { key: 'angleBar_1', label: 'Angle Bar 1"', uom: 'pc', catalogNo: 'ANGLEBAR-1' },
 ];
 
 export const materialSlotByKey = (key: string): MaterialSlot | undefined =>
@@ -110,8 +156,7 @@ const PIPE_LENGTH_M = 3;
 const PIPES_PER_JUNCTION_BOX = 3;
 const JUNCTION_SPACING_M = PIPE_LENGTH_M * PIPES_PER_JUNCTION_BOX; // 9
 
-const sizeSuffix = (size: PipeSize): 'half' | '3q' | '1' =>
-  size === '1/2"' ? 'half' : size === '3/4"' ? '3q' : '1';
+const sizeSuffix = (size: PipeSize): SizeKey => SIZE_KEY[size];
 
 // Pipes/junction boxes round UP — a run needs at least this many full sticks
 // to reach its full length (e.g. 100m ÷ 3m = 33.33 → 34 pipes; 33 would only
@@ -161,11 +206,19 @@ export function supportsNeeded(lengthMeters: number, bends90 = 0): number {
 }
 
 /** PEC-computed accessory quantities for a run (before any per-run override). */
-export function pecAccessories(e: Pick<InstallationWorkEntry, 'lengthMeters' | 'bends90' | 'equipmentConnections' | 'mounting'>): Record<AccessoryField, number> {
+export function pecAccessories(e: Pick<InstallationWorkEntry, 'lengthMeters' | 'bends90' | 'equipmentConnections' | 'mounting'> & { conduitType?: ConduitType }): Record<AccessoryField, number> {
   const supports = supportsNeeded(e.lengthMeters, e.bends90);
+  const pipes = pipesNeeded(e.lengthMeters);
+  const segments = junctionBoxesNeeded(e.lengthMeters, e.bends90);
   const conns = Math.max(0, Math.round(e.equipmentConnections || 0));
   const onUnistrut = e.mounting === 'unistrut';
   return {
+    // Sticks are joined end to end within each box-to-box segment. IMC is
+    // bought "with coupling" (one per length), so none extra by default;
+    // EMT is sold bare, so one coupling per joint.
+    couplingQty: e.conduitType === 'EMT' ? Math.max(0, pipes - segments) : 0,
+    // Every segment enters a box / panel at both ends.
+    boxFittingQty: segments * 2,
     lqtMeters: Math.round(conns * PEC_LQT_PER_CONNECTION_M * 10) / 10,
     straightConnectorQty: conns * 2, // one at each end of every LQT piece
     caddyClampQty: onUnistrut ? 0 : supports,
@@ -180,6 +233,7 @@ export function effectiveAccessories(e: InstallationWorkEntry): Record<Accessory
   const auto = pecAccessories(e);
   const pick = (k: AccessoryField) => (e[k] ?? auto[k]);
   return {
+    couplingQty: pick('couplingQty'), boxFittingQty: pick('boxFittingQty'),
     lqtMeters: pick('lqtMeters'), straightConnectorQty: pick('straightConnectorQty'), caddyClampQty: pick('caddyClampQty'),
     uBoltQty: pick('uBoltQty'), unistrutChannelQty: pick('unistrutChannelQty'), angleBarQty: pick('angleBarQty'),
   };
@@ -193,8 +247,11 @@ export function computeEntryQuantities(e: InstallationWorkEntry): Partial<Record
   const pipes = pipesNeeded(e.lengthMeters);
   const junctions = junctionBoxesNeeded(e.lengthMeters, e.bends90);
   const a = effectiveAccessories(e);
-  if (pipes > 0) out[`pipe_${suffix}` as MaterialSlotKey] = pipes;
-  if (junctions > 0) out.junctionBox = junctions;
+  const emt = e.conduitType === 'EMT';
+  if (pipes > 0) out[`${emt ? 'emtPipe' : 'pipe'}_${suffix}` as MaterialSlotKey] = pipes;
+  if (junctions > 0) out[boxSlotFor(e.pipeSize)] = junctions;
+  if (a.couplingQty > 0) out[`${emt ? 'emtCoupling' : 'imcCoupling'}_${suffix}` as MaterialSlotKey] = a.couplingQty;
+  if (a.boxFittingQty > 0) out[`${emt ? 'emtConnector' : 'locknut'}_${suffix}` as MaterialSlotKey] = a.boxFittingQty;
   if (a.lqtMeters > 0) out[`lqt_${suffix}` as MaterialSlotKey] = a.lqtMeters;
   if (a.straightConnectorQty > 0) out[`straightConnector_${suffix}` as MaterialSlotKey] = a.straightConnectorQty;
   if (a.caddyClampQty > 0) out[`caddyClamp_${suffix}` as MaterialSlotKey] = a.caddyClampQty;
@@ -218,18 +275,10 @@ export function aggregateEntries(entries: InstallationWorkEntry[]): Partial<Reco
 }
 
 // ── Pricing from the materials catalog ───────────────────────────────────
-// Each slot's item in the IOCT Electrical Materials pricelist
-// (pricelist_items, see scripts/import-pricelist-materials.js), by catalog no.
-export const SLOT_CATALOG_NO: Record<MaterialSlotKey, string> = {
-  pipe_half: 'IMC-0.5', pipe_3q: 'IMC-0.75', pipe_1: 'IMC-1',
-  junctionBox: 'JBOX-4X4',
-  lqt_half: 'LQT-0.5', lqt_3q: 'LQT-0.75', lqt_1: 'LQT-1',
-  straightConnector_half: 'LQTCON-0.5', straightConnector_3q: 'LQTCON-0.75', straightConnector_1: 'LQTCON-1',
-  caddyClamp_half: 'CADDY-0.5', caddyClamp_3q: 'CADDY-0.75', caddyClamp_1: 'CADDY-1',
-  uBolt_half: 'UBOLT-0.5', uBolt_3q: 'UBOLT-0.75', uBolt_1: 'UBOLT-1',
-  unistrutChannel: 'UNISTRUT-SLOT',
-  angleBar_1: 'ANGLEBAR-1',
-};
+// Each slot's item in the IOCT Electrical Materials pricelist (pricelist_items,
+// see scripts/import-pricelist-materials.js), by catalog no. Sizes the
+// pricelist doesn't carry yet simply don't match → "Not priced".
+export const SLOT_CATALOG_NO = Object.fromEntries(MATERIAL_SLOTS.map((s) => [s.key, s.catalogNo])) as Record<MaterialSlotKey, string>;
 
 export interface CatalogPriceItem { catalogNo: string; description: string; brand?: string; sellingPrice: number; pricelistDate?: string }
 

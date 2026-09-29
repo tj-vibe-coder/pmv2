@@ -136,3 +136,79 @@ describe('resolveSlotPrice', () => {
     expect(Object.keys(SLOT_CATALOG_NO).sort()).toEqual(MATERIAL_SLOTS.map((s) => s.key).sort());
   });
 });
+
+describe('IMC vs EMT', () => {
+  const base = { ...blankEntry(), lengthMeters: 30, pipeSize: '3/4"' as const };
+  // 30 m → 10 sticks, 4 box-to-box segments → 6 joints, 8 box entries
+
+  it('IMC: IMC pipe (comes with couplings), locknut with bushing per box entry', () => {
+    const qs = computeEntryQuantities({ ...base, conduitType: 'IMC' });
+    expect(qs.pipe_3q).toBe(10);
+    expect(qs.imcCoupling_3q).toBeUndefined(); // each IMC length is bought with its coupling
+    expect(computeEntryQuantities({ ...base, conduitType: 'IMC', couplingQty: 4 }).imcCoupling_3q).toBe(4);
+    expect(qs.locknut_3q).toBe(8);
+    expect(qs.emtPipe_3q).toBeUndefined();
+    expect(qs.emtConnector_3q).toBeUndefined();
+  });
+
+  it('EMT: EMT pipe, EMT couplings, EMT connector per box entry — same PEC supports', () => {
+    const qs = computeEntryQuantities({ ...base, conduitType: 'EMT' });
+    expect(qs.emtPipe_3q).toBe(10);
+    expect(qs.emtCoupling_3q).toBe(6);
+    expect(qs.emtConnector_3q).toBe(8);
+    expect(qs.pipe_3q).toBeUndefined();
+    expect(qs.locknut_3q).toBeUndefined();
+    expect(qs.caddyClamp_3q).toBe(computeEntryQuantities({ ...base, conduitType: 'IMC' }).caddyClamp_3q);
+  });
+
+  it('a single short stick needs no coupling', () => {
+    const qs = computeEntryQuantities({ ...base, lengthMeters: 2.5, conduitType: 'EMT' });
+    expect(qs.emtCoupling_3q).toBeUndefined();
+    expect(qs.emtConnector_3q).toBe(2);
+  });
+
+  it('IMC box entries use locknut with bushing', () => {
+    const qs = computeEntryQuantities({ ...base, lengthMeters: 2.5 });
+    expect(qs.locknut_3q).toBe(2);
+  });
+
+  it('EMT pipe, connector and IMC fittings price from the catalog', () => {
+    const cat = [
+      { catalogNo: 'EMT-0.75', description: 'EMT Pipe 3/4"', brand: 'Panasonic', sellingPrice: 537.5 },
+      { catalogNo: 'EMTCON-0.75', description: 'EMT Connector - 3/4"', brand: 'Panasonic', sellingPrice: 20 },
+      { catalogNo: 'LOCKNUT-0.75', description: 'Lock nut with bushing - 3/4"', brand: 'Panasonic', sellingPrice: 15.55 },
+    ];
+    expect(resolveSlotPrice('emtPipe_3q', {}, cat)).toMatchObject({ unitCost: 537.5, source: 'catalog' });
+    expect(resolveSlotPrice('emtConnector_3q', {}, cat).unitCost).toBe(20);
+    expect(resolveSlotPrice('locknut_3q', {}, cat).unitCost).toBe(15.55);
+    expect(resolveSlotPrice('emtCoupling_3q', {}, cat).source).toBe('none'); // not in the pricelist yet
+  });
+});
+
+describe('sizes up to 2"', () => {
+  it('every size-specific material exists for all six sizes, with a catalog number', () => {
+    for (const fam of ['pipe', 'emtPipe', 'emtCoupling', 'locknut', 'emtConnector', 'lqt', 'straightConnector', 'caddyClamp', 'uBolt']) {
+      for (const k of ['half', '3q', '1', '1q', '1h', '2']) expect(SLOT_CATALOG_NO[`${fam}_${k}` as keyof typeof SLOT_CATALOG_NO]).toBeTruthy();
+    }
+    expect(SLOT_CATALOG_NO.pipe_2).toBe('IMC-2');
+    expect(SLOT_CATALOG_NO.emtCoupling_1h).toBe('EMTCPL-1.5');
+    expect(SLOT_CATALOG_NO.pipe_half).toBe('IMC-0.5'); // existing keys + numbers unchanged
+  });
+
+  it('boxes are sized to the conduit: 4x4 up to 1", 6x6x4 for 1-1/4"–1-1/2", 8x8x4 for 2"', () => {
+    const q = (size: '1"' | '1-1/4"' | '1-1/2"' | '2"') => computeEntryQuantities({ ...blankEntry(), lengthMeters: 18, pipeSize: size });
+    expect(q('1"').junctionBox).toBe(2);
+    expect(q('1-1/4"').pullBox6).toBe(2);
+    expect(q('1-1/2"').pullBox6).toBe(2);
+    expect(q('2"').pullBox8).toBe(2);
+    expect(q('2"').junctionBox).toBeUndefined();
+  });
+
+  it('a 2" EMT run gets 2" materials', () => {
+    const qs = computeEntryQuantities({ ...blankEntry(), lengthMeters: 30, pipeSize: '2"', conduitType: 'EMT' });
+    expect(qs.emtPipe_2).toBe(10);
+    expect(qs.emtCoupling_2).toBe(6);
+    expect(qs.emtConnector_2).toBe(8);
+    expect(qs.caddyClamp_2).toBe(supportsNeeded(30));
+  });
+});
