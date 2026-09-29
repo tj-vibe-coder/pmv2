@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-09-30 — Control Panel configurator; terminals moved out of the PLC / BMS dialogs
+
+`controlPanel.ts` + `ControlPanelDialog.tsx` ("Control Panel" button in B. Supply of Components). From W × H × D: enclosure (wall / floor-standing from 1400 mm, plinth; 2 doors above 800 mm; size in the quotation description via `PanelLine.detail`), mounting plate ≈ W−100 × H−150 with a rail row every 200 mm → DIN rail + 40×60 horizontal ducts (rows+1) + 60×80 vertical ducts (2), cut from 2 m sticks; filter fans + exhaust filters from V = 3.1·(Q − 5.5·A·ΔT)/ΔT (IEC 60890 area), thermostat; LED light + door switch per door; optional service socket. 230 V is L1/L2 → **every breaker 2-pole ABB S202** (prices from the HVC DCPI ABB pricelist, e.g. S202-C16 ₱831.16): C6 per 24 V supply and for fans/light, C16 socket, C10 per other load, pin busbar, WAGO 2004-1201 4 mm² incoming terminals; **main auto-sized** from the 230 V load (supplies at 88% eff., fans 0.3 A, lights 0.1 A, socket 10 A, other loads as entered) × 1.25 and above the largest branch. 1.5 mm² white L1 / black L2 / green-yellow PE, 1.5mm2 ferrules; PVC marker tube Ø2.5 (0.5 mm²) and Ø3.2 (1.5 mm²), 2 tags per wire. Terminal strip + 0.5 mm² wiring now live here only: the PLC / Desigo dialogs no longer add them (their `fresh()` sets `terminals: false`) and instead hand `cfg.panelIo` (I/O incl. spare, 24 V devices, device rail, PSU rating) to `usePanelIoStore`, which pre-fills this dialog. Fixed `withSpare` floating-point bug (100 × 1.1 → 111).
+
 ## 2026-09-30 — Desigo BMS configurator + brand-neutral quotation descriptions
 
 - **Brand-neutral descriptions**: rows added by the Siemens PLC and Desigo configurators carry `part.generic` (e.g. "Terminal block, 2-level, 2.5 mm²", "PLC CPU, PROFINET, 600 KB program, 2.5 MB data") instead of the maker's description; part number and brand keep their own columns (RJ/TJ hide the part-number column manually so clients can't buy the exact item off the quote, and equivalents can be supplied when out of stock). `genericDescription(key)` in `siemensPlc.ts`, `TERMINAL_GENERIC` in `terminalWiring.ts`; tests assert no maker/model words.

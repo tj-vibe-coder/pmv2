@@ -5,6 +5,7 @@ import {
 } from '@mui/material';
 import { nanoid } from 'nanoid';
 import { usePricelistStore } from '../../store/pricelistStore';
+import { usePanelIoStore } from '../../store/panelIoStore';
 import type { ComponentLine } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
@@ -32,7 +33,8 @@ interface Props {
 }
 
 const id = () => nanoid(6);
-const fresh = (): DesigoInputs => ({ ...DEFAULT_DESIGO_INPUTS, analog: noAnalog(), protocols: noProtocols() });
+// Terminals + wiring now come from the Control Panel configurator (it gets this I/O via usePanelIoStore).
+const fresh = (): DesigoInputs => ({ ...DEFAULT_DESIGO_INPUTS, analog: noAnalog(), protocols: noProtocols(), terminals: false });
 const SECTION_ORDER: DesigoSection[] = ['plc', 'bmsSoftware', 'terminals', 'wiring'];
 const SECTION_HEADER: Record<DesigoSection, string> = {
   plc: BMS_HEADER, bmsSoftware: BMS_SOFTWARE_HEADER, terminals: TERMINALS_HEADER, wiring: WIRES_HEADER,
@@ -40,6 +42,7 @@ const SECTION_HEADER: Record<DesigoSection, string> = {
 
 export default function DesigoBmsDialog({ open, onClose, productContingencyPct, onSubmit }: Props) {
   const [inp, setInp] = useState<DesigoInputs>(fresh);
+  const setPanelIo = usePanelIoStore((s) => s.setIo);
   const set = <K extends keyof DesigoInputs>(k: K, v: DesigoInputs[K]) => setInp((p) => ({ ...p, [k]: v }));
 
   const catalog = usePricelistStore((s) => s.items);
@@ -99,6 +102,7 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
         contingencyPct: productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0,
       })),
     })));
+    setPanelIo(cfg.panelIo);
     setInp(fresh());
   };
 
@@ -198,19 +202,9 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
             </TextField>
           </Stack>
 
-          <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Terminals &amp; wiring (WAGO)</Typography></Divider>
-          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
-            <FormControlLabel
-              control={<Checkbox size="small" checked={inp.terminals} onChange={(e) => set('terminals', e.target.checked)} />}
-              label={<Typography variant="body2">Add terminals, relays, accessories &amp; 0.5 mm² wiring</Typography>}
-            />
-            {inp.terminals && (
-              <>
-                <Box sx={{ width: 130 }}>{num('panelW', 'Panel width (mm)')}</Box>
-                <Box sx={{ width: 130 }}>{num('panelH', 'Panel height (mm)')}</Box>
-              </>
-            )}
-          </Stack>
+          <Typography variant="caption" color="text.secondary">
+            Terminal blocks, relays and wiring are added with <strong>Control Panel</strong> — it picks up this I/O when you add these items.
+          </Typography>
 
           {ready ? (
             <>

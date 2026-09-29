@@ -34,7 +34,7 @@ import {
   ANALOG_KINDS, SIEMENS_PARTS, SWITCHES, SITOP_OPTIONS, noAnalog,
   type AnalogCount, type AnalogKey, type PlcLine, type PlcSection, type SiemensPart, type SwitchType,
 } from './siemensPlc';
-import { TERMINAL_PARTS, terminalStrip, type WiringSummary } from './terminalWiring';
+import { TERMINAL_PARTS, terminalStrip, type PanelIo, type WiringSummary } from './terminalWiring';
 
 export type DesigoControllerKey = 'auto' | 'pxc4' | 'pxc5' | 'pxc7s' | 'pxc7m' | 'pxc7l';
 
@@ -178,11 +178,14 @@ export interface DesigoConfig {
   modules: number;
   dataPoints: number;
   wiring: WiringSummary | null;
+  /** I/O for the Control Panel configurator's terminal strip. */
+  panelIo: PanelIo;
   notes: string[];
 }
 
 const whole = (n: number) => Math.max(0, Math.round(Number(n) || 0));
-const withSpare = (n: number, pct: number) => (n > 0 ? Math.ceil(n * (1 + Math.max(0, pct) / 100)) : 0);
+// Integer maths first: n × 1.1 in floating point is 110.00000000000001 for n = 100, which would round up to 111.
+const withSpare = (n: number, pct: number) => (n > 0 ? Math.ceil((n * (100 + Math.max(0, pct))) / 100 - 1e-9) : 0);
 
 interface Need { di: number; do: number; uio: number; suio: number; trunks: number; mbus: boolean; knx: boolean }
 
@@ -326,16 +329,20 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
   let wiring: WiringSummary | null = null;
   const a2 = ANALOG_KINDS.reduce((s, k) => s + sp(a[k.key]?.w2 ?? 0), 0);
   const a4 = ANALOG_KINDS.reduce((s, k) => s + (k.key === 'aiTc' ? 0 : sp(a[k.key]?.w4 ?? 0)), 0);
+  const panelIo: PanelIo = {
+    source: 'Siemens Desigo', di: need.di, dq: need.do, a2, a4,
+    distPoints: qty + txs + swQty + (psu ? 1 : 0) + 1,
+    deviceRailMm: qty * 200 + (modules + txs) * 64,
+    ...(psu ? { psuA: psu.ratingA, psuQty: 1 } : {}),
+  };
   if (inp.terminals && need.di + need.do + a2 + a4 > 0) {
     const strip = terminalStrip({
-      di: need.di, dq: need.do, a2, a4,
-      distPoints: qty + txs + swQty + (psu ? 1 : 0) + 1,
-      extraRailMm: qty * 200 + (modules + txs) * 64, railFor: 'terminals, relays, automation stations and TX-I/O',
+      ...panelIo, extraRailMm: panelIo.deviceRailMm, railFor: 'terminals, relays, automation stations and TX-I/O',
       panelW: whole(inp.panelW), panelH: whole(inp.panelH),
     });
     wiring = strip.wiring;
     strip.lines.forEach((l) => add(l.key, l.qty, l.why, l.section));
   }
 
-  return { lines, controller: model, controllers: qty, suggestedControllers: suggested, points, txPoints: tx.points, modules, dataPoints, wiring, notes };
+  return { lines, controller: model, controllers: qty, suggestedControllers: suggested, points, txPoints: tx.points, modules, dataPoints, wiring, panelIo, notes };
 }

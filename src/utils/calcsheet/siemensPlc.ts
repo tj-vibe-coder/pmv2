@@ -43,7 +43,7 @@
 // marked `verify`. A catalog item with the same part number (Sales →
 // Pricelists) overrides any price here.
 
-import { TERMINAL_GENERIC, TERMINAL_PARTS, terminalStrip, type CatalogPart, type WiringSummary } from './terminalWiring';
+import { TERMINAL_GENERIC, TERMINAL_PARTS, terminalStrip, type CatalogPart, type PanelIo, type WiringSummary } from './terminalWiring';
 
 export type { WiringSummary };
 export type PlcFamily = 'S7-1200' | 'S7-1500';
@@ -609,10 +609,13 @@ export interface PlcConfig {
   /** Switch model and count actually used (after redundancy rules). */
   network: { switchKey: string | null; qty: number; devices: number; portsPerSwitch: number };
   wiring: WiringSummary | null;
+  /** I/O for the Control Panel configurator's terminal strip. */
+  panelIo: PanelIo;
   notes: string[];
 }
 
-const withSpare = (n: number, pct: number) => (n > 0 ? Math.ceil(n * (1 + Math.max(0, pct) / 100)) : 0);
+// Integer maths first: n × 1.1 in floating point is 110.00000000000001 for n = 100, which would round up to 111.
+const withSpare = (n: number, pct: number) => (n > 0 ? Math.ceil((n * (100 + Math.max(0, pct))) / 100 - 1e-9) : 0);
 const whole = (n: number) => Math.max(0, Math.round(Number(n) || 0));
 
 export function onboardText(m: CpuModel): string {
@@ -781,13 +784,18 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   let wiring: WiringSummary | null = null;
   const a2 = ANALOG_KEYS.reduce((s, k) => s + analog[k].w2, 0);
   const a4 = ANALOG_KEYS.reduce((s, k) => s + analog[k].w4, 0);
+  // +24 V / 0 V distribution: CPU(s), each station's IM and light BaseUnit,
+  // panels and switches, plus the PSU feed.
+  const panelIo: PanelIo = {
+    source: `Siemens ${redundant ? `S7-1500${inp.redundancy}` : family}`,
+    di: need.di, dq: need.do, a2, a4,
+    distPoints: (cpu.drawA > 0 ? cpuUnits : 0) + 2 * stations + (panel ? inp.hmiQty : 0) + sw.qty + 1,
+    deviceRailMm: stations * (50 + 12.5) + ioModules * 15 + (is1200 ? 110 : 0),
+    ...(psu ? { psuA: psu.ratingA, psuQty: 1 } : {}),
+  };
   if (inp.terminals && need.di + need.do + a2 + a4 > 0) {
-    // +24 V / 0 V distribution: CPU(s), each station's IM and light BaseUnit,
-    // panels and switches, plus the PSU feed.
     const strip = terminalStrip({
-      di: need.di, dq: need.do, a2, a4,
-      distPoints: (cpu.drawA > 0 ? cpuUnits : 0) + 2 * stations + (panel ? inp.hmiQty : 0) + sw.qty + 1,
-      extraRailMm: stations * (50 + 12.5) + ioModules * 15, railFor: 'terminals, relays and ET 200SP',
+      ...panelIo, extraRailMm: stations * (50 + 12.5) + ioModules * 15, railFor: 'terminals, relays and ET 200SP',
       panelW: whole(inp.panelW), panelH: whole(inp.panelH),
     });
     wiring = strip.wiring;
@@ -831,6 +839,7 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
     ioModules,
     network: { switchKey: netSwitch?.key ?? null, qty: netSwitch ? sw.qty : 0, devices, portsPerSwitch },
     wiring,
+    panelIo,
     notes,
   };
 }

@@ -5,6 +5,7 @@ import {
 } from '@mui/material';
 import { nanoid } from 'nanoid';
 import { usePricelistStore } from '../../store/pricelistStore';
+import { usePanelIoStore } from '../../store/panelIoStore';
 import type { ComponentLine } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
@@ -34,10 +35,12 @@ interface Props {
 
 const id = () => nanoid(6);
 
-const fresh = (): PlcInputs => ({ ...DEFAULT_PLC_INPUTS, analog: noAnalog() });
+// Terminals + wiring now come from the Control Panel configurator (it gets this I/O via usePanelIoStore).
+const fresh = (): PlcInputs => ({ ...DEFAULT_PLC_INPUTS, analog: noAnalog(), terminals: false });
 
 export default function SiemensPlcDialog({ open, onClose, productContingencyPct, onSubmit }: Props) {
   const [inp, setInp] = useState<PlcInputs>(fresh);
+  const setPanelIo = usePanelIoStore((s) => s.setIo);
   const set = <K extends keyof PlcInputs>(k: K, v: PlcInputs[K]) => setInp((p) => ({ ...p, [k]: v }));
 
   const catalog = usePricelistStore((s) => s.items);
@@ -122,6 +125,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
         contingencyPct: productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0,
       })),
     })));
+    setPanelIo(cfg.panelIo);
     setInp(fresh());
   };
 
@@ -321,25 +325,9 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             </Stack>
           )}
 
-          <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Terminals &amp; wiring (WAGO)</Typography></Divider>
-          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
-            <FormControlLabel
-              control={<Checkbox size="small" checked={inp.terminals} onChange={(e) => set('terminals', e.target.checked)} />}
-              label={<Typography variant="body2">Add terminals, relays, accessories &amp; 0.5 mm² wiring</Typography>}
-            />
-            {inp.terminals && (
-              <>
-                <Box sx={{ width: 130 }}>{num('panelW', 'Panel width (mm)')}</Box>
-                <Box sx={{ width: 130 }}>{num('panelH', 'Panel height (mm)')}</Box>
-              </>
-            )}
-          </Stack>
-          {inp.terminals && (
-            <Typography variant="caption" color="text.secondary">
-              1 DI = 2-level terminal · 1 DO = slim relay (WAGO 857-304) · analog 2-wire = 1 fused + 1 standard, 4-wire = 2 fused + 2 standard ·
-              red 0.5 mm² for +24 V DC, blue for 0 V DC, length from the panel size.
-            </Typography>
-          )}
+          <Typography variant="caption" color="text.secondary">
+            Terminal blocks, relays and wiring are added with <strong>Control Panel</strong> — it picks up this I/O when you add these items.
+          </Typography>
 
           {ready ? (
             <>

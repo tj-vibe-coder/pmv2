@@ -54,6 +54,7 @@ import InstallationWorkDialog from './InstallationWorkDialog';
 import { INSTALLATION_HEADER, withInstallationRows, withSectionRows } from '../../utils/calcsheet/installationMaterials';
 import SiemensPlcDialog, { type PlcSubmitSection } from './SiemensPlcDialog';
 import DesigoBmsDialog from './DesigoBmsDialog';
+import ControlPanelDialog from './ControlPanelDialog';
 import MemoryIcon from '@mui/icons-material/Memory';
 import type { PricelistItem } from '../../types/Pricelist';
 import type { ProductHistoryAddSelection } from '../../types/ProductHistory';
@@ -515,6 +516,7 @@ export default function QuotationEditor() {
   const [installWorkOpen, setInstallWorkOpen] = useState(false);
   const [plcOpen, setPlcOpen] = useState(false);
   const [desigoOpen, setDesigoOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [timingComponentId, setTimingComponentId] = useState<string | null>(null);
 
   // "What did you change?" prompt shown on Save — the note is attached to
@@ -901,6 +903,7 @@ export default function QuotationEditor() {
     commit('components', components);
     setPlcOpen(false);
     setDesigoOpen(false);
+    setPanelOpen(false);
     const count = sections.reduce((n, g) => n + g.rows.length, 0);
     setToast({ msg: `Added ${count} item${count === 1 ? '' : 's'} under ${sections.map((g) => `"${g.header}"`).join(', ')} — review and Save.`, sev: 'success' });
   };
@@ -2176,6 +2179,9 @@ export default function QuotationEditor() {
                 <Button startIcon={<MemoryIcon />} size="small" variant="outlined" onClick={() => setDesigoOpen(true)}>
                   Desigo BMS
                 </Button>
+                <Button startIcon={<ConstructionIcon />} size="small" variant="outlined" onClick={() => setPanelOpen(true)}>
+                  Control Panel
+                </Button>
                 <Button startIcon={<AddIcon />} size="small" onClick={addComponent}>Add row</Button>
               </>
             )}
@@ -2784,6 +2790,12 @@ export default function QuotationEditor() {
       <DesigoBmsDialog
         open={desigoOpen}
         onClose={() => setDesigoOpen(false)}
+        productContingencyPct={quotation.productContingencyPct ?? 0}
+        onSubmit={addFromPlc}
+      />
+      <ControlPanelDialog
+        open={panelOpen}
+        onClose={() => setPanelOpen(false)}
         productContingencyPct={quotation.productContingencyPct ?? 0}
         onSubmit={addFromPlc}
       />

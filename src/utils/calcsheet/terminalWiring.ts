@@ -111,6 +111,24 @@ export interface TerminalStripInput {
   panelH: number;
 }
 
+/**
+ * The I/O a PLC / BMS configuration hands to the Control Panel configurator
+ * (which adds the terminal strip + wiring): counts incl. spare, the devices on
+ * the 24 V distribution, and the DIN rail its controller / I/O modules take.
+ */
+export interface PanelIo {
+  source: string;
+  di: number;
+  dq: number;
+  a2: number;
+  a4: number;
+  distPoints: number;
+  deviceRailMm: number;
+  /** 24 V DC supply picked in the PLC / BMS configurator: output rating (A) and count. */
+  psuA?: number;
+  psuQty?: number;
+}
+
 export type StripSection = 'terminals' | 'wiring';
 export interface StripLine { key: string; qty: number; why: string; section: StripSection }
 
