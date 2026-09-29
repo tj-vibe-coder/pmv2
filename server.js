@@ -941,6 +941,29 @@ function clientApproverString(contacts) {
 // by Firestore's automatic per-field indexes (zig-zag merge), no composite
 // index needed. The sets are disjoint by construction (an item can't be both
 // public and private), so no de-dup step is needed on merge.
+
+// Which board column (if any) a logged-in user IS — needed so the person a
+// public to-do is assigned to can tick it. Login accounts don't store this,
+// so match any word of their full name / username / email local-part
+// against each person's aliases. Keep in sync with WHITEBOARD_PEOPLE's
+// aliases in src/types/Whiteboard.ts. Returns null for anyone else.
+const WHITEBOARD_PERSON_ALIASES = {
+  tj: ['tj', 'tjc', 'tyrone', 'caballero'],
+  rj: ['rj', 'rjr', 'reuel', 'rivera'],
+  renzel: ['renzel', 'punongbayan'],
+  nylle: ['nylle', 'managa'],
+};
+function whiteboardPersonOf(user) {
+  const words = [user.full_name, user.username, String(user.email || '').split('@')[0]]
+    .filter(Boolean)
+    .flatMap((s) => String(s).toLowerCase().split(/[^a-z]+/))
+    .filter(Boolean);
+  for (const [key, aliases] of Object.entries(WHITEBOARD_PERSON_ALIASES)) {
+    if (words.some((w) => aliases.includes(w))) return key;
+  }
+  return null;
+}
+
 app.get('/api/whiteboard', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
@@ -960,13 +983,20 @@ app.post('/api/whiteboard', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    const { kind, visibility, text, done, dueDate } = req.body || {};
+    const { kind, visibility, text, done, dueDate, assignedTo } = req.body || {};
     if (!['update', 'note', 'todo'].includes(kind)) return res.status(400).json({ error: 'Invalid kind' });
     if (!['public', 'private'].includes(visibility)) return res.status(400).json({ error: 'Invalid visibility' });
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'Text is required' });
+    // assignedTo picks the board column (see WHITEBOARD_PEOPLE) — required
+    // for a public sticky note (it needs somewhere to live on the board),
+    // irrelevant for a private one (shown in "Just for me" instead).
+    if (visibility === 'public' && !['tj', 'rj', 'renzel', 'nylle'].includes(assignedTo)) {
+      return res.status(400).json({ error: 'assignedTo is required for a public item' });
+    }
     const now = new Date().toISOString();
     const doc = {
       kind, visibility, text: String(text).trim(),
+      ...(visibility === 'public' ? { assignedTo } : {}),
       ...(kind === 'todo' ? { done: !!done, ...(dueDate ? { dueDate } : {}) } : {}),
       createdBy: user.id,
       createdByName: user.full_name || user.username || 'Someone',
@@ -986,13 +1016,15 @@ app.put('/api/whiteboard/:id', async (req, res) => {
     if (!snap.exists) return res.status(404).json({ error: 'Item not found' });
     const existing = snap.data();
     const isOwner = existing.createdBy === user.id;
-    // Anyone may toggle `done` on a PUBLIC to-do (a shared task the team
-    // completes together) — every other edit is owner-only.
-    const isPublicTodoDoneToggle =
+    // Every edit — including dragging a note to another column — is
+    // poster-only, with one exception: the person a PUBLIC to-do is assigned
+    // to may tick/untick its `done` checkbox (and nothing else).
+    const isAssigneeDoneToggle =
       !isOwner && existing.kind === 'todo' && existing.visibility === 'public' &&
+      !!existing.assignedTo && existing.assignedTo === whiteboardPersonOf(user) &&
       Object.keys(req.body || {}).every((k) => k === 'done');
-    if (!isOwner && !isPublicTodoDoneToggle) return res.status(403).json({ error: 'Not allowed to edit this item' });
-    const patch = isPublicTodoDoneToggle ? { done: !!req.body.done } : req.body;
+    if (!isOwner && !isAssigneeDoneToggle) return res.status(403).json({ error: 'Not allowed to edit this item' });
+    const patch = isAssigneeDoneToggle ? { done: !!req.body.done } : req.body;
     await ref.update({ ...patch, updatedAt: new Date().toISOString() });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to update whiteboard item' }); }
@@ -1006,11 +1038,8 @@ app.delete('/api/whiteboard/:id', async (req, res) => {
     const snap = await ref.get();
     if (!snap.exists) return res.status(404).json({ error: 'Item not found' });
     const existing = snap.data();
-    const isOwner = existing.createdBy === user.id;
-    // Moderation safety net: admin/superadmin can remove any PUBLIC item —
-    // never a private one belonging to someone else.
-    const isModerator = !isOwner && existing.visibility === 'public' && (user.role === 'admin' || user.role === 'superadmin');
-    if (!isOwner && !isModerator) return res.status(403).json({ error: 'Not allowed to delete this item' });
+    // Only the poster can delete their own item — no admin override.
+    if (existing.createdBy !== user.id) return res.status(403).json({ error: 'Only the poster can delete this item' });
     await ref.delete();
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete whiteboard item' }); }
