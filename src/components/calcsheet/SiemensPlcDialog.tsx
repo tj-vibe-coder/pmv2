@@ -9,9 +9,9 @@ import type { ComponentLine } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import {
-  CPU_MODELS, DEFAULT_CPU, DEFAULT_PLC_INPUTS, HMI_LINES, HMI_PANELS, MEMORY_CARDS, SIEMENS_PARTS, SITOP_OPTIONS,
-  UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuModel, estimate24V, onboardText, siemensPrice,
-  type HmiLine, type ModbusMode, type PlcFamily, type PlcInputs, type ScadaKind, type WinccLicense,
+  CPU_MODELS, DEFAULT_CPU, DEFAULT_PLC_INPUTS, HMI_LINES, HMI_PANELS, LICENSE_EDITIONS, MEMORY_CARDS, SIEMENS_PARTS, SITOP_LINES,
+  SITOP_OPTIONS, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuModel, estimate24V, onboardText, siemensPrice,
+  type HmiLine, type LicenseEdition, type ModbusMode, type PlcFamily, type PlcInputs, type ScadaKind, type WinccLicense,
 } from '../../utils/calcsheet/siemensPlc';
 
 // Siemens PLC configurator: I/O counts + PLC family/CPU + Modbus (+ HMI,
@@ -74,7 +74,10 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
   const setFamily = (family: PlcFamily) => setInp((p) => ({ ...p, family, cpu: DEFAULT_CPU[family] }));
   const setHmiLine = (line: HmiLine | 'none') => set('hmi', line === 'none' ? 'none'
     : (HMI_PANELS.find((h) => h.line === line && h.sizeIn === 7) ?? HMI_PANELS.find((h) => h.line === line))!.key);
-  const setScada = (kind: ScadaKind) => setInp((p) => ({ ...p, scada: kind, scadaPackage: kind === 'unifiedPc' ? '1k' : '2048' }));
+  const setScada = (kind: ScadaKind) => setInp((p) => ({
+    ...p, scada: kind, scadaPackage: kind === 'unifiedPc' ? '1k' : '2048',
+    licenseEdition: kind === 'unifiedPc' && p.licenseEdition === 'dl' ? 'standard' : p.licenseEdition,
+  }));
 
   const close = () => { setInp(DEFAULT_PLC_INPUTS); onClose(); };
   const submit = () => {
@@ -87,18 +90,21 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
     setInp(DEFAULT_PLC_INPUTS);
   };
 
-  const psuItems = (['PSU100S', 'PSU8200'] as const).flatMap((line) => [
-    <ListSubheader key={line}>SITOP {line}</ListSubheader>,
-    ...SITOP_OPTIONS.filter((s) => s.line === line).map((s) => {
-      const priced = siemensPrice(SIEMENS_PARTS[s.key], catalog).price > 0;
-      const tag = s.ratingA < load.withMarginA ? ' · too small' : s.ratingA === load.suggestedA ? ' · suggested' : '';
-      return (
-        <MenuItem key={s.key} value={s.key} sx={{ color: s.ratingA < load.withMarginA ? 'text.disabled' : undefined }}>
-          {`${line} ${s.ratingA} A${s.input.startsWith('3-phase') ? ' (3-phase)' : ''} — ${s.partNo}${priced ? '' : ' · for inquiry'}${tag}`}
-        </MenuItem>
-      );
-    }),
-  ]);
+  const psuItems = SITOP_LINES.flatMap((line) => {
+    const opts = SITOP_OPTIONS.filter((s) => s.line === line);
+    return [
+      <ListSubheader key={line}>SITOP {line} · {opts[0].input.split(' ')[0]}</ListSubheader>,
+      ...opts.map((s) => {
+        const priced = siemensPrice(SIEMENS_PARTS[s.key], catalog).price > 0;
+        const tag = s.ratingA < load.withMarginA ? ' · too small' : s.ratingA === load.suggestedA ? ' · suggested' : '';
+        return (
+          <MenuItem key={s.key} value={s.key} sx={{ color: s.ratingA < load.withMarginA ? 'text.disabled' : undefined }}>
+            {`${line} ${s.ratingA} A — ${s.partNo}${priced ? '' : ' · for inquiry'}${tag}`}
+          </MenuItem>
+        );
+      }),
+    ];
+  });
 
   return (
     <Dialog open={open} onClose={close} maxWidth="md" fullWidth>
@@ -183,7 +189,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             ) : <Box />}
             {panel ? num('hmiQty', 'HMI qty') : <Box />}
           </Box>
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: '1.5fr 0.9fr 0.9fr 0.6fr' }, gap: 2 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: '1.4fr 1fr 0.8fr 0.9fr 0.6fr' }, gap: 2 }}>
             <TextField select label="SCADA license" size="small" fullWidth value={inp.scada} onChange={(e) => setScada(e.target.value as ScadaKind)}>
               <MenuItem value="none">None</MenuItem>
               <MenuItem value="wincc81">WinCC V8.1 (SCADA)</MenuItem>
@@ -198,6 +204,13 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             {inp.scada !== 'none' ? (
               <TextField select label="PowerTags" size="small" fullWidth value={inp.scadaPackage} onChange={(e) => set('scadaPackage', e.target.value)}>
                 {(inp.scada === 'wincc81' ? WINCC81_PACKAGES : UNIFIED_PC_PACKAGES).map((p) => <MenuItem key={p} value={p}>{p}</MenuItem>)}
+              </TextField>
+            ) : <Box />}
+            {inp.scada !== 'none' ? (
+              <TextField select label="Edition" size="small" fullWidth value={inp.licenseEdition} onChange={(e) => set('licenseEdition', e.target.value as LicenseEdition)}>
+                {LICENSE_EDITIONS.filter((ed) => inp.scada === 'wincc81' || !ed.wincc81Only).map((ed) => (
+                  <MenuItem key={ed.value} value={ed.value}>{ed.label}</MenuItem>
+                ))}
               </TextField>
             ) : <Box />}
             {inp.scada !== 'none' ? num('scadaQty', 'Stations') : <Box />}
@@ -298,9 +311,6 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                     <TableRow key={r.key}>
                       <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                         {r.part.partNo || <Typography variant="body2" color="warning.main">Ask supplier</Typography>}
-                        {r.part.partNo && !r.part.quoted && r.source !== 'catalog' && (
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'inherit' }}>verify P/N</Typography>
-                        )}
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2">{r.part.description.split(', ').slice(0, 3).join(', ')}</Typography>
@@ -323,8 +333,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
               {inquiry > 0 && (
                 <Alert severity="warning" sx={{ py: 0 }}>
                   {inquiry} item{inquiry === 1 ? '' : 's'} for inquiry — added at ₱0. When the supplier quotes, add the price in Sales → Pricelists
-                  (same part number, so it&apos;s used next time) or on the row. &quot;verify P/N&quot; part numbers are from Siemens&apos; catalog —
-                  confirm them with the supplier.
+                  (same part number, so it&apos;s used next time) or on the row. Part numbers were checked in the Siemens TIA Selection Tool.
                 </Alert>
               )}
             </>
