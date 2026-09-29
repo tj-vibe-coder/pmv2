@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel,
   ListSubheader, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup, Typography,
+  useMediaQuery, useTheme,
 } from '@mui/material';
 import { nanoid } from 'nanoid';
 import { usePricelistStore } from '../../store/pricelistStore';
@@ -25,6 +26,9 @@ import type { PlcSubmitSection } from './SiemensPlcDialog';
 // B. Supply of Components under their own headers. Descriptions on the
 // quotation are brand-neutral; the part number and brand keep their columns.
 
+/** Part no. and unit price columns fold into the item cell on phones. */
+const HIDE_ON_PHONE = { display: { xs: 'none', sm: 'table-cell' } } as const;
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -41,6 +45,8 @@ const SECTION_HEADER: Record<DesigoSection, string> = {
 };
 
 export default function DesigoBmsDialog({ open, onClose, productContingencyPct, onSubmit }: Props) {
+  // Phones: full-screen dialog, fields stack two per row, tables scroll sideways.
+  const fullScreen = useMediaQuery(useTheme().breakpoints.down('sm'));
   const [inp, setInp] = useState<DesigoInputs>(fresh);
   const setPanelIo = usePanelIoStore((s) => s.setIo);
   const set = <K extends keyof DesigoInputs>(k: K, v: DesigoInputs[K]) => setInp((p) => ({ ...p, [k]: v }));
@@ -85,7 +91,7 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
 
   const setProto = <K extends keyof DesigoProtocols>(k: K, v: DesigoProtocols[K]) => setInp((p) => ({ ...p, protocols: { ...p.protocols, [k]: v } }));
   const trunk = (k: 'mstp' | 'modbusRtu' | 'mbus' | 'p1', label: string) => (
-    <Box sx={{ width: 140 }}>
+    <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 140 } }}>
       <TextField label={label} size="small" fullWidth type="text" inputMode="numeric" value={inp.protocols[k] || ''} placeholder="0" helperText="trunks"
         onChange={(e) => setProto(k, Math.max(0, Math.round(parseLenientFloat(e.target.value))))} onFocus={(e) => e.target.select()} />
     </Box>
@@ -114,10 +120,10 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
   ]);
 
   return (
-    <Dialog open={open} onClose={close} maxWidth="md" fullWidth>
+    <Dialog open={open} onClose={close} maxWidth="md" fullWidth fullScreen={fullScreen} sx={{ '& .MuiDivider-wrapper': { whiteSpace: 'normal' } }}>
       <DialogTitle>
         Siemens Desigo BMS
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, display: { xs: 'none', sm: 'block' } }}>
           Enter the I/O count — the PXC automation station, TX-I/O modules, power, switches, Desigo CC licenses and the terminals &amp;
           wiring are selected for you and added to B. Supply of Components. Items without a price go in at ₱0 for inquiry.
         </Typography>
@@ -125,18 +131,18 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
       <DialogContent dividers>
         <Stack spacing={2}>
           <Stack direction="row" spacing={2} alignItems="flex-start" flexWrap="wrap" useFlexGap>
-            <TextField select label="Automation station" size="small" sx={{ minWidth: 260 }} value={inp.controller}
+            <TextField select label="Automation station" size="small" sx={{ minWidth: { xs: '100%', sm: 260 } }} value={inp.controller}
               onChange={(e) => set('controller', e.target.value as DesigoControllerKey)}
               helperText={inp.controller === 'auto' && cfg.controller ? `Auto: ${cfg.controller.model}` : ' '}>
               <MenuItem value="auto">Auto — smallest that fits</MenuItem>
               {PXC_MODELS.map((m) => <MenuItem key={m.key} value={m.key}>{m.model} — {m.partNo}</MenuItem>)}
             </TextField>
-            <Box sx={{ width: 170 }}>
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 170 } }}>
               {num('controllers', 'Stations', cfg.suggestedControllers ? `Suggested: ${cfg.suggestedControllers}` : 'Blank = auto', cfg.suggestedControllers ? `Auto (${cfg.suggestedControllers})` : 'Auto')}
             </Box>
-            <Box sx={{ width: 130 }}>{num('di', 'DI (digital in)')}</Box>
-            <Box sx={{ width: 130 }}>{num('do', 'DO (digital out)')}</Box>
-            <Box sx={{ width: 110 }}>{num('sparePct', 'Spare %')}</Box>
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 130 } }}>{num('di', 'DI (digital in)')}</Box>
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 130 } }}>{num('do', 'DO (digital out)')}</Box>
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 110 } }}>{num('sparePct', 'Spare %')}</Box>
           </Stack>
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Analog I/O by signal type</Typography></Divider>
@@ -177,7 +183,7 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
             />
             {inp.dcc && (
               <>
-                <TextField select label="Edition" size="small" sx={{ minWidth: 200 }} value={inp.dccEdition}
+                <TextField select label="Edition" size="small" sx={{ minWidth: { xs: '100%', sm: 200 } }} value={inp.dccEdition}
                   onChange={(e) => set('dccEdition', e.target.value as DesigoInputs['dccEdition'])}
                   helperText={inp.dccEdition === 'auto' && cfg.dccEdition ? `Auto: ${cfg.dccEdition === 'compact' ? 'Compact' : 'Standard'}` : ' '}>
                   <MenuItem value="auto">Auto — best fit</MenuItem>
@@ -185,10 +191,10 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
                   <MenuItem value="compactXl">Compact XL (manual)</MenuItem>
                   <MenuItem value="standard">Standard</MenuItem>
                 </TextField>
-                <Box sx={{ width: 150 }}>{num('integrationPoints', 'BACnet integration', 'Extra BA points')}</Box>
-                <Box sx={{ width: 150 }}>{num('scadaPoints', 'SCADA points', 'Modbus / OPC / S7 direct')}</Box>
-                <Box sx={{ width: 110 }}>{num('dccClients', 'Clients', 'Installed')}</Box>
-                <Box sx={{ width: 110 }}>{num('dccWebClients', 'Web clients')}</Box>
+                <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 150 } }}>{num('integrationPoints', 'BACnet integration', 'Extra BA points')}</Box>
+                <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 150 } }}>{num('scadaPoints', 'SCADA points', 'Modbus / OPC / S7 direct')}</Box>
+                <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 110 } }}>{num('dccClients', 'Clients', 'Installed')}</Box>
+                <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 110 } }}>{num('dccWebClients', 'Web clients')}</Box>
                 <FormControlLabel control={<Checkbox size="small" checked={inp.dccRedundant} onChange={(e) => set('dccRedundant', e.target.checked)} />}
                   label={<Typography variant="body2">Redundant servers</Typography>} />
                 <FormControlLabel control={<Checkbox size="small" checked={inp.dccEngineering} onChange={(e) => set('dccEngineering', e.target.checked)} />}
@@ -201,14 +207,14 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Network &amp; power</Typography></Divider>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
-            <Box sx={{ width: 120 }}>{num('switchQty', 'Switches')}</Box>
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('switchQty', 'Switches')}</Box>
             <ToggleButtonGroup size="small" exclusive value={inp.switchType}
               onChange={(_, v: SwitchType | null) => v && set('switchType', v)}
               sx={{ '& .MuiToggleButton-root': { textTransform: 'none', px: 2 } }}>
               <ToggleButton value="unmanaged">Unmanaged</ToggleButton>
               <ToggleButton value="managed">Managed</ToggleButton>
             </ToggleButtonGroup>
-            <TextField select label="24 V DC supply (field devices)" size="small" sx={{ minWidth: 300 }} value={inp.psu} onChange={(e) => set('psu', e.target.value)}>
+            <TextField select label="24 V DC supply (field devices)" size="small" sx={{ minWidth: { xs: '100%', sm: 300 } }} value={inp.psu} onChange={(e) => set('psu', e.target.value)}>
               <MenuItem value="none">None</MenuItem>
               {psuItems}
             </TextField>
@@ -229,13 +235,14 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
               {cfg.notes.map((n) => <Alert key={n} severity="info" sx={{ py: 0 }}>{n}</Alert>)}
 
               <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Items to add</Typography></Divider>
+              <Box sx={{ overflowX: 'auto' }}>
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Part no.</TableCell>
+                    <TableCell sx={HIDE_ON_PHONE}>Part no.</TableCell>
                     <TableCell>Item</TableCell>
                     <TableCell align="right">Qty</TableCell>
-                    <TableCell align="right">Unit price</TableCell>
+                    <TableCell align="right" sx={HIDE_ON_PHONE}>Unit price</TableCell>
                     <TableCell align="right">Total</TableCell>
                   </TableRow>
                 </TableHead>
@@ -246,7 +253,7 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
                     </TableRow>,
                     ...g.rows.map((r) => (
                       <TableRow key={r.key}>
-                        <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                        <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap', ...HIDE_ON_PHONE }}>
                           {r.part.partNo || <Typography variant="body2" color="warning.main">Ask supplier</Typography>}
                           {r.part.partNo && r.part.verify && r.source !== 'catalog' && (
                             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'inherit' }}>verify P/N</Typography>
@@ -255,9 +262,12 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
                         <TableCell>
                           <Typography variant="body2">{r.part.generic || r.part.description}</Typography>
                           <Typography variant="caption" color="text.secondary">{r.why}</Typography>
+                          <Typography variant="caption" sx={{ display: { xs: 'block', sm: 'none' }, fontFamily: 'monospace', color: r.unitCost === 0 ? 'warning.main' : 'text.secondary' }}>
+                            {r.part.partNo || 'Ask supplier'} · {r.unitCost === 0 ? 'for inquiry' : `@ ${PHP(r.unitCost)}`}
+                          </Typography>
                         </TableCell>
                         <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{r.qty}{r.part.uom && r.part.uom !== 'pc' ? ` ${r.part.uom}` : ''}</TableCell>
-                        <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap', color: r.unitCost === 0 ? 'warning.main' : undefined }}>
+                        <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap', color: r.unitCost === 0 ? 'warning.main' : undefined, ...HIDE_ON_PHONE }}>
                           {r.unitCost === 0 ? 'For inquiry' : PHP(r.unitCost)}
                           {r.source === 'catalog' && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>catalog</Typography>}
                         </TableCell>
@@ -266,11 +276,12 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
                     )),
                   ])}
                   <TableRow>
-                    <TableCell colSpan={4} align="right" sx={{ fontWeight: 600 }}>Total{inquiry > 0 ? ` (excl. ${inquiry} for inquiry)` : ''}</TableCell>
+                    <TableCell colSpan={fullScreen ? 2 : 4} align="right" sx={{ fontWeight: 600 }}>Total{inquiry > 0 ? ` (excl. ${inquiry} for inquiry)` : ''}</TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(total)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
               {inquiry > 0 && (
                 <Alert severity="warning" sx={{ py: 0 }}>
                   {inquiry} item{inquiry === 1 ? '' : 's'} for inquiry — added at ₱0. When the supplier quotes, add the price in Sales → Pricelists
@@ -283,7 +294,7 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
           )}
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+      <DialogActions sx={{ px: { xs: 2, sm: 3 }, pb: 2, flexWrap: 'wrap', gap: 1 }}>
         <Button onClick={close}>Cancel</Button>
         <Button variant="contained" onClick={submit} disabled={!ready}>
           Add {rows.length} item{rows.length === 1 ? '' : 's'} · {PHP(total)} to Components
