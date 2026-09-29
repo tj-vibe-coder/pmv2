@@ -8,11 +8,16 @@ it('configures an S7-1500 with Modbus RTU and adds the priced modules under a PL
   const onSubmit = jest.fn();
   render(<SiemensPlcDialog open onClose={() => {}} productContingencyPct={5} onSubmit={onSubmit} />);
   fireEvent.click(screen.getByRole('button', { name: /S7-1500/ }));
-  fireEvent.change(screen.getByLabelText(/^DI/), { target: { value: '40' } });   // +20% → 48 → 3 × DI16
-  fireEvent.change(screen.getByLabelText(/^AI/), { target: { value: '6' } });    // +20% → 8 → 1 × AI8
+  fireEvent.change(screen.getByLabelText(/^DI/), { target: { value: '40' } });   // +10% → 44 → 3 × DI16
+  fireEvent.change(screen.getByLabelText(/^AI/), { target: { value: '6' } });    // +10% → 7 → 1 × AI8
   fireEvent.mouseDown(screen.getByRole('combobox', { name: /modbus/i }));
   fireEvent.click(screen.getByRole('option', { name: /Modbus RTU/ }));
   fireEvent.change(screen.getByLabelText(/RS-485 ports/i), { target: { value: '2' } });
+  // PSU is picked by hand from the load estimate.
+  expect(screen.getByText(/No power supply selected/)).toBeInTheDocument();
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /power supply/i }));
+  fireEvent.click(screen.getByRole('option', { name: /PSU100S 20 A/ }));
+  expect(screen.getByText(/20 A covers/)).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: /to components/i }));
   const [rows, header] = onSubmit.mock.calls[0] as [Array<{ partNo: string; qty: number; unitCost: number; brand: string }>, string];
@@ -24,7 +29,7 @@ it('configures an S7-1500 with Modbus RTU and adds the priced modules under a PL
   expect(byPart['6ES7134-6GF00-0AA1']).toMatchObject({ qty: 1 });
   expect(byPart['6ES7137-6AA01-0BA0']).toMatchObject({ qty: 2 });             // CM PtP per RS-485 port
   expect(byPart['6ES7155-6AA02-0BN0']).toMatchObject({ qty: 1 });             // one ET 200SP station
-  expect(byPart['6ES7193-6BP00-0DA0']).toMatchObject({ qty: 1 });             // light BU
+  expect(byPart['6ES7193-6BP00-0DA0']).toMatchObject({ qty: 1, unitCost: 1600 }); // light BU
   expect(byPart['6ES7193-6BP00-0BA0']).toMatchObject({ qty: 5 });             // 6 modules − 1
   expect(byPart['6EP1336-2BA10']).toMatchObject({ qty: 1 });
   expect(byPart['6ES7241-1CH30-1XB0']).toBeUndefined();                       // no CB 1241 on S7-1500

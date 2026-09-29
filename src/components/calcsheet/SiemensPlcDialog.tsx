@@ -9,7 +9,7 @@ import type { ComponentLine } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import {
-  DEFAULT_PLC_INPUTS, SIEMENS_PARTS, configurePlc, siemensPrice,
+  DEFAULT_PLC_INPUTS, PSU_RATING_A, SIEMENS_PARTS, configurePlc, estimate24V, siemensPrice,
   type ModbusMode, type PlcFamily, type PlcInputs, type SitopModel,
 } from '../../utils/calcsheet/siemensPlc';
 
@@ -35,6 +35,9 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
   useEffect(() => { if (open && catalog.length === 0) void fetchCatalog().catch(() => {}); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cfg = configurePlc(inp);
+  const load = estimate24V(inp, cfg);
+  const psuA = inp.sitop === 'none' ? null : PSU_RATING_A[inp.sitop];
+  const [showLoad, setShowLoad] = useState(false);
   const is1200 = inp.family === 'S7-1200';
   const hasIo = inp.di + inp.do + inp.ai + inp.ao > 0;
   const rows = cfg.lines.map((l) => {
@@ -45,6 +48,13 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
   const total = rows.reduce((sum, r) => sum + r.lineTotal, 0);
   const header = `PLC — SIEMENS ${inp.family}`;
 
+  const dec = (k: 'doLoadA' | 'psuMarginPct', label: string, helper?: string) => (
+    <TextField
+      label={label} size="small" fullWidth type="text" inputMode="decimal" value={String(inp[k])} helperText={helper}
+      onChange={(e) => set(k, Math.max(0, parseLenientFloat(e.target.value)))}
+      onFocus={(e) => e.target.select()}
+    />
+  );
   const num = (k: 'di' | 'do' | 'ai' | 'ao' | 'sparePct' | 'modbusPorts', label: string, helper?: string) => (
     <TextField
       label={label} size="small" fullWidth type="text" inputMode="numeric"
@@ -105,10 +115,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
               <MenuItem value="rtu">Modbus RTU (RS-485)</MenuItem>
             </TextField>
             {inp.modbus === 'rtu' ? num('modbusPorts', 'RS-485 ports', is1200 ? '1st on CB 1241' : 'CM PtP each') : <Box />}
-            <TextField select label="24 V power supply" size="small" fullWidth value={inp.sitop} onChange={(e) => set('sitop', e.target.value as SitopModel)}>
-              <MenuItem value="PSU100S">SITOP PSU100S 20 A</MenuItem>
-              <MenuItem value="PSU8200">SITOP PSU8200 20 A</MenuItem>
-            </TextField>
+            <Box />
           </Box>
           {is1200 && (
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
@@ -136,6 +143,72 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                 {cfg.stations > 0 && <Chip size="small" variant="outlined" label={`${cfg.ioModules} ET 200SP module${cfg.ioModules === 1 ? '' : 's'} · ${cfg.stations} station${cfg.stations === 1 ? '' : 's'}`} />}
               </Stack>
               {cfg.notes.map((n) => <Alert key={n} severity="info" sx={{ py: 0 }}>{n}</Alert>)}
+
+              {/* 24 V DC load → pick the SITOP by hand */}
+              <Divider textAlign="left"><Typography variant="caption" color="text.secondary">24 V DC power supply</Typography></Divider>
+              <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
+                <Stack direction="row" spacing={3} alignItems="flex-start" flexWrap="wrap" useFlexGap>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Estimated load</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3 }}>{load.totalA.toFixed(2)} A</Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>With {inp.psuMarginPct}% margin</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3 }}>{load.withMarginA.toFixed(2)} A</Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Suggested SITOP</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3, color: load.suggestedA ? 'success.main' : 'error.main' }}>
+                      {load.suggestedA ? `${load.suggestedA} A` : 'over 40 A — split supplies'}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ flexGrow: 1 }} />
+                  <Box sx={{ width: 150 }}>{dec('doLoadA', 'Load per DO (A)', 'Relay / pilot ≈ 0.1')}</Box>
+                  <Box sx={{ width: 110 }}>{dec('psuMarginPct', 'Margin %')}</Box>
+                </Stack>
+                <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1.5 }} flexWrap="wrap" useFlexGap>
+                  <TextField select label="Power supply" size="small" sx={{ minWidth: 260 }} value={inp.sitop} onChange={(e) => set('sitop', e.target.value as SitopModel)}>
+                    <MenuItem value="none">None — I&apos;ll add it myself</MenuItem>
+                    <MenuItem value="PSU100S">SITOP PSU100S 20 A</MenuItem>
+                    <MenuItem value="PSU8200">SITOP PSU8200 20 A</MenuItem>
+                  </TextField>
+                  {psuA === null ? (
+                    <Typography variant="body2" color="warning.main">No power supply selected — pick one for {load.withMarginA.toFixed(1)} A or more.</Typography>
+                  ) : psuA < load.withMarginA ? (
+                    <Typography variant="body2" color="error.main">{psuA} A is below the {load.withMarginA.toFixed(1)} A needed — pick &quot;None&quot; and add a {load.suggestedA ?? 40}+ A supply yourself.</Typography>
+                  ) : (
+                    <Typography variant="body2" color="success.main">{psuA} A covers {load.withMarginA.toFixed(1)} A ({Math.round((load.withMarginA / psuA) * 100)}% loaded).</Typography>
+                  )}
+                  <Box sx={{ flexGrow: 1 }} />
+                  <Button size="small" onClick={() => setShowLoad((v) => !v)}>{showLoad ? 'Hide breakdown' : 'Show breakdown'}</Button>
+                </Stack>
+                {showLoad && (
+                  <Table size="small" sx={{ mt: 1 }}>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Load</TableCell>
+                        <TableCell align="right">Qty</TableCell>
+                        <TableCell align="right">Each (A)</TableCell>
+                        <TableCell align="right">Total (A)</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {load.lines.map((l) => (
+                        <TableRow key={l.label}>
+                          <TableCell>{l.label}</TableCell>
+                          <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{l.qty}</TableCell>
+                          <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{l.eachA}</TableCell>
+                          <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{l.totalA.toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  Typical draws: CPU and interface module per Siemens datasheets; module electronics and field loads (10 mA per DI, 20 mA per
+                  analog loop, the DO load above) are planning figures — adjust the DO load for solenoids or heavier devices.
+                </Typography>
+              </Box>
 
               <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Modules to add</Typography></Divider>
               <Table size="small">
@@ -172,8 +245,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
               </Table>
               {rows.some((r) => r.unitCost === 0) && (
                 <Alert severity="warning" sx={{ py: 0 }}>
-                  Some items have no price yet (e.g. the light BaseUnit 6ES7193-6BP00-0DA0) — they&apos;re added at ₱0; price them in Sales → Pricelists
-                  (same part number) or on the row afterward.
+                  Some items have no price yet — they&apos;re added at ₱0; price them in Sales → Pricelists (same part number) or on the row afterward.
                 </Alert>
               )}
             </>

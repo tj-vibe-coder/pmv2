@@ -20,7 +20,7 @@
 
 export type PlcFamily = 'S7-1200' | 'S7-1500';
 export type ModbusMode = 'none' | 'tcp' | 'rtu';
-export type SitopModel = 'PSU100S' | 'PSU8200';
+export type SitopModel = 'none' | 'PSU100S' | 'PSU8200';
 
 export type SiemensPartKey =
   | 'cpu1214' | 'cpu1513' | 'memCard' | 'cb1241'
@@ -58,7 +58,7 @@ export const SIEMENS_PARTS: Record<SiemensPartKey, SiemensPart> = {
     description: 'SIMATIC ET 200SP, Analog output module, AQ 4xU/I Standard, suitable for BU type A0, A1, Color code CC00, Module diagnostics, 16 bit, +/-0.3%' },
   cmPtp: { key: 'cmPtp', partNo: '6ES7137-6AA01-0BA0', price: 22526.27,
     description: 'SIMATIC ET 200SP, CM PtP communication module for serial connection RS-422, RS-485 and RS-232, freeport, 3964 (R), USS, MODBUS RTU master, slave, max. 250 Kbit/s, suitable for BU type A0' },
-  buLight: { key: 'buLight', partNo: '6ES7193-6BP00-0DA0', price: 0,
+  buLight: { key: 'buLight', partNo: '6ES7193-6BP00-0DA0', price: 1600,
     description: 'SIMATIC ET 200SP, BaseUnit BU15-P16+A0+2D, BU type A0, Push-in terminals, without AUX terminals, new load group (light), WxH: 15x 117 mm' },
   buDark: { key: 'buDark', partNo: '6ES7193-6BP00-0BA0', price: 1105.71,
     description: 'SIMATIC ET 200SP, BaseUnit BU15-P16+A0+2B, BU type A0, Push-in terminals, without AUX terminals, bridged to the left, WxH: 15x 117 mm' },
@@ -84,11 +84,16 @@ export interface PlcInputs {
   useOnboardAi: boolean;
   /** S7-1200: include a memory card (always included for S7-1500, where it's required). */
   memoryCard: boolean;
+  /** 24 V load per digital output, for PSU sizing (A) — interposing relay / pilot light ≈ 0.1 A. */
+  doLoadA: number;
+  /** Safety margin added to the estimated 24 V load when suggesting a PSU (%). */
+  psuMarginPct: number;
 }
 
 export const DEFAULT_PLC_INPUTS: PlcInputs = {
-  family: 'S7-1200', di: 0, do: 0, ai: 0, ao: 0, sparePct: 20,
-  modbus: 'none', modbusPorts: 1, sitop: 'PSU100S', useOnboardAi: false, memoryCard: false,
+  family: 'S7-1200', di: 0, do: 0, ai: 0, ao: 0, sparePct: 10,
+  modbus: 'none', modbusPorts: 1, sitop: 'none', useOnboardAi: false, memoryCard: false,
+  doLoadA: 0.1, psuMarginPct: 25,
 };
 
 export const CHANNELS = { di16: 16, dq16: 16, ai8: 8, aq4: 4 } as const;
@@ -142,7 +147,7 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   add('cmPtp', cmMods, is1200 ? 'Extra Modbus RTU ports (CB 1241 gives only one)' : '1 per Modbus RTU (RS-485) port');
   add('buLight', stations, 'First BaseUnit of each station (starts the potential group)');
   add('buDark', ioModules - stations, 'One BaseUnit per remaining module');
-  add(inp.sitop === 'PSU8200' ? 'psu8200' : 'psu100s', 1, '24 V DC supply for CPU and I/O');
+  if (inp.sitop !== 'none') add(inp.sitop === 'PSU8200' ? 'psu8200' : 'psu100s', 1, `24 V DC supply — ${PSU_RATING_A[inp.sitop]} A`);
 
   const notes: string[] = [];
   if (inp.modbus === 'tcp') notes.push('Modbus TCP runs on the CPU\'s PROFINET port — no extra hardware.');
@@ -167,6 +172,38 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
     ioModules,
     notes,
   };
+}
+
+// ── 24 V DC load estimate (for choosing the SITOP) ───────────────────────
+// Typical draws, rounded up — CPU and interface module from Siemens
+// datasheets; module electronics and field loads are planning figures. The
+// DO load and the margin are inputs because they depend on what's wired.
+export const PSU_RATING_A: Record<Exclude<SitopModel, 'none'>, number> = { PSU100S: 20, PSU8200: 20 };
+/** Standard SITOP output ratings to suggest from. */
+export const SITOP_RATINGS_A = [2.5, 5, 10, 20, 40];
+
+export interface LoadLine { label: string; qty: number; eachA: number; totalA: number }
+export interface LoadEstimate { lines: LoadLine[]; totalA: number; withMarginA: number; suggestedA: number | null }
+
+export function estimate24V(raw: PlcInputs, cfg: PlcConfig): LoadEstimate {
+  const count = (k: SiemensPartKey) => cfg.lines.find((l) => l.key === k)?.qty ?? 0;
+  const lines: LoadLine[] = [];
+  const add = (label: string, qty: number, eachA: number) => { if (qty > 0) lines.push({ label, qty, eachA, totalA: qty * eachA }); };
+  add(raw.family === 'S7-1200' ? 'CPU 1214C DC/DC/DC' : 'CPU 1513-1 PN', 1, raw.family === 'S7-1200' ? 0.5 : 0.7);
+  add('ET 200SP interface module (per station)', count('imBundle'), 0.2);
+  add('DI 16 module electronics', count('di16'), 0.05);
+  add('DQ 16 module electronics', count('dq16'), 0.05);
+  add('AI 8 module electronics', count('ai8'), 0.03);
+  add('AQ 4 module electronics', count('aq4'), 0.05);
+  add('CM PtP module', count('cmPtp'), 0.05);
+  add('Digital inputs — sensor + input current', cfg.channels.di.needed, 0.01);
+  add('Digital outputs — field load', cfg.channels.do.needed, Math.max(0, Number(raw.doLoadA) || 0));
+  add('Analog inputs — 2-wire 4–20 mA loop', cfg.channels.ai.needed, 0.02);
+  add('Analog outputs', cfg.channels.ao.needed, 0.02);
+  const totalA = Math.round(lines.reduce((a, l) => a + l.totalA, 0) * 100) / 100;
+  const withMarginA = Math.round(totalA * (1 + Math.max(0, Number(raw.psuMarginPct) || 0) / 100) * 100) / 100;
+  const suggestedA = SITOP_RATINGS_A.find((r) => r >= withMarginA) ?? null;
+  return { lines, totalA, withMarginA, suggestedA };
 }
 
 export interface SiemensCatalogItem { catalogNo: string; sellingPrice: number; pricelistDate?: string }

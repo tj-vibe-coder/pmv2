@@ -48,6 +48,7 @@ const ROWS = [
   ['ET 200SP', '6ES7134-6GF00-0AA1', 'SIMATIC ET 200SP, Analog input module, AI 8xI 2-/4-wire Basic, suitable for BU type A0, A1, Color code CC01, Module diagnostics, 16 bit', 16583.83],
   ['ET 200SP', '6ES7135-6HD00-0BA1', 'SIMATIC ET 200SP, Analog output module, AQ 4xU/I Standard, suitable for BU type A0, A1, Color code CC00, Module diagnostics, 16 bit, +/-0.3%', 14850.27],
   ['ET 200SP', '6ES7137-6AA01-0BA0', 'SIMATIC ET 200SP, CM PtP communication module for serial connection RS-422, RS-485 and RS-232, freeport, 3964 (R), USS, MODBUS RTU master, slave, max. 250 Kbit/s, suitable for BU type A0', 22526.27],
+  ['ET 200SP', '6ES7193-6BP00-0DA0', 'SIMATIC ET 200SP, BaseUnit BU15-P16+A0+2D, BU type A0, Push-in terminals, without AUX terminals, new load group (light), WxH: 15x 117 mm', 1600],
   ['ET 200SP', '6ES7193-6BP00-0BA0', 'SIMATIC ET 200SP, BaseUnit BU15-P16+A0+2B, BU type A0, Push-in terminals, without AUX terminals, bridged to the left, WxH: 15x 117 mm', 1105.71],
   ['ET 200SP', '6ES7193-6AR00-0AA0', 'SIMATIC ET 200SP, BusAdapter BA 2xRJ45, 2 RJ45 sockets', 3728.44],
   ['SITOP', '6EP1336-2BA10', 'SITOP PSU100S 20 A stabilized power supply input: 120/230 V AC output: 24 V DC/20 A', 27429.76],
