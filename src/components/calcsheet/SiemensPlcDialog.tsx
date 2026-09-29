@@ -222,6 +222,22 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             />
           )}
 
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <TextField
+              label="ET 200SP stations (IM)" size="small" sx={{ width: 190 }} type="text" inputMode="numeric"
+              value={inp.imStations || ''} placeholder={`Auto (${cfg.suggestedStations})`}
+              helperText={cfg.suggestedStations > 0 ? `Suggested: ${cfg.suggestedStations} — more for a separate IM per area` : 'Blank = auto'}
+              onChange={(e) => set('imStations', Math.max(0, Math.round(parseLenientFloat(e.target.value))))}
+              onFocus={(e) => e.target.select()}
+            />
+            {cfg.stations > 0 && (
+              <Typography variant="caption" color="text.secondary">
+                Using {cfg.stations} station{cfg.stations === 1 ? '' : 's'} for {cfg.ioModules} module{cfg.ioModules === 1 ? '' : 's'}
+                {' '}(max {redundant ? 64 : 32} per {redundant ? 'IM 155-6 PN/2 HF' : 'IM 155-6 PN ST'}).
+              </Typography>
+            )}
+          </Stack>
+
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Network switches</Typography></Divider>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
             <Box sx={{ width: 140 }}>{num('switchQty', 'Switches', redundant ? 'Min. 2 for redundancy' : undefined)}</Box>

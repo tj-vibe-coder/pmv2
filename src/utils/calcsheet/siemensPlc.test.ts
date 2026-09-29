@@ -337,3 +337,27 @@ describe('SCADA options: clients, data logging, redundancy', () => {
     expect(cfg({ scada: 'wincc81', scadaClients: 4, scadaRedundant: true, switchQty: 1 }).network.devices).toBe(1 + 2 + 4);
   });
 });
+
+describe('choosing the number of ET 200SP stations (IM)', () => {
+  it('auto uses the minimum; asking for more spreads the modules and adds IMs + light BaseUnits', () => {
+    const auto = cfg({ family: 'S7-1500', di: 6 * 16 });
+    expect([auto.stations, auto.suggestedStations, qty(auto, 'imBundle')]).toEqual([1, 1, 1]);
+    const three = cfg({ family: 'S7-1500', di: 6 * 16, imStations: 3 });
+    expect(qty(three, 'imBundle')).toBe(3);
+    expect([qty(three, 'buLight'), qty(three, 'buDark')]).toEqual([3, 3]); // 2 modules per station
+    expect(three.notes.join(' ')).toMatch(/3 ET 200SP stations as requested/);
+  });
+
+  it('never below the minimum, never more stations than modules', () => {
+    const tooFew = cfg({ family: 'S7-1500', di: 40 * 16, imStations: 1 });
+    expect(tooFew.stations).toBe(2);
+    expect(tooFew.notes.join(' ')).toMatch(/at least 2/);
+    expect(cfg({ family: 'S7-1500', di: 32, imStations: 5 }).stations).toBe(2);
+  });
+
+  it('a thermocouple-only station opens on an A1 light BaseUnit', () => {
+    // 2 DI modules + 2 TC modules over 2 stations → station 2 holds only TC modules
+    const c = cfg({ family: 'S7-1500', di: 32, analog: an({ aiTc: 16 }), imStations: 2 });
+    expect([qty(c, 'buLight'), qty(c, 'buDark'), qty(c, 'buLightA1'), qty(c, 'buDarkA1')]).toEqual([1, 1, 1, 1]);
+  });
+});

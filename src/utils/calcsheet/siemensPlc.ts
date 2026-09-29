@@ -538,6 +538,8 @@ export interface PlcInputs {
   scadaLogging: string;
   /** WinCC Unified: log to SQL Server (Database Storage option). */
   scadaDbStorage: boolean;
+  /** ET 200SP stations (interface modules) wanted; 0 = auto (the minimum). */
+  imStations: number;
   /** Network switches; the model is picked from the port count. Redundancy forces ≥ 2 managed. */
   switchQty: number;
   switchType: SwitchType;
@@ -557,7 +559,7 @@ export const DEFAULT_PLC_INPUTS: PlcInputs = {
   modbus: 'none', modbusPorts: 1, sitop: 'none', memoryCard: false, memCard: 'memCard',
   hmi: 'none', hmiQty: 1, scada: 'none', winccLicense: 'RC', licenseEdition: 'standard', scadaPackage: '2048', scadaQty: 1,
   scadaClients: 0, scadaRedundant: false, scadaLogging: 'none', scadaDbStorage: false,
-  switchQty: 0, switchType: 'unmanaged', terminals: true, panelW: 800, panelH: 1200,
+  imStations: 0, switchQty: 0, switchType: 'unmanaged', terminals: true, panelW: 800, panelH: 1200,
   doLoadA: 0.1, psuMarginPct: 25,
 };
 
@@ -591,6 +593,8 @@ export interface PlcConfig {
   /** Channels needed (incl. spare) per analog type and wiring. */
   analog: Record<AnalogKey, AnalogCount>;
   stations: number;
+  /** Fewest stations the module count needs (the auto value). */
+  suggestedStations: number;
   ioModules: number;
   /** Switch model and count actually used (after redundancy rules). */
   network: { switchKey: string | null; qty: number; devices: number; portsPerSwitch: number };
@@ -670,15 +674,22 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   const imMax = redundant ? IM_HF_MAX_MODULES : IM_MAX_MODULES;
   const a0Count = diMods + dqMods + aiMods + aiUMods + rtd8Mods + rtd4Mods + aqMods + cmMods;
   const ioModules = a0Count + tcMods;
-  const stations = ioModules > 0 ? Math.ceil(ioModules / imMax) : 0;
+  // Stations: the minimum the module count needs, or more when asked for
+  // (e.g. a separate IM per area / panel) — never more than one per module.
+  const suggestedStations = ioModules > 0 ? Math.ceil(ioModules / imMax) : 0;
+  const askedStations = whole(inp.imStations);
+  const stations = ioModules > 0 ? Math.min(ioModules, Math.max(suggestedStations, askedStations)) : 0;
   const bu = { lightA0: 0, darkA0: 0, lightA1: 0, darkA1: 0 };
+  // Modules shared out evenly: the first (ioModules % stations) stations take one more.
+  let first = 0;
   for (let s = 0; s < stations; s++) {
-    const first = s * imMax;
-    const last = Math.min(ioModules, first + imMax); // exclusive
+    const size = Math.floor(ioModules / stations) + (s < ioModules % stations ? 1 : 0);
+    const last = first + size; // exclusive
     const a0InStation = Math.max(0, Math.min(last, a0Count) - first);
     const a1InStation = (last - first) - a0InStation;
     if (a0InStation > 0) { bu.lightA0 += 1; bu.darkA0 += a0InStation - 1; bu.darkA1 += a1InStation; }
     else { bu.lightA1 += 1; bu.darkA1 += a1InStation - 1; }
+    first = last;
   }
 
   // Network switches: model from the ports each one needs.
@@ -820,7 +831,10 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   if (cpu.relayOutputs && inp.do > 0) notes.push('This CPU\'s on-board outputs are relays (2 A) — fine for contactors, not for fast pulse outputs.');
   if (cpu.drawA === 0) notes.push('AC/DC/RLY CPU is powered from 120/230 V AC — it is not counted in the 24 V load.');
   if (cpu.failSafe) notes.push('Fail-safe CPU — safety I/O (F-DI / F-DQ) is not auto-selected; add those modules yourself.');
-  if (stations > 1) notes.push(`${ioModules} modules need ${stations} ET 200SP stations (${imMax} modules per ${redundant ? 'IM 155-6 PN/2 HF' : 'IM 155-6 PN ST'}).`);
+  if (askedStations > 0 && askedStations < suggestedStations) notes.push(`${ioModules} modules need at least ${suggestedStations} ET 200SP stations — using ${suggestedStations}, not ${askedStations}.`);
+  if (askedStations > ioModules && ioModules > 0) notes.push(`Only ${ioModules} module${ioModules === 1 ? '' : 's'}, so at most ${ioModules} station${ioModules === 1 ? '' : 's'} (each needs at least one module).`);
+  if (stations > suggestedStations) notes.push(`${stations} ET 200SP stations as requested — ${ioModules} modules shared out about ${Math.ceil(ioModules / stations)} per station; move modules between stations on the quotation if an area needs more.`);
+  else if (stations > 1) notes.push(`${ioModules} modules need ${stations} ET 200SP stations (${imMax} modules per ${redundant ? 'IM 155-6 PN/2 HF' : 'IM 155-6 PN ST'}).`);
   if (wiring) notes.push('Terminals and wiring cover the I/O incl. spare; the main feed from the PSU to the distribution terminals is not included (size it separately).');
 
   const provided = {
@@ -839,6 +853,7 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
     },
     analog,
     stations,
+    suggestedStations,
     ioModules,
     network: { switchKey: netSwitch?.key ?? null, qty: netSwitch ? sw.qty : 0, devices, portsPerSwitch },
     wiring,
