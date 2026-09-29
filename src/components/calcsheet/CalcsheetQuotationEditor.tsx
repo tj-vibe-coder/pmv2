@@ -51,6 +51,7 @@ import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/onedriveFolderService';
 import ProductPickerDialog from '../pricelists/ProductPickerDialog';
 import InstallationWorkDialog from './InstallationWorkDialog';
+import { INSTALLATION_HEADER, withInstallationRows } from '../../utils/calcsheet/installationMaterials';
 import type { PricelistItem } from '../../types/Pricelist';
 import type { ProductHistoryAddSelection } from '../../types/ProductHistory';
 import ComponentTimingDialog, {
@@ -871,10 +872,17 @@ export default function QuotationEditor() {
 
   // Rows arrive with blank codes (see InstallationWorkDialog) — commit()'s
   // renumber step assigns the final sequential B-#### codes.
+  // …under an "INSTALLATION WORK" section header (created the first time,
+  // reused on later adds — see withInstallationRows).
   const addFromInstallationWork = (rows: ComponentLine[]) => {
-    commit('components', [...quotation.components, ...rows] as ComponentLine[]);
+    const hadHeader = quotation.components.some((c) => c.isHeader && c.description.trim().toUpperCase() === INSTALLATION_HEADER);
+    commit('components', withInstallationRows(quotation.components, rows, () => ({
+      id: id(), code: '', description: INSTALLATION_HEADER, brand: '', partNo: '',
+      qty: 0, uom: '', unitCost: 0, forex: 1, contingencyPct: 0, discountPct: 0,
+      isHeader: true,
+    } as ComponentLine)));
     setInstallWorkOpen(false);
-    setToast({ msg: `Added ${rows.length} item${rows.length === 1 ? '' : 's'} from Installation Work — review and Save.`, sev: 'success' });
+    setToast({ msg: `Added ${rows.length} item${rows.length === 1 ? '' : 's'} from Installation Work ${hadHeader ? 'under' : 'with'} the "${INSTALLATION_HEADER}" header — review and Save.`, sev: 'success' });
   };
 
   const addFromHistory = (selection: ProductHistoryAddSelection) => {

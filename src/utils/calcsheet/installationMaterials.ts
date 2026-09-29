@@ -312,3 +312,22 @@ export function resolveSlotPrice(
   if (item) return { unitCost: item.sellingPrice, brand: item.brand || '', partNo: item.catalogNo, source: 'catalog', catalogItem: item };
   return { unitCost: 0, brand: preset?.brand || '', partNo: '', source: 'none' };
 }
+
+// ── Placing the generated rows in Section B ──────────────────────────────
+export const INSTALLATION_HEADER = 'INSTALLATION WORK';
+
+type SectionRow = { id: string; description: string; isHeader?: boolean };
+
+/**
+ * Section B with the Installation Work rows added under an "INSTALLATION WORK"
+ * header row: the first time, the header is created at the end; after that,
+ * new rows go at the end of that header's block (before the next section
+ * header) so repeat adds stay together instead of repeating the header.
+ */
+export function withInstallationRows<T extends SectionRow>(components: T[], rows: T[], makeHeader: () => T): T[] {
+  const h = components.findIndex((c) => c.isHeader && c.description.trim().toUpperCase() === INSTALLATION_HEADER);
+  if (h < 0) return [...components, makeHeader(), ...rows];
+  let end = components.findIndex((c, i) => i > h && c.isHeader);
+  if (end < 0) end = components.length;
+  return [...components.slice(0, end), ...rows, ...components.slice(end)];
+}
