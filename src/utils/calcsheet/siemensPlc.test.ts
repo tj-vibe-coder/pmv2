@@ -10,8 +10,8 @@ describe('Siemens PLC configurator', () => {
     expect(qty(c, 'imBundle')).toBe(0);
     expect(c.ioModules).toBe(0);
     expect(c.channels.di).toEqual({ needed: 12, provided: 14 });
-    expect(qty(c, 'psu100s')).toBe(0); // PSU is chosen by hand from the load estimate
-    expect(qty(cfg({ family: 'S7-1200', di: 12, sitop: 'PSU100S' }), 'psu100s')).toBe(1);
+    expect(qty(c, 'psu100s20')).toBe(0); // PSU is chosen by hand from the load estimate
+    expect(qty(cfg({ family: 'S7-1200', di: 12, sitop: 'psu100s20' }), 'psu100s20')).toBe(1);
   });
 
   it('S7-1200: I/O beyond on-board goes to ET 200SP with BaseUnits', () => {
@@ -69,6 +69,62 @@ describe('Siemens PLC configurator', () => {
     expect(siemensPrice(SIEMENS_PARTS.di16, [])).toEqual({ price: 6218.99, source: 'quote' });
     expect(siemensPrice(SIEMENS_PARTS.di16, [{ catalogNo: '6ES7131-6BH01-0BA0', sellingPrice: 6000 }])).toEqual({ price: 6000, source: 'catalog' });
     expect(siemensPrice(SIEMENS_PARTS.buLight, [])).toEqual({ price: 1600, source: 'quote' });
+  });
+});
+
+describe('other CPU models, HMI, SCADA and SITOP choices', () => {
+  it('a smaller S7-1200 CPU has less on-board I/O, so ET 200SP starts sooner', () => {
+    // 1212C: 8 DI / 6 DQ on board → 12 DI needs a DI16; on a 1214C it would not.
+    const c = cfg({ family: 'S7-1200', cpu: 'cpu1212', di: 12, do: 6 });
+    expect(qty(c, 'cpu1212')).toBe(1);
+    expect(qty(c, 'cpu1214')).toBe(0);
+    expect([qty(c, 'di16'), qty(c, 'dq16'), qty(c, 'imBundle')]).toEqual([1, 0, 1]);
+  });
+
+  it('1215C on-board AQ covers 2 AO before an AQ4 module is needed', () => {
+    expect(qty(cfg({ family: 'S7-1200', cpu: 'cpu1215', ao: 2 }), 'aq4')).toBe(0);
+    expect(qty(cfg({ family: 'S7-1200', cpu: 'cpu1215', ao: 3 }), 'aq4')).toBe(1);
+  });
+
+  it('S7-1500 compact CPU counts its on-board I/O (AI are 4–20 mA capable)', () => {
+    const c = cfg({ family: 'S7-1500', cpu: 'cpu1511c', di: 16, do: 16, ai: 4 });
+    expect(c.ioModules).toBe(0);
+    expect(qty(c, 'memCard')).toBe(1);
+  });
+
+  it('a CPU key from the other family falls back to that family\'s default', () => {
+    expect(qty(cfg({ family: 'S7-1500', cpu: 'cpu1212' }), 'cpu1513')).toBe(1);
+  });
+
+  it('AC-powered CPU is left out of the 24 V load', () => {
+    const inp = { ...DEFAULT_PLC_INPUTS, cpu: 'cpu1214ac', di: 10 };
+    expect(estimate24V(inp, configurePlc(inp)).lines.some((l) => /CPU/.test(l.label))).toBe(false);
+  });
+
+  it('memory card size, HMI panel and SCADA license go on the BOM (unpriced → for inquiry)', () => {
+    const c = cfg({ family: 'S7-1500', memCard: 'memCard24', hmi: 'mtp1000', hmiQty: 2, scada: 'wincc81', winccLicense: 'RT', scadaPackage: '8192' });
+    expect(qty(c, 'memCard24')).toBe(1);
+    expect(qty(c, 'mtp1000')).toBe(2);
+    expect(qty(c, 'wincc81_RT_8192')).toBe(1);
+    expect(siemensPrice(SIEMENS_PARTS.mtp1000, [])).toEqual({ price: 0, source: 'none' });
+    expect(SIEMENS_PARTS.wincc81_RT_8192.description).toMatch(/WinCC V8\.1 RT.*8192 PowerTags/);
+    expect(qty(cfg({ scada: 'unifiedPc', scadaPackage: '1k' }), 'unifiedPc_1k')).toBe(1);
+  });
+
+  it('an HMI adds its draw to the 24 V estimate', () => {
+    const inp = { ...DEFAULT_PLC_INPUTS, sparePct: 0, di: 1, hmi: 'ktp700', hmiQty: 2 };
+    const e = estimate24V(inp, configurePlc(inp));
+    expect(e.lines.find((l) => /KTP700/.test(l.label))?.totalA).toBeCloseTo(0.5, 2);
+  });
+
+  it('any SITOP rating can be picked; unquoted ones are unpriced', () => {
+    expect(qty(cfg({ sitop: 'psu100s5' }), 'psu100s5')).toBe(1);
+    expect(SIEMENS_PARTS.psu100s5).toMatchObject({ partNo: '6EP1333-2BA20', price: 0 });
+    expect(SIEMENS_PARTS.psu100s20).toMatchObject({ price: 27429.76, quoted: true });
+  });
+
+  it('parts without a part number never match a catalog row', () => {
+    expect(siemensPrice(SIEMENS_PARTS.wincc81_RC_2048, [{ catalogNo: '', sellingPrice: 999 }])).toEqual({ price: 0, source: 'none' });
   });
 });
 
