@@ -932,6 +932,90 @@ function clientApproverString(contacts) {
   return [p.name, p.position].filter(Boolean).join(' – ').trim();
 }
 
+// ── Whiteboard (app-wide — notes, to-dos, updates) ───────────────────────────
+// Pops up once per login session (Header.tsx) plus a quick-access button.
+// Every item has a visibility: 'public' (everyone sees it) or 'private' (only
+// the creator — filtered server-side here, not just hidden in the UI). Two
+// separate equality-only queries (visibility==public; visibility==private AND
+// createdBy==me) merged in memory — both single/double `==` filters, served
+// by Firestore's automatic per-field indexes (zig-zag merge), no composite
+// index needed. The sets are disjoint by construction (an item can't be both
+// public and private), so no de-dup step is needed on merge.
+app.get('/api/whiteboard', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const [publicSnap, privateSnap] = await Promise.all([
+      db.collection('whiteboard_items').where('visibility', '==', 'public').get(),
+      db.collection('whiteboard_items').where('visibility', '==', 'private').where('createdBy', '==', user.id).get(),
+    ]);
+    const items = [...publicSnap.docs, ...privateSnap.docs]
+      .map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; })
+      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    res.json({ success: true, items });
+  } catch (err) { res.status(500).json({ error: 'Failed to get whiteboard items' }); }
+});
+
+app.post('/api/whiteboard', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { kind, visibility, text, done, dueDate } = req.body || {};
+    if (!['update', 'note', 'todo'].includes(kind)) return res.status(400).json({ error: 'Invalid kind' });
+    if (!['public', 'private'].includes(visibility)) return res.status(400).json({ error: 'Invalid visibility' });
+    if (!text || !String(text).trim()) return res.status(400).json({ error: 'Text is required' });
+    const now = new Date().toISOString();
+    const doc = {
+      kind, visibility, text: String(text).trim(),
+      ...(kind === 'todo' ? { done: !!done, ...(dueDate ? { dueDate } : {}) } : {}),
+      createdBy: user.id,
+      createdByName: user.full_name || user.username || 'Someone',
+      createdAt: now, updatedAt: now,
+    };
+    const ref = await db.collection('whiteboard_items').add(doc);
+    res.json({ success: true, item: { ...doc, id: ref.id } });
+  } catch (err) { res.status(500).json({ error: 'Failed to post whiteboard item' }); }
+});
+
+app.put('/api/whiteboard/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const ref = db.collection('whiteboard_items').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'Item not found' });
+    const existing = snap.data();
+    const isOwner = existing.createdBy === user.id;
+    // Anyone may toggle `done` on a PUBLIC to-do (a shared task the team
+    // completes together) — every other edit is owner-only.
+    const isPublicTodoDoneToggle =
+      !isOwner && existing.kind === 'todo' && existing.visibility === 'public' &&
+      Object.keys(req.body || {}).every((k) => k === 'done');
+    if (!isOwner && !isPublicTodoDoneToggle) return res.status(403).json({ error: 'Not allowed to edit this item' });
+    const patch = isPublicTodoDoneToggle ? { done: !!req.body.done } : req.body;
+    await ref.update({ ...patch, updatedAt: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update whiteboard item' }); }
+});
+
+app.delete('/api/whiteboard/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const ref = db.collection('whiteboard_items').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'Item not found' });
+    const existing = snap.data();
+    const isOwner = existing.createdBy === user.id;
+    // Moderation safety net: admin/superadmin can remove any PUBLIC item —
+    // never a private one belonging to someone else.
+    const isModerator = !isOwner && existing.visibility === 'public' && (user.role === 'admin' || user.role === 'superadmin');
+    if (!isOwner && !isModerator) return res.status(403).json({ error: 'Not allowed to delete this item' });
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete whiteboard item' }); }
+});
+
 app.get('/api/clients', async (req, res) => {
   try {
     const snap = await db.collection('clients').orderBy('name').get();
