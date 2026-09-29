@@ -297,3 +297,43 @@ describe('S7-1500 mounting rail', () => {
     expect(qty(cfg({ redundancy: 'H' }), 'rail1500_245')).toBe(2);
   });
 });
+
+describe('SCADA options: clients, data logging, redundancy', () => {
+  it('WinCC V8.1 client/server: WinCC/Server on each server, one RT Client per client', () => {
+    const c = cfg({ scada: 'wincc81', scadaQty: 1, scadaClients: 3 });
+    expect(qty(c, 'wincc81_RC_2048_standard')).toBe(1);
+    expect(qty(c, 'wincc81Server')).toBe(1);
+    expect(qty(c, 'wincc81Client')).toBe(3);
+    expect(SIEMENS_PARTS.wincc81Client.partNo).toBe('6AV6381-2CA08-1AX0');
+    expect(qty(cfg({ scada: 'wincc81' }), 'wincc81Server')).toBe(0); // single station — no server option
+  });
+
+  it('WinCC V8.1 redundancy doubles the servers and adds one Redundancy license per pair; archive per server', () => {
+    const c = cfg({ scada: 'wincc81', scadaQty: 1, scadaClients: 2, scadaRedundant: true, scadaLogging: '5000' });
+    expect(qty(c, 'wincc81_RC_2048_standard')).toBe(2);
+    expect(qty(c, 'wincc81Server')).toBe(2);
+    expect(qty(c, 'wincc81Redundancy')).toBe(1);
+    expect(qty(c, 'wincc81Archive_5000')).toBe(2);
+    expect(SIEMENS_PARTS.wincc81Redundancy.partNo).toBe('6AV6371-1CF08-1AX0');
+    expect(SIEMENS_PARTS.wincc81Archive_5000.partNo).toBe('6AV6371-1DQ10-0BX0');
+    // download edition → the download order numbers
+    const d = cfg({ scada: 'wincc81', licenseEdition: 'dl', scadaRedundant: true, scadaLogging: '1500' });
+    expect(qty(d, 'wincc81Redundancy_dl')).toBe(1);
+    expect(SIEMENS_PARTS.wincc81Archive_1500_dl.partNo).toBe('6AV6371-1HQ10-0AX0');
+  });
+
+  it('WinCC Unified: operate-client packs on each server, logging tags, Database Storage, redundancy', () => {
+    const c = cfg({ scada: 'unifiedPc', scadaPackage: '1k', scadaClients: 5, scadaRedundant: true, scadaLogging: '1000', scadaDbStorage: true });
+    expect(qty(c, 'unifiedPc_1k_standard')).toBe(2);
+    expect(qty(c, 'unifiedClient_3')).toBe(2);  // 5 = 3 + 1 + 1, on both servers
+    expect(qty(c, 'unifiedClient_1')).toBe(4);
+    expect(qty(c, 'unifiedLogging_1000')).toBe(2);
+    expect(qty(c, 'unifiedDbStorage')).toBe(2);
+    expect(qty(c, 'unifiedRedundancy')).toBe(1);
+    expect(SIEMENS_PARTS.unifiedClient_3.partNo).toBe('6AV2157-3JW00-0AB0');
+  });
+
+  it('servers and clients count as network devices for the switch', () => {
+    expect(cfg({ scada: 'wincc81', scadaClients: 4, scadaRedundant: true, switchQty: 1 }).network.devices).toBe(1 + 2 + 4);
+  });
+});

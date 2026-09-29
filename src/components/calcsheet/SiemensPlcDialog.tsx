@@ -10,7 +10,7 @@ import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import {
   ANALOG_KINDS, DEFAULT_CPU, DEFAULT_PLC_INPUTS, DEFAULT_REDUNDANT_CPU, HMI_LINES, HMI_PANELS, LICENSE_EDITIONS, MEMORY_CARDS, PSU_LINES,
-  REDUNDANCY_OPTIONS, SIEMENS_PARTS, SITOP_OPTIONS, SWITCHES, TERMINALS_HEADER, WIRES_HEADER, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuChoices, cpuModel,
+  REDUNDANCY_OPTIONS, SIEMENS_PARTS, UNIFIED_LOGGING_PACKAGES, WINCC81_ARCHIVE_PACKAGES, SITOP_OPTIONS, SWITCHES, TERMINALS_HEADER, WIRES_HEADER, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuChoices, cpuModel,
   effectiveSwitches, estimate24V, noAnalog, onboardText, siemensPrice,
   type AnalogKey, type HmiLine, type PlcSection, type LicenseEdition, type ModbusMode, type PlcFamily, type PlcInputs, type Redundancy, type ScadaKind,
   type SwitchType, type WinccLicense,
@@ -77,7 +77,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
       onFocus={(e) => e.target.select()}
     />
   );
-  const num = (k: 'di' | 'do' | 'sparePct' | 'modbusPorts' | 'hmiQty' | 'scadaQty' | 'switchQty' | 'panelW' | 'panelH', label: string, helper?: string) => (
+  const num = (k: 'di' | 'do' | 'sparePct' | 'modbusPorts' | 'hmiQty' | 'scadaQty' | 'scadaClients' | 'switchQty' | 'panelW' | 'panelH', label: string, helper?: string) => (
     <TextField
       label={label} size="small" fullWidth type="text" inputMode="numeric"
       value={inp[k] || (k === 'sparePct' ? '0' : '')} placeholder="0" helperText={helper}
@@ -107,7 +107,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
   const setHmiLine = (line: HmiLine | 'none') => set('hmi', line === 'none' ? 'none'
     : (HMI_PANELS.find((h) => h.line === line && h.sizeIn === 7) ?? HMI_PANELS.find((h) => h.line === line))!.key);
   const setScada = (kind: ScadaKind) => setInp((p) => ({
-    ...p, scada: kind, scadaPackage: kind === 'unifiedPc' ? '1k' : '2048',
+    ...p, scada: kind, scadaPackage: kind === 'unifiedPc' ? '1k' : '2048', scadaLogging: 'none',
     licenseEdition: kind === 'unifiedPc' && p.licenseEdition === 'dl' ? 'standard' : p.licenseEdition,
   }));
 
@@ -279,8 +279,30 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                 ))}
               </TextField>
             ) : <Box />}
-            {inp.scada !== 'none' ? num('scadaQty', 'Stations') : <Box />}
+            {inp.scada !== 'none' ? num('scadaQty', inp.scadaRedundant ? 'Server pairs' : 'Servers') : <Box />}
           </Box>
+          {inp.scada !== 'none' && (
+            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Box sx={{ width: 120 }}>{num('scadaClients', 'Clients', inp.scada === 'unifiedPc' ? 'Operate clients' : 'RT Client stations')}</Box>
+              <TextField select label="Data logging" size="small" sx={{ minWidth: 220 }} value={inp.scadaLogging} onChange={(e) => set('scadaLogging', e.target.value)}
+                helperText={inp.scada === 'wincc81' ? '512 archive tags included' : 'Logging tags per server'}>
+                <MenuItem value="none">{inp.scada === 'wincc81' ? 'Base only (512 archive tags)' : 'None'}</MenuItem>
+                {(inp.scada === 'wincc81' ? WINCC81_ARCHIVE_PACKAGES : UNIFIED_LOGGING_PACKAGES).map((p) => (
+                  <MenuItem key={p} value={p}>{inp.scada === 'wincc81' ? `Archive ${p} tags` : `Logging tags (${p})`}</MenuItem>
+                ))}
+              </TextField>
+              <FormControlLabel
+                control={<Checkbox size="small" checked={inp.scadaRedundant} onChange={(e) => set('scadaRedundant', e.target.checked)} />}
+                label={<Typography variant="body2">Redundant servers</Typography>}
+              />
+              {inp.scada === 'unifiedPc' && (
+                <FormControlLabel
+                  control={<Checkbox size="small" checked={inp.scadaDbStorage} onChange={(e) => set('scadaDbStorage', e.target.checked)} />}
+                  label={<Typography variant="body2">Database Storage (SQL logging)</Typography>}
+                />
+              )}
+            </Stack>
+          )}
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Terminals &amp; wiring (WAGO)</Typography></Divider>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>

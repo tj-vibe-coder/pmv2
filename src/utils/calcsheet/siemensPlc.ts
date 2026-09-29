@@ -242,6 +242,29 @@ export const LICENSE_EDITIONS: { value: LicenseEdition; label: string; wincc81On
   { value: 'asia', label: 'Asia edition' },
   { value: 'dl', label: 'Download', wincc81Only: true },
 ];
+// SCADA options (client/server, data logging, redundancy). WinCC V8.1: USB
+// order number for standard/Asia, download number for 'dl' (Siemens WinCC
+// V8.1 order data, Oct 2024). WinCC Unified options are 6AV2157-… (license on
+// USB, 0AB0) — Database Storage 6AV2154-…; the Unified redundancy option has
+// no V21 order number on file yet, so it goes in for the supplier to fill.
+export const WINCC81_ARCHIVE_PACKAGES = ['1500', '5000', '10000', '30000'];
+const WINCC81_ARCHIVE_CODE: Record<string, string> = { 1500: 'AX0', 5000: 'BX0', 10000: 'CX0', 30000: 'EX0' };
+export const UNIFIED_LOGGING_PACKAGES = ['100', '500', '1000', '5000'];
+const UNIFIED_LOGGING_PART: Record<string, string> = {
+  100: '6AV2157-2DA00-0AB0', 500: '6AV2157-1EA00-0AB0', 1000: '6AV2157-2EA00-0AB0', 5000: '6AV2157-1FA00-0AB0',
+};
+/** Operate-client packs (largest first) — clients are covered with the fewest packs. */
+const UNIFIED_CLIENT_PACKS: { n: number; partNo: string }[] = [
+  { n: 100, partNo: '6AV2157-2DW00-0AB0' }, { n: 30, partNo: '6AV2157-6CW00-0AB0' }, { n: 10, partNo: '6AV2157-2CW00-0AB0' },
+  { n: 3, partNo: '6AV2157-3JW00-0AB0' }, { n: 1, partNo: '6AV2157-1JW00-0AB0' },
+];
+export function unifiedClientPacks(clients: number): { n: number; qty: number }[] {
+  let left = Math.max(0, Math.round(clients));
+  const out: { n: number; qty: number }[] = [];
+  UNIFIED_CLIENT_PACKS.forEach(({ n }) => { const q = Math.floor(left / n); if (q > 0) { out.push({ n, qty: q }); left -= q * n; } });
+  return out;
+}
+
 export const scadaKey = (kind: Exclude<ScadaKind, 'none'>, license: WinccLicense, pkg: string, edition: LicenseEdition = 'standard') =>
   kind === 'wincc81' ? `wincc81_${license}_${pkg}_${edition}` : `unifiedPc_${pkg}_${edition === 'asia' ? 'asia' : 'standard'}`;
 
@@ -437,6 +460,33 @@ export const SIEMENS_PARTS: Record<string, SiemensPart> = (() => {
     key: scadaKey('unifiedPc', 'RT', pkg, ed), partNo: `6AV2155-${UNIFIED_CODE[pkg]}02-5${ed === 'asia' ? 'BA0' : 'AA0'}`, price: 0, uom: 'lic',
     description: `SIMATIC WinCC Unified V21 PC Runtime, ${pkg} PowerTags${EDITION_TEXT[ed]}, package — software license`,
   })));
+  // SCADA options
+  const dl = (ed: LicenseEdition) => ed === 'dl';
+  LICENSE_EDITIONS.forEach(({ value: ed }) => {
+    const sfx = ed === 'dl' ? '_dl' : '';
+    put({ key: `wincc81Client${sfx}`, partNo: dl(ed) ? '6AV6381-2CA08-1AH0' : '6AV6381-2CA08-1AX0', price: 0, uom: 'lic',
+      description: `SIMATIC WinCC V8.1 RT Client${dl(ed) ? ', download' : ''} — runtime software, single license (one per client station)` });
+    put({ key: `wincc81Server${sfx}`, partNo: dl(ed) ? '6AV6371-1HA08-1AX0' : '6AV6371-1CA08-1AX0', price: 0, uom: 'lic',
+      description: `SIMATIC WinCC/Server V8.1${dl(ed) ? ', download' : ''} — option for WinCC V8.1 runtime (client/server), single license (one per server)` });
+    put({ key: `wincc81Redundancy${sfx}`, partNo: dl(ed) ? '6AV6371-1HF08-1AX0' : '6AV6371-1CF08-1AX0', price: 0, uom: 'lic',
+      description: `SIMATIC WinCC/Redundancy V8.1${dl(ed) ? ', download' : ''} — option for WinCC V8.1 runtime, single license for 2 installations (one per server pair)` });
+    WINCC81_ARCHIVE_PACKAGES.forEach((pkg) => put({
+      key: `wincc81Archive_${pkg}${sfx}`, partNo: `6AV6371-1${dl(ed) ? 'H' : 'D'}Q10-0${WINCC81_ARCHIVE_CODE[pkg]}`, price: 0, uom: 'lic',
+      description: `SIMATIC WinCC/Archive V8.x, ${pkg} archive tags (countable)${dl(ed) ? ', download' : ''} — data logging option, single license (one per server; 512 archive tags come with the base license)`,
+    }));
+  });
+  UNIFIED_CLIENT_PACKS.forEach(({ n, partNo }) => put({
+    key: `unifiedClient_${n}`, partNo, price: 0, uom: 'lic', verify: n === 100 || n === 10,
+    description: `SIMATIC WinCC Unified Client, ${n} Operate Client${n === 1 ? '' : 's'} — option for WinCC Unified PC runtime, single license`,
+  }));
+  UNIFIED_LOGGING_PACKAGES.forEach((pkg) => put({
+    key: `unifiedLogging_${pkg}`, partNo: UNIFIED_LOGGING_PART[pkg], price: 0, uom: 'lic', verify: pkg === '100',
+    description: `SIMATIC WinCC Unified Logging Tags (${pkg}) — data logging option for WinCC Unified PC runtime, single license`,
+  }));
+  put({ key: 'unifiedDbStorage', partNo: '6AV2154-0BS02-5AA0', price: 0, uom: 'lic', verify: true,
+    description: 'SIMATIC WinCC Unified Database Storage V21 — logging to Microsoft SQL Server (large tag counts / long retention), single license' });
+  put({ key: 'unifiedRedundancy', partNo: '', price: 0, uom: 'lic',
+    description: 'SIMATIC WinCC Unified Redundancy V21 — option for WinCC Unified PC runtime (redundant server pair)' });
   SITOP_OPTIONS.filter((s) => !all[s.key]).forEach((s) => put(s.line.startsWith('WAGO')
     ? { key: s.key, partNo: s.partNo, price: WAGO_PSU_PRICE[s.key] ?? 0, brand: 'WAGO', quoted: !!WAGO_PSU_PRICE[s.key],
       description: s.line === 'WAGO Eco'
@@ -478,7 +528,16 @@ export interface PlcInputs {
   licenseEdition: LicenseEdition;
   /** Tag package (WINCC81_PACKAGES / UNIFIED_PC_PACKAGES). */
   scadaPackage: string;
+  /** SCADA servers (or single stations); with redundancy each gets a partner. */
   scadaQty: number;
+  /** Client stations viewing the server(s). */
+  scadaClients: number;
+  /** Server pairs: 2 servers per station + the redundancy license. */
+  scadaRedundant: boolean;
+  /** Extra logging tags: WINCC81_ARCHIVE_PACKAGES / UNIFIED_LOGGING_PACKAGES, or 'none'. */
+  scadaLogging: string;
+  /** WinCC Unified: log to SQL Server (Database Storage option). */
+  scadaDbStorage: boolean;
   /** Network switches; the model is picked from the port count. Redundancy forces ≥ 2 managed. */
   switchQty: number;
   switchType: SwitchType;
@@ -497,6 +556,7 @@ export const DEFAULT_PLC_INPUTS: PlcInputs = {
   family: 'S7-1200', cpu: 'cpu1214', redundancy: 'none', di: 0, do: 0, analog: noAnalog(), sparePct: 10,
   modbus: 'none', modbusPorts: 1, sitop: 'none', memoryCard: false, memCard: 'memCard',
   hmi: 'none', hmiQty: 1, scada: 'none', winccLicense: 'RC', licenseEdition: 'standard', scadaPackage: '2048', scadaQty: 1,
+  scadaClients: 0, scadaRedundant: false, scadaLogging: 'none', scadaDbStorage: false,
   switchQty: 0, switchType: 'unmanaged', terminals: true, panelW: 800, panelH: 1200,
   doLoadA: 0.1, psuMarginPct: 25,
 };
@@ -624,7 +684,9 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   // Network switches: model from the ports each one needs.
   const sw = effectiveSwitches(inp);
   const panel = HMI_PANELS.find((h) => h.key === inp.hmi);
-  const devices = cpuUnits + stations + (panel ? inp.hmiQty : 0) + (inp.scada !== 'none' ? inp.scadaQty : 0);
+  const scadaServers = inp.scada === 'none' ? 0 : inp.scadaQty * (inp.scadaRedundant ? 2 : 1);
+  const scadaClients = inp.scada === 'none' ? 0 : whole(inp.scadaClients);
+  const devices = cpuUnits + stations + (panel ? inp.hmiQty : 0) + scadaServers + scadaClients;
   const portsPerSwitch = sw.qty > 0 ? Math.ceil(devices / sw.qty) + (sw.qty > 1 ? 2 : 1) : 0;
   const ofType = SWITCHES.filter((s) => s.type === sw.type).sort((a, b) => a.ports - b.ports);
   const netSwitch = sw.qty > 0 ? (ofType.find((s) => s.ports >= portsPerSwitch) ?? ofType[ofType.length - 1]) : null;
@@ -670,7 +732,26 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   if (inp.scada !== 'none') {
     const pkgs = inp.scada === 'wincc81' ? WINCC81_PACKAGES : UNIFIED_PC_PACKAGES;
     const pkg = pkgs.includes(inp.scadaPackage) ? inp.scadaPackage : pkgs[0];
-    add(scadaKey(inp.scada, inp.winccLicense, pkg, inp.licenseEdition), inp.scadaQty, 'SCADA license — one per PC station');
+    const red = inp.scadaRedundant;
+    add(scadaKey(inp.scada, inp.winccLicense, pkg, inp.licenseEdition), scadaServers,
+      red ? `SCADA base license — ${inp.scadaQty} redundant server pair${inp.scadaQty === 1 ? '' : 's'} (2 servers each)` : 'SCADA license — one per server / PC station');
+    const logging = inp.scadaLogging;
+    if (inp.scada === 'wincc81') {
+      const sfx = inp.licenseEdition === 'dl' ? '_dl' : '';
+      if (scadaClients > 0) {
+        add(`wincc81Server${sfx}`, scadaServers, 'Client/server — WinCC/Server on each server');
+        add(`wincc81Client${sfx}`, scadaClients, 'One RT Client license per client station');
+      }
+      add(`wincc81Redundancy${sfx}`, red ? inp.scadaQty : 0, 'One per redundant server pair (covers both installations)');
+      if (WINCC81_ARCHIVE_PACKAGES.includes(logging)) add(`wincc81Archive_${logging}${sfx}`, scadaServers, `Data logging — ${logging} archive tags on each server (512 included in the base)`);
+    } else {
+      // Operate clients are licensed on the server — both servers of a redundant pair.
+      unifiedClientPacks(scadaClients).forEach(({ n, qty }) => add(`unifiedClient_${n}`, qty * scadaServers,
+        `${scadaClients} client${scadaClients === 1 ? '' : 's'} — licensed on each server${red ? ' (both servers of the pair)' : ''}`));
+      add('unifiedRedundancy', red ? inp.scadaQty : 0, 'One per redundant server pair');
+      if (UNIFIED_LOGGING_PACKAGES.includes(logging)) add(`unifiedLogging_${logging}`, scadaServers, `Data logging — ${logging} logging tags on each server`);
+      add('unifiedDbStorage', inp.scadaDbStorage ? scadaServers : 0, 'Logging to SQL Server — one per server');
+    }
   }
   const psu = SITOP_OPTIONS.find((s) => s.key === inp.sitop);
   if (psu) add(psu.key, 1, `24 V DC supply — ${psu.ratingA} A`);
