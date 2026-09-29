@@ -1,35 +1,52 @@
-// Installation Work calculator — turns a set of named conduit runs (length +
-// pipe size + optional accessory counts) into the pipe/junction-box/accessory
-// quantities needed, so Section B doesn't have to be hand-counted per project.
+// Installation Work calculator — turns a set of named conduit runs (length,
+// pipe size, bends, equipment connections, mounting) into the pipe /
+// junction-box / accessory quantities needed, so Section B doesn't have to be
+// hand-counted per project. Accessories are computed from the Philippine
+// Electrical Code (PEC 2017) support rules — see pecAccessories() — and each
+// can still be overridden per run.
 // Pure logic only (no React) — see InstallationWorkDialog.tsx for the popup UI
 // and CalcsheetPresets.tsx for where unit pricing is set.
 
 export type PipeSize = '1/2"' | '3/4"' | '1"';
 export const PIPE_SIZES: PipeSize[] = ['1/2"', '3/4"', '1"'];
 
+/** How the conduit is fixed: beam/caddy clamps straight to the structure, or
+ *  U-bolts on unistrut channel with 1" angle-bar brackets. */
+export type Mounting = 'clamp' | 'unistrut';
+
 // One continuous conduit run as entered in the popup. All of its accessories
 // (LQT, Straight Connector, Caddy Clamp, U Bolt) are assumed to match this
 // run's pipe size — a single run describes one size of conduit end-to-end;
 // mixed sizes on one route are entered as separate runs. Unistrut Channel and
 // Angle Bar aren't size-specific, so they're just one field each.
+//
+// Accessory fields are OVERRIDES: null = use the PEC-computed quantity.
 export interface InstallationWorkEntry {
   id: string;               // local-only, for list management in the dialog
   name: string;
   lengthMeters: number;
   pipeSize: PipeSize;
-  lqtMeters: number;
-  straightConnectorQty: number;
-  caddyClampQty: number;
-  uBoltQty: number;
-  unistrutChannelQty: number;
-  angleBarQty: number;
+  /** 90° bends (or equivalent) along the run — PEC allows at most 360° between pull points. */
+  bends90: number;
+  /** Equipment / device end connections made with LQT flex. */
+  equipmentConnections: number;
+  mounting: Mounting;
+  lqtMeters: number | null;
+  straightConnectorQty: number | null;
+  caddyClampQty: number | null;
+  uBoltQty: number | null;
+  unistrutChannelQty: number | null;
+  angleBarQty: number | null;
 }
 
 export const blankEntry = (): InstallationWorkEntry => ({
   id: '', name: '', lengthMeters: 0, pipeSize: '1/2"',
-  lqtMeters: 0, straightConnectorQty: 0, caddyClampQty: 0, uBoltQty: 0,
-  unistrutChannelQty: 0, angleBarQty: 0,
+  bends90: 0, equipmentConnections: 1, mounting: 'clamp',
+  lqtMeters: null, straightConnectorQty: null, caddyClampQty: null, uBoltQty: null,
+  unistrutChannelQty: null, angleBarQty: null,
 });
+
+export type AccessoryField = 'lqtMeters' | 'straightConnectorQty' | 'caddyClampQty' | 'uBoltQty' | 'unistrutChannelQty' | 'angleBarQty';
 
 // Fixed set of material "slots" this calculator knows how to price and
 // insert — pipe/LQT/Straight Connector/Caddy Clamp/U Bolt each split by size,
@@ -103,9 +120,69 @@ export function pipesNeeded(lengthMeters: number): number {
   const m = Math.max(0, lengthMeters || 0);
   return m > 0 ? Math.ceil(m / PIPE_LENGTH_M) : 0;
 }
-export function junctionBoxesNeeded(lengthMeters: number): number {
+// A junction box every 3 pipes (9 m), and — PEC 2017 Art. 3.42 (IMC, "not
+// more than the equivalent of four quarter bends (360° total) between pull
+// points") — enough boxes that no box-to-box segment carries more than four
+// 90° bends.
+export function junctionBoxesNeeded(lengthMeters: number, bends90 = 0): number {
   const m = Math.max(0, lengthMeters || 0);
-  return m > 0 ? Math.ceil(m / JUNCTION_SPACING_M) : 0;
+  if (m <= 0) return 0;
+  return Math.max(Math.ceil(m / JUNCTION_SPACING_M), Math.ceil(Math.max(0, bends90 || 0) / MAX_QUARTER_BENDS));
+}
+
+// ── PEC 2017 accessory rules ─────────────────────────────────────────────
+// IMC, Art. 3.42 (same as NEC 342.30): secured within 900 mm of every box /
+// termination, and supported at intervals not exceeding 3.0 m.
+export const PEC_SUPPORT_FROM_BOX_M = 0.9;
+export const PEC_MAX_SUPPORT_SPACING_M = 3.0;
+const MAX_QUARTER_BENDS = 4;
+// LFMC ("LQT"), Art. 3.50 (NEC 350.30 exception): up to 900 mm at a terminal
+// where flexibility is needed may be left unsupported — the usual equipment drop.
+export const PEC_LQT_PER_CONNECTION_M = 0.9;
+// Site practice (not PEC) for the support hardware — change here if the crew
+// cuts differently.
+export const UNISTRUT_PER_SUPPORT_M = 0.3;   // one short channel piece per support point
+export const UNISTRUT_STICK_M = 3.0;         // slotted channel, 3 m (10 ft) stock
+export const ANGLE_BAR_PER_SUPPORT_M = 0.6;  // one 1" angle bracket per support point
+export const ANGLE_BAR_STICK_M = 6.0;        // 6 m (20 ft) stock
+
+/** Supports along one box-to-box segment: one within 0.9 m of each end, none more than 3 m apart. */
+export function supportsPerSegment(segmentM: number): number {
+  const s = Math.max(0, segmentM || 0);
+  if (s <= 0) return 0;
+  return 1 + Math.ceil(Math.max(0, s - 2 * PEC_SUPPORT_FROM_BOX_M) / PEC_MAX_SUPPORT_SPACING_M);
+}
+
+/** Conduit supports a run needs under PEC — per segment between its junction boxes. */
+export function supportsNeeded(lengthMeters: number, bends90 = 0): number {
+  const segments = junctionBoxesNeeded(lengthMeters, bends90);
+  if (segments === 0) return 0;
+  return segments * supportsPerSegment(lengthMeters / segments);
+}
+
+/** PEC-computed accessory quantities for a run (before any per-run override). */
+export function pecAccessories(e: Pick<InstallationWorkEntry, 'lengthMeters' | 'bends90' | 'equipmentConnections' | 'mounting'>): Record<AccessoryField, number> {
+  const supports = supportsNeeded(e.lengthMeters, e.bends90);
+  const conns = Math.max(0, Math.round(e.equipmentConnections || 0));
+  const onUnistrut = e.mounting === 'unistrut';
+  return {
+    lqtMeters: Math.round(conns * PEC_LQT_PER_CONNECTION_M * 10) / 10,
+    straightConnectorQty: conns * 2, // one at each end of every LQT piece
+    caddyClampQty: onUnistrut ? 0 : supports,
+    uBoltQty: onUnistrut ? supports : 0,
+    unistrutChannelQty: onUnistrut && supports > 0 ? Math.ceil((supports * UNISTRUT_PER_SUPPORT_M) / UNISTRUT_STICK_M) : 0,
+    angleBarQty: onUnistrut && supports > 0 ? Math.ceil((supports * ANGLE_BAR_PER_SUPPORT_M) / ANGLE_BAR_STICK_M) : 0,
+  };
+}
+
+/** Accessory quantities actually used: the override where set, else the PEC figure. */
+export function effectiveAccessories(e: InstallationWorkEntry): Record<AccessoryField, number> {
+  const auto = pecAccessories(e);
+  const pick = (k: AccessoryField) => (e[k] ?? auto[k]);
+  return {
+    lqtMeters: pick('lqtMeters'), straightConnectorQty: pick('straightConnectorQty'), caddyClampQty: pick('caddyClampQty'),
+    uBoltQty: pick('uBoltQty'), unistrutChannelQty: pick('unistrutChannelQty'), angleBarQty: pick('angleBarQty'),
+  };
 }
 
 // Quantities a single run contributes, keyed by material slot. Zero/blank
@@ -114,15 +191,16 @@ export function computeEntryQuantities(e: InstallationWorkEntry): Partial<Record
   const suffix = sizeSuffix(e.pipeSize);
   const out: Partial<Record<MaterialSlotKey, number>> = {};
   const pipes = pipesNeeded(e.lengthMeters);
-  const junctions = junctionBoxesNeeded(e.lengthMeters);
+  const junctions = junctionBoxesNeeded(e.lengthMeters, e.bends90);
+  const a = effectiveAccessories(e);
   if (pipes > 0) out[`pipe_${suffix}` as MaterialSlotKey] = pipes;
   if (junctions > 0) out.junctionBox = junctions;
-  if (e.lqtMeters > 0) out[`lqt_${suffix}` as MaterialSlotKey] = e.lqtMeters;
-  if (e.straightConnectorQty > 0) out[`straightConnector_${suffix}` as MaterialSlotKey] = e.straightConnectorQty;
-  if (e.caddyClampQty > 0) out[`caddyClamp_${suffix}` as MaterialSlotKey] = e.caddyClampQty;
-  if (e.uBoltQty > 0) out[`uBolt_${suffix}` as MaterialSlotKey] = e.uBoltQty;
-  if (e.unistrutChannelQty > 0) out.unistrutChannel = e.unistrutChannelQty;
-  if (e.angleBarQty > 0) out.angleBar_1 = e.angleBarQty;
+  if (a.lqtMeters > 0) out[`lqt_${suffix}` as MaterialSlotKey] = a.lqtMeters;
+  if (a.straightConnectorQty > 0) out[`straightConnector_${suffix}` as MaterialSlotKey] = a.straightConnectorQty;
+  if (a.caddyClampQty > 0) out[`caddyClamp_${suffix}` as MaterialSlotKey] = a.caddyClampQty;
+  if (a.uBoltQty > 0) out[`uBolt_${suffix}` as MaterialSlotKey] = a.uBoltQty;
+  if (a.unistrutChannelQty > 0) out.unistrutChannel = a.unistrutChannelQty;
+  if (a.angleBarQty > 0) out.angleBar_1 = a.angleBarQty;
   return out;
 }
 
@@ -137,4 +215,51 @@ export function aggregateEntries(entries: InstallationWorkEntry[]): Partial<Reco
     }
   }
   return totals;
+}
+
+// ── Pricing from the materials catalog ───────────────────────────────────
+// Each slot's item in the IOCT Electrical Materials pricelist
+// (pricelist_items, see scripts/import-pricelist-materials.js), by catalog no.
+export const SLOT_CATALOG_NO: Record<MaterialSlotKey, string> = {
+  pipe_half: 'IMC-0.5', pipe_3q: 'IMC-0.75', pipe_1: 'IMC-1',
+  junctionBox: 'JBOX-4X4',
+  lqt_half: 'LQT-0.5', lqt_3q: 'LQT-0.75', lqt_1: 'LQT-1',
+  straightConnector_half: 'LQTCON-0.5', straightConnector_3q: 'LQTCON-0.75', straightConnector_1: 'LQTCON-1',
+  caddyClamp_half: 'CADDY-0.5', caddyClamp_3q: 'CADDY-0.75', caddyClamp_1: 'CADDY-1',
+  uBolt_half: 'UBOLT-0.5', uBolt_3q: 'UBOLT-0.75', uBolt_1: 'UBOLT-1',
+  unistrutChannel: 'UNISTRUT-SLOT',
+  angleBar_1: 'ANGLEBAR-1',
+};
+
+export interface CatalogPriceItem { catalogNo: string; description: string; brand?: string; sellingPrice: number; pricelistDate?: string }
+
+export interface SlotPrice {
+  unitCost: number;
+  brand: string;
+  partNo: string;
+  /** 'preset' = Presets → Installation Materials; 'catalog' = materials pricelist; 'none' = not priced. */
+  source: 'preset' | 'catalog' | 'none';
+  catalogItem?: CatalogPriceItem;
+}
+
+/**
+ * Unit price for a slot: a price set on Presets → Installation Materials wins
+ * (a deliberate company override); otherwise the catalog item for the slot
+ * (newest pricelist if the catalog number appears more than once).
+ */
+export function resolveSlotPrice(
+  key: MaterialSlotKey,
+  presets: Record<string, InstallMaterialPrice | undefined>,
+  catalog: CatalogPriceItem[],
+): SlotPrice {
+  const preset = presets[key];
+  const code = SLOT_CATALOG_NO[key].toUpperCase();
+  const item = catalog
+    .filter((c) => (c.catalogNo || '').toUpperCase() === code && (c.sellingPrice || 0) > 0)
+    .sort((a, b) => String(b.pricelistDate || '').localeCompare(String(a.pricelistDate || '')))[0];
+  if (preset && (preset.unitCost || 0) > 0) {
+    return { unitCost: preset.unitCost, brand: preset.brand || item?.brand || '', partNo: item?.catalogNo || '', source: 'preset', catalogItem: item };
+  }
+  if (item) return { unitCost: item.sellingPrice, brand: item.brand || '', partNo: item.catalogNo, source: 'catalog', catalogItem: item };
+  return { unitCost: 0, brand: preset?.brand || '', partNo: '', source: 'none' };
 }

@@ -1,5 +1,6 @@
 import {
   pipesNeeded, junctionBoxesNeeded, computeEntryQuantities, aggregateEntries, blankEntry,
+  supportsPerSegment, supportsNeeded, pecAccessories, resolveSlotPrice, SLOT_CATALOG_NO, MATERIAL_SLOTS,
 } from './installationMaterials';
 
 describe('pipesNeeded / junctionBoxesNeeded', () => {
@@ -36,11 +37,14 @@ describe('computeEntryQuantities', () => {
   });
 
   it('omits zero-quantity accessory slots entirely', () => {
-    const e = { ...blankEntry(), lengthMeters: 30, pipeSize: '1/2"' as const };
+    // Caddy-clamp mounting → no U-bolts / unistrut / angle bar; no equipment → no LQT.
+    const e = { ...blankEntry(), lengthMeters: 30, pipeSize: '1/2"' as const, equipmentConnections: 0 };
     const qs = computeEntryQuantities(e);
     expect(qs.pipe_half).toBe(10);
-    expect(qs.caddyClamp_half).toBeUndefined();
+    expect(qs.uBolt_half).toBeUndefined();
+    expect(qs.unistrutChannel).toBeUndefined();
     expect(qs.straightConnector_half).toBeUndefined();
+    expect(qs.lqt_half).toBeUndefined();
   });
 
   it('Unistrut Channel and Angle Bar are not size-specific', () => {
@@ -70,5 +74,65 @@ describe('aggregateEntries', () => {
 
   it('an empty entry list aggregates to nothing', () => {
     expect(aggregateEntries([])).toEqual({});
+  });
+});
+
+describe('PEC 2017 accessories', () => {
+  it('supports: within 0.9 m of each box, max 3 m apart, per box-to-box segment', () => {
+    expect(supportsPerSegment(9)).toBe(4);   // 9 m segment → 0.9 m, then ≤3 m spacing to 0.9 m from the far box
+    expect(supportsPerSegment(1.5)).toBe(1); // short segment: one support serves both ends
+    expect(supportsNeeded(9)).toBe(4);       // 1 box
+    expect(supportsNeeded(100)).toBe(12 * supportsPerSegment(100 / 12));
+    expect(supportsNeeded(0)).toBe(0);
+  });
+
+  it('more than 4 quarter bends adds pull points', () => {
+    expect(junctionBoxesNeeded(9, 0)).toBe(1);
+    expect(junctionBoxesNeeded(9, 4)).toBe(1);
+    expect(junctionBoxesNeeded(9, 9)).toBe(3); // 9 bends → at least 3 segments of ≤4
+  });
+
+  it('computes every accessory — nothing is optional', () => {
+    const clamp = pecAccessories({ lengthMeters: 30, bends90: 0, equipmentConnections: 2, mounting: 'clamp' });
+    expect(clamp.lqtMeters).toBe(1.8);
+    expect(clamp.straightConnectorQty).toBe(4);
+    expect(clamp.caddyClampQty).toBe(supportsNeeded(30));
+    expect(clamp.uBoltQty).toBe(0);
+    const strut = pecAccessories({ lengthMeters: 30, bends90: 0, equipmentConnections: 1, mounting: 'unistrut' });
+    const sup = supportsNeeded(30);
+    expect(strut.uBoltQty).toBe(sup);
+    expect(strut.caddyClampQty).toBe(0);
+    expect(strut.unistrutChannelQty).toBe(Math.ceil((sup * 0.3) / 3));
+    expect(strut.angleBarQty).toBe(Math.ceil((sup * 0.6) / 6));
+  });
+
+  it('an override replaces the PEC figure; null goes back to it', () => {
+    const e = { ...blankEntry(), lengthMeters: 30, pipeSize: '1/2"' as const };
+    expect(computeEntryQuantities(e).caddyClamp_half).toBe(supportsNeeded(30));
+    expect(computeEntryQuantities({ ...e, caddyClampQty: 7 }).caddyClamp_half).toBe(7);
+    expect(computeEntryQuantities({ ...e, lqtMeters: 0 }).lqt_half).toBeUndefined();
+  });
+});
+
+describe('resolveSlotPrice', () => {
+  const catalog = [
+    { catalogNo: 'IMC-0.5', description: 'IMC Pipe 1/2"', brand: 'Panasonic', sellingPrice: 392.5, pricelistDate: '2026-01' },
+    { catalogNo: 'IMC-0.5', description: 'IMC Pipe 1/2"', brand: 'Panasonic', sellingPrice: 410, pricelistDate: '2026-07' },
+    { catalogNo: 'CADDY-0.5', description: 'Unistrut Caddy Clamp - 1/2"', brand: 'Mcgill', sellingPrice: 16.5 },
+  ];
+  it('uses the catalog price (newest pricelist) when no preset price is set', () => {
+    const p = resolveSlotPrice('pipe_half', {}, catalog);
+    expect(p).toMatchObject({ unitCost: 410, brand: 'Panasonic', partNo: 'IMC-0.5', source: 'catalog' });
+  });
+  it('a preset price wins over the catalog', () => {
+    const p = resolveSlotPrice('caddyClamp_half', { caddyClamp_half: { unitCost: 20, brand: 'Local' } }, catalog);
+    expect(p).toMatchObject({ unitCost: 20, brand: 'Local', source: 'preset' });
+  });
+  it('a ₱0 preset falls through to the catalog; nothing found = not priced', () => {
+    expect(resolveSlotPrice('caddyClamp_half', { caddyClamp_half: { unitCost: 0 } }, catalog).source).toBe('catalog');
+    expect(resolveSlotPrice('uBolt_1', {}, catalog)).toMatchObject({ unitCost: 0, source: 'none' });
+  });
+  it('every material slot has a catalog number', () => {
+    expect(Object.keys(SLOT_CATALOG_NO).sort()).toEqual(MATERIAL_SLOTS.map((s) => s.key).sort());
   });
 });
