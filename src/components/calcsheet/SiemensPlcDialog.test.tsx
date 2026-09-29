@@ -58,7 +58,10 @@ it('adds another CPU model, an HMI by size and a WinCC license — unpriced ones
   const [{ rows }] = submitted(onSubmit);
   expect(rows.find((r) => r.partNo === '6ES7212-1AE40-0XB0')).toMatchObject({ qty: 1, unitCost: 0 });
   expect(rows.find((r) => r.partNo === '6AV2128-3MB06-0AX1')).toMatchObject({ qty: 1, unitCost: 0 });
-  expect(rows.find((r) => /WinCC V8\.1 RC/.test(r.description))).toMatchObject({ qty: 1, uom: 'lic', partNo: '6AV6381-2BP08-1AV0' });
+  // Brand-neutral description on the quotation; the exact item is in the part number.
+  expect(rows.find((r) => r.partNo === '6AV6381-2BP08-1AV0')).toMatchObject({ qty: 1, uom: 'lic', description: 'SCADA runtime & configuration license, 2048 tags' });
+  expect(rows.find((r) => r.partNo === '6ES7212-1AE40-0XB0')?.description).toBe('PLC CPU, compact, PROFINET, on-board 8 DI / 6 DO / 2 AI, 24 V DC powered');
+  rows.forEach((r) => expect(r.description).not.toMatch(/SIMATIC|Siemens|SITOP|WinCC|SCALANCE|WAGO|ET 200/i));
 });
 
 it('redundancy switches to an S7-1500R pair with HF interface modules and managed switches', () => {

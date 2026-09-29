@@ -116,7 +116,8 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
     onSubmit(sections.map((g) => ({
       header: g.header,
       rows: g.rows.map((r): ComponentLine => ({
-        id: id(), code: '', description: r.part.description, brand: r.part.brand ?? 'Siemens', partNo: r.part.partNo,
+        // Brand-neutral description on the quotation; the part number keeps its own column.
+        id: id(), code: '', description: r.part.generic || r.part.description, brand: r.part.brand ?? 'Siemens', partNo: r.part.partNo,
         qty: r.qty, uom: r.part.uom ?? 'pc', unitCost: r.unitCost, forex: 1,
         contingencyPct: productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0,
       })),
