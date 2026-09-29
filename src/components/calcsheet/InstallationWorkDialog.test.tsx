@@ -89,3 +89,24 @@ it('switching to unistrut mounting swaps caddy clamps for U-bolts, channel and a
   expect(Number(field(/unistrut channel slotted \(pc\)/i).value)).toBeGreaterThan(0);
   expect(Number(field(/angle bar 1" \(pc\)/i).value)).toBeGreaterThan(0);
 });
+
+it('recommends and auto-sets the pipe size from the wires (PEC conduit fill)', () => {
+  render(<InstallationWorkDialog open onClose={() => {}} productContingencyPct={0} onSubmit={() => {}} />);
+  const pipe = () => screen.getByRole('combobox', { name: /pipe size/i });
+  // 11 × 12 AWG THHN is one too many for 1/2" IMC (max 10) → 3/4"
+  fireEvent.change(screen.getByLabelText(/qty \(wires\)/i), { target: { value: '11' } });
+  expect(pipe()).toHaveTextContent('3/4"');
+  expect(screen.getByText(/recommended/i)).toHaveTextContent(/3\/4" IMC/);
+
+  // Picking a smaller size by hand keeps it but warns and offers the fix.
+  fireEvent.mouseDown(pipe());
+  fireEvent.click(screen.getByRole('option', { name: '1/2"' }));
+  expect(pipe()).toHaveTextContent('1/2"');
+  expect(screen.getByText(/over PEC limit/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Use 3/4"' }));
+  expect(pipe()).toHaveTextContent('3/4"');
+
+  // Too many for 2" → split the run.
+  fireEvent.change(screen.getByLabelText(/qty \(wires\)/i), { target: { value: '200' } });
+  expect(screen.getByText(/split them into separate runs/i)).toBeInTheDocument();
+});

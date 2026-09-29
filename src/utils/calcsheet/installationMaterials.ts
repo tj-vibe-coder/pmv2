@@ -7,6 +7,8 @@
 // Pure logic only (no React) — see InstallationWorkDialog.tsx for the popup UI
 // and CalcsheetPresets.tsx for where unit pricing is set.
 
+import type { ConductorGroup, Insulation } from './conduitFill';
+
 export type PipeSize = '1/2"' | '3/4"' | '1"' | '1-1/4"' | '1-1/2"' | '2"';
 export const PIPE_SIZES: PipeSize[] = ['1/2"', '3/4"', '1"', '1-1/4"', '1-1/2"', '2"'];
 
@@ -40,7 +42,12 @@ export interface InstallationWorkEntry {
   name: string;
   lengthMeters: number;
   pipeSize: PipeSize;
+  /** true = pipe size follows the PEC conduit-fill recommendation for `conductors`. */
+  pipeSizeAuto: boolean;
   conduitType: ConduitType;
+  /** Wires pulled through this conduit (for sizing it — PEC Chapter 9). */
+  conductors: ConductorGroup[];
+  insulation: Insulation;
   /** 90° bends (or equivalent) along the run — PEC allows at most 360° between pull points. */
   bends90: number;
   /** Equipment / device end connections made with LQT flex. */
@@ -59,7 +66,8 @@ export interface InstallationWorkEntry {
 }
 
 export const blankEntry = (): InstallationWorkEntry => ({
-  id: '', name: '', lengthMeters: 0, pipeSize: '1/2"', conduitType: 'IMC',
+  id: '', name: '', lengthMeters: 0, pipeSize: '1/2"', pipeSizeAuto: true, conduitType: 'IMC',
+  conductors: [{ size: '12', qty: 0 }], insulation: 'THHN',
   bends90: 0, equipmentConnections: 1, mounting: 'clamp',
   couplingQty: null, boxFittingQty: null,
   lqtMeters: null, straightConnectorQty: null, caddyClampQty: null, uBoltQty: null,
