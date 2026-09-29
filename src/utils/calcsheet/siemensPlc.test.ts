@@ -271,6 +271,16 @@ describe('WAGO terminals and wiring', () => {
     expect(siemensPrice(SIEMENS_PARTS.tb2Level, [])).toEqual({ price: 99.41, source: 'quote' });
     expect(siemensPrice(SIEMENS_PARTS.relay, [])).toEqual({ price: 554.69, source: 'quote' });
     expect(SIEMENS_PARTS.wagoEco10).toMatchObject({ partNo: '787-732', price: 5337.3, brand: 'WAGO' });
+    expect(siemensPrice(SIEMENS_PARTS.wireRed, [])).toEqual({ price: 1500, source: 'quote' }); // per 100 m roll
+    expect(siemensPrice(SIEMENS_PARTS.wireBlue, [])).toEqual({ price: 1500, source: 'quote' });
+    expect(SIEMENS_PARTS.ferrule05.description).toBe('0.5mm2 ferrule');
+  });
+
+  it('lines are grouped for Section B: PLC, terminal blocks & relays, wires', () => {
+    const sec = (key: string) => c.lines.find((l) => l.key === key)?.section;
+    expect([sec('cpu1513'), sec('di16'), sec('memCard')]).toEqual(['plc', 'plc', 'plc']);
+    expect([sec('tb2Level'), sec('relay'), sec('tbFuse'), sec('endStop'), sec('dinRail')]).toEqual(['terminals', 'terminals', 'terminals', 'terminals', 'terminals']);
+    expect([sec('wireRed'), sec('wireBlue'), sec('ferrule05')]).toEqual(['wiring', 'wiring', 'wiring']);
   });
 });
 

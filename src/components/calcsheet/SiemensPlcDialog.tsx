@@ -10,9 +10,9 @@ import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import {
   ANALOG_KINDS, DEFAULT_CPU, DEFAULT_PLC_INPUTS, DEFAULT_REDUNDANT_CPU, HMI_LINES, HMI_PANELS, LICENSE_EDITIONS, MEMORY_CARDS, PSU_LINES,
-  REDUNDANCY_OPTIONS, SIEMENS_PARTS, SITOP_OPTIONS, SWITCHES, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuChoices, cpuModel,
+  REDUNDANCY_OPTIONS, SIEMENS_PARTS, SITOP_OPTIONS, SWITCHES, TERMINALS_HEADER, WIRES_HEADER, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuChoices, cpuModel,
   effectiveSwitches, estimate24V, noAnalog, onboardText, siemensPrice,
-  type AnalogKey, type HmiLine, type LicenseEdition, type ModbusMode, type PlcFamily, type PlcInputs, type Redundancy, type ScadaKind,
+  type AnalogKey, type HmiLine, type PlcSection, type LicenseEdition, type ModbusMode, type PlcFamily, type PlcInputs, type Redundancy, type ScadaKind,
   type SwitchType, type WinccLicense,
 } from '../../utils/calcsheet/siemensPlc';
 
@@ -22,11 +22,14 @@ import {
 // quote or a pricelist item, added to B. Supply of Components under a
 // "PLC — SIEMENS …" header. Unpriced items go in at ₱0 marked "for inquiry".
 
+export interface PlcSubmitSection { header: string; rows: ComponentLine[] }
+
 interface Props {
   open: boolean;
   onClose: () => void;
   productContingencyPct: number;
-  onSubmit: (rows: ComponentLine[], header: string) => void;
+  /** One entry per Section B header (PLC, terminal blocks & relays, wires), in that order; empty ones left out. */
+  onSubmit: (sections: PlcSubmitSection[]) => void;
 }
 
 const id = () => nanoid(6);
@@ -62,6 +65,10 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
   const total = rows.reduce((sum, r) => sum + r.lineTotal, 0);
   const inquiry = rows.filter((r) => r.unitCost === 0).length;
   const header = `PLC — SIEMENS ${redundant ? `S7-1500${inp.redundancy}` : inp.family}`;
+  const SECTION_HEADER: Record<PlcSection, string> = { plc: header, terminals: TERMINALS_HEADER, wiring: WIRES_HEADER };
+  const sections = (['plc', 'terminals', 'wiring'] as PlcSection[])
+    .map((sec) => ({ sec, header: SECTION_HEADER[sec], rows: rows.filter((r) => r.section === sec) }))
+    .filter((g) => g.rows.length > 0);
 
   const dec = (k: 'doLoadA' | 'psuMarginPct', label: string, helper?: string) => (
     <TextField
@@ -106,12 +113,14 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
 
   const close = () => { setInp(fresh()); onClose(); };
   const submit = () => {
-    const lines: ComponentLine[] = rows.map((r) => ({
-      id: id(), code: '', description: r.part.description, brand: r.part.brand ?? 'Siemens', partNo: r.part.partNo,
-      qty: r.qty, uom: r.part.uom ?? 'pc', unitCost: r.unitCost, forex: 1,
-      contingencyPct: productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0,
-    }));
-    onSubmit(lines, header);
+    onSubmit(sections.map((g) => ({
+      header: g.header,
+      rows: g.rows.map((r): ComponentLine => ({
+        id: id(), code: '', description: r.part.description, brand: r.part.brand ?? 'Siemens', partNo: r.part.partNo,
+        qty: r.qty, uom: r.part.uom ?? 'pc', unitCost: r.unitCost, forex: 1,
+        contingencyPct: productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0,
+      })),
+    })));
     setInp(fresh());
   };
 
@@ -391,7 +400,13 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {rows.map((r) => (
+                  {sections.flatMap((g) => [
+                    ...(sections.length > 1 ? [(
+                      <TableRow key={`h-${g.sec}`}>
+                        <TableCell colSpan={5} sx={{ fontWeight: 700, bgcolor: 'action.hover', py: 0.5 }}>{g.header}</TableCell>
+                      </TableRow>
+                    )] : []),
+                    ...g.rows.map((r) => (
                     <TableRow key={r.key}>
                       <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                         {r.part.partNo || <Typography variant="body2" color="warning.main">Ask supplier</Typography>}
@@ -410,7 +425,8 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                       </TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{PHP(r.lineTotal)}</TableCell>
                     </TableRow>
-                  ))}
+                    )),
+                  ])}
                   <TableRow>
                     <TableCell colSpan={4} align="right" sx={{ fontWeight: 600 }}>Total{inquiry > 0 ? ` (excl. ${inquiry} for inquiry)` : ''}</TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(total)}</TableCell>

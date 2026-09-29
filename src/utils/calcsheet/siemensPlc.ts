@@ -371,6 +371,8 @@ const MEM_PART_NO: Record<string, string> = { memCard4: '6ES7954-8LC04-0AA0', me
 const WQ = { brand: 'WAGO', quoted: true };
 const W = { brand: 'WAGO', price: 0 };
 export const WIRE_ROLL_M = 100;
+/** ₱ per 100 m roll of 0.5 mm² wire (IOCT price, any colour). */
+export const WIRE_ROLL_PRICE = 1500;
 const TERMINAL_PARTS: SiemensPart[] = [
   { ...WQ, key: 'tb2Level', partNo: '2002-2201', price: 99.41,
     description: 'WAGO double-deck terminal block, through/through, L/L, without marker carrier, for DIN-rail 35 x 15 and 35 x 7.5, 2.5 mm², Push-in CAGE CLAMP, gray (1 per DI)' },
@@ -387,10 +389,10 @@ const TERMINAL_PARTS: SiemensPart[] = [
   { ...WQ, key: 'endStop', partNo: '249-116', price: 51.69, description: 'WAGO screwless end stop, 6 mm wide, for DIN-rail 35 x 15 and 35 x 7.5, gray' },
   { ...WQ, key: 'markers', partNo: '2009-115', price: 2.37, description: 'WAGO WMB-Inline marker for Smart Printer, stretchable 5 - 5.2 mm, plain, snap-on type, white (1 per terminal)' },
   { ...W, verify: true, key: 'dinRail', partNo: '210-113', description: 'WAGO steel DIN rail 35 x 7.5 mm, 1 mm thick, slotted, 2 m length' },
-  { ...W, verify: true, key: 'ferrule05', partNo: '216-201', description: 'WAGO ferrule for 0.5 mm² wire, insulated, white, 8 mm sleeve' },
+  { ...W, verify: true, key: 'ferrule05', partNo: '216-201', description: '0.5mm2 ferrule' },
   { key: 'fuse5x20', brand: '', partNo: '', price: 0, description: 'Miniature glass fuse 5 x 20 mm, 0.5 A fast-acting — for the analog fuse terminals' },
-  { key: 'wireRed', brand: '', partNo: '', price: 0, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), red — +24 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
-  { key: 'wireBlue', brand: '', partNo: '', price: 0, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), blue — 0 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
+  { key: 'wireRed', brand: '', partNo: '', price: WIRE_ROLL_PRICE, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), red — +24 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
+  { key: 'wireBlue', brand: '', partNo: '', price: WIRE_ROLL_PRICE, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), blue — 0 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
 ];
 
 function cpuDescription(m: CpuModel): string {
@@ -503,7 +505,12 @@ export const CHANNELS = { di16: 16, dq16: 16, ai8: 8, ai8u: 8, rtd8: 8, rtd4: 4,
 export const IM_MAX_MODULES = 32;
 export const IM_HF_MAX_MODULES = 64;
 
-export interface PlcLine { key: string; qty: number; why: string }
+/** Which Section B header a line goes under: the PLC, the terminal strip, or the wiring. */
+export type PlcSection = 'plc' | 'terminals' | 'wiring';
+export const TERMINALS_HEADER = 'TERMINAL BLOCKS & RELAYS';
+export const WIRES_HEADER = 'WIRES';
+
+export interface PlcLine { key: string; qty: number; why: string; section: PlcSection }
 
 export interface PlcChannels { needed: number; provided: number }
 
@@ -623,7 +630,7 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   const netSwitch = sw.qty > 0 ? (ofType.find((s) => s.ports >= portsPerSwitch) ?? ofType[ofType.length - 1]) : null;
 
   const lines: PlcLine[] = [];
-  const add = (key: string, qty: number, why: string) => { if (qty > 0 && SIEMENS_PARTS[key]) lines.push({ key, qty, why }); };
+  const add = (key: string, qty: number, why: string, section: PlcSection = 'plc') => { if (qty > 0 && SIEMENS_PARTS[key]) lines.push({ key, qty, why, section }); };
   const hasOnboard = cpu.onboard.di + cpu.onboard.do + cpu.onboard.ai + cpu.onboard.ao > 0;
   if (cpu.redundancy === 'H') add(cpu.key, 1, 'Redundant pair — 2 CPUs + sync modules + sync cables in one bundle');
   else if (cpu.redundancy === 'R') add(cpu.key, 2, 'Redundant pair — primary + backup CPU');
@@ -703,22 +710,22 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
     const ferrules = Math.ceil(((redWires + blueWires) * 2 * 1.1) / 100) * 100;
     wiring = { redWires, blueWires, runM, redM, blueM, terminals, railMm };
 
-    add('tb2Level', di, '1 double-deck terminal per DI (incl. spare)');
-    add('tb2LevelEnd', tb2End, 'Closes the DI terminal group');
-    add('relay', dq, '1 slim relay per DO (incl. spare)');
-    add('relayJumper', relayJumpers, `Bridges the relay coil commons (A2 → 0 V), ${relayGroups} group${relayGroups === 1 ? '' : 's'} of up to 16`);
-    add('tbFuse', fused, `Analog: 1 per 2-wire point (${a2}), 2 per 4-wire point (${a4})`);
-    add('fuse5x20', fused, 'Fuse insert for each fuse terminal');
-    add('tbStd', std + 2 * distPoints, `Analog: 1 per 2-wire point, 2 per 4-wire point (${std}); +24 V / 0 V distribution for CPU, stations, panels, switches and the PSU feed (${2 * distPoints})`);
-    add('tbPe', pe, 'PSU earth and DIN-rail / shield earth');
-    add('tbStdEnd', stdEnd, 'Closes the distribution group (fuse terminals carry their own end plate)');
-    add('jumper10', diJumpers + distJumpers, `Shorting links: DI 24 V level (${diJumpers}), +24 V / 0 V distribution (${distJumpers})`);
-    add('endStop', endStops, `2 per terminal group (${groups} groups)`);
-    add('markers', terminals, '1 marker per terminal / relay');
-    add('dinRail', Math.ceil(railMm / 2000), `≈ ${(railMm / 1000).toFixed(1)} m of rail for terminals, relays and ET 200SP (+20%)`);
-    add('wireRed', Math.ceil(redM / WIRE_ROLL_M), `0.5 mm² red (+24 V DC): ${redWires} wires × ${runM} m ≈ ${redM} m`);
-    add('wireBlue', Math.ceil(blueM / WIRE_ROLL_M), `0.5 mm² blue (0 V DC): ${blueWires} wires × ${runM} m ≈ ${blueM} m`);
-    add('ferrule05', ferrules, 'Both ends of every 0.5 mm² wire (+10%)');
+    add('tb2Level', di, '1 double-deck terminal per DI (incl. spare)', 'terminals');
+    add('tb2LevelEnd', tb2End, 'Closes the DI terminal group', 'terminals');
+    add('relay', dq, '1 slim relay per DO (incl. spare)', 'terminals');
+    add('relayJumper', relayJumpers, `Bridges the relay coil commons (A2 → 0 V), ${relayGroups} group${relayGroups === 1 ? '' : 's'} of up to 16`, 'terminals');
+    add('tbFuse', fused, `Analog: 1 per 2-wire point (${a2}), 2 per 4-wire point (${a4})`, 'terminals');
+    add('fuse5x20', fused, 'Fuse insert for each fuse terminal', 'terminals');
+    add('tbStd', std + 2 * distPoints, `Analog: 1 per 2-wire point, 2 per 4-wire point (${std}); +24 V / 0 V distribution for CPU, stations, panels, switches and the PSU feed (${2 * distPoints})`, 'terminals');
+    add('tbPe', pe, 'PSU earth and DIN-rail / shield earth', 'terminals');
+    add('tbStdEnd', stdEnd, 'Closes the distribution group (fuse terminals carry their own end plate)', 'terminals');
+    add('jumper10', diJumpers + distJumpers, `Shorting links: DI 24 V level (${diJumpers}), +24 V / 0 V distribution (${distJumpers})`, 'terminals');
+    add('endStop', endStops, `2 per terminal group (${groups} groups)`, 'terminals');
+    add('markers', terminals, '1 marker per terminal / relay', 'terminals');
+    add('dinRail', Math.ceil(railMm / 2000), `≈ ${(railMm / 1000).toFixed(1)} m of rail for terminals, relays and ET 200SP (+20%)`, 'terminals');
+    add('wireRed', Math.ceil(redM / WIRE_ROLL_M), `0.5 mm² red (+24 V DC): ${redWires} wires × ${runM} m ≈ ${redM} m`, 'wiring');
+    add('wireBlue', Math.ceil(blueM / WIRE_ROLL_M), `0.5 mm² blue (0 V DC): ${blueWires} wires × ${runM} m ≈ ${blueM} m`, 'wiring');
+    add('ferrule05', ferrules, 'Both ends of every 0.5 mm² wire (+10%)', 'wiring');
   }
 
   const notes: string[] = [];
