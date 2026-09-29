@@ -27,13 +27,13 @@ describe('enclosure, wireduct and DIN rail from the panel size', () => {
 describe('cooling', () => {
   it('fan airflow from heat loss minus what the walls dissipate', () => {
     // A = 1.8·1.2·1.1 + 1.4·0.8·0.3 = 2.712 m² → 5.5 × 2.712 × 10 ≈ 149 W through the walls
-    expect(cfg({ heatLossW: 150 }).airflow).toBe(0);
-    const hot = cfg({ heatLossW: 600 });
+    expect(cfg({ heatAuto: false, heatLossW: 150 }).airflow).toBe(0);
+    const hot = cfg({ heatAuto: false, heatLossW: 600 });
     expect(hot.airflow).toBe(140);        // 3.1 × (600 − 149) / 10
     expect(qty(hot, 'fan200')).toBe(1);
     expect(qty(hot, 'fan200Exhaust')).toBe(1);
     expect(qty(hot, 'thermostat')).toBe(1);
-    expect(qty(cfg({ heatLossW: 150 }), 'fan120')).toBe(1); // one fan anyway (hot ambient)
+    expect(qty(cfg({ heatAuto: false, heatLossW: 150 }), 'fan120')).toBe(1); // one fan anyway (hot ambient)
   });
 });
 
@@ -103,5 +103,27 @@ describe('main MCB auto-sized from the 230 V load', () => {
     const c = cfg({ mainA: 6 });
     expect(c.mainA).toBe(6);
     expect(c.notes.join(' ')).toMatch(/not above the largest 6 A branch/);
+  });
+});
+
+describe('heat load from the components', () => {
+  it('adds controller electronics, supply losses, relay coils, breakers and an allowance', () => {
+    const c = cfg({ io: io({ di: 20, dq: 10, electronicsW: 60, load24A: 8 }) });
+    // 60 + 8 × 24 × (1/0.9 − 1) = 21.3 + 10 × 0.2 = 2 + 3 breakers + 10 allowance
+    expect(c.heatAutoW).toBe(96);
+    expect(c.heatW).toBe(96);
+    expect(c.heatSources.map((h) => h.w)).toEqual([60, 21.3, 2, 3, 10]);
+  });
+
+  it('without a PLC / BMS config, assumes the supplies are ~60% loaded', () => {
+    // 1 × 10 A × 0.6 = 6 A → 16 W loss + 3 breakers + 10
+    expect(cfg({}).heatAutoW).toBe(29);
+  });
+
+  it('a big heat load sizes the fans; a typed figure overrides the estimate', () => {
+    const c = cfg({ io: io({ electronicsW: 500, load24A: 20 }) });
+    expect(c.airflow).toBeGreaterThan(100);
+    expect(qty(c, 'fan200')).toBe(1);
+    expect(cfg({ heatAuto: false, heatLossW: 40, io: io({ electronicsW: 500 }) }).heatW).toBe(40);
   });
 });

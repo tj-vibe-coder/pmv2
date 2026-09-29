@@ -89,7 +89,9 @@ export interface PanelInputs {
   depthMm: number;
   /** 'auto' = floor-standing from 1400 mm high. */
   mounting: 'auto' | 'wall' | 'floor';
-  /** Heat given off inside the panel (W) — PSU losses, CPU, modules, relays. */
+  /** Estimate the heat from the components (true), or use heatLossW. */
+  heatAuto: boolean;
+  /** Heat given off inside the panel (W) when entered by hand. */
   heatLossW: number;
   /** Allowed rise inside over ambient (K). */
   deltaT: number;
@@ -110,7 +112,7 @@ export interface PanelInputs {
 export const emptyPanelIo = (): PanelIo => ({ source: '', di: 0, dq: 0, a2: 0, a4: 0, distPoints: 1, deviceRailMm: 0 });
 
 export const DEFAULT_PANEL_INPUTS: PanelInputs = {
-  widthMm: 800, heightMm: 1200, depthMm: 300, mounting: 'auto', heatLossW: 150, deltaT: 10,
+  widthMm: 800, heightMm: 1200, depthMm: 300, mounting: 'auto', heatAuto: true, heatLossW: 150, deltaT: 10,
   io: emptyPanelIo(), terminals: true, psuQty: 1, psuA: 10, extraCircuits: 0, extraLoadA: 5, mainA: 'auto', socket: false,
 };
 
@@ -131,6 +133,10 @@ export interface PanelConfig {
   railLayoutMm: number;
   railNeededMm: number;
   airflow: number;
+  /** Heat used for the fans (W), the auto estimate and its breakdown. */
+  heatW: number;
+  heatAutoW: number;
+  heatSources: { label: string; w: number }[];
   /** 230 V load (A), before and after the 25% margin, and the main breaker picked. */
   loadA: number;
   mainA: McbRating;
@@ -175,16 +181,40 @@ export function configurePanel(raw: PanelInputs): PanelConfig {
   const railLayoutMm = rows * plate.w;
   add('panelRail', sticks(rows, plate.w), `${rows} rail rows × ${plate.w} mm`);
 
+  // 230 V circuits (one 2P breaker each) — needed for the heat estimate too.
+  const psuQty = whole(raw.psuQty);
+  const circuits = [
+    { n: psuQty, a: 6 as McbRating, what: '24 V DC supply' },
+    { n: 1, a: 6 as McbRating, what: 'fans, thermostat and panel light' },
+    { n: raw.socket ? 1 : 0, a: 16 as McbRating, what: 'service socket' },
+    { n: whole(raw.extraCircuits), a: 10 as McbRating, what: 'other 230 V load' },
+  ].filter((c) => c.n > 0);
+  const branches = circuits.reduce((s, c) => s + c.n, 0);
+
+  // Heat inside the panel: auto from the components, or as entered.
+  const psuA = Math.max(0, Number(raw.psuA) || 0);
+  const load24A = io.load24A ?? psuQty * psuA * 0.6; // unknown load → assume supplies ~60% loaded
+  const heatSources = [
+    { label: 'Controller electronics (CPU, I/O modules, switches, HMI)', w: io.electronicsW ?? 0 },
+    { label: `24 V supply losses (${Math.round(load24A * 10) / 10} A at ~90% efficiency)`, w: load24A * 24 * (1 / 0.9 - 1) },
+    { label: `Slim relay coils (${io.dq} × 0.2 W)`, w: io.dq * 0.2 },
+    { label: `Circuit breakers (${1 + branches} × ~1 W)`, w: 1 + branches },
+    { label: 'Control transformer losses', w: io.transformerW ?? 0 },
+    { label: 'Terminals, fuse LEDs, wiring (allowance)', w: 10 },
+  ].filter((h) => h.w > 0).map((h) => ({ ...h, w: Math.round(h.w * 10) / 10 }));
+  const heatAutoW = Math.round(heatSources.reduce((sum, h) => sum + h.w, 0));
+  const heatW = raw.heatAuto ? heatAutoW : Math.max(0, Number(raw.heatLossW) || 0);
+
   // Heat: fans + exhaust filters, thermostat
   const dT = Math.max(1, Number(raw.deltaT) || 10);
   const area = 1.8 * (H / 1000) * ((W + D) / 1000) + 1.4 * (W / 1000) * (D / 1000);
   const qSurface = 5.5 * area * dT;
-  const airflow = Math.max(0, Math.round((3.1 * (Math.max(0, Number(raw.heatLossW) || 0) - qSurface)) / dT));
+  const airflow = Math.max(0, Math.round((3.1 * (heatW - qSurface)) / dT));
   const fan = FANS.find((f) => f.airflow >= airflow) ?? FANS[FANS.length - 1];
   const fanQty = airflow > 0 ? Math.max(1, Math.ceil(airflow / fan.airflow)) : 1;
   add(fan.key, fanQty, airflow > 0
-    ? `${raw.heatLossW} W inside, ${Math.round(qSurface)} W through the walls at ΔT ${dT} K → ≈ ${airflow} m³/h`
-    : `The walls dissipate the ${raw.heatLossW} W at ΔT ${dT} K — one fan for hot ambient / sun`);
+    ? `${heatW} W inside${raw.heatAuto ? ' (auto)' : ''}, ${Math.round(qSurface)} W through the walls at ΔT ${dT} K → ≈ ${airflow} m³/h`
+    : `The walls dissipate the ${heatW} W${raw.heatAuto ? ' (auto)' : ''} at ΔT ${dT} K — one fan for hot ambient / sun`);
   add(`${fan.key}Exhaust`, fanQty, 'One exhaust filter per fan (top of the opposite side)');
   add('thermostat', 1, 'Switches the fans');
 
@@ -194,14 +224,6 @@ export function configurePanel(raw: PanelInputs): PanelConfig {
   add('socket', raw.socket ? 1 : 0, 'Service outlet for a laptop / tools');
 
   // 230 V: main 2P + a 2P MCB per circuit
-  const psuQty = whole(raw.psuQty);
-  const circuits = [
-    { n: psuQty, a: 6 as McbRating, what: '24 V DC supply' },
-    { n: 1, a: 6 as McbRating, what: 'fans, thermostat and panel light' },
-    { n: raw.socket ? 1 : 0, a: 16 as McbRating, what: 'service socket' },
-    { n: whole(raw.extraCircuits), a: 10 as McbRating, what: 'other 230 V load' },
-  ].filter((c) => c.n > 0);
-  const branches = circuits.reduce((s, c) => s + c.n, 0);
   // 230 V load: supplies at ~88% efficiency, fans ~0.3 A, lights ~0.1 A,
   // socket counted at 10 A, other loads as entered.
   const loadA = Math.round((
@@ -268,5 +290,5 @@ export function configurePanel(raw: PanelInputs): PanelConfig {
   if (airflow > FANS[FANS.length - 1].airflow) notes.push(`≈ ${airflow} m³/h is more than one ${FANS[FANS.length - 1].sizeMm} mm fan — ${fanQty} fans, or consider a panel air conditioner.`);
   notes.push('230 V circuits are 2-pole (L1 / L2) — 1.5 mm² white for L1, black for L2.');
 
-  return { lines, floor, doors, plate, rows, railLayoutMm, railNeededMm, airflow, loadA, mainA, wiring, wires15, notes };
+  return { lines, floor, doors, plate, rows, railLayoutMm, railNeededMm, airflow, heatW, heatAutoW, heatSources, loadA, mainA, wiring, wires15, notes };
 }

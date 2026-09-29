@@ -127,6 +127,12 @@ export interface PanelIo {
   /** 24 V DC supply picked in the PLC / BMS configurator: output rating (A) and count. */
   psuA?: number;
   psuQty?: number;
+  /** Heat the controller electronics give off inside the panel (W): CPU, I/O modules, switches, HMI. */
+  electronicsW?: number;
+  /** 24 V DC load actually drawn (A), for the supply losses. */
+  load24A?: number;
+  /** Control transformer losses (W), e.g. the 24 V AC transformer of a BMS panel. */
+  transformerW?: number;
 }
 
 export type StripSection = 'terminals' | 'wiring';

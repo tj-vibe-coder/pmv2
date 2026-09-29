@@ -28,6 +28,9 @@ it('configures an S7-1500 with Modbus RTU and adds the priced modules under a PL
   // Terminals + wiring are added by the Control Panel dialog, which gets this I/O.
   expect(sections.map((g) => g.header)).toEqual(['PLC — SIEMENS S7-1500']);
   expect(usePanelIoStore.getState().io).toMatchObject({ source: 'Siemens S7-1500', di: 44, a2: 7 });
+  // Heat for the Control Panel's fans: CPU + IM + modules at 24 V (field loads excluded)
+  expect(usePanelIoStore.getState().io?.electronicsW).toBeGreaterThan(20);
+  expect(usePanelIoStore.getState().io?.load24A).toBeGreaterThan(0);
   const rows = sections[0].rows;
   const byPart = Object.fromEntries(rows.map((r) => [r.partNo, r]));
   expect(byPart['6ES7513-1AM03-0AB0']).toMatchObject({ qty: 1, unitCost: 124083.35, brand: 'Siemens' });

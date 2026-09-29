@@ -334,6 +334,10 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
     distPoints: qty + txs + swQty + (psu ? 1 : 0) + 1,
     deviceRailMm: qty * 200 + (modules + txs) * 64,
     ...(psu ? { psuA: psu.ratingA, psuQty: 1 } : {}),
+    // Planning figures: ~8 W per automation station, ~1.2 W per TX-I/O module,
+    // ~3 W per TXS1.12F10; the 24 V AC transformer loses ~10% of its load.
+    electronicsW: Math.round(qty * 8 + modules * 1.2 + txs * 3),
+    transformerW: Math.round((qty * 25 + txs * 50) * 0.1),
   };
   if (inp.terminals && need.di + need.do + a2 + a4 > 0) {
     const strip = terminalStrip({
