@@ -9,7 +9,7 @@ it('configures an S7-1500 with Modbus RTU and adds the priced modules under a PL
   render(<SiemensPlcDialog open onClose={() => {}} productContingencyPct={5} onSubmit={onSubmit} />);
   fireEvent.click(screen.getByRole('button', { name: /S7-1500/ }));
   fireEvent.change(screen.getByLabelText(/^DI/), { target: { value: '40' } });   // +10% → 44 → 3 × DI16
-  fireEvent.change(screen.getByLabelText(/^AI/), { target: { value: '6' } });    // +10% → 7 → 1 × AI8
+  fireEvent.change(screen.getByLabelText('AI 4–20 mA 2-wire'), { target: { value: '6' } });    // +10% → 7 → 1 × AI8
   fireEvent.mouseDown(screen.getByRole('combobox', { name: /modbus/i }));
   fireEvent.click(screen.getByRole('option', { name: /Modbus RTU/ }));
   fireEvent.change(screen.getByLabelText(/RS-485 ports/i), { target: { value: '2' } });
@@ -46,13 +46,28 @@ it('adds another CPU model, an HMI by size and a WinCC license — unpriced ones
   fireEvent.click(screen.getByRole('option', { name: /12" — MTP1200/ }));
   fireEvent.mouseDown(screen.getByRole('combobox', { name: /SCADA license/i }));
   fireEvent.click(screen.getByRole('option', { name: /WinCC V8\.1/ }));
-  fireEvent.mouseDown(screen.getByRole('combobox', { name: /Edition/i }));
-  fireEvent.click(screen.getByRole('option', { name: /Asia edition/ }));
   expect(screen.getAllByText('For inquiry').length).toBe(3);                  // CPU, HMI, WinCC
+  expect(screen.getByText('Ask supplier')).toBeInTheDocument();                // WinCC part no.
 
   fireEvent.click(screen.getByRole('button', { name: /to components/i }));
   const [rows] = onSubmit.mock.calls[0] as [Array<{ partNo: string; description: string; qty: number; unitCost: number; uom: string }>];
   expect(rows.find((r) => r.partNo === '6ES7212-1AE40-0XB0')).toMatchObject({ qty: 1, unitCost: 0 });
   expect(rows.find((r) => r.partNo === '6AV2128-3MB06-0AX1')).toMatchObject({ qty: 1, unitCost: 0 });
-  expect(rows.find((r) => /WinCC V8\.1 RC/.test(r.description))).toMatchObject({ qty: 1, uom: 'lic', partNo: '6AV6381-2BP08-1AV0' });
+  expect(rows.find((r) => /WinCC V8\.1 RC/.test(r.description))).toMatchObject({ qty: 1, uom: 'lic', partNo: '' });
+});
+
+it('redundancy switches to an S7-1500R pair with HF interface modules and managed switches', () => {
+  const onSubmit = jest.fn();
+  render(<SiemensPlcDialog open onClose={() => {}} productContingencyPct={0} onSubmit={onSubmit} />);
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /redundancy/i }));
+  fireEvent.click(screen.getByRole('option', { name: /S7-1500R/ }));
+  fireEvent.change(screen.getByLabelText(/^DI/), { target: { value: '16' } });
+  fireEvent.click(screen.getByRole('button', { name: /to components/i }));
+  const [rows, header] = onSubmit.mock.calls[0] as [Array<{ partNo: string; qty: number; brand: string }>, string];
+  expect(header).toBe('PLC — SIEMENS S7-1500R');
+  const byPart = Object.fromEntries(rows.map((r) => [r.partNo, r]));
+  expect(byPart['6ES7513-1RM03-0AB0']).toMatchObject({ qty: 2 });
+  expect(byPart['6ES7155-6AU30-0CN0']).toMatchObject({ qty: 1 });
+  expect(byPart['6GK5208-0BA00-2AC2']).toMatchObject({ qty: 2 });
+  expect(byPart['2002-2201']).toMatchObject({ brand: 'WAGO' });              // 2-level terminals for the DI
 });
