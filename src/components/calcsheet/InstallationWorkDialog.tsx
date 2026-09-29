@@ -11,7 +11,7 @@ import { usePricelistStore } from '../../store/pricelistStore';
 import type { ComponentLine } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
-import { INSULATIONS, WIRE_SIZES, conduitFill, type ConductorGroup, type Insulation, type WireSize } from '../../utils/calcsheet/conduitFill';
+import { INSULATIONS, WIRE_SIZES, capacityBySize, conduitFill, type ConductorGroup, type Insulation, type WireSize } from '../../utils/calcsheet/conduitFill';
 import {
   PIPE_SIZES, CONDUIT_TYPES, materialSlotByKey, boxSlotFor, blankEntry, pipesNeeded, junctionBoxesNeeded, supportsNeeded,
   computeEntryQuantities, aggregateEntries, pecAccessories, effectiveAccessories, resolveSlotPrice,
@@ -174,7 +174,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
               error={overFill}
               helperText={fill
                 ? (form.pipeSizeAuto ? `Auto — ${fillPct(fill.fillOf(form.pipeSize))} fill` : `${fillPct(fill.fillOf(form.pipeSize))} fill${overFill ? ' — over PEC limit' : ''}`)
-                : 'Add wires below to auto-size'}
+                : 'Add cables below to auto-size'}
             >
               {PIPE_SIZES.map((sz) => <MenuItem key={sz} value={sz}>{sz}</MenuItem>)}
             </TextField>
@@ -190,7 +190,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
           {/* Wires → PEC Chapter 9 conduit fill → recommended pipe size */}
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>Wires in this conduit</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>Cables in this conduit</Typography>
               <Typography variant="caption" color="text.secondary">— sizes the pipe per PEC 2017 Chapter 9 (conduit fill)</Typography>
               <Box sx={{ flexGrow: 1 }} />
               <TextField
@@ -201,28 +201,51 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
               </TextField>
             </Stack>
             {form.conductors.map((g, i) => (
-              <Stack key={i} direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                <TextField
-                  select size="small" label="Wire size" value={g.size} sx={{ width: 220 }}
-                  onChange={(e) => setConductor(i, { size: e.target.value as WireSize })}
-                >
-                  {WIRE_SIZES.map((w) => <MenuItem key={w.value} value={w.value}>{w.label}</MenuItem>)}
-                </TextField>
-                <TextField
-                  size="small" label="Qty (wires)" type="text" inputMode="numeric" sx={{ width: 120 }}
-                  value={g.qty || ''} placeholder="0"
-                  onChange={(e) => setConductor(i, { qty: Math.max(0, Math.round(parseLenientFloat(e.target.value))) })}
-                />
-                {form.conductors.length > 1 && (
-                  <IconButton size="small" onClick={() => setField('conductors', form.conductors.filter((_, j) => j !== i))}>
-                    <DeleteOutlineIcon fontSize="small" />
-                  </IconButton>
-                )}
-              </Stack>
+              <Box key={i} sx={{ mb: 1.25 }}>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <TextField
+                    select size="small" label="Cable size" value={g.size} sx={{ width: 220 }}
+                    onChange={(e) => setConductor(i, { size: e.target.value as WireSize })}
+                  >
+                    {WIRE_SIZES.map((w) => <MenuItem key={w.value} value={w.value}>{w.label}</MenuItem>)}
+                  </TextField>
+                  <TextField
+                    size="small" label="Cables QTY" type="text" inputMode="numeric" sx={{ width: 120 }}
+                    value={g.qty || ''} placeholder="0"
+                    onChange={(e) => setConductor(i, { qty: Math.max(0, Math.round(parseLenientFloat(e.target.value))) })}
+                  />
+                  {form.conductors.length > 1 && (
+                    <IconButton size="small" onClick={() => setField('conductors', form.conductors.filter((_, j) => j !== i))}>
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
+                  )}
+                </Stack>
+                {/* How many of this cable each pipe size can take (PEC Ch. 9 / Annex C) */}
+                <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 0.75 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
+                    Max {WIRE_SIZES.find((w) => w.value === g.size)?.label.split(' (')[0]} cables per {form.conduitType} pipe:
+                  </Typography>
+                  {capacityBySize(g.size, form.insulation, form.conduitType).map(({ pipe, max }) => {
+                    const current = pipe === form.pipeSize;
+                    const tooSmall = g.qty > 0 && max < g.qty;
+                    return (
+                      <Tooltip key={pipe} title={`${pipe} ${form.conduitType} holds up to ${max} × ${g.size} AWG ${form.insulation === 'THHN' ? 'THHN' : 'THW'} (PEC fill) — click to use ${pipe}`}>
+                        <Chip
+                          size="small" label={`${pipe} → ${max}`}
+                          color={current ? (tooSmall ? 'warning' : 'primary') : 'default'}
+                          variant={current ? 'filled' : 'outlined'}
+                          onClick={() => setForm((f) => ({ ...f, pipeSize: pipe, pipeSizeAuto: false }))}
+                          sx={{ height: 22, fontSize: 11, opacity: tooSmall && !current ? 0.45 : 1 }}
+                        />
+                      </Tooltip>
+                    );
+                  })}
+                </Stack>
+              </Box>
             ))}
             <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
               <Button size="small" startIcon={<AddIcon />} onClick={() => setField('conductors', [...form.conductors, { size: '14', qty: 1 }])}>
-                Add wire size
+                Add cable size
               </Button>
               <Box sx={{ flexGrow: 1 }} />
               {fill && (fill.recommended ? (
@@ -234,13 +257,13 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                     </Button>
                   ) : undefined}
                 >
-                  Recommended <strong>{fill.recommended} {form.conduitType}</strong> — {fill.conductors} wire{fill.conductors === 1 ? '' : 's'},{' '}
+                  Recommended <strong>{fill.recommended} {form.conduitType}</strong> — {fill.conductors} cable{fill.conductors === 1 ? '' : 's'},{' '}
                   {fillPct(fill.fillOf(fill.recommended))} fill (PEC max {fillPct(fill.limit)})
                   {overFill ? `; ${form.pipeSize} would be ${fillPct(fill.fillOf(form.pipeSize))}` : ''}
                 </Alert>
               ) : (
                 <Alert severity="error" sx={{ py: 0 }}>
-                  {fill.conductors} wires need more than a 2" {form.conduitType} ({fillPct(fill.fillOf('2"'))} fill, max {fillPct(fill.limit)}) — split them into separate runs.
+                  {fill.conductors} cables need more than a 2" {form.conduitType} ({fillPct(fill.fillOf('2"'))} fill, max {fillPct(fill.limit)}) — split them into separate runs.
                 </Alert>
               ))}
             </Stack>
@@ -308,7 +331,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                     <TableCell>Name</TableCell>
                     <TableCell align="right">Length (m)</TableCell>
                     <TableCell>Size / type</TableCell>
-                    <TableCell>Wires</TableCell>
+                    <TableCell>Cables</TableCell>
                     <TableCell align="right">Pipes</TableCell>
                     <TableCell align="right">Boxes</TableCell>
                     <TableCell align="right">Supports</TableCell>

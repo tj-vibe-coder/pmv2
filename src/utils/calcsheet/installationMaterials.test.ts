@@ -1,6 +1,6 @@
 import {
   pipesNeeded, junctionBoxesNeeded, computeEntryQuantities, aggregateEntries, blankEntry,
-  supportsPerSegment, supportsNeeded, pecAccessories, resolveSlotPrice, SLOT_CATALOG_NO, MATERIAL_SLOTS,
+  supportsPerSegment, supportsNeeded, pecAccessories, resolveSlotPrice, SLOT_CATALOG_NO, MATERIAL_SLOTS, withInstallationRows,
 } from './installationMaterials';
 
 describe('pipesNeeded / junctionBoxesNeeded', () => {
@@ -210,5 +210,27 @@ describe('sizes up to 2"', () => {
     expect(qs.emtCoupling_2).toBe(6);
     expect(qs.emtConnector_2).toBe(8);
     expect(qs.caddyClamp_2).toBe(supportsNeeded(30));
+  });
+});
+
+describe('withInstallationRows', () => {
+  const row = (id: string, description = id, isHeader = false) => ({ id, description, isHeader });
+  const header = () => row('H', 'INSTALLATION WORK', true);
+
+  it('adds an INSTALLATION WORK header above the rows the first time', () => {
+    const out = withInstallationRows([row('a'), row('b')], [row('x'), row('y')], header);
+    expect(out.map((r) => r.id)).toEqual(['a', 'b', 'H', 'x', 'y']);
+    expect(out[2]).toMatchObject({ isHeader: true, description: 'INSTALLATION WORK' });
+  });
+
+  it('later adds go under the existing header, before the next section', () => {
+    const existing = [row('P', 'PANEL', true), row('a'), row('H0', 'Installation Work', true), row('x'), row('N', 'FIELD INSTRUMENTS', true), row('b')];
+    const out = withInstallationRows(existing, [row('y')], header);
+    expect(out.map((r) => r.id)).toEqual(['P', 'a', 'H0', 'x', 'y', 'N', 'b']);
+  });
+
+  it('existing header as the last section → rows go at the end', () => {
+    const out = withInstallationRows([row('H0', 'INSTALLATION WORK', true), row('x')], [row('y')], header);
+    expect(out.map((r) => r.id)).toEqual(['H0', 'x', 'y']);
   });
 });

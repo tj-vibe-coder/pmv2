@@ -94,7 +94,7 @@ it('recommends and auto-sets the pipe size from the wires (PEC conduit fill)', (
   render(<InstallationWorkDialog open onClose={() => {}} productContingencyPct={0} onSubmit={() => {}} />);
   const pipe = () => screen.getByRole('combobox', { name: /pipe size/i });
   // 11 × 12 AWG THHN is one too many for 1/2" IMC (max 10) → 3/4"
-  fireEvent.change(screen.getByLabelText(/qty \(wires\)/i), { target: { value: '11' } });
+  fireEvent.change(screen.getByLabelText(/cables qty/i), { target: { value: '11' } });
   expect(pipe()).toHaveTextContent('3/4"');
   expect(screen.getByText(/recommended/i)).toHaveTextContent(/3\/4" IMC/);
 
@@ -107,6 +107,17 @@ it('recommends and auto-sets the pipe size from the wires (PEC conduit fill)', (
   expect(pipe()).toHaveTextContent('3/4"');
 
   // Too many for 2" → split the run.
-  fireEvent.change(screen.getByLabelText(/qty \(wires\)/i), { target: { value: '200' } });
+  fireEvent.change(screen.getByLabelText(/cables qty/i), { target: { value: '200' } });
   expect(screen.getByText(/split them into separate runs/i)).toBeInTheDocument();
+});
+
+it('shows how many cables of the chosen size each pipe can take', () => {
+  render(<InstallationWorkDialog open onClose={() => {}} productContingencyPct={0} onSubmit={() => {}} />);
+  // Default 12 AWG THHN in IMC — Annex C: 10 / 17 / 29 / 49 / 67 / 109
+  for (const label of ['1/2" → 10', '3/4" → 17', '1" → 29', '1-1/4" → 49', '1-1/2" → 67', '2" → 109']) {
+    expect(screen.getByText(label)).toBeInTheDocument();
+  }
+  // Clicking a size picks that pipe.
+  fireEvent.click(screen.getByText('1" → 29'));
+  expect(screen.getByRole('combobox', { name: /pipe size/i })).toHaveTextContent('1"');
 });
