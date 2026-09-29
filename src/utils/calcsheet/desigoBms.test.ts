@@ -1,4 +1,4 @@
-import { DEFAULT_DESIGO_INPUTS, DESIGO_PARTS, configureDesigo, noProtocols, type DesigoInputs, type DesigoProtocols } from './desigoBms';
+import { DEFAULT_DESIGO_INPUTS, DESIGO_PARTS, bestPacks, configureDesigo, noProtocols, type DesigoInputs, type DesigoProtocols } from './desigoBms';
 import { noAnalog, type AnalogKey } from './siemensPlc';
 
 const an = (p: Partial<Record<AnalogKey, number>>) => {
@@ -26,6 +26,14 @@ describe('Desigo PXC automation stations', () => {
     expect(c.controller?.model).toBe('PXC7.E400S');
     expect(qty(c, 'txDi16')).toBe(7);
     expect(qty(c, 'txs12f10')).toBe(1); // 7 modules − 3 powered by the station
+    expect(qty(c, 'txaK12')).toBe(1);   // address keys for the 7 modules
+  });
+
+  it('address keys: a 1–24 set when a station has more than 12 TX-I/O modules', () => {
+    const c = cfg({ di: 300 });         // PXC7.E400L, 19 × TXM1.16D
+    expect(qty(c, 'txaK24')).toBe(1);
+    expect(qty(c, 'txaK12')).toBe(0);
+    expect(DESIGO_PARTS.txaK24.partNo).toBe('BPZ:TXA1.K24');
   });
 
   it('beyond one PXC7.E400L → more stations; the station count can be raised by hand', () => {
@@ -44,21 +52,61 @@ describe('Desigo PXC automation stations', () => {
   });
 });
 
-describe('Desigo CC licenses', () => {
-  it('server, data points (I/O + integration) and clients', () => {
-    const c = cfg({ di: 10, integrationPoints: 40, dccClients: 2, dccWebClients: 3 });
-    expect([qty(c, 'dccServer'), qty(c, 'dccPoints'), qty(c, 'dccClient'), qty(c, 'dccWebClient')]).toEqual([1, 1, 2, 3]);
+describe('Desigo CC licenses — best fit', () => {
+  it('small system → Compact (500 points + 3 clients included), no extra packs', () => {
+    const c = cfg({ di: 10, integrationPoints: 40, dccClients: 2 });
+    expect(c.dccEdition).toBe('compact');
+    expect(qty(c, 'dccCompact')).toBe(1);
+    expect(c.lines.filter((l) => l.key.startsWith('dccBa_'))).toEqual([]);
     expect(c.dataPoints).toBe(50);
-    expect(c.lines.find((l) => l.key === 'dccPoints')?.section).toBe('bmsSoftware');
+    expect(DESIGO_PARTS.dccCompact.partNo).toBe('P55802-Y113-A100');
+    expect(c.lines.find((l) => l.key === 'dccCompact')?.section).toBe('bmsSoftware');
   });
 
-  it('redundancy: two servers + the failover license; history per server', () => {
-    const c = cfg({ di: 10, dccRedundant: true, dccHistory: true });
-    expect([qty(c, 'dccServer'), qty(c, 'dccRedundancy'), qty(c, 'dccHistory')]).toEqual([2, 1, 2]);
+  it('Compact up to 2,000 BA points: packs for the points beyond the 500 included', () => {
+    const c = cfg({ di: 1400 });            // 1,400 → 900 beyond → one 1,000 pack
+    expect(c.dccEdition).toBe('compact');
+    expect(qty(c, 'dccBa_1000')).toBe(1);
   });
 
-  it('can be left out', () => {
-    expect(qty(cfg({ di: 10, dcc: false }), 'dccServer')).toBe(0);
+  it('more than 2,000 points, 4+ clients or redundancy → Standard + BA packs + client add-ons', () => {
+    const big = cfg({ di: 2600 });
+    expect(big.dccEdition).toBe('standard');
+    expect(qty(big, 'dccStandard')).toBe(1);
+    expect([qty(big, 'dccBa_1000'), qty(big, 'dccBa_500'), qty(big, 'dccBa_100')]).toEqual([2, 1, 1]);
+    const clients = cfg({ di: 10, dccClients: 3, dccWebClients: 2 });
+    expect(clients.dccEdition).toBe('standard');
+    expect(qty(clients, 'dccClient')).toBe(4);   // 5 clients, 1 included
+    expect(DESIGO_PARTS.dccClient.partNo).toBe('P55802-Y119-A200');
+    const red = cfg({ di: 10, dccRedundant: true });
+    expect([red.dccEdition, qty(red, 'dccRedundancy')]).toEqual(['standard', 1]);
+  });
+
+  it('SCADA points (Modbus / OPC direct) get SCADA packs on Standard', () => {
+    const c = cfg({ di: 10, dccEdition: 'standard', scadaPoints: 600 });
+    expect(qty(c, 'dccScada_500')).toBe(1);
+    expect(qty(c, 'dccScada_100')).toBe(1);
+  });
+
+  it('edition can be forced; Compact that does not fit gets a note', () => {
+    expect(cfg({ di: 10, dccEdition: 'standard' }).dccEdition).toBe('standard');
+    const c = cfg({ di: 10, dccEdition: 'compact', dccClients: 5 });
+    expect(c.dccEdition).toBe('compact');
+    expect(c.notes.join(' ')).toMatch(/this needs Standard/);
+  });
+
+  it('can be left out; engineering license on request', () => {
+    expect(qty(cfg({ di: 10, dcc: false }), 'dccCompact')).toBe(0);
+    expect(qty(cfg({ di: 10, dccEngineering: true }), 'dccEngineering')).toBe(1);
+  });
+});
+
+describe('bestPacks', () => {
+  it('lowest cost with bigger packs cheaper per point', () => {
+    expect(bestPacks(900, [100, 500, 1000])).toEqual([{ n: 1000, qty: 1 }]);
+    expect(bestPacks(1200, [100, 500, 1000])).toEqual([{ n: 1000, qty: 1 }, { n: 100, qty: 2 }]);
+    expect(bestPacks(2600, [100, 500, 1000, 5000])).toEqual([{ n: 1000, qty: 2 }, { n: 500, qty: 1 }, { n: 100, qty: 1 }]);
+    expect(bestPacks(0, [100])).toEqual([]);
   });
 });
 
@@ -110,5 +158,55 @@ describe('protocols', () => {
     const c = cfg({ di: 10, protocols: pr({ modbusTcp: true }) });
     expect(c.notes.join(' ')).toMatch(/Modbus TCP use the station's Ethernet port/);
     expect(c.lines.some((l) => ['mbusConverter', 'p1Gateway', 'knxInterface', 'rs485Termination'].includes(l.key))).toBe(false);
+  });
+});
+
+describe('RTD: Pt1000 on universal points, Pt100 on TXM1.8P', () => {
+  it('2-wire RTD (Pt1000 / Ni1000) uses universal points; 3-/4-wire Pt100 gets TXM1.8P modules', () => {
+    const rtd = (w2: number, w4: number) => ({ ...noAnalog(), aiRtd: { w2, w4 } });
+    const pt1000 = cfg({ analog: rtd(6, 0) });
+    expect(pt1000.controller?.model).toBe('PXC4.E16-2'); // fits the 12 universal on board
+    expect(qty(pt1000, 'txP8')).toBe(0);
+    const pt100 = cfg({ analog: rtd(0, 10) });
+    expect(qty(pt100, 'txP8')).toBe(2);
+    expect(DESIGO_PARTS.txP8.partNo).toBe('BPZ:TXM1.8P');
+  });
+});
+
+describe('license dongle (CMD.06)', () => {
+  it('none by default (Trusted Store); one per server when chosen; always one for the engineering license', () => {
+    expect(qty(cfg({ di: 10 }), 'dccDongle')).toBe(0);
+    expect(qty(cfg({ di: 10, dccDongle: true }), 'dccDongle')).toBe(1);
+    expect(qty(cfg({ di: 10, dccDongle: true, dccRedundant: true }), 'dccDongle')).toBe(2);
+    expect(qty(cfg({ di: 10, dccEngineering: true }), 'dccDongle')).toBe(1);
+    expect(DESIGO_PARTS.dccDongle.partNo).toBe('S55802-Y185');
+  });
+});
+
+describe('clients: single add-ons vs. unlimited (CCA-MAX-CL); Compact XL', () => {
+  it('without prices: single add-ons up to 5 extra, unlimited from 6', () => {
+    expect(qty(cfg({ di: 10, dccClients: 6 }), 'dccClient')).toBe(5);
+    const many = cfg({ di: 10, dccClients: 4, dccWebClients: 3 });
+    expect([qty(many, 'dccClient'), qty(many, 'dccMaxClients')]).toEqual([0, 1]);
+    expect(DESIGO_PARTS.dccMaxClients.partNo).toBe('P55802-Y120-A200');
+  });
+
+  it('with pricelist prices: whichever is cheaper', () => {
+    const price = (k: string) => ({ dccClient: 10000, dccMaxClients: 25000 } as Record<string, number>)[k] ?? 0;
+    // 4 extra clients: 4 × 10,000 = 40,000 > 25,000 → unlimited
+    expect(qty(configureDesigo({ ...DEFAULT_DESIGO_INPUTS, sparePct: 0, terminals: false, di: 10, dccClients: 5 }, price), 'dccMaxClients')).toBe(1);
+    // 2 extra: 20,000 < 25,000 → singles
+    expect(qty(configureDesigo({ ...DEFAULT_DESIGO_INPUTS, sparePct: 0, terminals: false, di: 10, dccClients: 3, dccEdition: 'standard' }, price), 'dccClient')).toBe(2);
+  });
+
+  it('warns past the Desigo CC client limits', () => {
+    expect(cfg({ di: 10, dccClients: 12 }).notes.join(' ')).toMatch(/at most 10 installed clients/);
+  });
+
+  it('Compact XL can be picked by hand', () => {
+    const c = cfg({ di: 10, dccEdition: 'compactXl' });
+    expect(c.dccEdition).toBe('compactXl');
+    expect(qty(c, 'dccCompactXl')).toBe(1);
+    expect(DESIGO_PARTS.dccCompactXl.partNo).toBe('P55802-Y109-A100');
   });
 });

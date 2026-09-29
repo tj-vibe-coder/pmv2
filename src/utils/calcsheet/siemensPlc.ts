@@ -885,6 +885,19 @@ export function estimate24V(raw: PlcInputs, cfg: PlcConfig): LoadEstimate {
   return { lines, totalA, withMarginA, suggestedA };
 }
 
+/**
+ * Heat for the Control Panel's fan sizing: the 24 V electronics inside the
+ * panel (field loads — sensors, DO loads, analog loops — dissipate in the
+ * field, so they're left out) and the total 24 V load for the supply losses.
+ */
+export function panelHeat(load: LoadEstimate): { electronicsW: number; load24A: number } {
+  const inside = load.lines.filter((l) => !/^(Digital inputs|Digital outputs|Analog inputs|Analog outputs) /.test(l.label) && l.label !== 'Analog outputs');
+  return {
+    electronicsW: Math.round(inside.reduce((s, l) => s + l.totalA, 0) * 24 * 10) / 10,
+    load24A: load.totalA,
+  };
+}
+
 export interface SiemensCatalogItem { catalogNo: string; sellingPrice: number; pricelistDate?: string }
 
 /** Unit price for a part: a catalog item with the same part number wins, else the quoted default. */

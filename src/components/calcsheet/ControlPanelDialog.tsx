@@ -122,12 +122,24 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Cooling</Typography></Divider>
           <Stack direction="row" spacing={2} alignItems="flex-start" flexWrap="wrap" useFlexGap>
-            <Box sx={{ width: 150 }}>{num('heatLossW', 'Heat loss inside (W)', 'PSU, CPU, modules')}</Box>
+            <FormControlLabel control={<Checkbox size="small" checked={inp.heatAuto} onChange={(e) => set('heatAuto', e.target.checked)} />}
+              label={<Typography variant="body2">Heat from the components</Typography>} />
+            {inp.heatAuto
+              ? <Typography variant="body2" sx={{ pt: 1, fontWeight: 600 }}>≈ {cfg.heatAutoW} W</Typography>
+              : <Box sx={{ width: 150 }}>{num('heatLossW', 'Heat loss inside (W)', `Auto would be ${cfg.heatAutoW} W`)}</Box>}
             <Box sx={{ width: 150 }}>{num('deltaT', 'Allowed rise (K)', 'Inside over ambient')}</Box>
             <Typography variant="body2" sx={{ pt: 1 }}>
               {cfg.airflow > 0 ? `≈ ${cfg.airflow} m³/h of fan airflow needed` : 'Wall surface dissipates the heat — 1 fan for hot ambient'}
             </Typography>
           </Stack>
+          {inp.heatAuto && (
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              {cfg.heatSources.map((h) => <Chip key={h.label} size="small" variant="outlined" label={`${h.label}: ${h.w} W`} />)}
+              {!inp.io.electronicsW && (
+                <Typography variant="caption" color="text.secondary">Add a Siemens PLC / Desigo BMS first to include its electronics.</Typography>
+              )}
+            </Stack>
+          )}
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">230 V AC (2-pole ABB MCBs)</Typography></Divider>
           <Stack direction="row" spacing={2} alignItems="flex-start" flexWrap="wrap" useFlexGap>

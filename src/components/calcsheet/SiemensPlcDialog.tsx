@@ -11,7 +11,7 @@ import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import {
   ANALOG_KINDS, DEFAULT_CPU, DEFAULT_PLC_INPUTS, DEFAULT_REDUNDANT_CPU, HMI_LINES, HMI_PANELS, LICENSE_EDITIONS, MEMORY_CARDS, PSU_LINES,
-  REDUNDANCY_OPTIONS, SIEMENS_PARTS, UNIFIED_LOGGING_PACKAGES, WINCC81_ARCHIVE_PACKAGES, SITOP_OPTIONS, SWITCHES, TERMINALS_HEADER, WIRES_HEADER, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuChoices, cpuModel,
+  REDUNDANCY_OPTIONS, SIEMENS_PARTS, UNIFIED_LOGGING_PACKAGES, WINCC81_ARCHIVE_PACKAGES, SITOP_OPTIONS, SWITCHES, TERMINALS_HEADER, WIRES_HEADER, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuChoices, panelHeat, cpuModel,
   effectiveSwitches, estimate24V, noAnalog, onboardText, siemensPrice,
   type AnalogKey, type HmiLine, type PlcSection, type LicenseEdition, type ModbusMode, type PlcFamily, type PlcInputs, type Redundancy, type ScadaKind,
   type SwitchType, type WinccLicense,
@@ -125,7 +125,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
         contingencyPct: productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0,
       })),
     })));
-    setPanelIo(cfg.panelIo);
+    setPanelIo({ ...cfg.panelIo, ...panelHeat(load) });
     setInp(fresh());
   };
 
