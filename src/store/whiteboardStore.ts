@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { WhiteboardItem, WhiteboardKind, WhiteboardVisibility } from '../types/Whiteboard';
+import type { WhiteboardItem, WhiteboardKind, WhiteboardPerson, WhiteboardVisibility } from '../types/Whiteboard';
 
 // App-wide (not calcsheet-scoped) — talks to /api/whiteboard directly, same
 // auth-header convention as quotationStore's api() helper.
@@ -36,8 +36,12 @@ interface WhiteboardState {
 
 interface WhiteboardActions {
   fetchItems: (opts?: { force?: boolean }) => Promise<void>;
-  addItem: (item: { kind: WhiteboardKind; visibility: WhiteboardVisibility; text: string; done?: boolean; dueDate?: string }) => Promise<WhiteboardItem>;
-  updateItem: (id: string, patch: Partial<Pick<WhiteboardItem, 'text' | 'visibility' | 'done' | 'dueDate'>>) => Promise<void>;
+  addItem: (item: { kind: WhiteboardKind; visibility: WhiteboardVisibility; assignedTo?: WhiteboardPerson; text: string; done?: boolean; dueDate?: string }) => Promise<WhiteboardItem>;
+  // assignedTo/dueDate accept `null` (not just `undefined`) to explicitly
+  // clear a previously-set value — `undefined` fields are dropped by
+  // JSON.stringify before the request even goes out, so they'd silently
+  // leave the old value in place rather than clearing it.
+  updateItem: (id: string, patch: Partial<Pick<WhiteboardItem, 'text' | 'visibility' | 'done'>> & { assignedTo?: WhiteboardPerson | null; dueDate?: string | null }) => Promise<void>;
   deleteItem: (id: string) => Promise<void>;
   setOpen: (open: boolean) => void;
 }
@@ -71,7 +75,21 @@ export const useWhiteboardStore = create<WhiteboardState & WhiteboardActions>()(
   updateItem: async (id, patch) => {
     await api('PUT', `/${id}`, patch);
     const updatedAt = new Date().toISOString();
-    set({ items: get().items.map((i) => (i.id === id ? { ...i, ...patch, updatedAt } : i)) });
+    set({
+      items: get().items.map((i) => {
+        if (i.id !== id) return i;
+        // The wire format accepts `null` to explicitly clear
+        // assignedTo/dueDate; normalize back to `undefined` for the
+        // in-memory item shape (which never stores null for these).
+        const next: WhiteboardItem = { ...i, updatedAt };
+        if (patch.text !== undefined) next.text = patch.text;
+        if (patch.visibility !== undefined) next.visibility = patch.visibility;
+        if (patch.done !== undefined) next.done = patch.done;
+        if ('assignedTo' in patch) next.assignedTo = patch.assignedTo ?? undefined;
+        if ('dueDate' in patch) next.dueDate = patch.dueDate ?? undefined;
+        return next;
+      }),
+    });
   },
 
   deleteItem: async (id) => {
