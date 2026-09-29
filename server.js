@@ -953,6 +953,17 @@ const WHITEBOARD_PERSON_ALIASES = {
   renzel: ['renzel', 'punongbayan'],
   nylle: ['nylle', 'managa'],
 };
+// Optional note → project/calcsheet-proposal link. Returns the cleaned link,
+// null (explicitly "no link" / clear it), or false if the shape is invalid.
+function sanitizeWhiteboardLink(link) {
+  if (link === undefined || link === null) return null;
+  if (typeof link !== 'object') return false;
+  const { type, id, label } = link;
+  if (!['project', 'calcsheet'].includes(type)) return false;
+  if (!id || typeof id !== 'string') return false;
+  return { type, id, label: String(label || '').trim().slice(0, 200) };
+}
+
 function whiteboardPersonOf(user) {
   const words = [user.full_name, user.username, String(user.email || '').split('@')[0]]
     .filter(Boolean)
@@ -984,6 +995,8 @@ app.post('/api/whiteboard', async (req, res) => {
     const user = await requireActiveUser(req, res);
     if (!user) return;
     const { kind, visibility, text, done, dueDate, assignedTo } = req.body || {};
+    const link = sanitizeWhiteboardLink(req.body && req.body.link);
+    if (link === false) return res.status(400).json({ error: 'Invalid link' });
     if (!['update', 'note', 'todo'].includes(kind)) return res.status(400).json({ error: 'Invalid kind' });
     if (!['public', 'private'].includes(visibility)) return res.status(400).json({ error: 'Invalid visibility' });
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'Text is required' });
@@ -998,6 +1011,7 @@ app.post('/api/whiteboard', async (req, res) => {
       kind, visibility, text: String(text).trim(),
       ...(visibility === 'public' ? { assignedTo } : {}),
       ...(kind === 'todo' ? { done: !!done, ...(dueDate ? { dueDate } : {}) } : {}),
+      ...(link ? { link } : {}),
       createdBy: user.id,
       createdByName: user.full_name || user.username || 'Someone',
       createdAt: now, updatedAt: now,
@@ -1024,7 +1038,13 @@ app.put('/api/whiteboard/:id', async (req, res) => {
       !!existing.assignedTo && existing.assignedTo === whiteboardPersonOf(user) &&
       Object.keys(req.body || {}).every((k) => k === 'done');
     if (!isOwner && !isAssigneeDoneToggle) return res.status(403).json({ error: 'Not allowed to edit this item' });
-    const patch = isAssigneeDoneToggle ? { done: !!req.body.done } : req.body;
+    const patch = isAssigneeDoneToggle ? { done: !!req.body.done } : { ...req.body };
+    // Owner edits may set, change, or clear (null) the link — validate it.
+    if (!isAssigneeDoneToggle && 'link' in patch) {
+      const link = sanitizeWhiteboardLink(patch.link);
+      if (link === false) return res.status(400).json({ error: 'Invalid link' });
+      patch.link = link;
+    }
     await ref.update({ ...patch, updatedAt: new Date().toISOString() });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to update whiteboard item' }); }

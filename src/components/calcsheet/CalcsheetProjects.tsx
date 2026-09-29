@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Box, Button, Checkbox, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControl,
+  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, FormControl,
   IconButton, InputAdornment, InputLabel, LinearProgress, ListItemText, MenuItem, OutlinedInput, Paper,
   Select, Snackbar, Stack, Switch, FormControlLabel,
   Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, TextField, Typography, Tooltip,
@@ -20,7 +20,7 @@ import { PROJECT_STATUSES, projectStatusLabel, OPPORTUNITY_GRADES, opportunityGr
 import { format } from 'date-fns';
 import { PHP, computeTotals, ioctMargin } from '../../utils/calcsheet/calc';
 import { salesAccountedTotal } from '../../utils/calcsheet/salesAccounting';
-import { quotationCode, nextProjectSequence } from '../../utils/calcsheet/codes';
+import NewCalcsheetProjectDialog from './NewCalcsheetProjectDialog';
 import { exportProjectListXlsx } from '../../utils/calcsheet/xlsxExport';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
@@ -120,17 +120,10 @@ function saveListPrefs(prefs: ListPrefs) {
   } catch { /* storage unavailable (private mode/quota) */ }
 }
 
-const empty = {
-  name: '', location: '', date: format(new Date(), 'yyyy-MM-dd'),
-  customerId: '', partnerId: '', salesContactId: '', status: 'draft' as ProjectStatus,
-  code: '',
-};
-
 export default function Projects() {
   const projects = useQuotationStore((s) => s.projects);
   const clients = useQuotationStore((s) => s.clients);
   const quotations = useQuotationStore((s) => s.quotations);
-  const addProject = useQuotationStore((s) => s.addProject);
   const deleteProject = useQuotationStore((s) => s.deleteProject);
   const updateProject = useQuotationStore((s) => s.updateProject);
   const syncMainProject = useQuotationStore((s) => s.syncMainProject);
@@ -240,25 +233,9 @@ export default function Projects() {
     const summary = `Done: ${progress.linked} linked to existing, ${progress.created} created, ${progress.failed} failed.`;
     setBulkLinkSummary(summary);
   };
+  // "New project" form lives in NewCalcsheetProjectDialog (shared with the
+  // Whiteboard).
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState(empty);
-  const [creating, setCreating] = useState(false);
-  // tracks whether the location/code fields were auto-filled — so customer
-  // changes can replace them, but manual edits lock them in
-  const [locationAutoFilled, setLocationAutoFilled] = useState(false);
-  const [codeManuallyEdited, setCodeManuallyEdited] = useState(false);
-
-  // helper: compute the auto code given a customerId + date string.
-  // We derive the next sequence from the actual project codes — the stored
-  // `seq` counter is unreliable because legacy imports and manual code
-  // assignments don't update it (data has codes up to 036 while the counter
-  // might say 7). Computing from data on every render keeps the preview
-  // honest. The actual server-side increment uses the same derivation.
-  const computeCode = (customerId: string, date: string) => {
-    const customer = clients.find((c) => c.id === customerId);
-    const seq = nextProjectSequence(projects.map((p) => p.code));
-    return quotationCode(seq, customer?.code ?? 'XXX', '00', new Date(date));
-  };
 
   // ── filter + sort state ────────────────────────────────────────────────────
   const [initPrefs] = useState(loadListPrefs);
@@ -283,52 +260,7 @@ export default function Projects() {
   // the proposal folder later. This avoids stranding a colleague whose MSAL
   // session is cached but can't acquire a token silently (24h SPA refresh-token
   // cap + ssoSilent blocked by browser cookie policy / wrong origin).
-  const startNew = async () => {
-    setForm(empty);
-    setLocationAutoFilled(false);
-    setCodeManuallyEdited(false);
-    setCreating(false);
-    setOpen(true);
-  };
-  const closeNewDialog = () => {
-    if (creating) return; // don't dismiss mid-create (avoids "did it work?" ambiguity)
-    setOpen(false);
-  };
-  const save = async () => {
-    // Customer is optional at creation — a bare opportunity can be saved before
-    // the client is known. Its code is assigned automatically once a customer
-    // is set (here or later from the project page).
-    if (!form.name || creating) return;
-    setCreating(true);
-    try {
-      const saved = await addProject({
-        name: form.name,
-        location: form.location,
-        date: form.date,
-        customerId: form.customerId || null,
-        partnerId: form.partnerId || null,
-        salesContactId: form.salesContactId || null,
-        status: form.status,
-        code: form.code || undefined,
-      });
-      setOpen(false);
-      setCreating(false);
-      // If OneDrive is configured but the folder couldn't be created (not signed
-      // in, or token unavailable), let the user know the project saved fine and
-      // the folder can be linked later from the project page.
-      if (oneDriveRequired && saved && !saved.proposalFolderId) {
-        setCreateNotice({
-          severity: 'info',
-          message: oneDriveSignedIn
-            ? 'Project created. OneDrive folder could not be created right now — open the project to create or link its proposal folder.'
-            : 'Project created without a OneDrive folder. Sign in to OneDrive, then create or link the proposal folder from the project page.',
-        });
-      }
-    } catch (err) {
-      setCreating(false);
-      setCreateNotice({ severity: 'error', message: err instanceof Error ? err.message : 'Failed to create project.' });
-    }
-  };
+  const startNew = () => setOpen(true);
 
   // Memoize per-project data so sort/filter doesn't re-scan quotations N times per render
   const enriched = useMemo(() => projects.map((p) => {
@@ -957,149 +889,11 @@ export default function Projects() {
         </DialogActions>
       </Dialog>
 
-      <Dialog
+      <NewCalcsheetProjectDialog
         open={open}
-        onClose={closeNewDialog}
-        maxWidth="sm"
-        fullWidth
-        disableEscapeKeyDown={creating}
-      >
-        {creating && <LinearProgress />}
-        <DialogTitle>New project</DialogTitle>
-        <DialogContent>
-          {creating && (
-            <Alert severity="info" sx={{ mb: 1 }}>
-              Creating project… this can take a few seconds (especially when linking OneDrive).
-            </Alert>
-          )}
-          {oneDriveRequired && !oneDriveSignedIn && (
-            <Alert
-              severity="info"
-              sx={{ mb: 1 }}
-              action={
-                <Button
-                  color="inherit"
-                  size="small"
-                  onClick={() => { void oneDriveLogin(); }}
-                  disabled={oneDriveLoading || creating}
-                >
-                  Sign in
-                </Button>
-              }
-            >
-              You're not signed in to OneDrive. You can still create this project now and link its
-              proposal folder later from the project page.
-            </Alert>
-          )}
-          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mt: 1 }}>
-            <TextField label="Project name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} sx={{ gridColumn: 'span 2' }} disabled={creating} />
-            {/* Customer first so location can auto-fill from it */}
-            <TextField
-              select
-              label="Customer (optional)"
-              value={form.customerId}
-              disabled={creating}
-              helperText="Leave blank to save a draft — no code is assigned until a client is set"
-              onChange={(e) => {
-                const newCustomerId = e.target.value;
-                const selectedClient = clients.find((c) => c.id === newCustomerId);
-                const newLocation =
-                  (locationAutoFilled || form.location === '')
-                    ? (selectedClient?.address ?? form.location)
-                    : form.location;
-                const didAutoFill = !!selectedClient?.address && newLocation === selectedClient?.address;
-                setLocationAutoFilled(didAutoFill);
-                const newCode = codeManuallyEdited ? form.code : (newCustomerId ? computeCode(newCustomerId, form.date) : '');
-                setForm((prev) => ({ ...prev, customerId: newCustomerId, location: newLocation, code: newCode }));
-              }}
-            >
-              <MenuItem value="">— none yet —</MenuItem>
-              {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
-            </TextField>
-            <TextField select label="Partner (optional)" value={form.partnerId} disabled={creating} onChange={(e) => setForm({ ...form, partnerId: e.target.value })}>
-              <MenuItem value="">— none —</MenuItem>
-              {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
-            </TextField>
-            <TextField
-              label="Location"
-              value={form.location}
-              disabled={creating}
-              onChange={(e) => { setLocationAutoFilled(false); setForm({ ...form, location: e.target.value }); }}
-              sx={{ gridColumn: 'span 2' }}
-              helperText={locationAutoFilled ? 'Auto-filled from client — edit freely' : undefined}
-            />
-            <TextField
-              label="Date"
-              type="date"
-              value={form.date}
-              disabled={creating}
-              onChange={(e) => {
-                const newDate = e.target.value;
-                const newCode = codeManuallyEdited ? form.code : (form.customerId ? computeCode(form.customerId, newDate) : '');
-                setForm({ ...form, date: newDate, code: newCode });
-              }}
-              InputLabelProps={{ shrink: true }}
-            />
-            <TextField select label="Status" value={form.status} disabled={creating} onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}>
-              {STATUS_OPTIONS.map((s) => (
-                <MenuItem key={s} value={s}>{statusLabel(s)}</MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              select
-              label="Sales / account contact"
-              value={form.salesContactId}
-              disabled={creating}
-              onChange={(e) => setForm({ ...form, salesContactId: e.target.value })}
-              sx={{ gridColumn: 'span 2' }}
-            >
-              <MenuItem value="">— none —</MenuItem>
-              <MenuItem value="Tyrone James Caballero">Tyrone James Caballero</MenuItem>
-              <MenuItem value="Renzel Punongbayan">Renzel Punongbayan</MenuItem>
-              <MenuItem value="Reuel Joshua Rivera">Reuel Joshua Rivera</MenuItem>
-              <MenuItem value="Nylle Harold Managa">Nylle Harold Managa</MenuItem>
-            </TextField>
-            {/* Project code — editable, auto-filled from customer + date */}
-            <TextField
-              label="Project code (optional)"
-              value={form.code}
-              disabled={creating}
-              onChange={(e) => { setCodeManuallyEdited(true); setForm({ ...form, code: e.target.value }); }}
-              onFocus={() => {
-                // auto-fill on first focus if still empty
-                if (!form.code && form.customerId && form.date) {
-                  setForm((prev) => ({ ...prev, code: computeCode(form.customerId, form.date) }));
-                }
-              }}
-              placeholder={
-                form.customerId && form.date
-                  ? computeCode(form.customerId, form.date)
-                  : 'Auto-generated once customer & date are set'
-              }
-              helperText={
-                codeManuallyEdited
-                  ? 'Using your custom code. Clear the field to revert to auto-generation.'
-                  : form.code
-                  ? 'Auto-generated from customer & date — edit to override'
-                  : 'Leave blank — code will be auto-generated from the customer code and date'
-              }
-              inputProps={{ style: { fontFamily: 'monospace' } }}
-              sx={{ gridColumn: 'span 2' }}
-            />
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={closeNewDialog} disabled={creating}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={() => { void save(); }}
-            disabled={creating || !form.name || !form.customerId}
-            startIcon={creating ? <CircularProgress size={16} color="inherit" /> : undefined}
-          >
-            {creating ? 'Creating…' : 'Create'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+        onClose={() => setOpen(false)}
+        onCreated={(_project, notice) => { if (notice) setCreateNotice(notice); }}
+      />
     </Stack>
   );
 }
