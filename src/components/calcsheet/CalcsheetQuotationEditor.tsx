@@ -52,7 +52,7 @@ import { resolveCorporateDriveId, uploadFileToFolderById } from '../../services/
 import ProductPickerDialog from '../pricelists/ProductPickerDialog';
 import InstallationWorkDialog from './InstallationWorkDialog';
 import { INSTALLATION_HEADER, withInstallationRows, withSectionRows } from '../../utils/calcsheet/installationMaterials';
-import SiemensPlcDialog from './SiemensPlcDialog';
+import SiemensPlcDialog, { type PlcSubmitSection } from './SiemensPlcDialog';
 import MemoryIcon from '@mui/icons-material/Memory';
 import type { PricelistItem } from '../../types/Pricelist';
 import type { ProductHistoryAddSelection } from '../../types/ProductHistory';
@@ -888,15 +888,18 @@ export default function QuotationEditor() {
     setToast({ msg: `Added ${rows.length} item${rows.length === 1 ? '' : 's'} from Installation Work ${hadHeader ? 'under' : 'with'} the "${INSTALLATION_HEADER}" header — review and Save.`, sev: 'success' });
   };
 
-  // Siemens PLC configurator rows, under a "PLC — SIEMENS S7-…" header.
-  const addFromPlc = (rows: ComponentLine[], header: string) => {
-    commit('components', withSectionRows(quotation.components, rows, header, () => ({
+  // Siemens PLC configurator rows, each group under its own header: "PLC —
+  // SIEMENS S7-…", "TERMINAL BLOCKS & RELAYS" and "WIRES".
+  const addFromPlc = (sections: PlcSubmitSection[]) => {
+    const components = sections.reduce((comps, { header, rows }) => withSectionRows(comps, rows, header, () => ({
       id: id(), code: '', description: header, brand: '', partNo: '',
       qty: 0, uom: '', unitCost: 0, forex: 1, contingencyPct: 0, discountPct: 0,
       isHeader: true,
-    } as ComponentLine)));
+    } as ComponentLine)), quotation.components);
+    commit('components', components);
     setPlcOpen(false);
-    setToast({ msg: `Added ${rows.length} Siemens item${rows.length === 1 ? '' : 's'} under "${header}" — review and Save.`, sev: 'success' });
+    const count = sections.reduce((n, g) => n + g.rows.length, 0);
+    setToast({ msg: `Added ${count} PLC item${count === 1 ? '' : 's'} under ${sections.map((g) => `"${g.header}"`).join(', ')} — review and Save.`, sev: 'success' });
   };
 
   const addFromHistory = (selection: ProductHistoryAddSelection) => {

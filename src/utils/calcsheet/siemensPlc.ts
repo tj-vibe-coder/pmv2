@@ -170,6 +170,26 @@ export function cpuModel(family: PlcFamily, key: string, redundancy: Redundancy 
   return choices.find((m) => m.key === key) ?? CPU_MODELS.find((m) => m.key === fallback)!;
 }
 
+// ── S7-1500 mounting rail ("backplate") ──────────────────────────────────
+// Every S7-1500 CPU mounts on its own S7-1500 mounting rail (not a DIN rail).
+// All I/O here is ET 200SP, so the rail only carries the CPU: pick the
+// shortest standard length the CPU fits on. One rail per CPU (R/H: 2).
+export const CPU1500_WIDTH_MM: Record<string, number> = {
+  cpu1511: 35, cpu1513: 35, cpu1515: 70, cpu1516: 70, cpu1511c: 85, cpu1512c: 110,
+  cpu1511f: 35, cpu1513f: 35, cpu1515f: 70, cpu1516f: 70, cpu1513r: 35, cpu1515r: 70, cpu1517h: 175,
+};
+export const MOUNTING_RAILS: { key: string; lengthMm: number; partNo: string }[] = [
+  { key: 'rail1500_160', lengthMm: 160, partNo: '6ES7590-1AB60-0AA0' },
+  { key: 'rail1500_245', lengthMm: 245, partNo: '6ES7590-1AC40-0AA0' },
+  { key: 'rail1500_482', lengthMm: 482, partNo: '6ES7590-1AE80-0AA0' },
+  { key: 'rail1500_530', lengthMm: 530, partNo: '6ES7590-1AF30-0AA0' },
+  { key: 'rail1500_830', lengthMm: 830, partNo: '6ES7590-1AJ30-0AA0' },
+];
+export function mountingRailFor(cpuKey: string) {
+  const w = CPU1500_WIDTH_MM[cpuKey] ?? 70;
+  return MOUNTING_RAILS.find((r) => r.lengthMm >= w) ?? MOUNTING_RAILS[MOUNTING_RAILS.length - 1];
+}
+
 // ── Memory cards ─────────────────────────────────────────────────────────
 export const MEMORY_CARDS: { key: string; label: string }[] = [
   { key: 'memCard4', label: '4 MB' },
@@ -222,6 +242,29 @@ export const LICENSE_EDITIONS: { value: LicenseEdition; label: string; wincc81On
   { value: 'asia', label: 'Asia edition' },
   { value: 'dl', label: 'Download', wincc81Only: true },
 ];
+// SCADA options (client/server, data logging, redundancy). WinCC V8.1: USB
+// order number for standard/Asia, download number for 'dl' (Siemens WinCC
+// V8.1 order data, Oct 2024). WinCC Unified options are 6AV2157-… (license on
+// USB, 0AB0) — Database Storage 6AV2154-…; the Unified redundancy option has
+// no V21 order number on file yet, so it goes in for the supplier to fill.
+export const WINCC81_ARCHIVE_PACKAGES = ['1500', '5000', '10000', '30000'];
+const WINCC81_ARCHIVE_CODE: Record<string, string> = { 1500: 'AX0', 5000: 'BX0', 10000: 'CX0', 30000: 'EX0' };
+export const UNIFIED_LOGGING_PACKAGES = ['100', '500', '1000', '5000'];
+const UNIFIED_LOGGING_PART: Record<string, string> = {
+  100: '6AV2157-2DA00-0AB0', 500: '6AV2157-1EA00-0AB0', 1000: '6AV2157-2EA00-0AB0', 5000: '6AV2157-1FA00-0AB0',
+};
+/** Operate-client packs (largest first) — clients are covered with the fewest packs. */
+const UNIFIED_CLIENT_PACKS: { n: number; partNo: string }[] = [
+  { n: 100, partNo: '6AV2157-2DW00-0AB0' }, { n: 30, partNo: '6AV2157-6CW00-0AB0' }, { n: 10, partNo: '6AV2157-2CW00-0AB0' },
+  { n: 3, partNo: '6AV2157-3JW00-0AB0' }, { n: 1, partNo: '6AV2157-1JW00-0AB0' },
+];
+export function unifiedClientPacks(clients: number): { n: number; qty: number }[] {
+  let left = Math.max(0, Math.round(clients));
+  const out: { n: number; qty: number }[] = [];
+  UNIFIED_CLIENT_PACKS.forEach(({ n }) => { const q = Math.floor(left / n); if (q > 0) { out.push({ n, qty: q }); left -= q * n; } });
+  return out;
+}
+
 export const scadaKey = (kind: Exclude<ScadaKind, 'none'>, license: WinccLicense, pkg: string, edition: LicenseEdition = 'standard') =>
   kind === 'wincc81' ? `wincc81_${license}_${pkg}_${edition}` : `unifiedPc_${pkg}_${edition === 'asia' ? 'asia' : 'standard'}`;
 
@@ -351,6 +394,8 @@ const MEM_PART_NO: Record<string, string> = { memCard4: '6ES7954-8LC04-0AA0', me
 const WQ = { brand: 'WAGO', quoted: true };
 const W = { brand: 'WAGO', price: 0 };
 export const WIRE_ROLL_M = 100;
+/** ₱ per 100 m roll of 0.5 mm² wire (IOCT price, any colour). */
+export const WIRE_ROLL_PRICE = 1500;
 const TERMINAL_PARTS: SiemensPart[] = [
   { ...WQ, key: 'tb2Level', partNo: '2002-2201', price: 99.41,
     description: 'WAGO double-deck terminal block, through/through, L/L, without marker carrier, for DIN-rail 35 x 15 and 35 x 7.5, 2.5 mm², Push-in CAGE CLAMP, gray (1 per DI)' },
@@ -367,10 +412,10 @@ const TERMINAL_PARTS: SiemensPart[] = [
   { ...WQ, key: 'endStop', partNo: '249-116', price: 51.69, description: 'WAGO screwless end stop, 6 mm wide, for DIN-rail 35 x 15 and 35 x 7.5, gray' },
   { ...WQ, key: 'markers', partNo: '2009-115', price: 2.37, description: 'WAGO WMB-Inline marker for Smart Printer, stretchable 5 - 5.2 mm, plain, snap-on type, white (1 per terminal)' },
   { ...W, verify: true, key: 'dinRail', partNo: '210-113', description: 'WAGO steel DIN rail 35 x 7.5 mm, 1 mm thick, slotted, 2 m length' },
-  { ...W, verify: true, key: 'ferrule05', partNo: '216-201', description: 'WAGO ferrule for 0.5 mm² wire, insulated, white, 8 mm sleeve' },
+  { ...W, verify: true, key: 'ferrule05', partNo: '216-201', description: '0.5mm2 ferrule' },
   { key: 'fuse5x20', brand: '', partNo: '', price: 0, description: 'Miniature glass fuse 5 x 20 mm, 0.5 A fast-acting — for the analog fuse terminals' },
-  { key: 'wireRed', brand: '', partNo: '', price: 0, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), red — +24 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
-  { key: 'wireBlue', brand: '', partNo: '', price: 0, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), blue — 0 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
+  { key: 'wireRed', brand: '', partNo: '', price: WIRE_ROLL_PRICE, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), red — +24 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
+  { key: 'wireBlue', brand: '', partNo: '', price: WIRE_ROLL_PRICE, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), blue — 0 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
 ];
 
 function cpuDescription(m: CpuModel): string {
@@ -391,6 +436,10 @@ export const SIEMENS_PARTS: Record<string, SiemensPart> = (() => {
   CATALOG.forEach(put);
   TERMINAL_PARTS.forEach(put);
   CPU_MODELS.filter((m) => !all[m.key]).forEach((m) => put({ key: m.key, partNo: CPU_PART_NO[m.key] ?? '', price: 0, description: cpuDescription(m) }));
+  MOUNTING_RAILS.forEach((r) => put({
+    key: r.key, partNo: r.partNo, price: 0, verify: true,
+    description: `SIMATIC S7-1500, mounting rail ${r.lengthMm} mm (approx. ${(r.lengthMm / 25.4).toFixed(1)} inch), incl. grounding screw, integrated DIN rail for mounting small parts such as terminals`,
+  }));
   MEMORY_CARDS.filter((c) => !all[c.key]).forEach((c) => put({
     key: c.key, partNo: MEM_PART_NO[c.key] ?? '', price: 0, description: `SIMATIC S7, memory card for S7-1x00 CPU, 3.3 V Flash, ${c.label}`,
   }));
@@ -411,6 +460,33 @@ export const SIEMENS_PARTS: Record<string, SiemensPart> = (() => {
     key: scadaKey('unifiedPc', 'RT', pkg, ed), partNo: `6AV2155-${UNIFIED_CODE[pkg]}02-5${ed === 'asia' ? 'BA0' : 'AA0'}`, price: 0, uom: 'lic',
     description: `SIMATIC WinCC Unified V21 PC Runtime, ${pkg} PowerTags${EDITION_TEXT[ed]}, package — software license`,
   })));
+  // SCADA options
+  const dl = (ed: LicenseEdition) => ed === 'dl';
+  LICENSE_EDITIONS.forEach(({ value: ed }) => {
+    const sfx = ed === 'dl' ? '_dl' : '';
+    put({ key: `wincc81Client${sfx}`, partNo: dl(ed) ? '6AV6381-2CA08-1AH0' : '6AV6381-2CA08-1AX0', price: 0, uom: 'lic',
+      description: `SIMATIC WinCC V8.1 RT Client${dl(ed) ? ', download' : ''} — runtime software, single license (one per client station)` });
+    put({ key: `wincc81Server${sfx}`, partNo: dl(ed) ? '6AV6371-1HA08-1AX0' : '6AV6371-1CA08-1AX0', price: 0, uom: 'lic',
+      description: `SIMATIC WinCC/Server V8.1${dl(ed) ? ', download' : ''} — option for WinCC V8.1 runtime (client/server), single license (one per server)` });
+    put({ key: `wincc81Redundancy${sfx}`, partNo: dl(ed) ? '6AV6371-1HF08-1AX0' : '6AV6371-1CF08-1AX0', price: 0, uom: 'lic',
+      description: `SIMATIC WinCC/Redundancy V8.1${dl(ed) ? ', download' : ''} — option for WinCC V8.1 runtime, single license for 2 installations (one per server pair)` });
+    WINCC81_ARCHIVE_PACKAGES.forEach((pkg) => put({
+      key: `wincc81Archive_${pkg}${sfx}`, partNo: `6AV6371-1${dl(ed) ? 'H' : 'D'}Q10-0${WINCC81_ARCHIVE_CODE[pkg]}`, price: 0, uom: 'lic',
+      description: `SIMATIC WinCC/Archive V8.x, ${pkg} archive tags (countable)${dl(ed) ? ', download' : ''} — data logging option, single license (one per server; 512 archive tags come with the base license)`,
+    }));
+  });
+  UNIFIED_CLIENT_PACKS.forEach(({ n, partNo }) => put({
+    key: `unifiedClient_${n}`, partNo, price: 0, uom: 'lic', verify: n === 100 || n === 10,
+    description: `SIMATIC WinCC Unified Client, ${n} Operate Client${n === 1 ? '' : 's'} — option for WinCC Unified PC runtime, single license`,
+  }));
+  UNIFIED_LOGGING_PACKAGES.forEach((pkg) => put({
+    key: `unifiedLogging_${pkg}`, partNo: UNIFIED_LOGGING_PART[pkg], price: 0, uom: 'lic', verify: pkg === '100',
+    description: `SIMATIC WinCC Unified Logging Tags (${pkg}) — data logging option for WinCC Unified PC runtime, single license`,
+  }));
+  put({ key: 'unifiedDbStorage', partNo: '6AV2154-0BS02-5AA0', price: 0, uom: 'lic', verify: true,
+    description: 'SIMATIC WinCC Unified Database Storage V21 — logging to Microsoft SQL Server (large tag counts / long retention), single license' });
+  put({ key: 'unifiedRedundancy', partNo: '', price: 0, uom: 'lic',
+    description: 'SIMATIC WinCC Unified Redundancy V21 — option for WinCC Unified PC runtime (redundant server pair)' });
   SITOP_OPTIONS.filter((s) => !all[s.key]).forEach((s) => put(s.line.startsWith('WAGO')
     ? { key: s.key, partNo: s.partNo, price: WAGO_PSU_PRICE[s.key] ?? 0, brand: 'WAGO', quoted: !!WAGO_PSU_PRICE[s.key],
       description: s.line === 'WAGO Eco'
@@ -452,7 +528,18 @@ export interface PlcInputs {
   licenseEdition: LicenseEdition;
   /** Tag package (WINCC81_PACKAGES / UNIFIED_PC_PACKAGES). */
   scadaPackage: string;
+  /** SCADA servers (or single stations); with redundancy each gets a partner. */
   scadaQty: number;
+  /** Client stations viewing the server(s). */
+  scadaClients: number;
+  /** Server pairs: 2 servers per station + the redundancy license. */
+  scadaRedundant: boolean;
+  /** Extra logging tags: WINCC81_ARCHIVE_PACKAGES / UNIFIED_LOGGING_PACKAGES, or 'none'. */
+  scadaLogging: string;
+  /** WinCC Unified: log to SQL Server (Database Storage option). */
+  scadaDbStorage: boolean;
+  /** ET 200SP stations (interface modules) wanted; 0 = auto (the minimum). */
+  imStations: number;
   /** Network switches; the model is picked from the port count. Redundancy forces ≥ 2 managed. */
   switchQty: number;
   switchType: SwitchType;
@@ -471,7 +558,8 @@ export const DEFAULT_PLC_INPUTS: PlcInputs = {
   family: 'S7-1200', cpu: 'cpu1214', redundancy: 'none', di: 0, do: 0, analog: noAnalog(), sparePct: 10,
   modbus: 'none', modbusPorts: 1, sitop: 'none', memoryCard: false, memCard: 'memCard',
   hmi: 'none', hmiQty: 1, scada: 'none', winccLicense: 'RC', licenseEdition: 'standard', scadaPackage: '2048', scadaQty: 1,
-  switchQty: 0, switchType: 'unmanaged', terminals: true, panelW: 800, panelH: 1200,
+  scadaClients: 0, scadaRedundant: false, scadaLogging: 'none', scadaDbStorage: false,
+  imStations: 0, switchQty: 0, switchType: 'unmanaged', terminals: true, panelW: 800, panelH: 1200,
   doLoadA: 0.1, psuMarginPct: 25,
 };
 
@@ -479,7 +567,12 @@ export const CHANNELS = { di16: 16, dq16: 16, ai8: 8, ai8u: 8, rtd8: 8, rtd4: 4,
 export const IM_MAX_MODULES = 32;
 export const IM_HF_MAX_MODULES = 64;
 
-export interface PlcLine { key: string; qty: number; why: string }
+/** Which Section B header a line goes under: the PLC, the terminal strip, or the wiring. */
+export type PlcSection = 'plc' | 'terminals' | 'wiring';
+export const TERMINALS_HEADER = 'TERMINAL BLOCKS & RELAYS';
+export const WIRES_HEADER = 'WIRES';
+
+export interface PlcLine { key: string; qty: number; why: string; section: PlcSection }
 
 export interface PlcChannels { needed: number; provided: number }
 
@@ -500,6 +593,8 @@ export interface PlcConfig {
   /** Channels needed (incl. spare) per analog type and wiring. */
   analog: Record<AnalogKey, AnalogCount>;
   stations: number;
+  /** Fewest stations the module count needs (the auto value). */
+  suggestedStations: number;
   ioModules: number;
   /** Switch model and count actually used (after redundancy rules). */
   network: { switchKey: string | null; qty: number; devices: number; portsPerSwitch: number };
@@ -579,27 +674,36 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   const imMax = redundant ? IM_HF_MAX_MODULES : IM_MAX_MODULES;
   const a0Count = diMods + dqMods + aiMods + aiUMods + rtd8Mods + rtd4Mods + aqMods + cmMods;
   const ioModules = a0Count + tcMods;
-  const stations = ioModules > 0 ? Math.ceil(ioModules / imMax) : 0;
+  // Stations: the minimum the module count needs, or more when asked for
+  // (e.g. a separate IM per area / panel) — never more than one per module.
+  const suggestedStations = ioModules > 0 ? Math.ceil(ioModules / imMax) : 0;
+  const askedStations = whole(inp.imStations);
+  const stations = ioModules > 0 ? Math.min(ioModules, Math.max(suggestedStations, askedStations)) : 0;
   const bu = { lightA0: 0, darkA0: 0, lightA1: 0, darkA1: 0 };
+  // Modules shared out evenly: the first (ioModules % stations) stations take one more.
+  let first = 0;
   for (let s = 0; s < stations; s++) {
-    const first = s * imMax;
-    const last = Math.min(ioModules, first + imMax); // exclusive
+    const size = Math.floor(ioModules / stations) + (s < ioModules % stations ? 1 : 0);
+    const last = first + size; // exclusive
     const a0InStation = Math.max(0, Math.min(last, a0Count) - first);
     const a1InStation = (last - first) - a0InStation;
     if (a0InStation > 0) { bu.lightA0 += 1; bu.darkA0 += a0InStation - 1; bu.darkA1 += a1InStation; }
     else { bu.lightA1 += 1; bu.darkA1 += a1InStation - 1; }
+    first = last;
   }
 
   // Network switches: model from the ports each one needs.
   const sw = effectiveSwitches(inp);
   const panel = HMI_PANELS.find((h) => h.key === inp.hmi);
-  const devices = cpuUnits + stations + (panel ? inp.hmiQty : 0) + (inp.scada !== 'none' ? inp.scadaQty : 0);
+  const scadaServers = inp.scada === 'none' ? 0 : inp.scadaQty * (inp.scadaRedundant ? 2 : 1);
+  const scadaClients = inp.scada === 'none' ? 0 : whole(inp.scadaClients);
+  const devices = cpuUnits + stations + (panel ? inp.hmiQty : 0) + scadaServers + scadaClients;
   const portsPerSwitch = sw.qty > 0 ? Math.ceil(devices / sw.qty) + (sw.qty > 1 ? 2 : 1) : 0;
   const ofType = SWITCHES.filter((s) => s.type === sw.type).sort((a, b) => a.ports - b.ports);
   const netSwitch = sw.qty > 0 ? (ofType.find((s) => s.ports >= portsPerSwitch) ?? ofType[ofType.length - 1]) : null;
 
   const lines: PlcLine[] = [];
-  const add = (key: string, qty: number, why: string) => { if (qty > 0 && SIEMENS_PARTS[key]) lines.push({ key, qty, why }); };
+  const add = (key: string, qty: number, why: string, section: PlcSection = 'plc') => { if (qty > 0 && SIEMENS_PARTS[key]) lines.push({ key, qty, why, section }); };
   const hasOnboard = cpu.onboard.di + cpu.onboard.do + cpu.onboard.ai + cpu.onboard.ao > 0;
   if (cpu.redundancy === 'H') add(cpu.key, 1, 'Redundant pair — 2 CPUs + sync modules + sync cables in one bundle');
   else if (cpu.redundancy === 'R') add(cpu.key, 2, 'Redundant pair — primary + backup CPU');
@@ -608,6 +712,10 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   if (redundant) add(card, 2, 'One per CPU (required)');
   else if (!is1200) add(card, 1, 'Required by every S7-1500 CPU');
   else if (inp.memoryCard) add(card, 1, 'Optional on S7-1200 (program backup / transfer)');
+  if (!is1200) {
+    const rail = mountingRailFor(cpu.key);
+    add(rail.key, cpuUnits, `S7-1500 mounting rail for the CPU (${CPU1500_WIDTH_MM[cpu.key] ?? 70} mm wide)${redundant ? ' — one per CPU' : ''}`);
+  }
   add('cb1241', useCb ? 1 : 0, 'Modbus RTU port on the CPU (1 × RS-485)');
   if (redundant) {
     add('imHf', stations, `ET 200SP station${stations === 1 ? '' : 's'} on system redundancy S2 — max ${IM_HF_MAX_MODULES} modules each (server module included)`);
@@ -635,7 +743,26 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   if (inp.scada !== 'none') {
     const pkgs = inp.scada === 'wincc81' ? WINCC81_PACKAGES : UNIFIED_PC_PACKAGES;
     const pkg = pkgs.includes(inp.scadaPackage) ? inp.scadaPackage : pkgs[0];
-    add(scadaKey(inp.scada, inp.winccLicense, pkg, inp.licenseEdition), inp.scadaQty, 'SCADA license — one per PC station');
+    const red = inp.scadaRedundant;
+    add(scadaKey(inp.scada, inp.winccLicense, pkg, inp.licenseEdition), scadaServers,
+      red ? `SCADA base license — ${inp.scadaQty} redundant server pair${inp.scadaQty === 1 ? '' : 's'} (2 servers each)` : 'SCADA license — one per server / PC station');
+    const logging = inp.scadaLogging;
+    if (inp.scada === 'wincc81') {
+      const sfx = inp.licenseEdition === 'dl' ? '_dl' : '';
+      if (scadaClients > 0) {
+        add(`wincc81Server${sfx}`, scadaServers, 'Client/server — WinCC/Server on each server');
+        add(`wincc81Client${sfx}`, scadaClients, 'One RT Client license per client station');
+      }
+      add(`wincc81Redundancy${sfx}`, red ? inp.scadaQty : 0, 'One per redundant server pair (covers both installations)');
+      if (WINCC81_ARCHIVE_PACKAGES.includes(logging)) add(`wincc81Archive_${logging}${sfx}`, scadaServers, `Data logging — ${logging} archive tags on each server (512 included in the base)`);
+    } else {
+      // Operate clients are licensed on the server — both servers of a redundant pair.
+      unifiedClientPacks(scadaClients).forEach(({ n, qty }) => add(`unifiedClient_${n}`, qty * scadaServers,
+        `${scadaClients} client${scadaClients === 1 ? '' : 's'} — licensed on each server${red ? ' (both servers of the pair)' : ''}`));
+      add('unifiedRedundancy', red ? inp.scadaQty : 0, 'One per redundant server pair');
+      if (UNIFIED_LOGGING_PACKAGES.includes(logging)) add(`unifiedLogging_${logging}`, scadaServers, `Data logging — ${logging} logging tags on each server`);
+      add('unifiedDbStorage', inp.scadaDbStorage ? scadaServers : 0, 'Logging to SQL Server — one per server');
+    }
   }
   const psu = SITOP_OPTIONS.find((s) => s.key === inp.sitop);
   if (psu) add(psu.key, 1, `24 V DC supply — ${psu.ratingA} A`);
@@ -675,22 +802,22 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
     const ferrules = Math.ceil(((redWires + blueWires) * 2 * 1.1) / 100) * 100;
     wiring = { redWires, blueWires, runM, redM, blueM, terminals, railMm };
 
-    add('tb2Level', di, '1 double-deck terminal per DI (incl. spare)');
-    add('tb2LevelEnd', tb2End, 'Closes the DI terminal group');
-    add('relay', dq, '1 slim relay per DO (incl. spare)');
-    add('relayJumper', relayJumpers, `Bridges the relay coil commons (A2 → 0 V), ${relayGroups} group${relayGroups === 1 ? '' : 's'} of up to 16`);
-    add('tbFuse', fused, `Analog: 1 per 2-wire point (${a2}), 2 per 4-wire point (${a4})`);
-    add('fuse5x20', fused, 'Fuse insert for each fuse terminal');
-    add('tbStd', std + 2 * distPoints, `Analog: 1 per 2-wire point, 2 per 4-wire point (${std}); +24 V / 0 V distribution for CPU, stations, panels, switches and the PSU feed (${2 * distPoints})`);
-    add('tbPe', pe, 'PSU earth and DIN-rail / shield earth');
-    add('tbStdEnd', stdEnd, 'Closes the distribution group (fuse terminals carry their own end plate)');
-    add('jumper10', diJumpers + distJumpers, `Shorting links: DI 24 V level (${diJumpers}), +24 V / 0 V distribution (${distJumpers})`);
-    add('endStop', endStops, `2 per terminal group (${groups} groups)`);
-    add('markers', terminals, '1 marker per terminal / relay');
-    add('dinRail', Math.ceil(railMm / 2000), `≈ ${(railMm / 1000).toFixed(1)} m of rail for terminals, relays and ET 200SP (+20%)`);
-    add('wireRed', Math.ceil(redM / WIRE_ROLL_M), `0.5 mm² red (+24 V DC): ${redWires} wires × ${runM} m ≈ ${redM} m`);
-    add('wireBlue', Math.ceil(blueM / WIRE_ROLL_M), `0.5 mm² blue (0 V DC): ${blueWires} wires × ${runM} m ≈ ${blueM} m`);
-    add('ferrule05', ferrules, 'Both ends of every 0.5 mm² wire (+10%)');
+    add('tb2Level', di, '1 double-deck terminal per DI (incl. spare)', 'terminals');
+    add('tb2LevelEnd', tb2End, 'Closes the DI terminal group', 'terminals');
+    add('relay', dq, '1 slim relay per DO (incl. spare)', 'terminals');
+    add('relayJumper', relayJumpers, `Bridges the relay coil commons (A2 → 0 V), ${relayGroups} group${relayGroups === 1 ? '' : 's'} of up to 16`, 'terminals');
+    add('tbFuse', fused, `Analog: 1 per 2-wire point (${a2}), 2 per 4-wire point (${a4})`, 'terminals');
+    add('fuse5x20', fused, 'Fuse insert for each fuse terminal', 'terminals');
+    add('tbStd', std + 2 * distPoints, `Analog: 1 per 2-wire point, 2 per 4-wire point (${std}); +24 V / 0 V distribution for CPU, stations, panels, switches and the PSU feed (${2 * distPoints})`, 'terminals');
+    add('tbPe', pe, 'PSU earth and DIN-rail / shield earth', 'terminals');
+    add('tbStdEnd', stdEnd, 'Closes the distribution group (fuse terminals carry their own end plate)', 'terminals');
+    add('jumper10', diJumpers + distJumpers, `Shorting links: DI 24 V level (${diJumpers}), +24 V / 0 V distribution (${distJumpers})`, 'terminals');
+    add('endStop', endStops, `2 per terminal group (${groups} groups)`, 'terminals');
+    add('markers', terminals, '1 marker per terminal / relay', 'terminals');
+    add('dinRail', Math.ceil(railMm / 2000), `≈ ${(railMm / 1000).toFixed(1)} m of rail for terminals, relays and ET 200SP (+20%)`, 'terminals');
+    add('wireRed', Math.ceil(redM / WIRE_ROLL_M), `0.5 mm² red (+24 V DC): ${redWires} wires × ${runM} m ≈ ${redM} m`, 'wiring');
+    add('wireBlue', Math.ceil(blueM / WIRE_ROLL_M), `0.5 mm² blue (0 V DC): ${blueWires} wires × ${runM} m ≈ ${blueM} m`, 'wiring');
+    add('ferrule05', ferrules, 'Both ends of every 0.5 mm² wire (+10%)', 'wiring');
   }
 
   const notes: string[] = [];
@@ -704,7 +831,10 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   if (cpu.relayOutputs && inp.do > 0) notes.push('This CPU\'s on-board outputs are relays (2 A) — fine for contactors, not for fast pulse outputs.');
   if (cpu.drawA === 0) notes.push('AC/DC/RLY CPU is powered from 120/230 V AC — it is not counted in the 24 V load.');
   if (cpu.failSafe) notes.push('Fail-safe CPU — safety I/O (F-DI / F-DQ) is not auto-selected; add those modules yourself.');
-  if (stations > 1) notes.push(`${ioModules} modules need ${stations} ET 200SP stations (${imMax} modules per ${redundant ? 'IM 155-6 PN/2 HF' : 'IM 155-6 PN ST'}).`);
+  if (askedStations > 0 && askedStations < suggestedStations) notes.push(`${ioModules} modules need at least ${suggestedStations} ET 200SP stations — using ${suggestedStations}, not ${askedStations}.`);
+  if (askedStations > ioModules && ioModules > 0) notes.push(`Only ${ioModules} module${ioModules === 1 ? '' : 's'}, so at most ${ioModules} station${ioModules === 1 ? '' : 's'} (each needs at least one module).`);
+  if (stations > suggestedStations) notes.push(`${stations} ET 200SP stations as requested — ${ioModules} modules shared out about ${Math.ceil(ioModules / stations)} per station; move modules between stations on the quotation if an area needs more.`);
+  else if (stations > 1) notes.push(`${ioModules} modules need ${stations} ET 200SP stations (${imMax} modules per ${redundant ? 'IM 155-6 PN/2 HF' : 'IM 155-6 PN ST'}).`);
   if (wiring) notes.push('Terminals and wiring cover the I/O incl. spare; the main feed from the PSU to the distribution terminals is not included (size it separately).');
 
   const provided = {
@@ -723,6 +853,7 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
     },
     analog,
     stations,
+    suggestedStations,
     ioModules,
     network: { switchKey: netSwitch?.key ?? null, qty: netSwitch ? sw.qty : 0, devices, portsPerSwitch },
     wiring,

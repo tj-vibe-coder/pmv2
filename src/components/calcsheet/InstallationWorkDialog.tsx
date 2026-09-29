@@ -11,7 +11,10 @@ import { usePricelistStore } from '../../store/pricelistStore';
 import type { ComponentLine } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
-import { INSULATIONS, WIRE_SIZES, capacityBySize, conduitFill, type ConductorGroup, type Insulation, type WireSize } from '../../utils/calcsheet/conduitFill';
+import {
+  INSULATIONS, WIRE_SIZES, cableOdMm, capacityFor, conduitFill, estimateCableOdMm, isMulticore,
+  type ConductorGroup, type Insulation, type WireSize,
+} from '../../utils/calcsheet/conduitFill';
 import {
   PIPE_SIZES, CONDUIT_TYPES, materialSlotByKey, boxSlotFor, blankEntry, pipesNeeded, junctionBoxesNeeded, supportsNeeded,
   computeEntryQuantities, aggregateEntries, pecAccessories, effectiveAccessories, resolveSlotPrice,
@@ -210,6 +213,18 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                     {WIRE_SIZES.map((w) => <MenuItem key={w.value} value={w.value}>{w.label}</MenuItem>)}
                   </TextField>
                   <TextField
+                    size="small" label="Cores" type="text" inputMode="numeric" sx={{ width: 90 }}
+                    value={g.cores && g.cores > 1 ? g.cores : ''} placeholder="1"
+                    onChange={(e) => setConductor(i, { cores: Math.max(1, Math.round(parseLenientFloat(e.target.value))) })}
+                  />
+                  {isMulticore(g) && (
+                    <TextField
+                      size="small" label="Cable OD (mm)" type="text" inputMode="decimal" sx={{ width: 130 }}
+                      value={g.odMm ? String(g.odMm) : ''} placeholder={String(estimateCableOdMm(g.size, g.cores ?? 1, form.insulation))}
+                      onChange={(e) => { const v = parseLenientFloat(e.target.value); setConductor(i, { odMm: v > 0 ? v : null }); }}
+                    />
+                  )}
+                  <TextField
                     size="small" label="Cables QTY" type="text" inputMode="numeric" sx={{ width: 120 }}
                     value={g.qty || ''} placeholder="0"
                     onChange={(e) => setConductor(i, { qty: Math.max(0, Math.round(parseLenientFloat(e.target.value))) })}
@@ -220,16 +235,22 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                     </IconButton>
                   )}
                 </Stack>
+                {isMulticore(g) && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                    {g.cores}-core cable counts as one conductor, sized by its OD (PEC Ch. 9 Note 9) —{' '}
+                    {g.odMm ? `datasheet OD ${g.odMm} mm` : `estimated OD ${cableOdMm(g, form.insulation)} mm; enter the datasheet OD if you have it (shielded / armoured cable is bigger)`}.
+                  </Typography>
+                )}
                 {/* How many of this cable each pipe size can take (PEC Ch. 9 / Annex C) */}
                 <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 0.75 }}>
                   <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
-                    Max {WIRE_SIZES.find((w) => w.value === g.size)?.label.split(' (')[0]} cables per {form.conduitType} pipe:
+                    Max {WIRE_SIZES.find((w) => w.value === g.size)?.label.split(' (')[0]}{isMulticore(g) ? ` × ${g.cores}C` : ''} cables per {form.conduitType} pipe:
                   </Typography>
-                  {capacityBySize(g.size, form.insulation, form.conduitType).map(({ pipe, max }) => {
+                  {capacityFor(g, form.insulation, form.conduitType).map(({ pipe, max }) => {
                     const current = pipe === form.pipeSize;
                     const tooSmall = g.qty > 0 && max < g.qty;
                     return (
-                      <Tooltip key={pipe} title={`${pipe} ${form.conduitType} holds up to ${max} × ${g.size} AWG ${form.insulation === 'THHN' ? 'THHN' : 'THW'} (PEC fill) — click to use ${pipe}`}>
+                      <Tooltip key={pipe} title={`${pipe} ${form.conduitType} holds up to ${max} × ${isMulticore(g) ? `${g.size} AWG ${g.cores}-core cable (OD ${cableOdMm(g, form.insulation)} mm)` : `${g.size} AWG ${form.insulation === 'THHN' ? 'THHN' : 'THW'}`} (PEC fill) — click to use ${pipe}`}>
                         <Chip
                           size="small" label={`${pipe} → ${max}`}
                           color={current ? (tooSmall ? 'warning' : 'primary') : 'default'}
@@ -349,7 +370,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                         <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{e.lengthMeters}</TableCell>
                         <TableCell>{e.pipeSize} {e.conduitType}</TableCell>
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                          {e.conductors.filter((g) => g.qty > 0).map((g) => `${g.qty}×${g.size}`).join(' + ') || '—'}
+                          {e.conductors.filter((g) => g.qty > 0).map((g) => `${g.qty}×${g.size}${isMulticore(g) ? `/${g.cores}C` : ''}`).join(' + ') || '—'}
                         </TableCell>
                         <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{pipeKey ? qs[pipeKey as keyof typeof qs] : 0}</TableCell>
                         <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{qs[boxSlotFor(e.pipeSize)] ?? 0}</TableCell>

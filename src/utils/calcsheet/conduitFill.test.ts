@@ -1,4 +1,4 @@
-import { capacityBySize, conduitFill, fillLimit, maxCables, wireAreaMm2 } from './conduitFill';
+import { capacityBySize, capacityFor, conduitFill, estimateCableOdMm, fillLimit, maxCables, wireAreaMm2 } from './conduitFill';
 
 describe('PEC Chapter 9 conduit fill', () => {
   it('Table 1 limits: 53% one wire, 31% two, 40% three or more', () => {
@@ -69,5 +69,37 @@ describe('cables per pipe (maxCables) — matches NEC Annex C', () => {
   it('the recommendation agrees with the capacity for one cable size', () => {
     expect(conduitFill([{ size: '12', qty: 16 }], 'THHN', 'EMT')?.recommended).toBe('3/4"');
     expect(conduitFill([{ size: '12', qty: 17 }], 'THHN', 'EMT')?.recommended).toBe('1"');
+  });
+});
+
+describe('multicore cables are sized by OD (PEC Ch. 9 Note 9)', () => {
+  it('estimates the OD from core size and count (typical PVC control cable)', () => {
+    expect(estimateCableOdMm('16', 20, 'THHN')).toBeCloseTo(14.9, 1); // 20 × 16 AWG ≈ 15–16 mm
+    expect(estimateCableOdMm('18', 12, 'THHN')).toBeCloseTo(10.6, 1); // 12 × 0.75 mm² ≈ 10 mm
+    expect(estimateCableOdMm('14', 7, 'THW')).toBeCloseTo(12.5, 1);
+  });
+
+  it('a 16 AWG × 20-core cable is one conductor sized by its OD, not 20 wires', () => {
+    const one = conduitFill([{ size: '16', qty: 1, cores: 20 }], 'THHN', 'EMT');
+    expect(one?.conductors).toBe(1);
+    expect(one?.limit).toBe(0.53);
+    expect(one?.recommended).toBe('3/4"'); // π/4 × 14.9² ≈ 174 mm² at 53%
+    // 3 such cables need 1-1/2"; counted as 60 single 16 AWG wires it would wrongly say 1-1/4"
+    expect(conduitFill([{ size: '16', qty: 3, cores: 20 }], 'THHN', 'EMT')?.recommended).toBe('1-1/2"');
+    expect(conduitFill([{ size: '16', qty: 60 }], 'THHN', 'EMT')?.recommended).toBe('1-1/4"');
+  });
+
+  it('the datasheet OD overrides the estimate', () => {
+    // 3 × 20 mm OD = 942 mm² — more than 40% of a 2" EMT → split the run
+    expect(conduitFill([{ size: '16', qty: 3, cores: 20, odMm: 20 }], 'THHN', 'EMT')?.recommended).toBeNull();
+    expect(conduitFill([{ size: '16', qty: 1, cores: 20, odMm: 20 }], 'THHN', 'EMT')?.recommended).toBe('1-1/4"'); // 314 mm² > 53% of 1"
+  });
+
+  it('capacity per pipe for a multicore cable, and mixing with single wires', () => {
+    // 1 cable at 53%, 2 at 31% (so 1-1/4" still holds only 1), 3+ at 40%
+    expect(capacityFor({ size: '16', qty: 1, cores: 20 }, 'THHN', 'EMT').map((c) => c.max)).toEqual([0, 1, 1, 1, 3, 5]);
+    const mixed = conduitFill([{ size: '16', qty: 2, cores: 20 }, { size: '12', qty: 1 }], 'THHN', 'IMC');
+    expect(mixed?.conductors).toBe(3);
+    expect(mixed?.recommended).toBe('1-1/4"');
   });
 });

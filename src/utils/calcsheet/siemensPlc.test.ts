@@ -271,5 +271,93 @@ describe('WAGO terminals and wiring', () => {
     expect(siemensPrice(SIEMENS_PARTS.tb2Level, [])).toEqual({ price: 99.41, source: 'quote' });
     expect(siemensPrice(SIEMENS_PARTS.relay, [])).toEqual({ price: 554.69, source: 'quote' });
     expect(SIEMENS_PARTS.wagoEco10).toMatchObject({ partNo: '787-732', price: 5337.3, brand: 'WAGO' });
+    expect(siemensPrice(SIEMENS_PARTS.wireRed, [])).toEqual({ price: 1500, source: 'quote' }); // per 100 m roll
+    expect(siemensPrice(SIEMENS_PARTS.wireBlue, [])).toEqual({ price: 1500, source: 'quote' });
+    expect(SIEMENS_PARTS.ferrule05.description).toBe('0.5mm2 ferrule');
+  });
+
+  it('lines are grouped for Section B: PLC, terminal blocks & relays, wires', () => {
+    const sec = (key: string) => c.lines.find((l) => l.key === key)?.section;
+    expect([sec('cpu1513'), sec('di16'), sec('memCard')]).toEqual(['plc', 'plc', 'plc']);
+    expect([sec('tb2Level'), sec('relay'), sec('tbFuse'), sec('endStop'), sec('dinRail')]).toEqual(['terminals', 'terminals', 'terminals', 'terminals', 'terminals']);
+    expect([sec('wireRed'), sec('wireBlue'), sec('ferrule05')]).toEqual(['wiring', 'wiring', 'wiring']);
+  });
+});
+
+describe('S7-1500 mounting rail', () => {
+  it('every S7-1500 CPU gets the shortest rail it fits on; none for S7-1200', () => {
+    expect(qty(cfg({ family: 'S7-1500' }), 'rail1500_160')).toBe(1);
+    expect(qty(cfg({ family: 'S7-1500', cpu: 'cpu1512c' }), 'rail1500_160')).toBe(1);
+    expect(qty(cfg({ family: 'S7-1200' }), 'rail1500_160')).toBe(0);
+    expect(SIEMENS_PARTS.rail1500_160.partNo).toBe('6ES7590-1AB60-0AA0');
+  });
+
+  it('redundant systems get one rail per CPU; the wide 1517H needs the 245 mm rail', () => {
+    expect(qty(cfg({ redundancy: 'R' }), 'rail1500_160')).toBe(2);
+    expect(qty(cfg({ redundancy: 'H' }), 'rail1500_245')).toBe(2);
+  });
+});
+
+describe('SCADA options: clients, data logging, redundancy', () => {
+  it('WinCC V8.1 client/server: WinCC/Server on each server, one RT Client per client', () => {
+    const c = cfg({ scada: 'wincc81', scadaQty: 1, scadaClients: 3 });
+    expect(qty(c, 'wincc81_RC_2048_standard')).toBe(1);
+    expect(qty(c, 'wincc81Server')).toBe(1);
+    expect(qty(c, 'wincc81Client')).toBe(3);
+    expect(SIEMENS_PARTS.wincc81Client.partNo).toBe('6AV6381-2CA08-1AX0');
+    expect(qty(cfg({ scada: 'wincc81' }), 'wincc81Server')).toBe(0); // single station — no server option
+  });
+
+  it('WinCC V8.1 redundancy doubles the servers and adds one Redundancy license per pair; archive per server', () => {
+    const c = cfg({ scada: 'wincc81', scadaQty: 1, scadaClients: 2, scadaRedundant: true, scadaLogging: '5000' });
+    expect(qty(c, 'wincc81_RC_2048_standard')).toBe(2);
+    expect(qty(c, 'wincc81Server')).toBe(2);
+    expect(qty(c, 'wincc81Redundancy')).toBe(1);
+    expect(qty(c, 'wincc81Archive_5000')).toBe(2);
+    expect(SIEMENS_PARTS.wincc81Redundancy.partNo).toBe('6AV6371-1CF08-1AX0');
+    expect(SIEMENS_PARTS.wincc81Archive_5000.partNo).toBe('6AV6371-1DQ10-0BX0');
+    // download edition → the download order numbers
+    const d = cfg({ scada: 'wincc81', licenseEdition: 'dl', scadaRedundant: true, scadaLogging: '1500' });
+    expect(qty(d, 'wincc81Redundancy_dl')).toBe(1);
+    expect(SIEMENS_PARTS.wincc81Archive_1500_dl.partNo).toBe('6AV6371-1HQ10-0AX0');
+  });
+
+  it('WinCC Unified: operate-client packs on each server, logging tags, Database Storage, redundancy', () => {
+    const c = cfg({ scada: 'unifiedPc', scadaPackage: '1k', scadaClients: 5, scadaRedundant: true, scadaLogging: '1000', scadaDbStorage: true });
+    expect(qty(c, 'unifiedPc_1k_standard')).toBe(2);
+    expect(qty(c, 'unifiedClient_3')).toBe(2);  // 5 = 3 + 1 + 1, on both servers
+    expect(qty(c, 'unifiedClient_1')).toBe(4);
+    expect(qty(c, 'unifiedLogging_1000')).toBe(2);
+    expect(qty(c, 'unifiedDbStorage')).toBe(2);
+    expect(qty(c, 'unifiedRedundancy')).toBe(1);
+    expect(SIEMENS_PARTS.unifiedClient_3.partNo).toBe('6AV2157-3JW00-0AB0');
+  });
+
+  it('servers and clients count as network devices for the switch', () => {
+    expect(cfg({ scada: 'wincc81', scadaClients: 4, scadaRedundant: true, switchQty: 1 }).network.devices).toBe(1 + 2 + 4);
+  });
+});
+
+describe('choosing the number of ET 200SP stations (IM)', () => {
+  it('auto uses the minimum; asking for more spreads the modules and adds IMs + light BaseUnits', () => {
+    const auto = cfg({ family: 'S7-1500', di: 6 * 16 });
+    expect([auto.stations, auto.suggestedStations, qty(auto, 'imBundle')]).toEqual([1, 1, 1]);
+    const three = cfg({ family: 'S7-1500', di: 6 * 16, imStations: 3 });
+    expect(qty(three, 'imBundle')).toBe(3);
+    expect([qty(three, 'buLight'), qty(three, 'buDark')]).toEqual([3, 3]); // 2 modules per station
+    expect(three.notes.join(' ')).toMatch(/3 ET 200SP stations as requested/);
+  });
+
+  it('never below the minimum, never more stations than modules', () => {
+    const tooFew = cfg({ family: 'S7-1500', di: 40 * 16, imStations: 1 });
+    expect(tooFew.stations).toBe(2);
+    expect(tooFew.notes.join(' ')).toMatch(/at least 2/);
+    expect(cfg({ family: 'S7-1500', di: 32, imStations: 5 }).stations).toBe(2);
+  });
+
+  it('a thermocouple-only station opens on an A1 light BaseUnit', () => {
+    // 2 DI modules + 2 TC modules over 2 stations → station 2 holds only TC modules
+    const c = cfg({ family: 'S7-1500', di: 32, analog: an({ aiTc: 16 }), imStations: 2 });
+    expect([qty(c, 'buLight'), qty(c, 'buDark'), qty(c, 'buLightA1'), qty(c, 'buDarkA1')]).toEqual([1, 1, 1, 1]);
   });
 });
