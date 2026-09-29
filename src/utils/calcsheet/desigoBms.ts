@@ -99,6 +99,10 @@ export const DCC_SCADA_PACKS = [
 ];
 /** Compact edition: 500 BA + 500 SCADA points and 3 clients included; BA expandable to 2,000; no redundancy. */
 export const DCC_COMPACT = { baIncluded: 500, baMax: 2000, scadaMax: 500, clientsMax: 3 };
+/** Desigo CC system limits (V5 system description): clients per server by type. */
+export const DCC_LIMITS = { installed: 10, windowsApp: 30, web: 40 };
+/** Without prices, CCA-MAX-CL instead of single-client add-ons from this many extra clients. */
+export const MAX_CL_FROM = 6;
 
 /**
  * Point packs covering `need` points at the lowest cost. Prices aren't known
@@ -106,13 +110,15 @@ export const DCC_COMPACT = { baIncluded: 500, baMax: 2000, scadaMax: 500, client
  * packs are cheaper per point): 900 points → one 1,000 pack rather than
  * 500 + 4 × 100, but 2,600 → 2 × 1,000 + 500 + 100 rather than 3 × 1,000.
  */
-export function bestPacks(need: number, sizes: number[]): { n: number; qty: number }[] {
+export function bestPacks(need: number, sizes: number[], price?: (n: number) => number): { n: number; qty: number }[] {
   if (need <= 0) return [];
   const unit = Math.min(...sizes);
   const needU = Math.ceil(need / unit);
   const maxU = Math.ceil(needU * 1.5) + 1;
   const coins = sizes.map((x) => x / unit);
-  const cost = sizes.map((x) => Math.pow(x, 0.85));
+  // Real prices when every pack has one (Sales → Pricelists), else the discount curve.
+  const real = price ? sizes.map(price) : [];
+  const cost = real.length && real.every((c) => c > 0) ? real : sizes.map((x) => Math.pow(x, 0.85));
   const best: number[] = Array(maxU + 1).fill(Infinity);
   const pick: number[] = Array(maxU + 1).fill(-1);
   best[0] = 0;
@@ -150,8 +156,14 @@ const DESIGO_PARTS_LIST: SiemensPart[] = [
   ...DCC_SCADA_PACKS.map((p) => ({ ...DCC, key: `dccScada_${p.n}`, partNo: p.partNo,
     description: `Desigo CC add ${p.n.toLocaleString('en-US')} SCADA data points (CCA-${p.n}-SCADA) — Modbus / OPC / S7 / SNMP integration`,
     generic: `BMS software — ${p.n.toLocaleString('en-US')} SCADA integration data points` })),
+  { ...DCC, key: 'dccCompactXl', partNo: 'P55802-Y109-A100', verify: true,
+    description: 'Desigo CC Compact XL Building Automation feature set (CCA-CMPXL-BA)', generic: 'BMS software — compact XL edition license' },
+  { ...DCC, key: 'dccMaxClients', partNo: 'P55802-Y120-A200', description: 'Desigo CC unlimited clients (CCA-MAX-CL) — any number of installed, Windows app or web clients',
+    generic: 'BMS software — unlimited clients license' },
   { ...DCC, key: 'dccClient', partNo: 'P55802-Y119-A200', description: 'Desigo CC add 1 client (CCA-1-CL) — installed, web or Windows app client', generic: 'BMS software — 1 additional client license' },
   { ...DCC, key: 'dccRedundancy', description: 'Desigo CC redundancy option (CCA-OP-REDU) — server failover pair', generic: 'BMS software — server redundancy option' },
+  { key: 'dccDongle', partNo: 'S55802-Y185', price: 0, brand: 'Siemens',
+    description: 'CMD.06 Micro Dongle — USB software protection key for Desigo CC licenses (LMS)', generic: 'BMS software license key (USB dongle)' },
   { ...DCC, key: 'dccEngineering', partNo: 'P55802-Y130-A100', description: 'Desigo CC engineering license (CCA-ENG)', generic: 'BMS software — engineering license' },
 ];
 
@@ -187,12 +199,14 @@ export interface DesigoInputs {
   sparePct: number;
   /** Desigo CC management station. */
   dcc: boolean;
-  /** 'auto' = Compact when the points / clients fit, else Standard. */
-  dccEdition: 'auto' | 'compact' | 'standard';
+  /** 'auto' = Compact when the points / clients fit, else Standard; Compact XL by hand (limits not confirmed). */
+  dccEdition: 'auto' | 'compact' | 'compactXl' | 'standard';
   /** Points integrated straight into Desigo CC over Modbus / OPC / S7 / SNMP (not via a PXC). */
   scadaPoints: number;
-  /** One-off engineering license (only if IOCT doesn't have one yet). */
+  /** One-off engineering license (only if IOCT doesn't have one yet) — always on its own dongle. */
   dccEngineering: boolean;
+  /** Project licenses on a USB dongle (else in the server's Trusted Store, tied to that PC). */
+  dccDongle: boolean;
   /** Integration points on top of the I/O (Modbus / BACnet from chillers, meters…). */
   integrationPoints: number;
   dccClients: number;
@@ -210,7 +224,7 @@ export interface DesigoInputs {
 export const DEFAULT_DESIGO_INPUTS: DesigoInputs = {
   controller: 'auto', protocols: noProtocols(), controllers: 0, di: 0, do: 0, analog: noAnalog(), sparePct: 10,
   dcc: true, integrationPoints: 0, dccClients: 1, dccWebClients: 0, dccRedundant: false,
-  dccEdition: 'auto', scadaPoints: 0, dccEngineering: false,
+  dccEdition: 'auto', scadaPoints: 0, dccEngineering: false, dccDongle: false,
   switchQty: 0, switchType: 'unmanaged', psu: 'none', terminals: true, panelW: 800, panelH: 1200,
 };
 
@@ -231,7 +245,7 @@ export interface DesigoConfig {
   modules: number;
   dataPoints: number;
   /** Desigo CC edition used (null = not included). */
-  dccEdition: 'compact' | 'standard' | null;
+  dccEdition: 'compact' | 'compactXl' | 'standard' | null;
   wiring: WiringSummary | null;
   /** I/O for the Control Panel configurator's terminal strip. */
   panelIo: PanelIo;
@@ -284,7 +298,12 @@ function fits(need: Need, m: PxcModel, qty: number): boolean {
   return tx.points <= (m.maxTxPoints ?? 0) * qty;
 }
 
-export function configureDesigo(raw: DesigoInputs): DesigoConfig {
+/**
+ * `priceOf(key)` — unit price of a part from the pricelist (0 = not priced);
+ * when given, license choices (point packs, unlimited vs. single clients)
+ * compare real prices.
+ */
+export function configureDesigo(raw: DesigoInputs, priceOf?: (key: string) => number): DesigoConfig {
   const inp = { ...raw, di: whole(raw.di), do: whole(raw.do) };
   const a = raw.analog ?? noAnalog();
   const sp = (n: number) => withSpare(whole(n), inp.sparePct);
@@ -374,12 +393,19 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
   const dataPoints = points + whole(inp.integrationPoints);
   const scadaPts = whole(inp.scadaPoints);
   const clients = Math.max(1, whole(inp.dccClients) + whole(inp.dccWebClients));
-  let dccEdition: 'compact' | 'standard' | null = null;
+  let dccEdition: 'compact' | 'compactXl' | 'standard' | null = null;
   if (inp.dcc) {
     const compactFits = !inp.dccRedundant && clients <= DCC_COMPACT.clientsMax && dataPoints <= DCC_COMPACT.baMax && scadaPts <= DCC_COMPACT.scadaMax;
-    dccEdition = inp.dccEdition === 'standard' || (inp.dccEdition === 'auto' && !compactFits) ? 'standard' : 'compact';
+    dccEdition = inp.dccEdition === 'compactXl' ? 'compactXl'
+      : inp.dccEdition === 'standard' || (inp.dccEdition === 'auto' && !compactFits) ? 'standard' : 'compact';
     const sw = 'bmsSoftware' as const;
-    if (dccEdition === 'compact') {
+    const packPrice = (prefix: string) => (priceOf ? (n: number) => priceOf(`${prefix}${n}`) : undefined);
+    if (whole(inp.dccClients) > DCC_LIMITS.installed) notes.push(`Desigo CC allows at most ${DCC_LIMITS.installed} installed clients per server — use Windows app (max. ${DCC_LIMITS.windowsApp}) or web clients (max. ${DCC_LIMITS.web}) for the rest.`);
+    if (whole(inp.dccWebClients) > DCC_LIMITS.web) notes.push(`More than ${DCC_LIMITS.web} web clients per server — split across servers (distributed system).`);
+    if (dccEdition === 'compactXl') {
+      add('dccCompactXl', 1, 'Compact XL feature set (picked by hand)', sw);
+      notes.push('Compact XL: the included points / clients are not on file — add BA-point packs or clients by hand if the supplier says they are needed.');
+    } else if (dccEdition === 'compact') {
       add('dccCompact', 1, `${dataPoints} BA points, ${scadaPts} SCADA, ${clients} client${clients === 1 ? '' : 's'} — fits Compact (500 BA / 500 SCADA / 3 clients included)`, sw);
       bestPacks(Math.max(0, dataPoints - DCC_COMPACT.baIncluded), DCC_BA_PACKS.map((p) => p.n).filter((n) => n <= 1000))
         .forEach(({ n, qty: q }) => add(`dccBa_${n}`, q, `BA points beyond the 500 included (${dataPoints} total, max. 2,000 on Compact)`, sw));
@@ -388,13 +414,24 @@ export function configureDesigo(raw: DesigoInputs): DesigoConfig {
       add('dccStandard', 1, inp.dccEdition === 'auto'
         ? `Standard — ${!compactFits ? (inp.dccRedundant ? 'redundancy' : clients > 3 ? `${clients} clients` : `${dataPoints} BA / ${scadaPts} SCADA points`) : ''} is beyond Compact`
         : 'Standard feature set (1 client included)', sw);
-      bestPacks(dataPoints, DCC_BA_PACKS.map((p) => p.n)).forEach(({ n, qty: q }) => add(`dccBa_${n}`, q, `${dataPoints} BA points (${points} I/O incl. spare + ${whole(inp.integrationPoints)} BACnet integration)`, sw));
-      bestPacks(scadaPts, DCC_SCADA_PACKS.map((p) => p.n)).forEach(({ n, qty: q }) => add(`dccScada_${n}`, q, `${scadaPts} SCADA points (Modbus / OPC / S7 / SNMP direct)`, sw));
-      add('dccClient', clients - 1, `${clients} clients — 1 comes with the Standard feature set`, sw);
+      bestPacks(dataPoints, DCC_BA_PACKS.map((p) => p.n), packPrice('dccBa_')).forEach(({ n, qty: q }) => add(`dccBa_${n}`, q, `${dataPoints} BA points (${points} I/O incl. spare + ${whole(inp.integrationPoints)} BACnet integration)`, sw));
+      bestPacks(scadaPts, DCC_SCADA_PACKS.map((p) => p.n), packPrice('dccScada_')).forEach(({ n, qty: q }) => add(`dccScada_${n}`, q, `${scadaPts} SCADA points (Modbus / OPC / S7 / SNMP direct)`, sw));
+      // Extra clients: single add-ons, or unlimited (CCA-MAX-CL) when cheaper.
+      const extra = clients - 1;
+      const one = priceOf?.('dccClient') ?? 0;
+      const max = priceOf?.('dccMaxClients') ?? 0;
+      const useMax = extra > 0 && (one > 0 && max > 0 ? max < extra * one : extra >= MAX_CL_FROM);
+      if (useMax) add('dccMaxClients', 1, `${clients} clients — unlimited is ${one > 0 && max > 0 ? 'cheaper' : `used from ${MAX_CL_FROM} extra clients`} than ${extra} × single add-on`, sw);
+      else add('dccClient', extra, `${clients} clients — 1 comes with the Standard feature set`, sw);
       add('dccRedundancy', inp.dccRedundant ? 1 : 0, 'Server failover pair (main + standby server)', sw);
     }
     add('dccEngineering', inp.dccEngineering ? 1 : 0, 'One-off — for engineering the project (skip if IOCT already has one)', sw);
-    notes.push(`Desigo CC ${dccEdition === 'compact' ? 'Compact' : 'Standard'}: long-term storage, trends and reports are included in the feature set.${inp.dccRedundant ? ' Redundancy option order number: ask the supplier.' : ''}`);
+    // CMD.06 dongle: mandatory for the engineering license; optional for the
+    // project licenses (else Trusted Store on the server) — one per server.
+    const servers = dccEdition === 'standard' && inp.dccRedundant ? 2 : 1;
+    const dongles = (inp.dccDongle ? servers : 0) + (inp.dccEngineering ? 1 : 0);
+    add('dccDongle', dongles, [inp.dccDongle && `project licenses on USB (${servers} server${servers === 1 ? '' : 's'})`, inp.dccEngineering && 'engineering license (dongle required)'].filter(Boolean).join(' + '), sw);
+    notes.push(`Desigo CC ${dccEdition === 'compact' ? 'Compact' : dccEdition === 'compactXl' ? 'Compact XL' : 'Standard'}: long-term storage, trends and reports are included in the feature set.${inp.dccRedundant ? ' Redundancy option order number: ask the supplier.' : ''}`);
   }
 
   // Network: BACnet/IP between stations and the management station.

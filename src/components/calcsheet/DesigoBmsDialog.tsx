@@ -49,7 +49,7 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
   const fetchCatalog = usePricelistStore((s) => s.fetchItems);
   useEffect(() => { if (open && catalog.length === 0) void fetchCatalog().catch(() => {}); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const cfg = configureDesigo(inp);
+  const cfg = configureDesigo(inp, (key) => (DESIGO_PARTS[key] ? siemensPrice(DESIGO_PARTS[key], catalog).price : 0));
   const rows = cfg.lines.map((l) => {
     const part = DESIGO_PARTS[l.key];
     const p = siemensPrice(part, catalog);
@@ -182,6 +182,7 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
                   helperText={inp.dccEdition === 'auto' && cfg.dccEdition ? `Auto: ${cfg.dccEdition === 'compact' ? 'Compact' : 'Standard'}` : ' '}>
                   <MenuItem value="auto">Auto — best fit</MenuItem>
                   <MenuItem value="compact">Compact (≤ 2,000 points, 3 clients)</MenuItem>
+                  <MenuItem value="compactXl">Compact XL (manual)</MenuItem>
                   <MenuItem value="standard">Standard</MenuItem>
                 </TextField>
                 <Box sx={{ width: 150 }}>{num('integrationPoints', 'BACnet integration', 'Extra BA points')}</Box>
@@ -192,6 +193,8 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
                   label={<Typography variant="body2">Redundant servers</Typography>} />
                 <FormControlLabel control={<Checkbox size="small" checked={inp.dccEngineering} onChange={(e) => set('dccEngineering', e.target.checked)} />}
                   label={<Typography variant="body2">Engineering license</Typography>} />
+                <FormControlLabel control={<Checkbox size="small" checked={inp.dccDongle} onChange={(e) => set('dccDongle', e.target.checked)} />}
+                  label={<Typography variant="body2">Licenses on USB dongle</Typography>} />
               </>
             )}
           </Stack>
@@ -220,7 +223,7 @@ export default function DesigoBmsDialog({ open, onClose, productContingencyPct, 
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                 {cfg.points > 0 && <Chip size="small" variant="outlined" color="success" label={`${cfg.points} I/O points incl. spare · ${cfg.txPoints} on TX-I/O`} />}
                 {cfg.modules > 0 && <Chip size="small" variant="outlined" label={`${cfg.modules} TX-I/O module${cfg.modules === 1 ? '' : 's'}`} />}
-                {inp.dcc && cfg.dataPoints > 0 && <Chip size="small" variant="outlined" label={`${cfg.dataPoints} Desigo CC BA points · ${cfg.dccEdition === 'compact' ? 'Compact' : 'Standard'}`} />}
+                {inp.dcc && cfg.dataPoints > 0 && <Chip size="small" variant="outlined" label={`${cfg.dataPoints} Desigo CC BA points · ${cfg.dccEdition === 'compact' ? 'Compact' : cfg.dccEdition === 'compactXl' ? 'Compact XL' : 'Standard'}`} />}
                 {cfg.wiring && <Chip size="small" variant="outlined" label={`${cfg.wiring.terminals} terminals · ${(cfg.wiring.railMm / 1000).toFixed(1)} m DIN rail`} />}
               </Stack>
               {cfg.notes.map((n) => <Alert key={n} severity="info" sx={{ py: 0 }}>{n}</Alert>)}

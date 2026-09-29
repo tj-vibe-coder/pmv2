@@ -172,3 +172,41 @@ describe('RTD: Pt1000 on universal points, Pt100 on TXM1.8P', () => {
     expect(DESIGO_PARTS.txP8.partNo).toBe('BPZ:TXM1.8P');
   });
 });
+
+describe('license dongle (CMD.06)', () => {
+  it('none by default (Trusted Store); one per server when chosen; always one for the engineering license', () => {
+    expect(qty(cfg({ di: 10 }), 'dccDongle')).toBe(0);
+    expect(qty(cfg({ di: 10, dccDongle: true }), 'dccDongle')).toBe(1);
+    expect(qty(cfg({ di: 10, dccDongle: true, dccRedundant: true }), 'dccDongle')).toBe(2);
+    expect(qty(cfg({ di: 10, dccEngineering: true }), 'dccDongle')).toBe(1);
+    expect(DESIGO_PARTS.dccDongle.partNo).toBe('S55802-Y185');
+  });
+});
+
+describe('clients: single add-ons vs. unlimited (CCA-MAX-CL); Compact XL', () => {
+  it('without prices: single add-ons up to 5 extra, unlimited from 6', () => {
+    expect(qty(cfg({ di: 10, dccClients: 6 }), 'dccClient')).toBe(5);
+    const many = cfg({ di: 10, dccClients: 4, dccWebClients: 3 });
+    expect([qty(many, 'dccClient'), qty(many, 'dccMaxClients')]).toEqual([0, 1]);
+    expect(DESIGO_PARTS.dccMaxClients.partNo).toBe('P55802-Y120-A200');
+  });
+
+  it('with pricelist prices: whichever is cheaper', () => {
+    const price = (k: string) => ({ dccClient: 10000, dccMaxClients: 25000 } as Record<string, number>)[k] ?? 0;
+    // 4 extra clients: 4 × 10,000 = 40,000 > 25,000 → unlimited
+    expect(qty(configureDesigo({ ...DEFAULT_DESIGO_INPUTS, sparePct: 0, terminals: false, di: 10, dccClients: 5 }, price), 'dccMaxClients')).toBe(1);
+    // 2 extra: 20,000 < 25,000 → singles
+    expect(qty(configureDesigo({ ...DEFAULT_DESIGO_INPUTS, sparePct: 0, terminals: false, di: 10, dccClients: 3, dccEdition: 'standard' }, price), 'dccClient')).toBe(2);
+  });
+
+  it('warns past the Desigo CC client limits', () => {
+    expect(cfg({ di: 10, dccClients: 12 }).notes.join(' ')).toMatch(/at most 10 installed clients/);
+  });
+
+  it('Compact XL can be picked by hand', () => {
+    const c = cfg({ di: 10, dccEdition: 'compactXl' });
+    expect(c.dccEdition).toBe('compactXl');
+    expect(qty(c, 'dccCompactXl')).toBe(1);
+    expect(DESIGO_PARTS.dccCompactXl.partNo).toBe('P55802-Y109-A100');
+  });
+});

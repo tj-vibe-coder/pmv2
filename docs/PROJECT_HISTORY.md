@@ -12,6 +12,9 @@
 - **TX-I/O address keys**: BPZ:TXA1.K12 (1–12 + reset) per station up to 12 modules, else BPZ:TXA1.K24 (1–24 + 2 reset).
 - **RTD**: 2-wire = Pt1000 / Ni1000 on universal points (on board / TXM1.8U); 3-/4-wire = Pt100 on BPZ:TXM1.8P (8 × Pt100 4-wire / 250 Ω).
 - PXC selection stays auto (smallest that fits I/O + RS-485 trunks) with manual override.
+- **Dongle**: CMD.06 Micro Dongle S55802-Y185 — always 1 for the engineering license; for project licenses optional (`dccDongle`, one per server), else Trusted Store on the server PC.
+- **Clients**: CCA-MAX-CL unlimited clients P55802-Y120-A200 vs. CCA-1-CL add-ons — compares pricelist prices when both are priced (`configureDesigo(inp, priceOf)`), else unlimited from 6 extra clients (`MAX_CL_FROM`). Warns past the V5 system limits (10 installed / 30 Windows app / 40 web clients per server). `bestPacks` also uses real pack prices when every pack is priced.
+- **Compact XL** CCA-CMPXL-BA P55802-Y109-A100: selectable by hand only — its included points / clients weren't found, so auto doesn't pick it (verify P/N; ask the supplier for its limits).
 
 ## 2026-09-30 — Control Panel configurator; terminals moved out of the PLC / BMS dialogs
 
