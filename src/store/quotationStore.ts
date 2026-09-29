@@ -106,6 +106,9 @@ interface Actions {
   // Saved-version history for a quotation (newest first). Not cached in the store —
   // fetched on demand when the History dialog opens.
   fetchQuotationVersions: (id: ID) => Promise<QuotationVersion[]>;
+  // Read one quotation fresh from the server without touching store state.
+  // Used by the editor's Live sync to pick up rows written outside the UI.
+  fetchQuotationFresh: (id: ID, projectId: ID) => Promise<Quotation | null>;
   deleteQuotationVersion: (quotationId: ID, versionId: ID) => Promise<void>;
 
   // Presets
@@ -627,6 +630,13 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
   deleteQuotation: async (id) => {
     await api('DELETE', `/quotations/${id}`);
     set({ quotations: get().quotations.filter((q) => q.id !== id) });
+  },
+  fetchQuotationFresh: async (id, projectId) => {
+    const res = await api<{ quotations: Quotation[] }>(
+      'GET',
+      `/quotations?projectId=${encodeURIComponent(projectId)}`,
+    );
+    return (res.quotations ?? []).find((q) => q.id === id) ?? null;
   },
   fetchQuotationVersions: async (id) => {
     const res = await api<{ versions: QuotationVersion[] }>('GET', `/quotations/${id}/versions`);

@@ -12,8 +12,8 @@ const app = require('./server.js');
 exports.api = onRequest(
   {
     region: 'us-central1',
-    memory: '256MiB',
-    timeoutSeconds: 120,
+    memory: '1GiB',
+    timeoutSeconds: 300,
     invoker: 'public',
   },
   app
