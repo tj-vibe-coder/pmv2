@@ -56,11 +56,15 @@ const AREA_IN2: Record<Insulation, Record<WireSize, number>> = {
   },
 };
 
-// Table 4, total (100%) internal area in mm².
-const CONDUIT_AREA_MM2: Record<ConduitType, Record<PipeSize, number>> = {
-  IMC: { '1/2"': 222, '3/4"': 377, '1"': 620, '1-1/4"': 1064, '1-1/2"': 1432, '2"': 2341 },
-  EMT: { '1/2"': 196, '3/4"': 343, '1"': 556, '1-1/4"': 968, '1-1/2"': 1314, '2"': 2165 },
+// Table 4, total (100%) internal area — the published in² figures (kept exact:
+// rounding to whole mm² tips borderline counts over the Note 7 threshold).
+const CONDUIT_AREA_IN2: Record<ConduitType, Record<PipeSize, number>> = {
+  IMC: { '1/2"': 0.342, '3/4"': 0.586, '1"': 0.959, '1-1/4"': 1.647, '1-1/2"': 2.225, '2"': 3.63 },
+  EMT: { '1/2"': 0.304, '3/4"': 0.533, '1"': 0.864, '1-1/4"': 1.496, '1-1/2"': 2.036, '2"': 3.356 },
 };
+const CONDUIT_AREA_MM2 = Object.fromEntries(
+  Object.entries(CONDUIT_AREA_IN2).map(([t, sizes]) => [t, Object.fromEntries(Object.entries(sizes).map(([k, v]) => [k, v * IN2_TO_MM2]))]),
+) as Record<ConduitType, Record<PipeSize, number>>;
 
 const CONDUIT_ORDER: PipeSize[] = ['1/2"', '3/4"', '1"', '1-1/4"', '1-1/2"', '2"'];
 
@@ -86,6 +90,27 @@ export interface FillResult {
   fillOf: (size: PipeSize) => number;
 }
 
+/**
+ * How many cables of one size a conduit may hold (PEC Chapter 9): 40% fill
+ * for three or more, 31% for two, 53% for one; and Note 7 — when every cable
+ * is the same size and the count works out to a decimal of 0.8 or more, the
+ * next whole number is permitted (this is how the Annex C tables are built).
+ */
+export function maxCables(size: WireSize, insulation: Insulation, type: ConduitType, pipe: PipeSize): number {
+  const a = wireAreaMm2(size, insulation);
+  const area = CONDUIT_AREA_MM2[type][pipe];
+  const raw = (0.4 * area) / a;
+  const n = raw - Math.floor(raw) >= 0.8 ? Math.ceil(raw) : Math.floor(raw);
+  if (n >= 3) return n;
+  if (2 * a <= 0.31 * area) return 2;
+  return a <= 0.53 * area ? 1 : 0;
+}
+
+/** Cables of `size` per pipe for every pipe size (the Annex C row). */
+export function capacityBySize(size: WireSize, insulation: Insulation, type: ConduitType): { pipe: PipeSize; max: number }[] {
+  return CONDUIT_ORDER.map((pipe) => ({ pipe, max: maxCables(size, insulation, type, pipe) }));
+}
+
 export function conduitFill(groups: ConductorGroup[], insulation: Insulation, type: ConduitType): FillResult | null {
   const valid = groups.filter((g) => g.qty > 0);
   const conductors = valid.reduce((n, g) => n + Math.round(g.qty), 0);
@@ -93,6 +118,12 @@ export function conduitFill(groups: ConductorGroup[], insulation: Insulation, ty
   const area = valid.reduce((a, g) => a + Math.round(g.qty) * wireAreaMm2(g.size, insulation), 0);
   const limit = fillLimit(conductors);
   const fillOf = (size: PipeSize) => area / CONDUIT_AREA_MM2[type][size];
-  const recommended = CONDUIT_ORDER.find((size) => fillOf(size) <= limit + 1e-9) ?? null;
+  // All one size → use the per-pipe capacity (incl. Note 7) so the
+  // recommendation agrees with the capacity shown; mixed sizes → by area.
+  const sizes = new Set(valid.map((g) => g.size));
+  const fits = sizes.size === 1
+    ? (pipe: PipeSize) => conductors <= maxCables(valid[0].size, insulation, type, pipe)
+    : (pipe: PipeSize) => fillOf(pipe) <= limit + 1e-9;
+  const recommended = CONDUIT_ORDER.find(fits) ?? null;
   return { conductors, wireAreaMm2: area, limit, recommended, fillOf };
 }

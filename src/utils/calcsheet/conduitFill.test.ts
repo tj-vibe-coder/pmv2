@@ -1,4 +1,4 @@
-import { conduitFill, fillLimit, wireAreaMm2 } from './conduitFill';
+import { capacityBySize, conduitFill, fillLimit, maxCables, wireAreaMm2 } from './conduitFill';
 
 describe('PEC Chapter 9 conduit fill', () => {
   it('Table 1 limits: 53% one wire, 31% two, 40% three or more', () => {
@@ -48,5 +48,26 @@ describe('PEC Chapter 9 conduit fill', () => {
   it('no wires → nothing to check', () => {
     expect(conduitFill([], 'THHN', 'IMC')).toBeNull();
     expect(conduitFill([{ size: '12', qty: 0 }], 'THHN', 'IMC')).toBeNull();
+  });
+});
+
+describe('cables per pipe (maxCables) — matches NEC Annex C', () => {
+  // Annex C Table C.1 (EMT) and C.4 (IMC), THHN/THWN, trade sizes 1/2"…2".
+  it('EMT, THHN', () => {
+    expect(capacityBySize('14', 'THHN', 'EMT').map((c) => c.max)).toEqual([12, 22, 35, 61, 84, 138]);
+    expect(capacityBySize('12', 'THHN', 'EMT').map((c) => c.max)).toEqual([9, 16, 26, 45, 61, 101]);
+    expect(capacityBySize('10', 'THHN', 'EMT').map((c) => c.max)).toEqual([5, 10, 16, 28, 38, 63]);
+  });
+  it('IMC, THHN', () => {
+    expect(capacityBySize('14', 'THHN', 'IMC').map((c) => c.max)).toEqual([14, 24, 39, 68, 91, 149]);
+    expect(capacityBySize('12', 'THHN', 'IMC').map((c) => c.max)).toEqual([10, 17, 29, 49, 67, 109]);
+  });
+  it('Note 7: a remainder of 0.8+ rounds up', () => {
+    // 3/4" EMT, 12 AWG THHN: 0.4 × 343 / 8.58 = 15.99 → 16
+    expect(maxCables('12', 'THHN', 'EMT', '3/4"')).toBe(16);
+  });
+  it('the recommendation agrees with the capacity for one cable size', () => {
+    expect(conduitFill([{ size: '12', qty: 16 }], 'THHN', 'EMT')?.recommended).toBe('3/4"');
+    expect(conduitFill([{ size: '12', qty: 17 }], 'THHN', 'EMT')?.recommended).toBe('1"');
   });
 });
