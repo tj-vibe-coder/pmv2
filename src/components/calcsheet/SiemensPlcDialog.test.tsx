@@ -34,3 +34,24 @@ it('configures an S7-1500 with Modbus RTU and adds the priced modules under a PL
   expect(byPart['6EP1336-2BA10']).toMatchObject({ qty: 1 });
   expect(byPart['6ES7241-1CH30-1XB0']).toBeUndefined();                       // no CB 1241 on S7-1500
 });
+
+it('adds another CPU model, an HMI by size and a WinCC license — unpriced ones for inquiry', () => {
+  const onSubmit = jest.fn();
+  render(<SiemensPlcDialog open onClose={() => {}} productContingencyPct={0} onSubmit={onSubmit} />);
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /^CPU/ }));
+  fireEvent.click(screen.getByRole('option', { name: /1212C DC\/DC\/DC/ }));
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /HMI panel/i }));
+  fireEvent.click(screen.getByRole('option', { name: /Unified Comfort/ }));
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /HMI size/i }));
+  fireEvent.click(screen.getByRole('option', { name: /12" — MTP1200/ }));
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /SCADA license/i }));
+  fireEvent.click(screen.getByRole('option', { name: /WinCC V8\.1/ }));
+  expect(screen.getAllByText('For inquiry').length).toBe(3);                  // CPU, HMI, WinCC
+  expect(screen.getByText('Ask supplier')).toBeInTheDocument();                // WinCC part no.
+
+  fireEvent.click(screen.getByRole('button', { name: /to components/i }));
+  const [rows] = onSubmit.mock.calls[0] as [Array<{ partNo: string; description: string; qty: number; unitCost: number; uom: string }>];
+  expect(rows.find((r) => r.partNo === '6ES7212-1AE40-0XB0')).toMatchObject({ qty: 1, unitCost: 0 });
+  expect(rows.find((r) => r.partNo === '6AV2128-3MB06-0AX1')).toMatchObject({ qty: 1, unitCost: 0 });
+  expect(rows.find((r) => /WinCC V8\.1 RC/.test(r.description))).toMatchObject({ qty: 1, uom: 'lic', partNo: '' });
+});
