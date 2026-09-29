@@ -105,10 +105,31 @@ describe('other CPU models, HMI, SCADA and SITOP choices', () => {
     const c = cfg({ family: 'S7-1500', memCard: 'memCard24', hmi: 'mtp1000', hmiQty: 2, scada: 'wincc81', winccLicense: 'RT', scadaPackage: '8192' });
     expect(qty(c, 'memCard24')).toBe(1);
     expect(qty(c, 'mtp1000')).toBe(2);
-    expect(qty(c, 'wincc81_RT_8192')).toBe(1);
+    expect(qty(c, 'wincc81_RT_8192_standard')).toBe(1);
     expect(siemensPrice(SIEMENS_PARTS.mtp1000, [])).toEqual({ price: 0, source: 'none' });
-    expect(SIEMENS_PARTS.wincc81_RT_8192.description).toMatch(/WinCC V8\.1 RT.*8192 PowerTags/);
-    expect(qty(cfg({ scada: 'unifiedPc', scadaPackage: '1k' }), 'unifiedPc_1k')).toBe(1);
+    expect(SIEMENS_PARTS.wincc81_RT_8192_standard.description).toMatch(/WinCC V8\.1 RT.*8192 PowerTags/);
+    expect(qty(cfg({ scada: 'unifiedPc', scadaPackage: '1k' }), 'unifiedPc_1k_standard')).toBe(1);
+  });
+
+  // Part numbers as listed in the Siemens TIA Selection Tool (Sep 2026).
+  it('WinCC V8.1 license part numbers follow the RC/RT size code and the edition', () => {
+    expect(SIEMENS_PARTS.wincc81_RC_2048_standard.partNo).toBe('6AV6381-2BP08-1AX0');
+    expect(SIEMENS_PARTS.wincc81_RC_102400_asia.partNo).toBe('6AV6381-2BT08-1AV0');
+    expect(SIEMENS_PARTS.wincc81_RT_128_dl.partNo).toBe('6AV6381-2BC08-1AH0');
+    expect(SIEMENS_PARTS.wincc81_RT_65536_standard.partNo).toBe('6AV6381-2BF08-1AX0');
+    expect(qty(cfg({ scada: 'wincc81', winccLicense: 'RC', scadaPackage: '512', licenseEdition: 'asia' }), 'wincc81_RC_512_asia')).toBe(1);
+  });
+
+  it('WinCC Unified V21 PC Runtime packages (download edition falls back to standard)', () => {
+    expect(SIEMENS_PARTS.unifiedPc_150_standard.partNo).toBe('6AV2155-3DB02-5AA0');
+    expect(SIEMENS_PARTS.unifiedPc_10k_asia.partNo).toBe('6AV2155-2FB02-5BA0');
+    expect(qty(cfg({ scada: 'unifiedPc', scadaPackage: '2.5k', licenseEdition: 'dl' }), 'unifiedPc_2.5k_standard')).toBe(1);
+  });
+
+  it('S7-1500 CPUs use the current "…03" generation; memory cards "…04"', () => {
+    expect(SIEMENS_PARTS.cpu1511.partNo).toBe('6ES7511-1AL03-0AB0');
+    expect(SIEMENS_PARTS.cpu1516f.partNo).toBe('6ES7516-3FP03-0AB0');
+    expect(SIEMENS_PARTS.memCard4.partNo).toBe('6ES7954-8LC04-0AA0');
   });
 
   it('an HMI adds its draw to the 24 V estimate', () => {
@@ -124,7 +145,7 @@ describe('other CPU models, HMI, SCADA and SITOP choices', () => {
   });
 
   it('parts without a part number never match a catalog row', () => {
-    expect(siemensPrice(SIEMENS_PARTS.wincc81_RC_2048, [{ catalogNo: '', sellingPrice: 999 }])).toEqual({ price: 0, source: 'none' });
+    expect(siemensPrice({ key: 'x', partNo: '', description: '', price: 0 }, [{ catalogNo: '', sellingPrice: 999 }])).toEqual({ price: 0, source: 'none' });
   });
 });
 

@@ -46,12 +46,13 @@ it('adds another CPU model, an HMI by size and a WinCC license — unpriced ones
   fireEvent.click(screen.getByRole('option', { name: /12" — MTP1200/ }));
   fireEvent.mouseDown(screen.getByRole('combobox', { name: /SCADA license/i }));
   fireEvent.click(screen.getByRole('option', { name: /WinCC V8\.1/ }));
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /Edition/i }));
+  fireEvent.click(screen.getByRole('option', { name: /Asia edition/ }));
   expect(screen.getAllByText('For inquiry').length).toBe(3);                  // CPU, HMI, WinCC
-  expect(screen.getByText('Ask supplier')).toBeInTheDocument();                // WinCC part no.
 
   fireEvent.click(screen.getByRole('button', { name: /to components/i }));
   const [rows] = onSubmit.mock.calls[0] as [Array<{ partNo: string; description: string; qty: number; unitCost: number; uom: string }>];
   expect(rows.find((r) => r.partNo === '6ES7212-1AE40-0XB0')).toMatchObject({ qty: 1, unitCost: 0 });
   expect(rows.find((r) => r.partNo === '6AV2128-3MB06-0AX1')).toMatchObject({ qty: 1, unitCost: 0 });
-  expect(rows.find((r) => /WinCC V8\.1 RC/.test(r.description))).toMatchObject({ qty: 1, uom: 'lic', partNo: '' });
+  expect(rows.find((r) => /WinCC V8\.1 RC/.test(r.description))).toMatchObject({ qty: 1, uom: 'lic', partNo: '6AV6381-2BP08-1AV0' });
 });

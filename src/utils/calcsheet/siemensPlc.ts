@@ -20,15 +20,17 @@
 //
 // Prices: parts marked `quoted` carry the price and part number from the
 // supplier quotes TJ supplied (2026). The rest are listed so the BOM is
-// complete — price 0 ("for inquiry") and part numbers from Siemens' catalog
-// that should be confirmed with the supplier. A catalog item with the same
-// part number (Sales → Pricelists) overrides any price here.
+// complete — price 0 ("for inquiry"); their part numbers were checked in the
+// Siemens TIA Selection Tool (Sep 2026). A catalog item with the same part
+// number (Sales → Pricelists) overrides any price here.
 
 export type PlcFamily = 'S7-1200' | 'S7-1500';
 export type ModbusMode = 'none' | 'tcp' | 'rtu';
 export type HmiLine = 'basic' | 'comfort' | 'unified';
 export type ScadaKind = 'none' | 'wincc81' | 'unifiedPc';
 export type WinccLicense = 'RC' | 'RT';
+/** License delivery: standard (license on USB stick), Asia edition, or download (WinCC V8.1 only). */
+export type LicenseEdition = 'standard' | 'asia' | 'dl';
 
 export interface SiemensPart {
   key: string;
@@ -54,6 +56,8 @@ export interface CpuModel {
   drawA: number;
   relayOutputs?: boolean;
   failSafe?: boolean;
+  /** Work memory, e.g. "300 KB program, 1.5 MB data" (S7-1500). */
+  memory?: string;
 }
 
 const cpu1200 = (key: string, model: string, variant: 'DC/DC/DC' | 'AC/DC/RLY' | 'DC/DC/RLY', io: [number, number, number, number], drawA: number, failSafe = false): CpuModel => ({
@@ -61,9 +65,9 @@ const cpu1200 = (key: string, model: string, variant: 'DC/DC/DC' | 'AC/DC/RLY' |
   onboard: { di: io[0], do: io[1], ai: io[2], ao: io[3] }, aiCurrent: false,
   drawA: variant === 'AC/DC/RLY' ? 0 : drawA, relayOutputs: variant !== 'DC/DC/DC', failSafe,
 });
-const cpu1500 = (key: string, label: string, drawA: number, opts: Partial<Pick<CpuModel, 'onboard' | 'failSafe'>> = {}): CpuModel => ({
+const cpu1500 = (key: string, label: string, drawA: number, memory: string, opts: Partial<Pick<CpuModel, 'onboard' | 'failSafe'>> = {}): CpuModel => ({
   key, family: 'S7-1500', label, onboard: opts.onboard ?? { di: 0, do: 0, ai: 0, ao: 0 },
-  aiCurrent: true, drawA, failSafe: opts.failSafe ?? false,
+  aiCurrent: true, drawA, failSafe: opts.failSafe ?? false, memory,
 });
 
 export const CPU_MODELS: CpuModel[] = [
@@ -83,16 +87,16 @@ export const CPU_MODELS: CpuModel[] = [
   cpu1200('cpu1212f', 'CPU 1212FC', 'DC/DC/DC', [8, 6, 2, 0], 0.4, true),
   cpu1200('cpu1214f', 'CPU 1214FC', 'DC/DC/DC', [14, 10, 2, 0], 0.5, true),
   cpu1200('cpu1215f', 'CPU 1215FC', 'DC/DC/DC', [14, 10, 2, 2], 0.5, true),
-  cpu1500('cpu1511', 'CPU 1511-1 PN', 0.6),
-  cpu1500('cpu1513', 'CPU 1513-1 PN', 0.7),
-  cpu1500('cpu1515', 'CPU 1515-2 PN', 0.8),
-  cpu1500('cpu1516', 'CPU 1516-3 PN/DP', 0.9),
-  cpu1500('cpu1511c', 'CPU 1511C-1 PN (compact)', 0.8, { onboard: { di: 16, do: 16, ai: 4, ao: 2 } }),
-  cpu1500('cpu1512c', 'CPU 1512C-1 PN (compact)', 0.9, { onboard: { di: 32, do: 32, ai: 4, ao: 2 } }),
-  cpu1500('cpu1511f', 'CPU 1511F-1 PN (fail-safe)', 0.6, { failSafe: true }),
-  cpu1500('cpu1513f', 'CPU 1513F-1 PN (fail-safe)', 0.7, { failSafe: true }),
-  cpu1500('cpu1515f', 'CPU 1515F-2 PN (fail-safe)', 0.8, { failSafe: true }),
-  cpu1500('cpu1516f', 'CPU 1516F-3 PN/DP (fail-safe)', 0.9, { failSafe: true }),
+  cpu1500('cpu1511', 'CPU 1511-1 PN', 0.6, '300 KB program, 1.5 MB data'),
+  cpu1500('cpu1513', 'CPU 1513-1 PN', 0.7, '600 KB program, 2.5 MB data'),
+  cpu1500('cpu1515', 'CPU 1515-2 PN', 0.8, '1 MB program, 4.5 MB data'),
+  cpu1500('cpu1516', 'CPU 1516-3 PN/DP', 0.9, '2 MB program, 7.5 MB data'),
+  cpu1500('cpu1511c', 'CPU 1511C-1 PN (compact)', 0.8, '300 KB program, 1.5 MB data', { onboard: { di: 16, do: 16, ai: 4, ao: 2 } }),
+  cpu1500('cpu1512c', 'CPU 1512C-1 PN (compact)', 0.9, '400 KB program, 2 MB data', { onboard: { di: 32, do: 32, ai: 4, ao: 2 } }),
+  cpu1500('cpu1511f', 'CPU 1511F-1 PN (fail-safe)', 0.6, '450 KB program, 1.5 MB data', { failSafe: true }),
+  cpu1500('cpu1513f', 'CPU 1513F-1 PN (fail-safe)', 0.7, '900 KB program, 2.5 MB data', { failSafe: true }),
+  cpu1500('cpu1515f', 'CPU 1515F-2 PN (fail-safe)', 0.8, '1.5 MB program, 4.5 MB data', { failSafe: true }),
+  cpu1500('cpu1516f', 'CPU 1516F-3 PN/DP (fail-safe)', 0.9, '3 MB program, 7.5 MB data', { failSafe: true }),
 ];
 export const DEFAULT_CPU: Record<PlcFamily, string> = { 'S7-1200': 'cpu1214', 'S7-1500': 'cpu1513' };
 
@@ -124,9 +128,9 @@ export const HMI_PANELS: HmiPanel[] = [
   { key: 'tp700', line: 'comfort', model: 'TP700 Comfort', sizeIn: 7, partNo: '6AV2124-0GC01-0AX0', drawA: 0.5 },
   { key: 'tp900', line: 'comfort', model: 'TP900 Comfort', sizeIn: 9, partNo: '6AV2124-0JC01-0AX0', drawA: 0.6 },
   { key: 'tp1200', line: 'comfort', model: 'TP1200 Comfort', sizeIn: 12, partNo: '6AV2124-0MC01-0AX0', drawA: 0.8 },
-  { key: 'tp1500', line: 'comfort', model: 'TP1500 Comfort', sizeIn: 15, partNo: '6AV2124-0QC02-0AX0', drawA: 1.1 },
-  { key: 'tp1900', line: 'comfort', model: 'TP1900 Comfort', sizeIn: 19, partNo: '6AV2124-0UC02-0AX0', drawA: 1.4 },
-  { key: 'tp2200', line: 'comfort', model: 'TP2200 Comfort', sizeIn: 22, partNo: '6AV2124-0XC02-0AX0', drawA: 1.6 },
+  { key: 'tp1500', line: 'comfort', model: 'TP1500 Comfort', sizeIn: 15, partNo: '6AV2124-0QC02-0AX2', drawA: 1.1 },
+  { key: 'tp1900', line: 'comfort', model: 'TP1900 Comfort', sizeIn: 19, partNo: '6AV2124-0UC02-0AX1', drawA: 1.4 },
+  { key: 'tp2200', line: 'comfort', model: 'TP2200 Comfort', sizeIn: 22, partNo: '6AV2124-0XC02-0AX1', drawA: 1.6 },
   { key: 'mtp700', line: 'unified', model: 'MTP700 Unified Comfort', sizeIn: 7, partNo: '6AV2128-3GB06-0AX1', drawA: 0.5 },
   { key: 'mtp1000', line: 'unified', model: 'MTP1000 Unified Comfort', sizeIn: 10, partNo: '6AV2128-3KB06-0AX1', drawA: 0.7 },
   { key: 'mtp1200', line: 'unified', model: 'MTP1200 Unified Comfort', sizeIn: 12, partNo: '6AV2128-3MB06-0AX1', drawA: 0.8 },
@@ -135,25 +139,41 @@ export const HMI_PANELS: HmiPanel[] = [
   { key: 'mtp2200', line: 'unified', model: 'MTP2200 Unified Comfort', sizeIn: 22, partNo: '6AV2128-3XB06-0AX1', drawA: 1.6 },
 ];
 
-// ── SCADA licenses (part numbers left for the supplier) ──────────────────
-export const WINCC81_PACKAGES = ['128', '512', '2048', '8192', '64k', '100k', '150k', '256k'];
-export const UNIFIED_PC_PACKAGES = ['150', '500', '1k', '2.5k', '5k', '10k', '30k', '50k', '100k'];
-export const scadaKey = (kind: Exclude<ScadaKind, 'none'>, license: WinccLicense, pkg: string) =>
-  kind === 'wincc81' ? `wincc81_${license}_${pkg}` : `unifiedPc_${pkg}`;
+// ── SCADA licenses (TIA Selection Tool, Sep 2026) ────────────────────────
+// WinCC V8.1: 6AV6381-2B?08-1A?? — size letter per RC/RT, then AX0 standard
+// (license on USB stick), AV0 Asia edition, AH0 download.
+export const WINCC81_PACKAGES = ['128', '512', '2048', '8192', '65536', '102400'];
+const WINCC81_CODE: Record<WinccLicense, Record<string, string>> = {
+  RC: { 128: 'BM', 512: 'BN', 2048: 'BP', 8192: 'BS', 65536: 'BQ', 102400: 'BT' },
+  RT: { 128: 'BC', 512: 'BD', 2048: 'BE', 8192: 'BH', 65536: 'BF', 102400: 'BJ' },
+};
+const WINCC81_SUFFIX: Record<LicenseEdition, string> = { standard: 'AX0', asia: 'AV0', dl: 'AH0' };
+// WinCC Unified V21 PC Runtime package: 6AV2155-???02-5?A0 — AA0 standard, BA0 Asia.
+// (100k / max only exist as upgrades, so they're not offered.)
+export const UNIFIED_PC_PACKAGES = ['150', '500', '1k', '2.5k', '5k', '10k', '50k'];
+const UNIFIED_CODE: Record<string, string> = { 150: '3DB', 500: '1EB', '1k': '2EB', '2.5k': '2MB', '5k': '1FB', '10k': '2FB', '50k': '1GB' };
+export const LICENSE_EDITIONS: { value: LicenseEdition; label: string; wincc81Only?: boolean }[] = [
+  { value: 'standard', label: 'Standard' },
+  { value: 'asia', label: 'Asia edition' },
+  { value: 'dl', label: 'Download', wincc81Only: true },
+];
+export const scadaKey = (kind: Exclude<ScadaKind, 'none'>, license: WinccLicense, pkg: string, edition: LicenseEdition = 'standard') =>
+  kind === 'wincc81' ? `wincc81_${license}_${pkg}_${edition}` : `unifiedPc_${pkg}_${edition === 'asia' ? 'asia' : 'standard'}`;
 
-// ── SITOP 24 V DC supplies ───────────────────────────────────────────────
-export interface SitopOption { key: string; line: 'PSU100S' | 'PSU8200'; ratingA: number; partNo: string; input: string }
+// ── SITOP 24 V DC supplies (TIA Selection Tool, Sep 2026) ────────────────
+export type SitopLine = 'PSU100S' | 'PSU200M' | 'PSU8200' | 'PSU300S';
+export interface SitopOption { key: string; line: SitopLine; ratingA: number; partNo: string; input: string }
+export const SITOP_LINES: SitopLine[] = ['PSU100S', 'PSU200M', 'PSU8200', 'PSU300S'];
 export const SITOP_OPTIONS: SitopOption[] = [
-  { key: 'psu100s2', line: 'PSU100S', ratingA: 2.5, partNo: '6EP1332-2BA20', input: '120/230 V AC' },
-  { key: 'psu100s5', line: 'PSU100S', ratingA: 5, partNo: '6EP1333-2BA20', input: '120/230 V AC' },
-  { key: 'psu100s10', line: 'PSU100S', ratingA: 10, partNo: '6EP1334-2BA20', input: '120/230 V AC' },
-  { key: 'psu100s20', line: 'PSU100S', ratingA: 20, partNo: '6EP1336-2BA10', input: '120/230 V AC' },
-  { key: 'psu8200_5', line: 'PSU8200', ratingA: 5, partNo: '6EP1333-3BA10', input: '120-230 V AC / 110-220 V DC' },
-  { key: 'psu8200_10', line: 'PSU8200', ratingA: 10, partNo: '6EP1334-3BA10', input: '120-230 V AC / 110-220 V DC' },
-  { key: 'psu8200_20', line: 'PSU8200', ratingA: 20, partNo: '6EP1336-3BA10', input: '120-230 V AC / 110-220 V DC' },
-  { key: 'psu8200_40', line: 'PSU8200', ratingA: 40, partNo: '6EP1337-3BA00', input: '120/230 V AC' },
-  { key: 'psu8200_3ph20', line: 'PSU8200', ratingA: 20, partNo: '6EP1436-3BA10', input: '3-phase 400-500 V AC' },
-  { key: 'psu8200_3ph40', line: 'PSU8200', ratingA: 40, partNo: '6EP1437-3BA10', input: '3-phase 400-500 V AC' },
+  { key: 'psu100s2', line: 'PSU100S', ratingA: 2.5, partNo: '6EP1332-2BA20', input: '1-phase 120/230 V AC' },
+  { key: 'psu100s5', line: 'PSU100S', ratingA: 5, partNo: '6EP1333-2BA20', input: '1-phase 120/230 V AC' },
+  { key: 'psu100s10', line: 'PSU100S', ratingA: 10, partNo: '6EP1334-2BA20', input: '1-phase 120/230 V AC' },
+  { key: 'psu100s20', line: 'PSU100S', ratingA: 20, partNo: '6EP1336-2BA10', input: '1-phase 120/230 V AC' },
+  { key: 'psu200m5', line: 'PSU200M', ratingA: 5, partNo: '6EP1333-3BA10', input: '1/2-phase 120-230 V AC' },
+  { key: 'psu200m10', line: 'PSU200M', ratingA: 10, partNo: '6EP1334-3BA10', input: '1/2-phase 120-230 V AC' },
+  { key: 'psu8200_20', line: 'PSU8200', ratingA: 20, partNo: '6EP1336-3BA10', input: '1-phase 120-230 V AC / 110-220 V DC' },
+  { key: 'psu300s20', line: 'PSU300S', ratingA: 20, partNo: '6EP1436-2BA10', input: '3-phase 400-500 V AC' },
+  { key: 'psu300s40', line: 'PSU300S', ratingA: 40, partNo: '6EP1437-2BA20', input: '3-phase 400-500 V AC' },
 ];
 
 // ── Part list ────────────────────────────────────────────────────────────
@@ -188,7 +208,9 @@ const QUOTED: SiemensPart[] = [
     description: 'SITOP PSU8200 20 A stabilized power supply input: 120-230 V AC 110-220 V DC output: 24 V DC/20 A' },
 ];
 
-// Siemens catalog part numbers for the unquoted CPUs (confirm with the supplier).
+// Part numbers for the unquoted CPUs — checked in the TIA Selection Tool
+// (Sep 2026). S7-1500: the current "…03" generation (same as the quoted
+// 1513-1 PN), not the older "…02" / "…01" ones.
 const CPU_PART_NO: Record<string, string> = {
   cpu1211: '6ES7211-1AE40-0XB0', cpu1211ac: '6ES7211-1BE40-0XB0', cpu1211rly: '6ES7211-1HE40-0XB0',
   cpu1212: '6ES7212-1AE40-0XB0', cpu1212ac: '6ES7212-1BE40-0XB0', cpu1212rly: '6ES7212-1HE40-0XB0',
@@ -196,21 +218,22 @@ const CPU_PART_NO: Record<string, string> = {
   cpu1215: '6ES7215-1AG40-0XB0', cpu1215ac: '6ES7215-1BG40-0XB0', cpu1215rly: '6ES7215-1HG40-0XB0',
   cpu1217: '6ES7217-1AG40-0XB0',
   cpu1212f: '6ES7212-1AF40-0XB0', cpu1214f: '6ES7214-1AF40-0XB0', cpu1215f: '6ES7215-1AF40-0XB0',
-  cpu1511: '6ES7511-1AK02-0AB0', cpu1515: '6ES7515-2AM02-0AB0', cpu1516: '6ES7516-3AN02-0AB0',
-  cpu1511c: '6ES7511-1CK01-0AB0', cpu1512c: '6ES7512-1CK01-0AB0',
-  cpu1511f: '6ES7511-1FK02-0AB0', cpu1513f: '6ES7513-1FL02-0AB0', cpu1515f: '6ES7515-2FM02-0AB0', cpu1516f: '6ES7516-3FN02-0AB0',
+  cpu1511: '6ES7511-1AL03-0AB0', cpu1515: '6ES7515-2AN03-0AB0', cpu1516: '6ES7516-3AP03-0AB0',
+  cpu1511c: '6ES7511-1CL03-0AB0', cpu1512c: '6ES7512-1CM03-0AB0',
+  cpu1511f: '6ES7511-1FL03-0AB0', cpu1513f: '6ES7513-1FM03-0AB0', cpu1515f: '6ES7515-2FN03-0AB0', cpu1516f: '6ES7516-3FP03-0AB0',
 };
-const MEM_PART_NO: Record<string, string> = { memCard4: '6ES7954-8LC03-0AA0', memCard12: '6ES7954-8LE03-0AA0', memCard24: '6ES7954-8LF03-0AA0' };
+const MEM_PART_NO: Record<string, string> = { memCard4: '6ES7954-8LC04-0AA0', memCard12: '6ES7954-8LE04-0AA0', memCard24: '6ES7954-8LF04-0AA0' };
 
 function cpuDescription(m: CpuModel): string {
   const io = m.onboard;
   const ioText = io.di + io.do + io.ai + io.ao > 0
     ? `onboard I/O: ${io.di} DI 24 V DC; ${io.do} DO ${m.relayOutputs ? 'relay 2 A' : '24 V DC'}; ${io.ai} AI${m.family === 'S7-1200' ? ' 0-10 V DC' : ''}${io.ao ? `; ${io.ao} AO` : ''}`
     : 'PROFINET, SIMATIC Memory Card required';
-  return `SIMATIC ${m.family}, ${m.label}${m.family === 'S7-1200' ? ', compact CPU' : ''}, ${ioText}`;
+  return `SIMATIC ${m.family}, ${m.label}${m.family === 'S7-1200' ? ', compact CPU' : ''}${m.memory ? `, ${m.memory}` : ''}, ${ioText}`;
 }
 
 const LICENSE_TEXT: Record<WinccLicense, string> = { RC: 'RC (Runtime & Configuration)', RT: 'RT (Runtime)' };
+const EDITION_TEXT: Record<LicenseEdition, string> = { standard: '', asia: ', Asia edition', dl: ', download' };
 
 export const SIEMENS_PARTS: Record<string, SiemensPart> = (() => {
   const all: Record<string, SiemensPart> = {};
@@ -224,14 +247,14 @@ export const SIEMENS_PARTS: Record<string, SiemensPart> = (() => {
     key: h.key, partNo: h.partNo, price: 0,
     description: `SIMATIC HMI ${h.model}, ${HMI_LINES.find((l) => l.value === h.line)!.label.replace(/ \(.*/, '')}, ${h.sizeIn}" widescreen TFT touch display, PROFINET interface`,
   }));
-  (['RC', 'RT'] as WinccLicense[]).forEach((lic) => WINCC81_PACKAGES.forEach((pkg) => put({
-    key: scadaKey('wincc81', lic, pkg), partNo: '', price: 0,
-    description: `SIMATIC WinCC V8.1 ${LICENSE_TEXT[lic]}, ${pkg} PowerTags — software license`,
+  (['RC', 'RT'] as WinccLicense[]).forEach((lic) => WINCC81_PACKAGES.forEach((pkg) => LICENSE_EDITIONS.forEach(({ value: ed }) => put({
+    key: scadaKey('wincc81', lic, pkg, ed), partNo: `6AV6381-2${WINCC81_CODE[lic][pkg]}08-1${WINCC81_SUFFIX[ed]}`, price: 0,
+    description: `SIMATIC WinCC V8.1 ${LICENSE_TEXT[lic]}, ${pkg} PowerTags${EDITION_TEXT[ed]} — software license`,
+  }))));
+  UNIFIED_PC_PACKAGES.forEach((pkg) => (['standard', 'asia'] as LicenseEdition[]).forEach((ed) => put({
+    key: scadaKey('unifiedPc', 'RT', pkg, ed), partNo: `6AV2155-${UNIFIED_CODE[pkg]}02-5${ed === 'asia' ? 'BA0' : 'AA0'}`, price: 0,
+    description: `SIMATIC WinCC Unified V21 PC Runtime, ${pkg} PowerTags${EDITION_TEXT[ed]}, package — software license`,
   })));
-  UNIFIED_PC_PACKAGES.forEach((pkg) => put({
-    key: scadaKey('unifiedPc', 'RT', pkg), partNo: '', price: 0,
-    description: `SIMATIC WinCC Unified PC Runtime, ${pkg} PowerTags — software license`,
-  }));
   SITOP_OPTIONS.filter((s) => !all[s.key]).forEach((s) => put({
     key: s.key, partNo: s.partNo, price: 0,
     description: `SITOP ${s.line} ${s.ratingA} A stabilized power supply input: ${s.input} output: 24 V DC/${s.ratingA} A`,
@@ -266,6 +289,8 @@ export interface PlcInputs {
   hmiQty: number;
   scada: ScadaKind;
   winccLicense: WinccLicense;
+  /** Standard / Asia / download (download is WinCC V8.1 only; Unified falls back to standard). */
+  licenseEdition: LicenseEdition;
   /** Tag package (WINCC81_PACKAGES / UNIFIED_PC_PACKAGES). */
   scadaPackage: string;
   scadaQty: number;
@@ -278,7 +303,7 @@ export interface PlcInputs {
 export const DEFAULT_PLC_INPUTS: PlcInputs = {
   family: 'S7-1200', cpu: 'cpu1214', di: 0, do: 0, ai: 0, ao: 0, sparePct: 10,
   modbus: 'none', modbusPorts: 1, sitop: 'none', useOnboardAi: false, memoryCard: false, memCard: 'memCard',
-  hmi: 'none', hmiQty: 1, scada: 'none', winccLicense: 'RC', scadaPackage: '2048', scadaQty: 1,
+  hmi: 'none', hmiQty: 1, scada: 'none', winccLicense: 'RC', licenseEdition: 'standard', scadaPackage: '2048', scadaQty: 1,
   doLoadA: 0.1, psuMarginPct: 25,
 };
 
@@ -350,7 +375,7 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   if (inp.scada !== 'none') {
     const pkgs = inp.scada === 'wincc81' ? WINCC81_PACKAGES : UNIFIED_PC_PACKAGES;
     const pkg = pkgs.includes(inp.scadaPackage) ? inp.scadaPackage : pkgs[0];
-    add(scadaKey(inp.scada, inp.winccLicense, pkg), inp.scadaQty, 'SCADA license — one per PC station');
+    add(scadaKey(inp.scada, inp.winccLicense, pkg, inp.licenseEdition), inp.scadaQty, 'SCADA license — one per PC station');
   }
   const psu = SITOP_OPTIONS.find((s) => s.key === inp.sitop);
   if (psu) add(psu.key, 1, `24 V DC supply — ${psu.ratingA} A`);
