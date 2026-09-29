@@ -33,8 +33,9 @@ it('configures an S7-1500 with Modbus RTU and adds the priced modules under a PL
   expect(usePanelIoStore.getState().io?.load24A).toBeGreaterThan(0);
   const rows = sections[0].rows;
   const byPart = Object.fromEntries(rows.map((r) => [r.partNo, r]));
-  expect(byPart['6ES7513-1AM03-0AB0']).toMatchObject({ qty: 1, unitCost: 124083.35, brand: 'Siemens' });
-  expect(byPart['6ES7954-8LL04-0AA0']).toMatchObject({ qty: 1 });             // memory card, required
+  // Auto CPU: 51 channels → performance class 1 → the lowest-cost fit is the CPU 1511-1 PN
+  expect(byPart['6ES7511-1AL03-0AB0']).toMatchObject({ qty: 1, brand: 'Siemens' });
+  expect(byPart['6ES7954-8LF04-0AA0']).toMatchObject({ qty: 1 });             // memory card, auto 24 MB
   expect(byPart['6ES7131-6BH01-0BA0']).toMatchObject({ qty: 3, unitCost: 6218.99 });
   expect(byPart['6ES7134-6GF00-0AA1']).toMatchObject({ qty: 1 });
   expect(byPart['6ES7137-6AA01-0BA0']).toMatchObject({ qty: 2 });             // CM PtP per RS-485 port

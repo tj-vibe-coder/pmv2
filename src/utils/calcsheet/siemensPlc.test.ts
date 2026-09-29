@@ -1,5 +1,5 @@
 import {
-  DEFAULT_PLC_INPUTS, SIEMENS_PARTS, configurePlc, estimate24V, noAnalog, siemensPrice,
+  DEFAULT_PLC_INPUTS, SIEMENS_PARTS, cheapestModules, configurePlc, estimate24V, noAnalog, siemensPrice,
   type AnalogCount, type AnalogKey, type PlcInputs,
 } from './siemensPlc';
 
@@ -376,5 +376,63 @@ describe('brand-neutral quotation descriptions', () => {
     expect(SIEMENS_PARTS.psu100s20.generic).toBe('Power supply 24 V DC, 20 A, 1-phase input');
     expect(SIEMENS_PARTS.cpu1513.generic).toBe('PLC CPU, PROFINET, 600 KB program, 2.5 MB data');
     expect(SIEMENS_PARTS.wagoSw8.generic).toBe('Industrial Ethernet switch, unmanaged, 8 x RJ45 10/100 Mbit/s');
+  });
+});
+
+describe('optimizing: local expansion, cheapest module sizes, auto CPU, auto memory card', () => {
+  const opt = (p: Partial<PlcInputs>) => cfg({ cpu: 'auto', expansion: 'auto', moduleSizes: 'auto', memCard: 'auto', terminals: false, ...p });
+
+  it('S7-1200: I/O beyond on board goes on signal modules on the CPU — no ET 200SP', () => {
+    // 1214C: 14 DI + 10 DQ on board; 30 DI → 16 left → SM 1221 DI16; 12 DQ → 2 left → SM 1222 DQ8
+    const c = cfg({ family: 'S7-1200', di: 30, do: 12, expansion: 'auto', moduleSizes: 'auto' });
+    expect(c.expansion).toBe('local');
+    expect([qty(c, 'sm1221di16'), qty(c, 'sm1222dq8'), qty(c, 'imBundle'), qty(c, 'buLight')]).toEqual([1, 1, 0, 0]);
+    expect(c.local).toMatchObject({ modules: 2, slots: 8 });
+    expect(c.channels.di).toEqual({ needed: 30, provided: 30 });
+  });
+
+  it('signal board for a single leftover AI; RTD / TC / AQ signal modules', () => {
+    const c = cfg({ family: 'S7-1200', expansion: 'auto', moduleSizes: 'auto', analog: an({ aiI: 1, aiRtd: 3, aiTc: 5, aoU: 3 }) });
+    expect([qty(c, 'sb1231ai1'), qty(c, 'sm1231rtd4'), qty(c, 'sm1231tc8'), qty(c, 'sm1232aq4')]).toEqual([1, 1, 1, 1]);
+  });
+
+  it('more than 8 signal modules (or a 1211C with none) → ET 200SP', () => {
+    expect(cfg({ family: 'S7-1200', di: 14 + 9 * 16, expansion: 'auto' }).expansion).toBe('et200sp');
+    expect(cfg({ family: 'S7-1200', cpu: 'cpu1211', di: 10, expansion: 'auto' }).expansion).toBe('et200sp');
+    const forced = cfg({ family: 'S7-1200', di: 14 + 9 * 16, expansion: 'local' });
+    expect(forced.notes.join(' ')).toMatch(/Doesn't fit on the CPU/);
+  });
+
+  it('extra Modbus RTU ports on the S7-1200 use CM 1241 (left of the CPU)', () => {
+    const c = cfg({ family: 'S7-1200', di: 20, expansion: 'auto', modbus: 'rtu', modbusPorts: 3 });
+    expect([qty(c, 'cb1241'), qty(c, 'cm1241'), qty(c, 'cmPtp')]).toEqual([1, 2, 0]);
+  });
+
+  it('cheapest module mix on ET 200SP: 18 DI → DI16 + DI8, not 2 × DI16', () => {
+    const c = cfg({ family: 'S7-1500', di: 18, moduleSizes: 'auto' });
+    expect([qty(c, 'di16'), qty(c, 'di8')]).toEqual([1, 1]);
+    expect(qty(cfg({ family: 'S7-1500', di: 18 }), 'di16')).toBe(2); // standard sizes only
+    expect(qty(cfg({ family: 'S7-1500', analog: an({ aoU: 2 }), moduleSizes: 'auto' }), 'aq2')).toBe(1);
+  });
+
+  it('cheapestModules uses real prices when given', () => {
+    const price = (k: string) => ({ a16: 100, a8: 70 } as Record<string, number>)[k] ?? 0;
+    expect(cheapestModules(18, [{ key: 'a16', ch: 16 }, { key: 'a8', ch: 8 }], price)).toEqual({ a16: 1, a8: 1 });
+    expect(cheapestModules(18, [{ key: 'a16', ch: 16 }, { key: 'a8', ch: 8 }], (k) => (k === 'a8' ? 30 : 100))).toEqual({ a8: 3 });
+  });
+
+  it('auto CPU: smallest S7-1200 class that fits, cheapest complete configuration', () => {
+    expect(opt({ family: 'S7-1200', di: 10, do: 6 }).cpuKey).toBe('cpu1212');   // fits the 1212C on board
+    expect(opt({ family: 'S7-1200', di: 30, do: 12 }).cpuKey).toBe('cpu1214');  // needs signal modules → 1214C
+    const big = opt({ family: 'S7-1200', di: 200, do: 100 });
+    expect(big.cpuKey).toBe('cpu1215');                                          // 330 channels → class 4
+    expect(opt({ family: 'S7-1500', di: 2000 }).cpuKey).toBe('cpu1515');         // 2,200 channels → class 3
+    expect(opt({ family: 'S7-1500', di: 40, failSafe: true }).cpuKey).toBe('cpu1511f');
+    expect(opt({ family: 'S7-1500', di: 40 }).notes[0]).toMatch(/^Auto CPU:/);
+  });
+
+  it('auto memory card: 24 MB on S7-1500, 4 MB on S7-1200', () => {
+    expect(qty(opt({ family: 'S7-1500', di: 16 }), 'memCard24')).toBe(1);
+    expect(qty(opt({ family: 'S7-1200', di: 10, memoryCard: true }), 'memCard4')).toBe(1);
   });
 });
