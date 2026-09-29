@@ -15,6 +15,7 @@ import type {
 import { seedClients, seedSalesContacts } from '../data/quotationClients';
 import { seedLaborPresets, starterGeneralReqts } from '../data/quotationPresets';
 import { quotationCode } from '../utils/calcsheet/codes';
+import type { InstallMaterialPrice } from '../utils/calcsheet/installationMaterials';
 import { getOneDriveTokenStore } from '../services/onedriveTokenStore';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import { ensureProposalFolder, ensureWonExecutionLayout } from '../services/onedriveFolderService';
@@ -71,6 +72,10 @@ interface State {
   salesContacts: SalesContact[];
   laborPresets: LaborRolePreset[];
   scopeBundles: ScopeBundle[];
+  // Unit pricing for the Installation Work calculator's fixed material slots
+  // (see utils/calcsheet/installationMaterials.ts). Keyed by slot key; a slot
+  // absent here just means it hasn't been priced yet (unitCost 0 in the UI).
+  installMaterialPrices: Record<string, InstallMaterialPrice>;
   projects: Project[];
   quotations: Quotation[];
   seq: number;
@@ -121,6 +126,9 @@ interface Actions {
   addScopeBundle: (b: Omit<ScopeBundle, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'createdByName'>) => Promise<ScopeBundle>;
   updateScopeBundle: (id: ID, patch: Partial<ScopeBundle>) => Promise<void>;
   deleteScopeBundle: (id: ID) => Promise<void>;
+
+  // Installation Work calculator — material unit pricing
+  updateInstallMaterialPrice: (key: string, patch: InstallMaterialPrice) => Promise<void>;
 
   // Settings
   updateSettings: (patch: CalcsheetSettings) => Promise<void>;
@@ -265,6 +273,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
   salesContacts: seedSalesContacts(),
   laborPresets: seedLaborPresets(),
   scopeBundles: [],
+  installMaterialPrices: {},
   projects: [],
   quotations: [],
   seq: 1,
@@ -276,7 +285,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
     if (initInFlight) return initInFlight;
     initInFlight = (async () => {
     try {
-      const [pRes, qRes, cRes, prRes, sRes, staffRes, stRes, slRes] = await Promise.all([
+      const [pRes, qRes, cRes, prRes, sRes, staffRes, stRes, slRes, impRes] = await Promise.all([
         api<{ projects: Project[] }>('GET', '/projects'),
         api<{ quotations: Quotation[] }>('GET', '/quotations'),
         api<{ clients: Client[] }>('GET', '/clients'),
@@ -287,6 +296,8 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
         // Scope Library is optional — an older server without the endpoint must
         // not break init, so swallow failures into an empty library.
         api<{ bundles: ScopeBundle[] }>('GET', '/scope-library').catch(() => ({ bundles: [] })),
+        // Same for Installation Work material pricing — sparse and optional.
+        api<{ prices: Record<string, InstallMaterialPrice> }>('GET', '/install-materials').catch(() => ({ prices: {} })),
       ]);
       const salesContacts = mergeSalesContactsWithUsers(seedSalesContacts(), staffRes.contacts ?? []);
       let laborPresets: LaborRolePreset[];
@@ -316,6 +327,7 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
         salesContacts,
         laborPresets,
         scopeBundles: slRes.bundles ?? [],
+        installMaterialPrices: impRes.prices ?? {},
         seq: sRes.seq ?? 1,
         settings: stRes.settings ?? {},
         initialized: true,
@@ -736,6 +748,11 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
   deleteScopeBundle: async (id) => {
     await api('DELETE', `/scope-library/${id}`);
     set({ scopeBundles: get().scopeBundles.filter((b) => b.id !== id) });
+  },
+
+  updateInstallMaterialPrice: async (key, patch) => {
+    await api('PUT', `/install-materials/${key}`, patch);
+    set({ installMaterialPrices: { ...get().installMaterialPrices, [key]: patch } });
   },
 
   updateSettings: async (patch) => {
