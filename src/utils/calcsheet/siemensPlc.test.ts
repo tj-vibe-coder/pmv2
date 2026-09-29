@@ -361,3 +361,20 @@ describe('choosing the number of ET 200SP stations (IM)', () => {
     expect([qty(c, 'buLight'), qty(c, 'buDark'), qty(c, 'buLightA1'), qty(c, 'buDarkA1')]).toEqual([1, 1, 1, 1]);
   });
 });
+
+describe('brand-neutral quotation descriptions', () => {
+  it('every part has a generic description without the maker or model', () => {
+    Object.values(SIEMENS_PARTS).forEach((p) => {
+      expect(p.generic).toBeTruthy();
+      expect(p.generic).not.toMatch(/SIMATIC|Siemens|SITOP|WinCC|SCALANCE|WAGO|TOPJOB|CAGE CLAMP|ET 200|EPSITRON/i);
+    });
+  });
+  it('keeps the key rating so the item can still be sourced', () => {
+    expect(SIEMENS_PARTS.tb2Level.generic).toBe('Terminal block, 2-level, 2.5 mm²');
+    expect(SIEMENS_PARTS.relay.generic).toBe('Slim relay module, 24 V DC coil, 1 changeover contact, 6 A');
+    expect(SIEMENS_PARTS.di16.generic).toBe('Digital input module, 16 x 24 V DC');
+    expect(SIEMENS_PARTS.psu100s20.generic).toBe('Power supply 24 V DC, 20 A, 1-phase input');
+    expect(SIEMENS_PARTS.cpu1513.generic).toBe('PLC CPU, PROFINET, 600 KB program, 2.5 MB data');
+    expect(SIEMENS_PARTS.wagoSw8.generic).toBe('Industrial Ethernet switch, unmanaged, 8 x RJ45 10/100 Mbit/s');
+  });
+});

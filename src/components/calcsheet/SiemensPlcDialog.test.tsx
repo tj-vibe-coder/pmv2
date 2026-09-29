@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import SiemensPlcDialog from './SiemensPlcDialog';
 import { usePricelistStore } from '../../store/pricelistStore';
+import { usePanelIoStore } from '../../store/panelIoStore';
 
 beforeEach(() => { usePricelistStore.setState({ items: [], loading: false }); });
 
@@ -24,7 +25,9 @@ it('configures an S7-1500 with Modbus RTU and adds the priced modules under a PL
 
   fireEvent.click(screen.getByRole('button', { name: /to components/i }));
   const sections = submitted(onSubmit);
-  expect(sections.map((g) => g.header)).toEqual(['PLC — SIEMENS S7-1500', 'TERMINAL BLOCKS & RELAYS', 'WIRES']);
+  // Terminals + wiring are added by the Control Panel dialog, which gets this I/O.
+  expect(sections.map((g) => g.header)).toEqual(['PLC — SIEMENS S7-1500']);
+  expect(usePanelIoStore.getState().io).toMatchObject({ source: 'Siemens S7-1500', di: 44, a2: 7 });
   const rows = sections[0].rows;
   const byPart = Object.fromEntries(rows.map((r) => [r.partNo, r]));
   expect(byPart['6ES7513-1AM03-0AB0']).toMatchObject({ qty: 1, unitCost: 124083.35, brand: 'Siemens' });
@@ -58,7 +61,10 @@ it('adds another CPU model, an HMI by size and a WinCC license — unpriced ones
   const [{ rows }] = submitted(onSubmit);
   expect(rows.find((r) => r.partNo === '6ES7212-1AE40-0XB0')).toMatchObject({ qty: 1, unitCost: 0 });
   expect(rows.find((r) => r.partNo === '6AV2128-3MB06-0AX1')).toMatchObject({ qty: 1, unitCost: 0 });
-  expect(rows.find((r) => /WinCC V8\.1 RC/.test(r.description))).toMatchObject({ qty: 1, uom: 'lic', partNo: '6AV6381-2BP08-1AV0' });
+  // Brand-neutral description on the quotation; the exact item is in the part number.
+  expect(rows.find((r) => r.partNo === '6AV6381-2BP08-1AV0')).toMatchObject({ qty: 1, uom: 'lic', description: 'SCADA runtime & configuration license, 2048 tags' });
+  expect(rows.find((r) => r.partNo === '6ES7212-1AE40-0XB0')?.description).toBe('PLC CPU, compact, PROFINET, on-board 8 DI / 6 DO / 2 AI, 24 V DC powered');
+  rows.forEach((r) => expect(r.description).not.toMatch(/SIMATIC|Siemens|SITOP|WinCC|SCALANCE|WAGO|ET 200/i));
 });
 
 it('redundancy switches to an S7-1500R pair with HF interface modules and managed switches', () => {
@@ -70,12 +76,10 @@ it('redundancy switches to an S7-1500R pair with HF interface modules and manage
   fireEvent.click(screen.getByRole('button', { name: /to components/i }));
   const sections = submitted(onSubmit);
   // PLC hardware, the WAGO terminal strip and the wires each go under their own header
-  expect(sections.map((g) => g.header)).toEqual(['PLC — SIEMENS S7-1500R', 'TERMINAL BLOCKS & RELAYS', 'WIRES']);
-  const [plc, terminals, wires] = sections.map((g) => Object.fromEntries(g.rows.map((r) => [r.partNo || r.description, r])));
+  expect(sections.map((g) => g.header)).toEqual(['PLC — SIEMENS S7-1500R']);
+  const [plc] = sections.map((g) => Object.fromEntries(g.rows.map((r) => [r.partNo || r.description, r])));
   expect(plc['6ES7513-1RM03-0AB0']).toMatchObject({ qty: 2 });
   expect(plc['6ES7155-6AU30-0CN0']).toMatchObject({ qty: 1 });
   expect(plc['6GK5208-0BA00-2AC2']).toMatchObject({ qty: 2 });
-  expect(terminals['2002-2201']).toMatchObject({ brand: 'WAGO' });          // 2-level terminals for the DI
-  expect(Object.keys(wires)).toEqual(expect.arrayContaining(['216-201']));  // 0.5mm2 ferrules go with the wires
-  expect(Object.values(wires).filter((r) => r.uom === 'roll').every((r) => r.unitCost === 1500)).toBe(true);
+  expect(usePanelIoStore.getState().io).toMatchObject({ source: 'Siemens S7-1500R', di: 18 });
 });

@@ -43,6 +43,9 @@
 // marked `verify`. A catalog item with the same part number (Sales →
 // Pricelists) overrides any price here.
 
+import { TERMINAL_GENERIC, TERMINAL_PARTS, terminalStrip, type CatalogPart, type PanelIo, type WiringSummary } from './terminalWiring';
+
+export type { WiringSummary };
 export type PlcFamily = 'S7-1200' | 'S7-1500';
 export type ModbusMode = 'none' | 'tcp' | 'rtu';
 export type HmiLine = 'basic' | 'comfort' | 'unified';
@@ -53,22 +56,8 @@ export type LicenseEdition = 'standard' | 'asia' | 'dl';
 export type Redundancy = 'none' | 'R' | 'H';
 export type SwitchType = 'unmanaged' | 'managed';
 
-export interface SiemensPart {
-  key: string;
-  /** '' = not known yet — the supplier fills it in. */
-  partNo: string;
-  description: string;
-  /** Default unit price (₱) from supplier quotes; 0 = not priced (for inquiry). */
-  price: number;
-  /** Part number and price come from a supplier quote (others: confirm the part number). */
-  quoted?: boolean;
-  /** Maker — defaults to Siemens. */
-  brand?: string;
-  /** Unit of measure — defaults to 'pc'. */
-  uom?: string;
-  /** Part number not confirmed yet — shown as "verify P/N". */
-  verify?: boolean;
-}
+/** A priced part (brand defaults to Siemens here) — see terminalWiring.ts. */
+export type SiemensPart = CatalogPart;
 
 // ── Analog signal types ──────────────────────────────────────────────────
 export type AnalogKey = 'aiI' | 'aiU' | 'aiRtd' | 'aiTc' | 'aoI' | 'aoU';
@@ -386,37 +375,9 @@ const CPU_PART_NO: Record<string, string> = {
 };
 const MEM_PART_NO: Record<string, string> = { memCard4: '6ES7954-8LC04-0AA0', memCard12: '6ES7954-8LE04-0AA0', memCard24: '6ES7954-8LF04-0AA0' };
 
-// WAGO terminals, relays and accessories, plus the 0.5 mm² signal wire — for
-// the panel's I/O terminal strip. `quoted` ones carry the part number and
-// VAT-ex unit price from the ISTS WAGO inventory (ex-stock list, 2026); the
-// rest are WAGO catalog numbers for inquiry. A pricelist item with the same
-// part number still wins.
-const WQ = { brand: 'WAGO', quoted: true };
-const W = { brand: 'WAGO', price: 0 };
-export const WIRE_ROLL_M = 100;
-/** ₱ per 100 m roll of 0.5 mm² wire (IOCT price, any colour). */
-export const WIRE_ROLL_PRICE = 1500;
-const TERMINAL_PARTS: SiemensPart[] = [
-  { ...WQ, key: 'tb2Level', partNo: '2002-2201', price: 99.41,
-    description: 'WAGO double-deck terminal block, through/through, L/L, without marker carrier, for DIN-rail 35 x 15 and 35 x 7.5, 2.5 mm², Push-in CAGE CLAMP, gray (1 per DI)' },
-  { ...WQ, key: 'tb2LevelEnd', partNo: '2002-2292', price: 31.23, description: 'WAGO end and intermediate plate, 0.8 mm thick, orange — for 2002-2201 double-deck terminals' },
-  { ...WQ, key: 'tbFuse', partNo: '2002-1611/1000-541', price: 279.66,
-    description: 'WAGO 2-conductor fuse terminal block with pivoting fuse holder, with end plate, for 5 x 20 mm miniature metric fuse, blown fuse indication by LED 12-30 V, for DIN-rail 35 x 15 and 35 x 7.5, 2.5 mm², Push-in CAGE CLAMP, gray' },
-  { ...WQ, key: 'tbStd', partNo: '2002-1201', price: 26.45, description: 'WAGO 2-conductor through terminal block for DIN-rail, gray, Push-in CAGE CLAMP, 2.5 mm², 24 A, 800 V' },
-  { ...WQ, key: 'tbStdEnd', partNo: '2002-1292', price: 34.94, description: 'WAGO end and intermediate plate, 0.8 mm thick, orange — for 2002-1201 terminals' },
-  { ...WQ, key: 'tbPe', partNo: '2002-1207', price: 163.1, description: 'WAGO 2-conductor ground terminal block, 2.5 mm², for DIN-rail 35 x 15 and 35 x 7.5, Push-in CAGE CLAMP, green-yellow' },
-  { ...WQ, key: 'jumper10', partNo: '2002-410', price: 250.57, description: 'WAGO jumper (shorting link), 10-way, insulated, light gray — for 2002 series' },
-  { ...WQ, key: 'relay', partNo: '857-304', price: 554.69,
-    description: 'WAGO relay module, nominal input voltage 24 V DC, 1 changeover contact, limiting continuous current 6 A, yellow status indicator, module width 6 mm, gray (TRS 24VDC 1CO equivalent, 1 per DO)' },
-  { ...W, verify: true, key: 'relayJumper', partNo: '859-402', description: 'WAGO jumper (shorting link) for 857 relay modules, insulated, 2-way — coil common (A2 / 0 V)' },
-  { ...WQ, key: 'endStop', partNo: '249-116', price: 51.69, description: 'WAGO screwless end stop, 6 mm wide, for DIN-rail 35 x 15 and 35 x 7.5, gray' },
-  { ...WQ, key: 'markers', partNo: '2009-115', price: 2.37, description: 'WAGO WMB-Inline marker for Smart Printer, stretchable 5 - 5.2 mm, plain, snap-on type, white (1 per terminal)' },
-  { ...W, verify: true, key: 'dinRail', partNo: '210-113', description: 'WAGO steel DIN rail 35 x 7.5 mm, 1 mm thick, slotted, 2 m length' },
-  { ...W, verify: true, key: 'ferrule05', partNo: '216-201', description: '0.5mm2 ferrule' },
-  { key: 'fuse5x20', brand: '', partNo: '', price: 0, description: 'Miniature glass fuse 5 x 20 mm, 0.5 A fast-acting — for the analog fuse terminals' },
-  { key: 'wireRed', brand: '', partNo: '', price: WIRE_ROLL_PRICE, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), red — +24 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
-  { key: 'wireBlue', brand: '', partNo: '', price: WIRE_ROLL_PRICE, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), blue — 0 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
-];
+// WAGO terminals, relays, accessories and 0.5 mm² wire (TERMINAL_PARTS) are
+// shared with the other vendors' configurators — see terminalWiring.ts.
+export { WIRE_ROLL_M, WIRE_ROLL_PRICE } from './terminalWiring';
 
 function cpuDescription(m: CpuModel): string {
   const io = m.onboard;
@@ -494,8 +455,68 @@ export const SIEMENS_PARTS: Record<string, SiemensPart> = (() => {
         : `WAGO power supply, Pro 2, 1-phase, 24 V DC output voltage, ${s.ratingA} A output current, TopBoost + PowerBoost, communication capability` }
     : { key: s.key, partNo: s.partNo, price: 0,
       description: `SITOP ${s.line} ${s.ratingA} A stabilized power supply input: ${s.input} output: 24 V DC/${s.ratingA} A` }));
+  Object.values(all).forEach((p) => { if (!p.generic) p.generic = genericDescription(p.key); });
   return all;
 })();
+
+/**
+ * Brand-neutral description for the quotation — what the item does and its
+ * key rating, no maker or model (the part number stays in its own column, so
+ * it can be hidden and an equivalent supplied when an item is out of stock).
+ */
+export function genericDescription(key: string): string {
+  if (TERMINAL_GENERIC[key]) return TERMINAL_GENERIC[key];
+  const cpu = CPU_MODELS.find((m) => m.key === key);
+  if (cpu) {
+    const io = cpu.onboard;
+    const onboard = io.di + io.do + io.ai + io.ao > 0
+      ? `, on-board ${io.di} DI / ${io.do} DO${cpu.relayOutputs ? ' (relay)' : ''}${io.ai ? ` / ${io.ai} AI` : ''}${io.ao ? ` / ${io.ao} AO` : ''}` : '';
+    if (cpu.redundancy === 'H') return 'Redundant PLC system: 2 × CPU with synchronization modules and sync cables';
+    if (cpu.redundancy === 'R') return 'Redundant PLC CPU, PROFINET (order 2 per system)';
+    const kind = cpu.failSafe ? 'Safety PLC CPU' : 'PLC CPU';
+    const power = cpu.family === 'S7-1200' ? (cpu.drawA === 0 ? ', 120/230 V AC powered' : ', 24 V DC powered') : '';
+    return `${kind}${cpu.family === 'S7-1200' ? ', compact' : ''}, PROFINET${cpu.memory ? `, ${cpu.memory}` : ''}${onboard}${power}`;
+  }
+  const mem = MEMORY_CARDS.find((c) => c.key === key);
+  if (mem) return `PLC memory card, ${mem.label}`;
+  const hmi = HMI_PANELS.find((h) => h.key === key);
+  if (hmi) return `HMI touch panel, ${hmi.sizeIn}" widescreen, Ethernet`;
+  const sw = SWITCHES.find((x) => x.key === key);
+  if (sw) return `Industrial Ethernet switch, ${sw.type}${sw.type === 'managed' ? ' (ring redundancy, VLAN)' : ''}, ${sw.ports} x RJ45 10/100 Mbit/s`;
+  const psu = SITOP_OPTIONS.find((x) => x.key === key);
+  if (psu) return `Power supply 24 V DC, ${psu.ratingA} A, ${psu.input.startsWith('3-phase') ? '3-phase' : '1-phase'} input`;
+  const rail = MOUNTING_RAILS.find((r) => r.key === key);
+  if (rail) return `PLC mounting rail, ${rail.lengthMm} mm`;
+  let m: RegExpMatchArray | null;
+  if ((m = key.match(/^wincc81_(RC|RT)_(\d+)_/))) return `SCADA ${m[1] === 'RC' ? 'runtime & configuration' : 'runtime'} license, ${m[2]} tags`;
+  if ((m = key.match(/^unifiedPc_([^_]+)_/))) return `SCADA PC runtime license, ${m[1]} tags`;
+  if ((m = key.match(/^wincc81Archive_(\d+)/))) return `SCADA data logging license, ${m[1]} archive tags`;
+  if ((m = key.match(/^unifiedClient_(\d+)/))) return `SCADA client license, ${m[1]} client${m[1] === '1' ? '' : 's'}`;
+  if ((m = key.match(/^unifiedLogging_(\d+)/))) return `SCADA data logging license, ${m[1]} logging tags`;
+  if (key.startsWith('wincc81Client')) return 'SCADA client license';
+  if (key.startsWith('wincc81Server')) return 'SCADA server license (client/server)';
+  if (key.startsWith('wincc81Redundancy') || key === 'unifiedRedundancy') return 'SCADA redundancy license (redundant server pair)';
+  if (key === 'unifiedDbStorage') return 'SCADA database storage license (SQL logging)';
+  const GENERIC: Record<string, string> = {
+    cb1241: 'RS-485 communication board (Modbus RTU)',
+    cmPtp: 'Serial communication module RS-485 / RS-422 / RS-232 (Modbus RTU)',
+    imBundle: 'Remote I/O interface module, PROFINET, max. 32 modules, with bus adapter',
+    imHf: 'Remote I/O interface module, PROFINET, high feature (system redundancy), max. 64 modules',
+    busAdapter: 'Bus adapter, 2 x RJ45',
+    di16: 'Digital input module, 16 x 24 V DC',
+    dq16: 'Digital output module, 16 x 24 V DC / 0.5 A',
+    ai8: 'Analog input module, 8 x 4–20 mA (2-/4-wire)',
+    ai8u: 'Analog input module, 8 x 0–10 V',
+    rtd8: 'Analog input module, 8 x RTD / thermocouple (2-wire)',
+    rtd4: 'Analog input module, 4 x RTD / thermocouple (2-/3-/4-wire)',
+    aq4: 'Analog output module, 4 x 0–10 V / 4–20 mA',
+    buLight: 'I/O base unit, starts a new potential group',
+    buDark: 'I/O base unit',
+    buLightA1: 'I/O base unit with temperature sensor (thermocouple), starts a new potential group',
+    buDarkA1: 'I/O base unit with temperature sensor (thermocouple)',
+  };
+  return GENERIC[key] ?? '';
+}
 
 // ── Inputs ───────────────────────────────────────────────────────────────
 export interface PlcInputs {
@@ -576,17 +597,6 @@ export interface PlcLine { key: string; qty: number; why: string; section: PlcSe
 
 export interface PlcChannels { needed: number; provided: number }
 
-export interface WiringSummary {
-  redWires: number;
-  blueWires: number;
-  /** Average length per wire (m), from the panel size. */
-  runM: number;
-  redM: number;
-  blueM: number;
-  terminals: number;
-  railMm: number;
-}
-
 export interface PlcConfig {
   lines: PlcLine[];
   channels: { di: PlcChannels; do: PlcChannels; ai: PlcChannels; ao: PlcChannels };
@@ -599,10 +609,13 @@ export interface PlcConfig {
   /** Switch model and count actually used (after redundancy rules). */
   network: { switchKey: string | null; qty: number; devices: number; portsPerSwitch: number };
   wiring: WiringSummary | null;
+  /** I/O for the Control Panel configurator's terminal strip. */
+  panelIo: PanelIo;
   notes: string[];
 }
 
-const withSpare = (n: number, pct: number) => (n > 0 ? Math.ceil(n * (1 + Math.max(0, pct) / 100)) : 0);
+// Integer maths first: n × 1.1 in floating point is 110.00000000000001 for n = 100, which would round up to 111.
+const withSpare = (n: number, pct: number) => (n > 0 ? Math.ceil((n * (100 + Math.max(0, pct))) / 100 - 1e-9) : 0);
 const whole = (n: number) => Math.max(0, Math.round(Number(n) || 0));
 
 export function onboardText(m: CpuModel): string {
@@ -771,53 +784,22 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   let wiring: WiringSummary | null = null;
   const a2 = ANALOG_KEYS.reduce((s, k) => s + analog[k].w2, 0);
   const a4 = ANALOG_KEYS.reduce((s, k) => s + analog[k].w4, 0);
+  // +24 V / 0 V distribution: CPU(s), each station's IM and light BaseUnit,
+  // panels and switches, plus the PSU feed.
+  const panelIo: PanelIo = {
+    source: `Siemens ${redundant ? `S7-1500${inp.redundancy}` : family}`,
+    di: need.di, dq: need.do, a2, a4,
+    distPoints: (cpu.drawA > 0 ? cpuUnits : 0) + 2 * stations + (panel ? inp.hmiQty : 0) + sw.qty + 1,
+    deviceRailMm: stations * (50 + 12.5) + ioModules * 15 + (is1200 ? 110 : 0),
+    ...(psu ? { psuA: psu.ratingA, psuQty: 1 } : {}),
+  };
   if (inp.terminals && need.di + need.do + a2 + a4 > 0) {
-    const di = need.di;
-    const dq = need.do;
-    const fused = a2 + 2 * a4;
-    const std = a2 + 2 * a4;
-    const diJumpers = Math.ceil(di / 10);
-    const relayGroups = Math.ceil(dq / 16);
-    const relayJumpers = dq - relayGroups;
-    // +24 V / 0 V distribution: CPU(s), each station's IM and light BaseUnit,
-    // panels and switches, plus the PSU feed.
-    const distPoints = (cpu.drawA > 0 ? cpuUnits : 0) + 2 * stations + (panel ? inp.hmiQty : 0) + sw.qty + 1;
-    const distJumpers = 2 * Math.ceil(distPoints / 10);
-    const pe = 2; // PSU earth + DIN-rail / shield earth
-    const groups = (di ? 1 : 0) + (dq ? 1 : 0) + (fused ? 1 : 0) + 1;
-    const endStops = 2 * groups;
-    const tb2End = di ? 1 : 0;
-    // The analog group ends on a fuse terminal, which comes with its own end
-    // plate; only the +24 V / 0 V distribution group needs a 2002-1292.
-    const stdEnd = 1;
-    const terminals = di + dq + fused + std + 2 * distPoints + pe;
-    const railMm = Math.ceil((di * 5.2 + dq * 6 + fused * 8 + (std + 2 * distPoints + pe) * 5.2 + (tb2End + stdEnd) * 0.8 + endStops * 6
-      + stations * (50 + 12.5) + ioModules * 15) * 1.2);
-
-    const redWires = di + dq + fused + distPoints + diJumpers;
-    const blueWires = std + distPoints + relayGroups;
-    const runM = Math.round(((whole(inp.panelW) + whole(inp.panelH)) / 2000 + 0.3) * 100) / 100;
-    const redM = Math.ceil(redWires * runM * 1.1);
-    const blueM = Math.ceil(blueWires * runM * 1.1);
-    const ferrules = Math.ceil(((redWires + blueWires) * 2 * 1.1) / 100) * 100;
-    wiring = { redWires, blueWires, runM, redM, blueM, terminals, railMm };
-
-    add('tb2Level', di, '1 double-deck terminal per DI (incl. spare)', 'terminals');
-    add('tb2LevelEnd', tb2End, 'Closes the DI terminal group', 'terminals');
-    add('relay', dq, '1 slim relay per DO (incl. spare)', 'terminals');
-    add('relayJumper', relayJumpers, `Bridges the relay coil commons (A2 → 0 V), ${relayGroups} group${relayGroups === 1 ? '' : 's'} of up to 16`, 'terminals');
-    add('tbFuse', fused, `Analog: 1 per 2-wire point (${a2}), 2 per 4-wire point (${a4})`, 'terminals');
-    add('fuse5x20', fused, 'Fuse insert for each fuse terminal', 'terminals');
-    add('tbStd', std + 2 * distPoints, `Analog: 1 per 2-wire point, 2 per 4-wire point (${std}); +24 V / 0 V distribution for CPU, stations, panels, switches and the PSU feed (${2 * distPoints})`, 'terminals');
-    add('tbPe', pe, 'PSU earth and DIN-rail / shield earth', 'terminals');
-    add('tbStdEnd', stdEnd, 'Closes the distribution group (fuse terminals carry their own end plate)', 'terminals');
-    add('jumper10', diJumpers + distJumpers, `Shorting links: DI 24 V level (${diJumpers}), +24 V / 0 V distribution (${distJumpers})`, 'terminals');
-    add('endStop', endStops, `2 per terminal group (${groups} groups)`, 'terminals');
-    add('markers', terminals, '1 marker per terminal / relay', 'terminals');
-    add('dinRail', Math.ceil(railMm / 2000), `≈ ${(railMm / 1000).toFixed(1)} m of rail for terminals, relays and ET 200SP (+20%)`, 'terminals');
-    add('wireRed', Math.ceil(redM / WIRE_ROLL_M), `0.5 mm² red (+24 V DC): ${redWires} wires × ${runM} m ≈ ${redM} m`, 'wiring');
-    add('wireBlue', Math.ceil(blueM / WIRE_ROLL_M), `0.5 mm² blue (0 V DC): ${blueWires} wires × ${runM} m ≈ ${blueM} m`, 'wiring');
-    add('ferrule05', ferrules, 'Both ends of every 0.5 mm² wire (+10%)', 'wiring');
+    const strip = terminalStrip({
+      ...panelIo, extraRailMm: stations * (50 + 12.5) + ioModules * 15, railFor: 'terminals, relays and ET 200SP',
+      panelW: whole(inp.panelW), panelH: whole(inp.panelH),
+    });
+    wiring = strip.wiring;
+    strip.lines.forEach((l) => add(l.key, l.qty, l.why, l.section));
   }
 
   const notes: string[] = [];
@@ -857,6 +839,7 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
     ioModules,
     network: { switchKey: netSwitch?.key ?? null, qty: netSwitch ? sw.qty : 0, devices, portsPerSwitch },
     wiring,
+    panelIo,
     notes,
   };
 }
