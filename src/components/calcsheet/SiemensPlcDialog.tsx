@@ -39,7 +39,7 @@ const id = () => nanoid(6);
 // The dialog starts on the optimizing defaults: auto CPU, cheapest module sizes, S7-1200 local expansion
 // when it fits, auto memory card.
 const fresh = (): PlcInputs => ({
-  ...DEFAULT_PLC_INPUTS, analog: noAnalog(), terminals: false, cpu: 'auto', expansion: 'auto', moduleSizes: 'auto', memCard: 'auto',
+  ...DEFAULT_PLC_INPUTS, analog: noAnalog(), terminals: false, cpu: 'auto', expansion: 'auto', moduleSizes: 'auto', memCard: 'auto', pnCabling: true,
 });
 
 export default function SiemensPlcDialog({ open, onClose, productContingencyPct, onSubmit }: Props) {
@@ -84,7 +84,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
       onFocus={(e) => e.target.select()}
     />
   );
-  const num = (k: 'di' | 'do' | 'sparePct' | 'modbusPorts' | 'hmiQty' | 'scadaQty' | 'scadaClients' | 'switchQty' | 'panelW' | 'panelH', label: string, helper?: string) => (
+  const num = (k: 'di' | 'do' | 'sparePct' | 'modbusPorts' | 'hmiQty' | 'scadaQty' | 'scadaClients' | 'switchQty' | 'panelW' | 'panelH' | 'upsMinutes' | 'pnFieldLinks' | 'pnFieldM', label: string, helper?: string) => (
     <TextField
       label={label} size="small" fullWidth type="text" inputMode="numeric"
       value={inp[k] || (k === 'sparePct' ? '0' : '')} placeholder="0" helperText={helper}
@@ -285,6 +285,41 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                 ? `${sw.qty} × ${SWITCHES.find((s) => s.key === cfg.network.switchKey)?.model} — ${cfg.network.devices} device${cfg.network.devices === 1 ? '' : 's'} on the network`
                 : 'Enter how many switches — the model is picked from the ports needed'}
             </Typography>
+          </Stack>
+
+          <Divider textAlign="left"><Typography variant="caption" color="text.secondary">PROFINET cabling &amp; 24 V UPS</Typography></Divider>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <FormControlLabel control={<Checkbox size="small" checked={inp.pnCabling} onChange={(e) => set('pnCabling', e.target.checked)} />}
+              label={<Typography variant="body2">PROFINET cabling</Typography>} />
+            {inp.pnCabling && (
+              <>
+                <Box sx={{ width: 170 }}>{num('pnFieldLinks', 'Links leaving the panel', 'Rest = 2 m patch cords')}</Box>
+                <Box sx={{ width: 150 }}>{num('pnFieldM', 'Avg. field run (m)', '+10% on the cable')}</Box>
+                <Typography variant="caption" color="text.secondary">
+                  {cfg.profinet
+                    ? `${cfg.profinet.links} link${cfg.profinet.links === 1 ? '' : 's'} — ${cfg.profinet.patch} patch cord${cfg.profinet.patch === 1 ? '' : 's'}${cfg.profinet.field ? `, ${cfg.profinet.cableM} m FC cable + ${cfg.profinet.field * 2} plugs` : ''}`
+                    : 'Only one device on the network — no cabling needed'}
+                </Typography>
+              </>
+            )}
+          </Stack>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <FormControlLabel control={<Checkbox size="small" checked={inp.ups} onChange={(e) => set('ups', e.target.checked)} />}
+              label={<Typography variant="body2">24 V DC UPS</Typography>} />
+            {inp.ups && (
+              <>
+                <Box sx={{ width: 140 }}>{num('upsMinutes', 'Backup (min)')}</Box>
+                <TextField select label="Buffered load" size="small" sx={{ minWidth: 220 }} value={inp.upsLoad} onChange={(e) => set('upsLoad', e.target.value as PlcInputs['upsLoad'])}>
+                  <MenuItem value="controller">Controller electronics only</MenuItem>
+                  <MenuItem value="all">Whole 24 V load (incl. DO / field)</MenuItem>
+                </TextField>
+                {cfg.ups && (
+                  <Typography variant="caption" color="text.secondary">
+                    {`${cfg.ups.loadA} A for ${cfg.ups.minutes} min → ${cfg.ups.ah} Ah battery`}
+                  </Typography>
+                )}
+              </>
+            )}
           </Stack>
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">HMI &amp; SCADA</Typography></Divider>
