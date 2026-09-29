@@ -1,4 +1,4 @@
-// App-wide Whiteboard — a 4-column sticky-note board (one column per team
+// App-wide Whiteboard — a sticky-note board (one column per team
 // member) plus a private "Just for me" area. Not calcsheet-specific; the
 // popup (once per login session) and the always-available quick-access
 // button both live in Header.tsx, and the data itself is served by
@@ -7,9 +7,9 @@
 export type WhiteboardKind = 'update' | 'note' | 'todo';
 export type WhiteboardVisibility = 'public' | 'private';
 
-// Fixed 4-person roster — the board's columns, not an open-ended list. Real
+// Fixed roster (TJ, RJ, Renzel, Nylle, Kim) — the board's columns, not an open-ended list. Real
 // names are kept here only as a comment/reference for whoever edits this.
-export type WhiteboardPerson = 'tj' | 'rj' | 'renzel' | 'nylle';
+export type WhiteboardPerson = 'tj' | 'rj' | 'renzel' | 'nylle' | 'kim';
 
 export interface WhiteboardPersonInfo {
   key: WhiteboardPerson;
@@ -23,16 +23,17 @@ export interface WhiteboardPersonInfo {
 }
 
 // tj = Tyrone James Caballero, rj = Reuel Joshua Rivera, renzel = Renzel
-// Punongbayan, nylle = Nylle Harold Managa.
+// Punongbayan, nylle = Nylle Harold Managa, kim = Kim Solis.
 export const WHITEBOARD_PEOPLE: WhiteboardPersonInfo[] = [
   { key: 'tj', label: 'TJ', color: '#f0b357', lightColor: '#fdf1de', aliases: ['tj', 'tjc', 'tyrone', 'caballero'] },
   { key: 'rj', label: 'RJ', color: '#7fb1e0', lightColor: '#e7f1fb', aliases: ['rj', 'rjr', 'reuel', 'rivera'] },
   { key: 'renzel', label: 'Renzel', color: '#a8cf7c', lightColor: '#eef7e4', aliases: ['renzel', 'punongbayan'] },
   { key: 'nylle', label: 'Nylle', color: '#b18fd1', lightColor: '#f2eaf9', aliases: ['nylle', 'managa'] },
+  { key: 'kim', label: 'Kim', color: '#e8909f', lightColor: '#fcecef', aliases: ['kim', 'solis'] },
 ];
 
 // Which column (if any) a logged-in user is — so the person a public to-do is
-// assigned to can tick it. null for anyone who isn't one of the four.
+// assigned to can tick it. null for anyone who isn't one of the board's people.
 export function whiteboardPersonOf(user: { full_name?: string | null; username?: string; email?: string } | null | undefined): WhiteboardPerson | null {
   if (!user) return null;
   const words = [user.full_name, user.username, (user.email || '').split('@')[0]]

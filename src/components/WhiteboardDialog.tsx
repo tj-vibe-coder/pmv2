@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   Alert, Autocomplete, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
   IconButton, MenuItem, Stack, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
+  useMediaQuery, useTheme,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -202,8 +203,8 @@ function WhiteboardColumn({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: person.key });
   return (
-    <Box>
-      <Box sx={{ bgcolor: person.color, color: 'white', fontWeight: 700, textAlign: 'center', borderRadius: 1, py: 0.75, mb: 1 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <Box sx={{ flexShrink: 0, bgcolor: person.color, color: 'white', fontWeight: 700, textAlign: 'center', borderRadius: 1, py: 0.75, mb: 1 }}>
         {person.label}
         <Typography component="span" variant="caption" sx={{ ml: 0.5, opacity: 0.85 }}>
           ({colItems.length})
@@ -212,7 +213,7 @@ function WhiteboardColumn({
       <Box
         ref={setNodeRef}
         sx={{
-          maxHeight: 360, overflowY: 'auto', pr: 0.5, minHeight: 60, borderRadius: 1,
+          flex: 1, minHeight: 60, overflowY: 'auto', pr: 0.5, borderRadius: 1,
           outline: isOver ? '2px dashed' : 'none', outlineColor: person.color, outlineOffset: 2,
           transition: 'outline-color 0.1s',
         }}
@@ -277,6 +278,10 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
   const [savingEdit, setSavingEdit] = useState(false);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const theme = useTheme();
+  const isPhone = useMediaQuery(theme.breakpoints.down('sm'));
+  // Wide screens: "Just for me" is a fifth full-height column beside the board.
+  const isWide = useMediaQuery(theme.breakpoints.up('lg'));
 
   useEffect(() => { if (open) { fetchItems(); fetchLinkOptions(); } }, [open, fetchItems, fetchLinkOptions]);
 
@@ -296,11 +301,11 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
   };
 
   const publicByPerson = useMemo(() => {
-    const map: Record<WhiteboardPerson, WhiteboardItem[]> = { tj: [], rj: [], renzel: [], nylle: [] };
+    const map = Object.fromEntries(WHITEBOARD_PEOPLE.map((p) => [p.key, [] as WhiteboardItem[]])) as Record<WhiteboardPerson, WhiteboardItem[]>;
     items
       .filter((i) => i.visibility === 'public' && i.assignedTo)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .forEach((i) => map[i.assignedTo as WhiteboardPerson].push(i));
+      .forEach((i) => map[i.assignedTo as WhiteboardPerson]?.push(i));
     return map;
   }, [items]);
 
@@ -401,18 +406,39 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
     }
   };
 
+  const privateNotes = myPrivate.length === 0 ? (
+    <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 1 }}>
+      Nothing private yet — post something above and switch it to Private.
+    </Typography>
+  ) : (
+    <Box sx={{ display: 'grid', gridTemplateColumns: isWide ? '1fr' : { xs: '1fr', sm: '1fr 1fr' }, gap: isWide ? 0 : 1 }}>
+      {myPrivate.map((item) => (
+        <StickyNote
+          key={item.id} item={item} bg="#f2f2f2" draggable={false}
+          canToggleDone={canToggleDone(item)} canEdit={canEdit(item)} canDelete={canDelete(item)}
+          onToggleDone={toggleDone} onEdit={startEdit} onDelete={remove} onOpenLink={openLink}
+        />
+      ))}
+    </Box>
+  );
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
+    // Near-full-screen board (full screen on phones): the columns stretch to
+    // the height left under the composer and scroll on their own.
+    <Dialog
+      open={open} onClose={onClose} maxWidth={false} fullWidth fullScreen={isPhone}
+      PaperProps={{ sx: isPhone ? {} : { width: 'calc(100vw - 48px)', height: 'calc(100vh - 48px)', maxHeight: 'none', m: 3 } }}
+    >
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         Whiteboard
         <IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
       </DialogTitle>
-      <DialogContent>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {error && <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setError(null)}>{error}</Alert>}
         {notice && <Alert severity={notice.severity} sx={{ mb: 1.5 }} onClose={() => setNotice(null)}>{notice.message}</Alert>}
 
         {/* ── Composer ── */}
-        <Stack spacing={1} sx={{ mb: 2 }}>
+        <Stack spacing={1} sx={{ mb: 2, flexShrink: 0 }}>
           <ToggleButtonGroup
             size="small" exclusive value={kind}
             onChange={(_e, v) => { if (v) setKind(v); }}
@@ -465,17 +491,23 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
           </Stack>
         </Stack>
 
-        <Divider sx={{ mb: 0.5 }} />
-        <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5 }}>
+        <Divider sx={{ mb: 0.5, flexShrink: 0 }} />
+        <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5, flexShrink: 0 }}>
           Drag the ⠿ handle on one of your own notes to move it to another column.
         </Typography>
 
-        {/* ── 4-column board ── */}
+        {/* ── Board — one column per person ── */}
         {loading && items.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>Loading…</Typography>
         ) : (
           <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 1.5, overflowX: 'auto' }}>
+            <Box
+              sx={{
+                flex: 1, minHeight: isPhone ? 'auto' : 320, display: 'grid', gap: 2, overflowX: 'auto',
+                gridTemplateColumns: `repeat(${WHITEBOARD_PEOPLE.length + (isWide ? 1 : 0)}, minmax(190px, 1fr))`,
+                gridTemplateRows: isPhone ? 'auto' : 'minmax(0, 1fr)',
+              }}
+            >
               {WHITEBOARD_PEOPLE.map((p) => (
                 <WhiteboardColumn
                   key={p.key} person={p} items={publicByPerson[p.key]}
@@ -484,28 +516,27 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
                   onToggleDone={toggleDone} onEdit={startEdit} onDelete={remove} onOpenLink={openLink}
                 />
               ))}
+              {isWide && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                  <Box sx={{ flexShrink: 0, bgcolor: '#9e9e9e', color: 'white', fontWeight: 700, textAlign: 'center', borderRadius: 1, py: 0.75, mb: 1 }}>
+                    <LockIcon sx={{ fontSize: 14, mr: 0.5, verticalAlign: '-2px' }} />Just for me
+                    <Typography component="span" variant="caption" sx={{ ml: 0.5, opacity: 0.85 }}>({myPrivate.length})</Typography>
+                  </Box>
+                  <Box sx={{ flex: 1, minHeight: 60, overflowY: 'auto', pr: 0.5 }}>{privateNotes}</Box>
+                </Box>
+              )}
             </Box>
           </DndContext>
         )}
 
-        {/* ── Just for me (private) ── */}
-        <Divider sx={{ my: 2 }} textAlign="left">
-          <Typography variant="caption" color="text.secondary">Just for me ({myPrivate.length})</Typography>
-        </Divider>
-        {myPrivate.length === 0 ? (
-          <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 1 }}>
-            Nothing private yet — post something above and switch it to Private.
-          </Typography>
-        ) : (
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1 }}>
-            {myPrivate.map((item) => (
-              <StickyNote
-                key={item.id} item={item} bg="#f2f2f2" draggable={false}
-                canToggleDone={canToggleDone(item)} canEdit={canEdit(item)} canDelete={canDelete(item)}
-                onToggleDone={toggleDone} onEdit={startEdit} onDelete={remove} onOpenLink={openLink}
-              />
-            ))}
-          </Box>
+        {/* ── Just for me (private) — below the board on narrower screens ── */}
+        {!isWide && (
+          <>
+            <Divider sx={{ my: 2, flexShrink: 0 }} textAlign="left">
+              <Typography variant="caption" color="text.secondary">Just for me ({myPrivate.length})</Typography>
+            </Divider>
+            <Box sx={{ flexShrink: 0, maxHeight: isPhone ? 'none' : '24vh', overflowY: 'auto', pr: 0.5 }}>{privateNotes}</Box>
+          </>
         )}
       </DialogContent>
 

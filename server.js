@@ -952,6 +952,7 @@ const WHITEBOARD_PERSON_ALIASES = {
   rj: ['rj', 'rjr', 'reuel', 'rivera'],
   renzel: ['renzel', 'punongbayan'],
   nylle: ['nylle', 'managa'],
+  kim: ['kim', 'solis'],
 };
 // Optional note → project/calcsheet-proposal link. Returns the cleaned link,
 // null (explicitly "no link" / clear it), or false if the shape is invalid.
@@ -1003,7 +1004,7 @@ app.post('/api/whiteboard', async (req, res) => {
     // assignedTo picks the board column (see WHITEBOARD_PEOPLE) — required
     // for a public sticky note (it needs somewhere to live on the board),
     // irrelevant for a private one (shown in "Just for me" instead).
-    if (visibility === 'public' && !['tj', 'rj', 'renzel', 'nylle'].includes(assignedTo)) {
+    if (visibility === 'public' && !Object.keys(WHITEBOARD_PERSON_ALIASES).includes(assignedTo)) {
       return res.status(400).json({ error: 'assignedTo is required for a public item' });
     }
     const now = new Date().toISOString();
