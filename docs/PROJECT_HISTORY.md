@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-09-30 — Siemens PLC configurator optimizations
+
+`siemensPlc.ts` / `SiemensPlcDialog.tsx`. The dialog now starts on optimizing defaults (`cpu: 'auto'`, `expansion: 'auto'`, `moduleSizes: 'auto'`, `memCard: 'auto'`); `DEFAULT_PLC_INPUTS` keeps the old fixed behaviour for the unit tests.
+- **S7-1200 local expansion** (`expansion`): I/O beyond on board on SM 1221 DI8/16, SM 1222 DQ8/16, SM 1231 AI4/8 / RTD4/8 / TC4/8, SM 1232 AQ2/4 (8 slots on 1214C/1215C/1217C, 2 on 1212C, 0 on 1211C), SB 1231 / SB 1232 signal board for a single leftover AI / AO (not with CB 1241 — same slot), CM 1241 for extra RS-485 ports (max 3). Checks slots + 5 V backplane budget (1,000 / 1,600 mA, planning figures); falls back to ET 200SP when it doesn't fit or ET 200SP stations are asked for. Part numbers 6ES7221/222/231/232/241-…; the ones not confirmed are `verify`.
+- **Cheapest module mix** (`cheapestModules`, DP): ET 200SP DI8 6ES7131-6BF01-0BA0, DQ8 6ES7132-6BF01-0BA0, AI 4xI 6ES7134-6GD01-0BA1, AI 4xU/I 6ES7134-6HD01-0BA1, AQ 2xU/I 6ES7135-6HB00-0BA1 alongside the 16/8/4-ch ones; each ET 200SP module costed with its dark BaseUnit.
+- **Auto CPU**: builds the whole configuration for each candidate (DC/DC/DC S7-1200s, standard + compact S7-1500s, F-CPUs with "Fail-safe", R/H pairs) within the performance class the channel count needs (S7-1200 ≤64/128/256/400/more → 1211/1212/1214/1215/1217; S7-1500 ≤256/1024/2048/more → 1511/1513/1515/1516) and keeps the cheapest (`cfg.cpuKey`).
+- Costs for ranking: pricelist (`configurePlc(inp, priceOf)`) → supplier quote → `RANK_PRICE` rough relative prices (ranking only, never on the BOM).
+- **Auto memory card**: 24 MB S7-1500 / R/H, 4 MB S7-1200 (was the 256 MB card).
+
 ## 2026-09-30 — Desigo CC licenses with real order numbers + auto edition; TX-I/O address keys; Pt100 module
 
 - **Desigo CC** (Siemens HIT, P55802-…): CCA-CMPT-BA Compact BA P55802-Y113-A100 (500 BA + 500 SCADA points and 3 clients included, BA max 2,000, no redundancy); CCA-STD-FSET Standard P55802-Y114-A100 (1 client); BA point packs CCA-100/500/1000/5000/10000/30000/100000-BA = Y157-A412/A452/A413/A453/A414/A434/A415; SCADA packs CCA-100/500/5000-SCADA = Y124-A412/A452/A453; CCA-1-CL add 1 client P55802-Y119-A200; CCA-ENG engineering P55802-Y130-A100 (optional); CCA-OP-REDU redundancy — no order number found (Ask supplier). Long-term storage and reports are part of both feature sets (history / reports options removed). **Edition auto** (`dccEdition`: auto / compact / standard): Compact when BA ≤ 2,000, SCADA ≤ 500, clients ≤ 3 and no redundancy, else Standard. BA points = PXC I/O + BACnet integration; SCADA points = Modbus / OPC / S7 / SNMP direct. `bestPacks()` picks the lowest-cost pack mix using a volume-discount proxy (cost ∝ size^0.85) since prices aren't known.

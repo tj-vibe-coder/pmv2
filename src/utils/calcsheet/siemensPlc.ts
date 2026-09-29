@@ -337,6 +337,28 @@ const QUOTED: SiemensPart[] = [
 
 // Siemens catalog parts not on a quote yet (confirm part numbers with the supplier).
 const CATALOG: SiemensPart[] = [
+  // ET 200SP smaller modules (for the cheapest module mix).
+  { key: 'di8', partNo: '6ES7131-6BF01-0BA0', price: 0, description: 'SIMATIC ET 200SP, Digital input module, DI 8x 24V DC Standard, type 3 (IEC 61131), sink input (PNP, P-reading), fits to BU-type A0, Colour Code CC01' },
+  { key: 'dq8', partNo: '6ES7132-6BF01-0BA0', price: 0, description: 'SIMATIC ET 200SP, Digital output module, DQ 8x 24V DC/0.5A Standard, Source output (PNP, P-switching), fits to BU-type A0, Colour Code CC02' },
+  { key: 'ai4i', partNo: '6ES7134-6GD01-0BA1', price: 0, description: 'SIMATIC ET 200SP, Analog input module, AI 4xI 2-/4-wire Standard, suitable for BU type A0, A1, Color code CC03, Module diagnostics, 16 bit' },
+  { key: 'ai4u', partNo: '6ES7134-6HD01-0BA1', price: 0, verify: true, description: 'SIMATIC ET 200SP, Analog input module, AI 4xU/I 2-wire Standard, suitable for BU type A0, A1, Color code CC03, Module diagnostics, 16 bit' },
+  { key: 'aq2', partNo: '6ES7135-6HB00-0BA1', price: 0, description: 'SIMATIC ET 200SP, Analog output module, AQ 2xU/I Standard, suitable for BU type A0, A1, Color code CC00, Module diagnostics, 16 bit' },
+  // S7-1200 signal modules / boards / communication modules (local expansion on the CPU).
+  { key: 'sm1221di16', partNo: '6ES7221-1BH32-0XB0', price: 0, description: 'SIMATIC S7-1200, Digital input SM 1221, 16 DI, 24 V DC, sink/source' },
+  { key: 'sm1221di8', partNo: '6ES7221-1BF32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Digital input SM 1221, 8 DI, 24 V DC, sink/source' },
+  { key: 'sm1222dq16', partNo: '6ES7222-1BH32-0XB0', price: 0, description: 'SIMATIC S7-1200, Digital output SM 1222, 16 DO, 24 V DC transistor 0.5 A' },
+  { key: 'sm1222dq8', partNo: '6ES7222-1BF32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Digital output SM 1222, 8 DO, 24 V DC transistor 0.5 A' },
+  { key: 'sm1231ai4', partNo: '6ES7231-4HD32-0XB0', price: 0, description: 'SIMATIC S7-1200, Analog input SM 1231, 4 AI, +/-10 V, +/-5 V, +/-2.5 V, or 0-20 / 4-20 mA, 12 bit + sign bit (13 bit ADC)' },
+  { key: 'sm1231ai8', partNo: '6ES7231-4HF32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Analog input SM 1231, 8 AI, +/-10 V, +/-5 V, +/-2.5 V, or 0-20 / 4-20 mA, 12 bit + sign bit (13 bit ADC)' },
+  { key: 'sm1231rtd4', partNo: '6ES7231-5PD32-0XB0', price: 0, description: 'SIMATIC S7-1200, Analog input SM 1231 RTD, 4 AI, Pt100 / Pt1000 resistance thermometers, 2-/3-/4-wire, 16 bit' },
+  { key: 'sm1231rtd8', partNo: '6ES7231-5PF32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Analog input SM 1231 RTD, 8 AI, Pt100 / Pt1000 resistance thermometers, 2-/3-/4-wire, 16 bit' },
+  { key: 'sm1231tc4', partNo: '6ES7231-5QD32-0XB0', price: 0, description: 'SIMATIC S7-1200, Analog input SM 1231 TC, 4 AI, thermocouple, 16 bit' },
+  { key: 'sm1231tc8', partNo: '6ES7231-5QF32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Analog input SM 1231 TC, 8 AI, thermocouple, 16 bit' },
+  { key: 'sm1232aq2', partNo: '6ES7232-4HB32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Analog output SM 1232, 2 AO, +/-10 V or 0-20 mA, 14 bit' },
+  { key: 'sm1232aq4', partNo: '6ES7232-4HD32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Analog output SM 1232, 4 AO, +/-10 V or 0-20 mA, 14 bit' },
+  { key: 'sb1231ai1', partNo: '6ES7231-4HA30-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Signal board SB 1231, 1 AI, +/-10 V or 0-20 mA, 12 bit' },
+  { key: 'sb1232aq1', partNo: '6ES7232-4HA30-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Signal board SB 1232, 1 AO, +/-10 V or 0-20 mA, 12 bit' },
+  { key: 'cm1241', partNo: '6ES7241-1CH32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Communication module CM 1241, RS-422/485, 9-pin sub D (Modbus RTU / Freeport)' },
   { key: 'ai8u', partNo: '6ES7134-6FF00-0AA1', price: 0,
     description: 'SIMATIC ET 200SP, Analog input module, AI 8xU Basic, 0-10 V / ±10 V, suitable for BU type A0, A1, Color code CC01, Module diagnostics, 16 bit' },
   { key: 'rtd8', partNo: '6ES7134-6JF00-0CA1', price: 0,
@@ -514,6 +536,26 @@ export function genericDescription(key: string): string {
     buDark: 'I/O base unit',
     buLightA1: 'I/O base unit with temperature sensor (thermocouple), starts a new potential group',
     buDarkA1: 'I/O base unit with temperature sensor (thermocouple)',
+    di8: 'Digital input module, 8 x 24 V DC',
+    dq8: 'Digital output module, 8 x 24 V DC / 0.5 A',
+    ai4i: 'Analog input module, 4 x 4–20 mA (2-/4-wire)',
+    ai4u: 'Analog input module, 4 x 0–10 V / 4–20 mA (2-wire)',
+    aq2: 'Analog output module, 2 x 0–10 V / 4–20 mA',
+    sm1221di16: 'PLC expansion module, 16 digital inputs 24 V DC',
+    sm1221di8: 'PLC expansion module, 8 digital inputs 24 V DC',
+    sm1222dq16: 'PLC expansion module, 16 digital outputs 24 V DC transistor',
+    sm1222dq8: 'PLC expansion module, 8 digital outputs 24 V DC transistor',
+    sm1231ai4: 'PLC expansion module, 4 analog inputs 0–10 V / 4–20 mA',
+    sm1231ai8: 'PLC expansion module, 8 analog inputs 0–10 V / 4–20 mA',
+    sm1231rtd4: 'PLC expansion module, 4 RTD inputs (Pt100 / Pt1000)',
+    sm1231rtd8: 'PLC expansion module, 8 RTD inputs (Pt100 / Pt1000)',
+    sm1231tc4: 'PLC expansion module, 4 thermocouple inputs',
+    sm1231tc8: 'PLC expansion module, 8 thermocouple inputs',
+    sm1232aq2: 'PLC expansion module, 2 analog outputs 0–10 V / 4–20 mA',
+    sm1232aq4: 'PLC expansion module, 4 analog outputs 0–10 V / 4–20 mA',
+    sb1231ai1: 'PLC signal board, 1 analog input 0–10 V / 4–20 mA',
+    sb1232aq1: 'PLC signal board, 1 analog output 0–10 V / 4–20 mA',
+    cm1241: 'PLC communication module RS-422 / RS-485 (Modbus RTU)',
   };
   return GENERIC[key] ?? '';
 }
@@ -538,8 +580,14 @@ export interface PlcInputs {
   sitop: string;
   /** S7-1200: include a memory card (always included for S7-1500, where it's required). */
   memoryCard: boolean;
-  /** MEMORY_CARDS key. */
+  /** MEMORY_CARDS key, or 'auto' (24 MB on S7-1500, 4 MB on S7-1200). */
   memCard: string;
+  /** S7-1200 I/O beyond on board: signal modules on the CPU, ET 200SP, or auto (local when it fits). */
+  expansion: 'auto' | 'local' | 'et200sp';
+  /** 'auto' = cheapest mix of 8/16-ch DI/DQ, 4/8-ch AI, 2/4-ch AQ; 'standard' = DI16 / DQ16 / AI8 / AQ4 only. */
+  moduleSizes: 'auto' | 'standard';
+  /** With cpu 'auto': pick among fail-safe (F) CPUs. */
+  failSafe: boolean;
   /** HMI_PANELS key, or 'none'. */
   hmi: string;
   hmiQty: number;
@@ -576,7 +624,7 @@ export interface PlcInputs {
 }
 
 export const DEFAULT_PLC_INPUTS: PlcInputs = {
-  family: 'S7-1200', cpu: 'cpu1214', redundancy: 'none', di: 0, do: 0, analog: noAnalog(), sparePct: 10,
+  family: 'S7-1200', cpu: 'cpu1214', redundancy: 'none', expansion: 'et200sp', moduleSizes: 'standard', failSafe: false, di: 0, do: 0, analog: noAnalog(), sparePct: 10,
   modbus: 'none', modbusPorts: 1, sitop: 'none', memoryCard: false, memCard: 'memCard',
   hmi: 'none', hmiQty: 1, scada: 'none', winccLicense: 'RC', licenseEdition: 'standard', scadaPackage: '2048', scadaQty: 1,
   scadaClients: 0, scadaRedundant: false, scadaLogging: 'none', scadaDbStorage: false,
@@ -599,6 +647,12 @@ export interface PlcChannels { needed: number; provided: number }
 
 export interface PlcConfig {
   lines: PlcLine[];
+  /** CPU actually used (the auto pick, or the one chosen). */
+  cpuKey: string;
+  /** How the I/O beyond on board is added. */
+  expansion: 'local' | 'et200sp' | 'none';
+  /** S7-1200 local expansion: signal modules used / CPU slots, and 5 V backplane current (mA) used / available. */
+  local: { modules: number; slots: number; busMa: number; busMaxMa: number } | null;
   channels: { di: PlcChannels; do: PlcChannels; ai: PlcChannels; ao: PlcChannels };
   /** Channels needed (incl. spare) per analog type and wiring. */
   analog: Record<AnalogKey, AnalogCount>;
@@ -633,7 +687,109 @@ export function effectiveSwitches(inp: Pick<PlcInputs, 'redundancy' | 'switchQty
   return inp.redundancy !== 'none' ? { qty: Math.max(2, qty), type: 'managed' } : { qty, type: inp.switchType };
 }
 
-export function configurePlc(raw: PlcInputs): PlcConfig {
+// ── Cheapest module mix / auto CPU ───────────────────────────────────────
+// Relative prices (₱, rough list-price ratios) used ONLY to rank options when
+// neither the pricelist nor a supplier quote has a price — never shown or
+// put on the BOM. Real prices (Sales → Pricelists, quotes) always win.
+const RANK_PRICE: Record<string, number> = {
+  cpu1211: 13000, cpu1212: 17000, cpu1215: 30000, cpu1217: 38000, cpu1212f: 30000, cpu1214f: 38000, cpu1215f: 45000,
+  cpu1511: 70000, cpu1515: 190000, cpu1516: 260000, cpu1511c: 95000, cpu1512c: 140000,
+  cpu1511f: 110000, cpu1513f: 180000, cpu1515f: 260000, cpu1516f: 340000, cpu1513r: 170000, cpu1515r: 250000, cpu1517h: 900000,
+  memCard4: 3500, memCard12: 6000, memCard24: 9000,
+  di8: 4300, dq8: 5000, ai4i: 11000, ai4u: 11000, aq2: 10500, ai8u: 16000, rtd8: 17000, rtd4: 12000,
+  sm1221di8: 5500, sm1221di16: 8500, sm1222dq8: 6000, sm1222dq16: 9500, sm1231ai4: 13000, sm1231ai8: 21000,
+  sm1231rtd4: 15000, sm1231rtd8: 23000, sm1231tc4: 14000, sm1231tc8: 22000, sm1232aq2: 12000, sm1232aq4: 20000,
+  sb1231ai1: 7000, sb1232aq1: 7500, cm1241: 8000, cmPtp: 22526, imHf: 38000, busAdapter: 3500,
+  buLightA1: 2200, buDarkA1: 1700, rail1500_160: 1500, rail1500_245: 1900,
+};
+/** Unit cost for ranking: pricelist → quote → rough relative price. */
+function rankCost(key: string, priceOf?: (key: string) => number): number {
+  return (priceOf?.(key) || 0) || (SIEMENS_PARTS[key]?.price || 0) || RANK_PRICE[key] || 5000;
+}
+
+/** Cheapest set of modules (with an extra cost per module, e.g. its BaseUnit) covering `need` channels. */
+export function cheapestModules(need: number, options: { key: string; ch: number }[], cost: (key: string) => number, perModule = 0): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (need <= 0 || options.length === 0) return out;
+  const max = need + Math.max(...options.map((o) => o.ch));
+  const best: number[] = Array(max + 1).fill(Infinity);
+  const pick: number[] = Array(max + 1).fill(-1);
+  best[0] = 0;
+  for (let t = 1; t <= max; t++) {
+    options.forEach((o, i) => {
+      const from = Math.max(0, t - o.ch);
+      const c = best[from] + cost(o.key) + perModule;
+      if (c < best[t] - 1e-6) { best[t] = c; pick[t] = i; }
+    });
+  }
+  let target = need;
+  for (let t = need; t <= max; t++) if (best[t] < best[target] - 1e-6) target = t;
+  for (let t = target; t > 0;) {
+    const o = options[pick[t]];
+    out[o.key] = (out[o.key] ?? 0) + 1;
+    t = Math.max(0, t - o.ch);
+  }
+  return out;
+}
+
+// S7-1200: signal-module slots on the right of the CPU, and the 5 V
+// backplane current each CPU supplies / each module draws (mA, planning figures).
+const SM_SLOTS = (key: string) => (/^cpu1211/.test(key) ? 0 : /^cpu1212/.test(key) ? 2 : 8);
+const BUS_MA_MAX = (key: string) => (/^cpu1211/.test(key) || /^cpu1212/.test(key) ? 1000 : 1600);
+const BUS_MA: Record<string, number> = {
+  sm1221di8: 105, sm1221di16: 130, sm1222dq8: 120, sm1222dq16: 140, sm1231ai4: 80, sm1231ai8: 90,
+  sm1231rtd4: 80, sm1231rtd8: 90, sm1231tc4: 80, sm1231tc8: 80, sm1232aq2: 80, sm1232aq4: 80, sb1231ai1: 55, sb1232aq1: 15, cm1241: 220,
+};
+
+/** Performance class the I/O count asks for — S7-1500: 1 = 1511 … 4 = 1516; S7-1200: 1 = 1211C … 5 = 1217C (work memory grows with it). */
+const tierFor = (channels: number, family: PlcFamily) => (family === 'S7-1200'
+  ? (channels <= 64 ? 1 : channels <= 128 ? 2 : channels <= 256 ? 3 : channels <= 400 ? 4 : 5)
+  : (channels <= 256 ? 1 : channels <= 1024 ? 2 : channels <= 2048 ? 3 : 4));
+const CPU_TIER: Record<string, number> = {
+  cpu1211: 1, cpu1212: 2, cpu1212f: 2, cpu1214: 3, cpu1214f: 3, cpu1215: 4, cpu1215f: 4, cpu1217: 5,
+  cpu1511: 1, cpu1511c: 1, cpu1511f: 1, cpu1513: 2, cpu1512c: 2, cpu1513f: 2, cpu1513r: 2,
+  cpu1515: 3, cpu1515f: 3, cpu1515r: 3, cpu1516: 4, cpu1516f: 4, cpu1517h: 4,
+};
+
+/** CPUs the auto pick chooses from (DC/DC/DC S7-1200s; relay / AC variants only by hand). */
+export function autoCpuCandidates(inp: Pick<PlcInputs, 'family' | 'redundancy' | 'failSafe'>): string[] {
+  if (inp.redundancy === 'R') return ['cpu1513r', 'cpu1515r'];
+  if (inp.redundancy === 'H') return ['cpu1517h'];
+  if (inp.family === 'S7-1200') return inp.failSafe ? ['cpu1212f', 'cpu1214f', 'cpu1215f'] : ['cpu1211', 'cpu1212', 'cpu1214', 'cpu1215', 'cpu1217'];
+  return inp.failSafe ? ['cpu1511f', 'cpu1513f', 'cpu1515f', 'cpu1516f'] : ['cpu1511', 'cpu1511c', 'cpu1513', 'cpu1512c', 'cpu1515', 'cpu1516'];
+}
+
+/**
+ * Configure the PLC. With `cpu: 'auto'`, every suitable CPU is tried and the
+ * cheapest complete configuration wins (S7-1500: only CPUs of the performance
+ * class the I/O count needs). `priceOf(key)` = pricelist price (0 = none).
+ */
+export function configurePlc(raw: PlcInputs, priceOf?: (key: string) => number): PlcConfig {
+  if (raw.cpu !== 'auto') return configurePlcFor(raw, priceOf);
+  const redundant = (raw.redundancy ?? 'none') !== 'none';
+  const family: PlcFamily = redundant ? 'S7-1500' : raw.family;
+  const probe = configurePlcFor({ ...raw, cpu: autoCpuCandidates({ ...raw, family })[0] }, priceOf);
+  const channels = probe.channels.di.needed + probe.channels.do.needed + probe.channels.ai.needed + probe.channels.ao.needed;
+  const tier = tierFor(channels, family);
+  const all = autoCpuCandidates({ ...raw, family });
+  const fitting = all.filter((k) => (CPU_TIER[k] ?? 5) >= tier);
+  // Nothing big enough (e.g. redundant R for a very large system) → the largest on offer.
+  const candidates = fitting.length ? fitting : all.slice(-1);
+  let best: PlcConfig | null = null;
+  let bestCost = Infinity;
+  candidates.forEach((k) => {
+    const c = configurePlcFor({ ...raw, cpu: k }, priceOf);
+    const cost = c.lines.filter((l) => l.section === 'plc').reduce((sum, l) => sum + l.qty * rankCost(l.key, priceOf), 0);
+    if (cost < bestCost - 1e-6) { best = c; bestCost = cost; }
+  });
+  const chosen = best ?? probe;
+  const m = cpuModel(family, chosen.cpuKey, raw.redundancy ?? 'none');
+  chosen.notes.unshift(`Auto CPU: ${m.label} — the lowest-cost fit for ${channels} channels (performance class ${tier} of ${family === 'S7-1200' ? 5 : 4}).`);
+  if (family === 'S7-1200' && channels > 400) chosen.notes.push(`${channels} channels is a lot for an S7-1200 — consider an S7-1500.`);
+  return chosen;
+}
+
+function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): PlcConfig {
   const rawAnalog = raw.analog ?? noAnalog();
   const inp = {
     ...raw, di: whole(raw.di), do: whole(raw.do),
@@ -669,18 +825,63 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   const onboardAiUsed = allot(cpu.onboard.ai, cpu.onboardAi);
   allot(cpu.onboard.ao, cpu.onboardAo);
 
-  const diMods = Math.ceil(Math.max(0, need.di - cpu.onboard.di) / CHANNELS.di16);
-  const dqMods = Math.ceil(Math.max(0, need.do - cpu.onboard.do) / CHANNELS.dq16);
-  const aiMods = Math.ceil(modNeed.aiI / CHANNELS.ai8);
-  const aiUMods = Math.ceil(modNeed.aiU / CHANNELS.ai8u);
-  const rtd8Mods = Math.ceil(analog.aiRtd.w2 / CHANNELS.rtd8);
-  const rtd4Mods = Math.ceil(analog.aiRtd.w4 / CHANNELS.rtd4);
-  const tcMods = Math.ceil(analog.aiTc.w2 / CHANNELS.rtd8);
-  const aqMods = Math.ceil((modNeed.aoI + modNeed.aoU) / CHANNELS.aq4);
-
+  const leftDi = Math.max(0, need.di - cpu.onboard.di);
+  const leftDo = Math.max(0, need.do - cpu.onboard.do);
   const rtuPorts = inp.modbus === 'rtu' ? inp.modbusPorts : 0;
+  const cost = (key: string) => rankCost(key, priceOf);
+
+  // ── S7-1200 local expansion: signal modules on the CPU (+ a signal board) ──
+  let localMods: Record<string, number> = {};
+  let local: PlcConfig['local'] = null;
+  let useLocal = false;
+  if (is1200 && inp.expansion !== 'et200sp') {
+    const lm: Record<string, number> = {};
+    const merge = (m: Record<string, number>) => Object.entries(m).forEach(([k, v]) => { lm[k] = (lm[k] ?? 0) + v; });
+    let aiLeft = modNeed.aiI + modNeed.aiU;
+    let aoLeft = modNeed.aoI + modNeed.aoU;
+    // Signal board (front of the CPU) for a single leftover AI or AO — the CB 1241 uses the same slot.
+    const boardFree = rtuPorts === 0;
+    if (boardFree && aiLeft === 1) { lm.sb1231ai1 = 1; aiLeft = 0; } else if (boardFree && aoLeft === 1) { lm.sb1232aq1 = 1; aoLeft = 0; }
+    const small = inp.moduleSizes === 'auto';
+    merge(cheapestModules(leftDi, [{ key: 'sm1221di16', ch: 16 }, ...(small ? [{ key: 'sm1221di8', ch: 8 }] : [])], cost));
+    merge(cheapestModules(leftDo, [{ key: 'sm1222dq16', ch: 16 }, ...(small ? [{ key: 'sm1222dq8', ch: 8 }] : [])], cost));
+    merge(cheapestModules(aiLeft, [{ key: 'sm1231ai8', ch: 8 }, { key: 'sm1231ai4', ch: 4 }], cost));
+    merge(cheapestModules(analog.aiRtd.w2 + analog.aiRtd.w4, [{ key: 'sm1231rtd8', ch: 8 }, { key: 'sm1231rtd4', ch: 4 }], cost));
+    merge(cheapestModules(analog.aiTc.w2, [{ key: 'sm1231tc8', ch: 8 }, { key: 'sm1231tc4', ch: 4 }], cost));
+    merge(cheapestModules(aoLeft, [{ key: 'sm1232aq4', ch: 4 }, { key: 'sm1232aq2', ch: 2 }], cost));
+    const cms = Math.max(0, rtuPorts - 1);
+    if (cms > 0) lm.cm1241 = cms;
+    const smCount = Object.entries(lm).filter(([k]) => k.startsWith('sm12')).reduce((n, [, v]) => n + v, 0);
+    const busMa = Object.entries(lm).reduce((n, [k, v]) => n + (BUS_MA[k] ?? 0) * v, 0);
+    local = { modules: smCount, slots: SM_SLOTS(cpu.key), busMa, busMaxMa: BUS_MA_MAX(cpu.key) };
+    const fits = smCount <= local.slots && cms <= 3 && busMa <= local.busMaxMa;
+    useLocal = fits && whole(inp.imStations) === 0;
+    if (useLocal) localMods = lm;
+    else local = inp.expansion === 'local' ? local : null;
+  }
+
+  // ── ET 200SP modules (cheapest mix; each module also takes a BaseUnit) ──
+  const buCost = SIEMENS_PARTS.buDark.price;
+  const sizes = inp.moduleSizes === 'auto';
+  const pickSp = (n: number, opts: { key: string; ch: number }[]) => (useLocal ? {} : cheapestModules(n, sizes ? opts : opts.slice(0, 1), cost, buCost));
+  const spDi = pickSp(leftDi, [{ key: 'di16', ch: 16 }, { key: 'di8', ch: 8 }]);
+  const spDq = pickSp(leftDo, [{ key: 'dq16', ch: 16 }, { key: 'dq8', ch: 8 }]);
+  const spAiI = pickSp(modNeed.aiI, [{ key: 'ai8', ch: 8 }, { key: 'ai4i', ch: 4 }]);
+  const spAiU = pickSp(modNeed.aiU, [{ key: 'ai8u', ch: 8 }, { key: 'ai4u', ch: 4 }]);
+  const spRtd2 = pickSp(analog.aiRtd.w2, [{ key: 'rtd8', ch: 8 }, { key: 'rtd4', ch: 4 }]);
+  const spAq = pickSp(modNeed.aoI + modNeed.aoU, [{ key: 'aq4', ch: 4 }, { key: 'aq2', ch: 2 }]);
+  const n = (m: Record<string, number>) => Object.values(m).reduce((a, b) => a + b, 0);
+  const diMods = n(spDi);
+  const dqMods = n(spDq);
+  const aiMods = n(spAiI);
+  const aiUMods = n(spAiU);
+  const rtd8Mods = spRtd2.rtd8 ?? 0;
+  const rtd4Mods = (spRtd2.rtd4 ?? 0) + (useLocal ? 0 : Math.ceil(analog.aiRtd.w4 / CHANNELS.rtd4));
+  const tcMods = useLocal ? 0 : Math.ceil(analog.aiTc.w2 / CHANNELS.rtd8);
+  const aqMods = n(spAq);
+
   const useCb = is1200 && rtuPorts >= 1;
-  const cmMods = is1200 ? Math.max(0, rtuPorts - 1) : rtuPorts;
+  const cmMods = useLocal ? 0 : is1200 ? Math.max(0, rtuPorts - 1) : rtuPorts;
 
   // Modules in slot order: A0 first, thermocouple modules (type A1) last, so a
   // station only opens on an A1 BaseUnit when it holds nothing but TC modules.
@@ -720,8 +921,9 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   const hasOnboard = cpu.onboard.di + cpu.onboard.do + cpu.onboard.ai + cpu.onboard.ao > 0;
   if (cpu.redundancy === 'H') add(cpu.key, 1, 'Redundant pair — 2 CPUs + sync modules + sync cables in one bundle');
   else if (cpu.redundancy === 'R') add(cpu.key, 2, 'Redundant pair — primary + backup CPU');
-  else add(cpu.key, 1, hasOnboard ? `CPU — ${onboardText(cpu)} on board` : 'CPU — all I/O on ET 200SP');
-  const card = MEMORY_CARDS.some((c) => c.key === inp.memCard) ? inp.memCard : 'memCard';
+  else add(cpu.key, 1, hasOnboard ? `CPU — ${onboardText(cpu)} on board${useLocal ? ', the rest on signal modules' : ''}` : 'CPU — all I/O on ET 200SP');
+  // Auto: 24 MB covers most S7-1500 programs; 4 MB is enough to transfer / back up an S7-1200.
+  const card = inp.memCard === 'auto' ? (is1200 ? 'memCard4' : 'memCard24') : MEMORY_CARDS.some((c) => c.key === inp.memCard) ? inp.memCard : 'memCard';
   if (redundant) add(card, 2, 'One per CPU (required)');
   else if (!is1200) add(card, 1, 'Required by every S7-1500 CPU');
   else if (inp.memoryCard) add(card, 1, 'Optional on S7-1200 (program backup / transfer)');
@@ -736,14 +938,28 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   } else {
     add('imBundle', stations, `ET 200SP station${stations === 1 ? '' : 's'} — max ${IM_MAX_MODULES} modules each (incl. server module + BusAdapter)`);
   }
-  add('di16', diMods, `${CHANNELS.di16} DI each`);
-  add('dq16', dqMods, `${CHANNELS.dq16} DQ each`);
-  add('ai8', aiMods, `${CHANNELS.ai8} AI 4–20 mA (2- or 4-wire) each`);
-  add('ai8u', aiUMods, `${CHANNELS.ai8u} AI 0–10 V each`);
+  const why = (base: string) => (sizes ? `${base} — cheapest mix of module sizes` : base);
+  add('di16', spDi.di16 ?? 0, why(`${CHANNELS.di16} DI each`));
+  add('di8', spDi.di8 ?? 0, why('8 DI each'));
+  add('dq16', spDq.dq16 ?? 0, why(`${CHANNELS.dq16} DQ each`));
+  add('dq8', spDq.dq8 ?? 0, why('8 DQ each'));
+  add('ai8', spAiI.ai8 ?? 0, why(`${CHANNELS.ai8} AI 4–20 mA (2- or 4-wire) each`));
+  add('ai4i', spAiI.ai4i ?? 0, why('4 AI 4–20 mA (2- or 4-wire) each'));
+  add('ai8u', spAiU.ai8u ?? 0, why(`${CHANNELS.ai8u} AI 0–10 V each`));
+  add('ai4u', spAiU.ai4u ?? 0, why('4 AI 0–10 V each'));
   const rtd8Why = [rtd8Mods ? `${rtd8Mods} for RTD 2-wire` : '', tcMods ? `${tcMods} for thermocouples (on A1 BaseUnits)` : ''].filter(Boolean).join(', ');
   add('rtd8', rtd8Mods + tcMods, `${CHANNELS.rtd8} RTD/TC each — ${rtd8Why}`);
   add('rtd4', rtd4Mods, `${CHANNELS.rtd4} RTD 3-/4-wire each`);
-  add('aq4', aqMods, `${CHANNELS.aq4} AQ (0–10 V or 4–20 mA) each`);
+  add('aq4', spAq.aq4 ?? 0, why(`${CHANNELS.aq4} AQ (0–10 V or 4–20 mA) each`));
+  add('aq2', spAq.aq2 ?? 0, why('2 AQ (0–10 V or 4–20 mA) each'));
+  // S7-1200 local expansion
+  const LOCAL_WHY: Record<string, string> = {
+    sm1221di16: '16 DI', sm1221di8: '8 DI', sm1222dq16: '16 DQ transistor', sm1222dq8: '8 DQ transistor',
+    sm1231ai8: '8 AI 0–10 V / 4–20 mA', sm1231ai4: '4 AI 0–10 V / 4–20 mA', sm1231rtd8: '8 RTD', sm1231rtd4: '4 RTD',
+    sm1231tc8: '8 thermocouple', sm1231tc4: '4 thermocouple', sm1232aq4: '4 AQ', sm1232aq2: '2 AQ',
+    sb1231ai1: 'signal board, 1 AI (front of the CPU)', sb1232aq1: 'signal board, 1 AQ (front of the CPU)', cm1241: 'extra Modbus RTU port (left of the CPU, max. 3)',
+  };
+  Object.entries(localMods).forEach(([k, q]) => add(k, q, `On the CPU — ${LOCAL_WHY[k] ?? k}`));
   add('cmPtp', cmMods, is1200 ? 'Extra Modbus RTU ports (CB 1241 gives only one)' : '1 per Modbus RTU (RS-485) port');
   add('buLight', bu.lightA0, 'First BaseUnit of each station (starts the potential group)');
   add('buDark', bu.darkA0, 'One BaseUnit per remaining module');
@@ -803,6 +1019,8 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   }
 
   const notes: string[] = [];
+  if (useLocal && local) notes.push(`S7-1200 local expansion: ${local.modules} of ${local.slots} signal-module slots, ${local.busMa} of ${local.busMaxMa} mA backplane current — no ET 200SP station needed.`);
+  if (is1200 && inp.expansion === 'local' && !useLocal && local) notes.push(`Doesn't fit on the CPU (${local.modules} signal modules for ${local.slots} slots, ${local.busMa} / ${local.busMaxMa} mA) — using ET 200SP instead.`);
   if (redundant) notes.push(`${inp.redundancy === 'R' ? 'S7-1500R' : 'S7-1500H'}: ET 200SP on IM 155-6 PN/2 HF (system redundancy S2) and the PROFINET ring on managed switches (MRP). Consider a second 24 V supply with a redundancy module.`);
   if (redundant && whole(inp.switchQty) < 2) notes.push('Redundancy needs at least 2 managed switches — added automatically.');
   if (redundant && inp.switchType === 'unmanaged' && whole(inp.switchQty) > 0) notes.push('Unmanaged switches can\'t run the MRP ring — managed ones are used instead.');
@@ -819,14 +1037,25 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   else if (stations > 1) notes.push(`${ioModules} modules need ${stations} ET 200SP stations (${imMax} modules per ${redundant ? 'IM 155-6 PN/2 HF' : 'IM 155-6 PN ST'}).`);
   if (wiring) notes.push('Terminals and wiring cover the I/O incl. spare; the main feed from the PSU to the distribution terminals is not included (size it separately).');
 
+  const LOCAL_CH: Record<string, ['di' | 'do' | 'ai' | 'ao', number]> = {
+    sm1221di16: ['di', 16], sm1221di8: ['di', 8], sm1222dq16: ['do', 16], sm1222dq8: ['do', 8],
+    sm1231ai8: ['ai', 8], sm1231ai4: ['ai', 4], sm1231rtd8: ['ai', 8], sm1231rtd4: ['ai', 4], sm1231tc8: ['ai', 8], sm1231tc4: ['ai', 4],
+    sm1232aq4: ['ao', 4], sm1232aq2: ['ao', 2], sb1231ai1: ['ai', 1], sb1232aq1: ['ao', 1],
+  };
+  const localCh = { di: 0, do: 0, ai: 0, ao: 0 };
+  Object.entries(localMods).forEach(([k, q]) => { const c = LOCAL_CH[k]; if (c) localCh[c[0]] += c[1] * q; });
+  const spCh = (m: Record<string, number>, per: Record<string, number>) => Object.entries(m).reduce((s2, [k, q]) => s2 + (per[k] ?? 0) * q, 0);
   const provided = {
-    di: cpu.onboard.di + diMods * CHANNELS.di16,
-    do: cpu.onboard.do + dqMods * CHANNELS.dq16,
-    ai: onboardAiUsed + aiMods * CHANNELS.ai8 + aiUMods * CHANNELS.ai8u + (rtd8Mods + tcMods) * CHANNELS.rtd8 + rtd4Mods * CHANNELS.rtd4,
-    ao: cpu.onboard.ao + aqMods * CHANNELS.aq4,
+    di: cpu.onboard.di + spCh(spDi, { di16: 16, di8: 8 }) + localCh.di,
+    do: cpu.onboard.do + spCh(spDq, { dq16: 16, dq8: 8 }) + localCh.do,
+    ai: onboardAiUsed + spCh(spAiI, { ai8: 8, ai4i: 4 }) + spCh(spAiU, { ai8u: 8, ai4u: 4 }) + (rtd8Mods + tcMods) * CHANNELS.rtd8 + rtd4Mods * CHANNELS.rtd4 + localCh.ai,
+    ao: cpu.onboard.ao + spCh(spAq, { aq4: 4, aq2: 2 }) + localCh.ao,
   };
   return {
     lines,
+    cpuKey: cpu.key,
+    expansion: useLocal ? 'local' : ioModules > 0 ? 'et200sp' : 'none',
+    local: useLocal ? local : null,
     channels: {
       di: { needed: need.di, provided: provided.di },
       do: { needed: need.do, provided: provided.do },
@@ -859,16 +1088,22 @@ export function estimate24V(raw: PlcInputs, cfg: PlcConfig): LoadEstimate {
   const lines: LoadLine[] = [];
   const add = (label: string, qty: number, eachA: number) => { if (qty > 0 && eachA > 0) lines.push({ label, qty, eachA, totalA: qty * eachA }); };
   const redundancy = raw.redundancy ?? 'none';
-  const cpu = cpuModel(redundancy !== 'none' ? 'S7-1500' : raw.family, raw.cpu, redundancy);
+  const cpu = cpuModel(redundancy !== 'none' ? 'S7-1500' : raw.family, cfg.cpuKey ?? raw.cpu, redundancy);
   add(cpu.label, redundancy !== 'none' ? 2 : 1, cpu.drawA);
+  const localMods = cfg.lines.filter((l) => /^(sm12|sb12|cm1241)/.test(l.key)).reduce((n, l) => n + l.qty, 0);
+  add('S7-1200 signal modules / boards (sensor supply share)', localMods, 0.03);
   add('ET 200SP interface module (per station)', count('imBundle'), 0.2);
   add('ET 200SP IM 155-6 PN/2 HF (per station)', count('imHf'), 0.25);
   add('DI 16 module electronics', count('di16'), 0.05);
+  add('DI 8 module electronics', count('di8'), 0.03);
   add('DQ 16 module electronics', count('dq16'), 0.05);
+  add('DQ 8 module electronics', count('dq8'), 0.03);
   add('AI 8xI module electronics', count('ai8'), 0.03);
   add('AI 8xU module electronics', count('ai8u'), 0.03);
+  add('AI 4 module electronics', count('ai4i') + count('ai4u'), 0.03);
   add('AI RTD/TC module electronics', count('rtd8') + count('rtd4'), 0.03);
   add('AQ 4 module electronics', count('aq4'), 0.05);
+  add('AQ 2 module electronics', count('aq2'), 0.04);
   add('CM PtP module', count('cmPtp'), 0.05);
   const sw = SWITCHES.find((s) => s.key === cfg.network.switchKey);
   if (sw) add(sw.model, cfg.network.qty, sw.drawA);

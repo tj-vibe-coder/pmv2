@@ -36,7 +36,11 @@ interface Props {
 const id = () => nanoid(6);
 
 // Terminals + wiring now come from the Control Panel configurator (it gets this I/O via usePanelIoStore).
-const fresh = (): PlcInputs => ({ ...DEFAULT_PLC_INPUTS, analog: noAnalog(), terminals: false });
+// The dialog starts on the optimizing defaults: auto CPU, cheapest module sizes, S7-1200 local expansion
+// when it fits, auto memory card.
+const fresh = (): PlcInputs => ({
+  ...DEFAULT_PLC_INPUTS, analog: noAnalog(), terminals: false, cpu: 'auto', expansion: 'auto', moduleSizes: 'auto', memCard: 'auto',
+});
 
 export default function SiemensPlcDialog({ open, onClose, productContingencyPct, onSubmit }: Props) {
   const [inp, setInp] = useState<PlcInputs>(fresh);
@@ -47,10 +51,10 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
   const fetchCatalog = usePricelistStore((s) => s.fetchItems);
   useEffect(() => { if (open && catalog.length === 0) void fetchCatalog().catch(() => {}); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const cfg = configurePlc(inp);
+  const cfg = configurePlc(inp, (key) => (SIEMENS_PARTS[key] ? siemensPrice(SIEMENS_PARTS[key], catalog).price : 0));
   const load = estimate24V(inp, cfg);
   const redundant = inp.redundancy !== 'none';
-  const cpu = cpuModel(inp.family, inp.cpu, inp.redundancy);
+  const cpu = cpuModel(inp.family, cfg.cpuKey, inp.redundancy);
   const psu = SITOP_OPTIONS.find((s) => s.key === inp.sitop);
   const psuA = psu ? psu.ratingA : null;
   const panel = HMI_PANELS.find((h) => h.key === inp.hmi);
@@ -101,11 +105,11 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
     />
   );
 
-  const setFamily = (family: PlcFamily) => setInp((p) => ({ ...p, family, cpu: DEFAULT_CPU[family] }));
+  const setFamily = (family: PlcFamily) => setInp((p) => ({ ...p, family, cpu: p.cpu === 'auto' ? 'auto' : DEFAULT_CPU[family] }));
   // Redundancy is S7-1500 only; switching it resets the CPU to that mode's default.
   const setRedundancy = (redundancy: Redundancy) => setInp((p) => {
     const family: PlcFamily = redundancy === 'none' ? p.family : 'S7-1500';
-    return { ...p, redundancy, family, cpu: redundancy === 'none' ? DEFAULT_CPU[family] : DEFAULT_REDUNDANT_CPU[redundancy] };
+    return { ...p, redundancy, family, cpu: p.cpu === 'auto' ? 'auto' : redundancy === 'none' ? DEFAULT_CPU[family] : DEFAULT_REDUNDANT_CPU[redundancy] };
   });
   const setHmiLine = (line: HmiLine | 'none') => set('hmi', line === 'none' ? 'none'
     : (HMI_PANELS.find((h) => h.line === line && h.sizeIn === 7) ?? HMI_PANELS.find((h) => h.line === line))!.key);
@@ -169,7 +173,9 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             <TextField select label="Redundancy" size="small" sx={{ minWidth: 220 }} value={inp.redundancy} onChange={(e) => setRedundancy(e.target.value as Redundancy)}>
               {REDUNDANCY_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
             </TextField>
-            <TextField select label="CPU" size="small" sx={{ minWidth: 280 }} value={cpu.key} onChange={(e) => set('cpu', e.target.value)}>
+            <TextField select label="CPU" size="small" sx={{ minWidth: 280 }} value={inp.cpu === 'auto' ? 'auto' : cpu.key} onChange={(e) => set('cpu', e.target.value)}
+              helperText={inp.cpu === 'auto' ? `Auto: ${cpu.label}` : ' '}>
+              <MenuItem value="auto">Auto — lowest-cost fit</MenuItem>
               {cpuChoices(inp.family, inp.redundancy).map((m) => (
                 <MenuItem key={m.key} value={m.key}>
                   {m.label}{SIEMENS_PARTS[m.key].price > 0 ? '' : ' · for inquiry'}
@@ -179,8 +185,27 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             <Typography variant="caption" color="text.secondary">
               {SIEMENS_PARTS[cpu.key].partNo} · {redundant
                 ? `${cpu.redundancy === 'H' ? 'bundle of 2 CPUs + sync modules' : '2 CPUs'}; ET 200SP on IM 155-6 PN/2 HF; managed switches`
-                : `${onboardText(cpu)}${is1200 ? '; the rest on ET 200SP' : '; memory card required'}`}
+                : `${onboardText(cpu)}${is1200 ? (cfg.expansion === 'local' ? '; the rest on signal modules' : '; the rest on ET 200SP') : '; memory card required'}`}
             </Typography>
+          </Stack>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            {is1200 && (
+              <TextField select label="I/O expansion" size="small" sx={{ minWidth: 250 }} value={inp.expansion} onChange={(e) => set('expansion', e.target.value as PlcInputs['expansion'])}
+                helperText={inp.expansion === 'auto' ? `Auto: ${cfg.expansion === 'local' ? `signal modules on the CPU (${cfg.local?.modules ?? 0} of ${cfg.local?.slots ?? 0} slots)` : cfg.expansion === 'et200sp' ? 'ET 200SP' : 'on-board only'}` : ' '}>
+                <MenuItem value="auto">Auto — on the CPU when it fits</MenuItem>
+                <MenuItem value="local">Signal modules on the CPU (SM 12xx)</MenuItem>
+                <MenuItem value="et200sp">ET 200SP remote I/O</MenuItem>
+              </TextField>
+            )}
+            <TextField select label="Module sizes" size="small" sx={{ minWidth: 230 }} value={inp.moduleSizes} onChange={(e) => set('moduleSizes', e.target.value as PlcInputs['moduleSizes'])}
+              helperText=" ">
+              <MenuItem value="auto">Cheapest mix (8/16 DI·DQ, 4/8 AI, 2/4 AQ)</MenuItem>
+              <MenuItem value="standard">Standard only (DI16 / DQ16 / AI8 / AQ4)</MenuItem>
+            </TextField>
+            {inp.cpu === 'auto' && inp.redundancy === 'none' && (
+              <FormControlLabel control={<Checkbox size="small" checked={inp.failSafe} onChange={(e) => set('failSafe', e.target.checked)} />}
+                label={<Typography variant="body2">Fail-safe CPU (F)</Typography>} />
+            )}
           </Stack>
 
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
@@ -214,6 +239,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             {inp.modbus === 'rtu' ? num('modbusPorts', 'RS-485 ports', is1200 ? '1st on CB 1241' : 'CM PtP each') : <Box />}
             {!is1200 || inp.memoryCard ? (
               <TextField select label="Memory card" size="small" fullWidth value={inp.memCard} onChange={(e) => set('memCard', e.target.value)}>
+                <MenuItem value="auto">{`Auto (${is1200 ? '4 MB' : '24 MB'})`}</MenuItem>
                 {MEMORY_CARDS.map((c) => (
                   <MenuItem key={c.key} value={c.key}>{c.label}{SIEMENS_PARTS[c.key].price > 0 ? '' : ' · for inquiry'}</MenuItem>
                 ))}
