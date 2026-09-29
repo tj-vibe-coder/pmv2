@@ -273,3 +273,17 @@ describe('WAGO terminals and wiring', () => {
     expect(SIEMENS_PARTS.wagoEco10).toMatchObject({ partNo: '787-732', price: 5337.3, brand: 'WAGO' });
   });
 });
+
+describe('S7-1500 mounting rail', () => {
+  it('every S7-1500 CPU gets the shortest rail it fits on; none for S7-1200', () => {
+    expect(qty(cfg({ family: 'S7-1500' }), 'rail1500_160')).toBe(1);
+    expect(qty(cfg({ family: 'S7-1500', cpu: 'cpu1512c' }), 'rail1500_160')).toBe(1);
+    expect(qty(cfg({ family: 'S7-1200' }), 'rail1500_160')).toBe(0);
+    expect(SIEMENS_PARTS.rail1500_160.partNo).toBe('6ES7590-1AB60-0AA0');
+  });
+
+  it('redundant systems get one rail per CPU; the wide 1517H needs the 245 mm rail', () => {
+    expect(qty(cfg({ redundancy: 'R' }), 'rail1500_160')).toBe(2);
+    expect(qty(cfg({ redundancy: 'H' }), 'rail1500_245')).toBe(2);
+  });
+});

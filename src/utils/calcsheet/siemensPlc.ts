@@ -170,6 +170,26 @@ export function cpuModel(family: PlcFamily, key: string, redundancy: Redundancy 
   return choices.find((m) => m.key === key) ?? CPU_MODELS.find((m) => m.key === fallback)!;
 }
 
+// ── S7-1500 mounting rail ("backplate") ──────────────────────────────────
+// Every S7-1500 CPU mounts on its own S7-1500 mounting rail (not a DIN rail).
+// All I/O here is ET 200SP, so the rail only carries the CPU: pick the
+// shortest standard length the CPU fits on. One rail per CPU (R/H: 2).
+export const CPU1500_WIDTH_MM: Record<string, number> = {
+  cpu1511: 35, cpu1513: 35, cpu1515: 70, cpu1516: 70, cpu1511c: 85, cpu1512c: 110,
+  cpu1511f: 35, cpu1513f: 35, cpu1515f: 70, cpu1516f: 70, cpu1513r: 35, cpu1515r: 70, cpu1517h: 175,
+};
+export const MOUNTING_RAILS: { key: string; lengthMm: number; partNo: string }[] = [
+  { key: 'rail1500_160', lengthMm: 160, partNo: '6ES7590-1AB60-0AA0' },
+  { key: 'rail1500_245', lengthMm: 245, partNo: '6ES7590-1AC40-0AA0' },
+  { key: 'rail1500_482', lengthMm: 482, partNo: '6ES7590-1AE80-0AA0' },
+  { key: 'rail1500_530', lengthMm: 530, partNo: '6ES7590-1AF30-0AA0' },
+  { key: 'rail1500_830', lengthMm: 830, partNo: '6ES7590-1AJ30-0AA0' },
+];
+export function mountingRailFor(cpuKey: string) {
+  const w = CPU1500_WIDTH_MM[cpuKey] ?? 70;
+  return MOUNTING_RAILS.find((r) => r.lengthMm >= w) ?? MOUNTING_RAILS[MOUNTING_RAILS.length - 1];
+}
+
 // ── Memory cards ─────────────────────────────────────────────────────────
 export const MEMORY_CARDS: { key: string; label: string }[] = [
   { key: 'memCard4', label: '4 MB' },
@@ -391,6 +411,10 @@ export const SIEMENS_PARTS: Record<string, SiemensPart> = (() => {
   CATALOG.forEach(put);
   TERMINAL_PARTS.forEach(put);
   CPU_MODELS.filter((m) => !all[m.key]).forEach((m) => put({ key: m.key, partNo: CPU_PART_NO[m.key] ?? '', price: 0, description: cpuDescription(m) }));
+  MOUNTING_RAILS.forEach((r) => put({
+    key: r.key, partNo: r.partNo, price: 0, verify: true,
+    description: `SIMATIC S7-1500, mounting rail ${r.lengthMm} mm (approx. ${(r.lengthMm / 25.4).toFixed(1)} inch), incl. grounding screw, integrated DIN rail for mounting small parts such as terminals`,
+  }));
   MEMORY_CARDS.filter((c) => !all[c.key]).forEach((c) => put({
     key: c.key, partNo: MEM_PART_NO[c.key] ?? '', price: 0, description: `SIMATIC S7, memory card for S7-1x00 CPU, 3.3 V Flash, ${c.label}`,
   }));
@@ -608,6 +632,10 @@ export function configurePlc(raw: PlcInputs): PlcConfig {
   if (redundant) add(card, 2, 'One per CPU (required)');
   else if (!is1200) add(card, 1, 'Required by every S7-1500 CPU');
   else if (inp.memoryCard) add(card, 1, 'Optional on S7-1200 (program backup / transfer)');
+  if (!is1200) {
+    const rail = mountingRailFor(cpu.key);
+    add(rail.key, cpuUnits, `S7-1500 mounting rail for the CPU (${CPU1500_WIDTH_MM[cpu.key] ?? 70} mm wide)${redundant ? ' — one per CPU' : ''}`);
+  }
   add('cb1241', useCb ? 1 : 0, 'Modbus RTU port on the CPU (1 × RS-485)');
   if (redundant) {
     add('imHf', stations, `ET 200SP station${stations === 1 ? '' : 's'} on system redundancy S2 — max ${IM_HF_MAX_MODULES} modules each (server module included)`);
