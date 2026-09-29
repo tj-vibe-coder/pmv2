@@ -59,8 +59,8 @@ it('computes the conduit accessories from PEC and prices every material from the
   expect(byDesc['Caddy Clamp 1/2"']).toMatchObject({ qty: supports, unitCost: 16.5, partNo: 'CADDY-0.5' });
   expect(byDesc['LQT 1/2"']).toMatchObject({ qty: 0.9, unitCost: 71.43 });
   expect(byDesc['Straight Connector 1/2"']).toMatchObject({ qty: 2, unitCost: 31.25 });
-  expect(byDesc['Junction Box']).toMatchObject({ qty: 4, unitCost: 66.54 });
-  expect(byDesc['IMC Coupling 1/2"']).toMatchObject({ qty: 6 });            // 10 sticks, 4 segments
+  expect(byDesc['Junction Box 4x4']).toMatchObject({ qty: 4, unitCost: 66.54 });
+  expect(byDesc['IMC Coupling 1/2"']).toBeUndefined();                      // IMC lengths come with couplings
   expect(byDesc['Lock Nut with Bushing 1/2"']).toMatchObject({ qty: 8 });   // 2 box entries per segment
 });
 

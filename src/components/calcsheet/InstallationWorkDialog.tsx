@@ -12,7 +12,7 @@ import type { ComponentLine } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import {
-  PIPE_SIZES, CONDUIT_TYPES, materialSlotByKey, blankEntry, pipesNeeded, junctionBoxesNeeded, supportsNeeded,
+  PIPE_SIZES, CONDUIT_TYPES, materialSlotByKey, boxSlotFor, blankEntry, pipesNeeded, junctionBoxesNeeded, supportsNeeded,
   computeEntryQuantities, aggregateEntries, pecAccessories, effectiveAccessories, resolveSlotPrice,
   PEC_MAX_SUPPORT_SPACING_M, PEC_SUPPORT_FROM_BOX_M, PEC_LQT_PER_CONNECTION_M,
   type PipeSize, type ConduitType, type InstallationWorkEntry, type AccessoryField, type Mounting, type MaterialSlotKey,
@@ -194,7 +194,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
           {form.lengthMeters > 0 && (
             <Alert severity="info" sx={{ py: 0 }}>
               This run needs <strong>{previewPipes} {form.pipeSize} {form.conduitType} pipe{previewPipes === 1 ? '' : 's'}</strong>,{' '}
-              <strong>{previewJunctions} junction box{previewJunctions === 1 ? '' : 'es'}</strong> and{' '}
+              <strong>{previewJunctions} {materialSlotByKey(boxSlotFor(form.pipeSize))?.label.toLowerCase()}{previewJunctions === 1 ? '' : 'es'}</strong> and{' '}
               <strong>{previewSupports} conduit support{previewSupports === 1 ? '' : 's'}</strong>
               {' '}(3m/pipe, a box every 3 pipes{form.bends90 > 4 ? ' or every 4 bends' : ''}; supports within {PEC_SUPPORT_FROM_BOX_M * 1000} mm of each box and at most {PEC_MAX_SUPPORT_SPACING_M} m apart — PEC 2017 {article}).
             </Alert>
@@ -202,7 +202,9 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Conduit Accessories — PEC 2017 (computed; type to override)</Typography></Divider>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
-            {accField('couplingQty', sizedLabel(`${form.conduitType} Coupling (pc)`), `1 per joint between ${form.conduitType} sticks, within each box-to-box segment`)}
+            {accField('couplingQty', sizedLabel(`${form.conduitType} Coupling (pc)`), isEmt
+              ? '1 per joint between EMT sticks, within each box-to-box segment'
+              : '0 — each IMC length comes with its coupling; type a number for spares')}
             {accField('boxFittingQty', sizedLabel(isEmt ? 'EMT Connector (pc)' : 'Lock Nut w/ Bushing (pc)'), isEmt
               ? '2 per segment — one EMT connector at each box / panel entry'
               : '2 per segment — a locknut with bushing at each box / panel entry')}
@@ -229,7 +231,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                     <TableCell align="right">Length (m)</TableCell>
                     <TableCell>Size / type</TableCell>
                     <TableCell align="right">Pipes</TableCell>
-                    <TableCell align="right">Junction Boxes</TableCell>
+                    <TableCell align="right">Boxes</TableCell>
                     <TableCell align="right">Supports</TableCell>
                     <TableCell align="right">LQT (m)</TableCell>
                     <TableCell align="right" sx={{ width: 44 }} />
@@ -245,7 +247,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                         <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{e.lengthMeters}</TableCell>
                         <TableCell>{e.pipeSize} {e.conduitType}</TableCell>
                         <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{pipeKey ? qs[pipeKey as keyof typeof qs] : 0}</TableCell>
-                        <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{qs.junctionBox ?? 0}</TableCell>
+                        <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{qs[boxSlotFor(e.pipeSize)] ?? 0}</TableCell>
                         <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
                           {(() => { const a = effectiveAccessories(e); return e.mounting === 'unistrut' ? `${a.uBoltQty} U-bolt` : `${a.caddyClampQty} clamp`; })()}
                         </TableCell>
