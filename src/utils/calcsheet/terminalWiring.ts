@@ -134,7 +134,12 @@ export interface PanelIo {
   load24A?: number;
   /** Control transformer losses (W), e.g. the 24 V AC transformer of a BMS panel. */
   transformerW?: number;
+  /** Controller devices for the panel layout drawing (planning sizes); without them deviceRailMm is drawn as one block. */
+  devices?: PanelDevice[];
 }
+
+/** A DIN-rail device for the panel layout: tag prefix, label, size (mm). */
+export interface PanelDevice { tag: string; label: string; widthMm: number; heightMm: number }
 
 export type StripSection = 'terminals' | 'wiring';
 export interface StripLine { key: string; qty: number; why: string; section: StripSection }

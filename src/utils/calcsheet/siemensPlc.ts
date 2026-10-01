@@ -43,7 +43,7 @@
 // marked `verify`. A catalog item with the same part number (Sales →
 // Pricelists) overrides any price here.
 
-import { TERMINAL_GENERIC, TERMINAL_PARTS, terminalStrip, type CatalogPart, type PanelIo, type WiringSummary } from './terminalWiring';
+import { TERMINAL_GENERIC, TERMINAL_PARTS, terminalStrip, type CatalogPart, type PanelDevice, type PanelIo, type WiringSummary } from './terminalWiring';
 
 export type { WiringSummary };
 export type PlcFamily = 'S7-1200' | 'S7-1500';
@@ -1043,9 +1043,11 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
   const groupReasons = { overCurrent: 0, outputs: 0 };
   let groupsMaxA = 0;
   let first = 0;
+  const stationSizes: number[] = [];
   for (let s = 0; s < stations; s++) {
     // Modules shared out evenly: the first (ioModules % stations) stations take one more.
     const size = Math.floor(ioModules / stations) + (s < ioModules % stations ? 1 : 0);
+    stationSizes.push(size);
     let groupA = 0;
     let prev: SlotModule | null = null;
     for (const m of slots.slice(first, first + size)) {
@@ -1187,8 +1189,27 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
   const a4 = ANALOG_KEYS.reduce((s, k) => s + analog[k].w4, 0);
   // +24 V / 0 V distribution: CPU(s), each station's IM and light BaseUnit,
   // panels and switches, plus the PSU feed.
+  // Devices for the Control Panel layout drawing — planning widths / heights (mm).
+  const panelDevices: PanelDevice[] = [];
+  const cpuW = is1200 ? (/1211|1212/.test(cpu.key) ? 90 : /1214/.test(cpu.key) ? 110 : /1215/.test(cpu.key) ? 130 : 150) : 0;
+  for (let u = 0; u < cpuUnits; u++) {
+    if (is1200) panelDevices.push({ tag: 'A', label: cpu.label, widthMm: cpuW, heightMm: 100 });
+    else {
+      const railMm = central && !central.fallback ? central.railMm : CPU1500_WIDTH_MM[cpu.key] ?? 70;
+      panelDevices.push({ tag: 'A', label: central && !central.fallback ? `${cpu.label} + ${central.modules} central module${central.modules === 1 ? '' : 's'}` : cpu.label, widthMm: railMm, heightMm: 155 });
+    }
+  }
+  if (is1200) {
+    Object.entries(localMods).filter(([k]) => /^(sm12|cm1241)/.test(k)).forEach(([k, q]) => {
+      for (let i = 0; i < q; i++) panelDevices.push({ tag: 'A', label: k.replace(/^sm(\d{4})(\w+)/, 'SM $1 $2').replace('cm1241', 'CM 1241').toUpperCase(), widthMm: k === 'cm1241' ? 30 : /rtd8/.test(k) ? 70 : 45, heightMm: 100 });
+    });
+  }
+  stationSizes.forEach((n) => panelDevices.push({ tag: 'A', label: `ET 200SP station, ${n} module${n === 1 ? '' : 's'}`, widthMm: 50 + 15 + n * 15, heightMm: 120 }));
+  if (netSwitch) for (let i = 0; i < sw.qty; i++) panelDevices.push({ tag: 'W', label: netSwitch.model, widthMm: 60, heightMm: 120 });
+
   const panelIo: PanelIo = {
     source: `Siemens ${redundant ? `S7-1500${inp.redundancy}` : family}`,
+    devices: panelDevices,
     di: need.di, dq: need.do, a2, a4,
     distPoints: (cpu.drawA > 0 ? cpuUnits : 0) + stations + potentialGroups + (panel ? inp.hmiQty : 0) + sw.qty + psuQty
       + (central && !central.fallback ? central.modules + (central.ps ? 1 : 0) : 0),

@@ -19,6 +19,10 @@
 //  • One LED light + door switch per door (2 doors above 800 mm wide).
 
 import { TERMINAL_PARTS, TERMINAL_GENERIC, terminalStrip, type CatalogPart, type PanelIo, type StripLine, type WiringSummary } from './terminalWiring';
+import {
+  DIMS, DUCT_V_W, ENCLOSURES, MAX_BAYS, autoEnclosure, customEnclosure, layoutPanel, plateOf,
+  type EnclosureKey, type LayoutGroup, type PanelLayout,
+} from './panelLayout';
 
 export type PanelSection = 'panel' | 'terminals' | 'wiring';
 
@@ -56,6 +60,7 @@ const PANEL_PARTS_LIST: CatalogPart[] = [
   G('enclosureWall', 'Panel enclosure, wall-mounted'),
   G('enclosureFloor', 'Panel enclosure, floor-standing'),
   G('plinth', 'Enclosure plinth / base, 100 mm'),
+  G('bayKit', 'Baying kit for joining enclosures side by side'),
   G('ductH', 'Slotted wiring duct 40 x 60 mm (W x H), with cover, 2 m'),
   G('ductV', 'Slotted wiring duct 60 x 80 mm (W x H), with cover, 2 m'),
   G('panelRail', 'DIN rail 35 mm, 2 m'),
@@ -107,6 +112,10 @@ export interface PanelInputs {
   /** Main incomer rating, or 'auto' = sized from the 230 V load. */
   mainA: McbRating | 'auto';
   socket: boolean;
+  /** Standard enclosure (Tekpan floor 800 / 1200 W, Tibox wall 1000×800 / 800×600), 'auto' = smallest that fits, 'custom' = W × H × D above. */
+  enclosure: EnclosureKey | 'auto';
+  /** Floor-standing bays joined side by side; 0 = as many as the layout needs. */
+  bays: number;
 }
 
 export const emptyPanelIo = (): PanelIo => ({ source: '', di: 0, dq: 0, a2: 0, a4: 0, distPoints: 1, deviceRailMm: 0 });
@@ -114,6 +123,7 @@ export const emptyPanelIo = (): PanelIo => ({ source: '', di: 0, dq: 0, a2: 0, a
 export const DEFAULT_PANEL_INPUTS: PanelInputs = {
   widthMm: 800, heightMm: 1200, depthMm: 300, mounting: 'auto', heatAuto: true, heatLossW: 150, deltaT: 10,
   io: emptyPanelIo(), terminals: true, psuQty: 1, psuA: 10, extraCircuits: 0, extraLoadA: 5, mainA: 'auto', socket: false,
+  enclosure: 'custom', bays: 0,
 };
 
 export const PANEL_HEADER = 'CONTROL PANEL';
@@ -121,7 +131,7 @@ export const TERMINALS_HEADER = 'TERMINAL BLOCKS & RELAYS';
 export const WIRES_HEADER = 'WIRES';
 
 /** `detail` is appended to the part's quotation description (e.g. the enclosure size). */
-export interface PanelLine { key: string; qty: number; why: string; section: PanelSection; detail?: string }
+export interface PanelLine { key: string; qty: number; why: string; section: PanelSection; detail?: string; brand?: string }
 
 export interface PanelConfig {
   lines: PanelLine[];
@@ -142,6 +152,8 @@ export interface PanelConfig {
   mainA: McbRating;
   wiring: WiringSummary | null;
   wires15: number;
+  /** Components placed on the mounting plate(s) — for the drawings and the fit check. */
+  layout: PanelLayout;
   notes: string[];
 }
 
@@ -153,35 +165,47 @@ function sticks(pieces: number, pieceMm: number, stickMm = 2000): number {
   return Math.ceil(pieces / Math.floor(stickMm / pieceMm));
 }
 
+/** The panel's devices as layout runs: power row, controller, relays, terminal strips. */
+function panelGroups(raw: PanelInputs, io: PanelIo, psuQty: number, branches: number): LayoutGroup[] {
+  const g: LayoutGroup[] = [];
+  const run = (tag: string, label: string, d: { w: number; h: number }, count: number, zone: LayoutGroup['zone'], splittable = true) => {
+    if (count > 0) g.push({ tag, label, unitW: d.w, unitH: d.h, count, splittable, zone });
+  };
+  run('X0', 'Incoming 230 V terminals', DIMS.tbIn4, 2, 'power');
+  run('Q0', 'Main breaker 2P', DIMS.mcb2p, 1, 'power', false);
+  run('Q1', 'Branch breakers 2P', DIMS.mcb2p, branches, 'power');
+  run('B1', 'Thermostat', DIMS.thermostat, 1, 'power', false);
+  if (raw.socket) run('XS1', 'Service socket', DIMS.socket, 1, 'power', false);
+  const psuA = Math.max(0, Number(raw.psuA) || 0);
+  run('G', `24 V DC supply ${psuA} A`, DIMS.psu(psuA), psuQty, 'power', false);
+  // Controller devices from the PLC / BMS configuration (or one block of its rail length).
+  const seen: Record<string, number> = {};
+  if (io.devices?.length) {
+    io.devices.forEach((d) => {
+      seen[d.tag] = (seen[d.tag] ?? 0) + 1;
+      run(`${d.tag}${seen[d.tag]}`, d.label, { w: d.widthMm, h: d.heightMm }, 1, 'control', false);
+    });
+  } else if (io.deviceRailMm > 0) run('A1', `Controller (${io.source || 'PLC / BMS'})`, { w: 15, h: 120 }, Math.ceil(io.deviceRailMm / 15), 'control');
+  if (raw.terminals) {
+    run('K', 'Interposing relays (DO)', DIMS.relay, io.dq, 'relays');
+    run('X1', '24 V DC distribution', DIMS.tbStd, 2 * io.distPoints, 'terminals');
+    run('X2', 'DI terminals, 2-level', DIMS.tb2Level, io.di, 'terminals');
+    run('X3', 'Analog fuse terminals', DIMS.tbFuse, io.a2 + 2 * io.a4, 'terminals');
+    run('X3', 'Analog terminals', DIMS.tbStd, io.a2 + 2 * io.a4, 'terminals');
+    run('PE', 'PE terminals', DIMS.tbStd, 2, 'terminals');
+  }
+  return g;
+}
+
 export function configurePanel(raw: PanelInputs): PanelConfig {
-  const W = whole(raw.widthMm);
-  const H = whole(raw.heightMm);
-  const D = whole(raw.depthMm);
   const io = { ...emptyPanelIo(), ...raw.io };
   const lines: PanelLine[] = [];
-  const add = (key: string, qty: number, why: string, section: PanelSection = 'panel', detail?: string) => {
-    if (qty > 0 && PANEL_PARTS[key]) lines.push({ key, qty, why, section, ...(detail ? { detail } : {}) });
+  const add = (key: string, qty: number, why: string, section: PanelSection = 'panel', detail?: string, brand?: string) => {
+    if (qty > 0 && PANEL_PARTS[key]) lines.push({ key, qty, why, section, ...(detail ? { detail } : {}), ...(brand ? { brand } : {}) });
   };
   const notes: string[] = [];
 
-  const floor = raw.mounting === 'floor' || (raw.mounting === 'auto' && H >= 1400);
-  const doors = W > 800 ? 2 : 1;
-  const plate = { w: Math.max(0, W - 100), h: Math.max(0, H - 150) };
-  const rows = Math.max(1, Math.floor(plate.h / 200));
-  const size = `${W} x ${H} x ${D} mm`;
-
-  // Enclosure
-  add(floor ? 'enclosureFloor' : 'enclosureWall', 1, `${doors} door${doors === 1 ? '' : 's'}, mounting plate ${plate.w} x ${plate.h} mm`, 'panel',
-    `${size} (W x H x D), ${doors} door${doors === 1 ? '' : 's'}, powder-coated steel, with mounting plate`);
-  add('plinth', floor ? 1 : 0, 'Floor-standing — lifts the enclosure for cable entry');
-
-  // Wireduct + DIN rail from the layout
-  add('ductH', sticks(rows + 1, plate.w), `${rows + 1} horizontal runs × ${plate.w} mm (above / below ${rows} rail rows)`);
-  add('ductV', sticks(2, plate.h), `2 vertical runs × ${plate.h} mm (both sides)`);
-  const railLayoutMm = rows * plate.w;
-  add('panelRail', sticks(rows, plate.w), `${rows} rail rows × ${plate.w} mm`);
-
-  // 230 V circuits (one 2P breaker each) — needed for the heat estimate too.
+  // 230 V circuits (one 2P breaker each) — needed for the layout and the heat estimate.
   const psuQty = whole(raw.psuQty);
   const circuits = [
     { n: psuQty, a: 6 as McbRating, what: '24 V DC supply' },
@@ -190,6 +214,62 @@ export function configurePanel(raw: PanelInputs): PanelConfig {
     { n: whole(raw.extraCircuits), a: 10 as McbRating, what: 'other 230 V load' },
   ].filter((c) => c.n > 0);
   const branches = circuits.reduce((s, c) => s + c.n, 0);
+
+  // Enclosure + bays: a standard one (or the smallest that fits), or the custom W × H × D.
+  const groups = panelGroups(raw, io, psuQty, branches);
+  const preset = raw.enclosure ?? 'custom';
+  const custom = preset === 'custom';
+  const floorIn = raw.mounting === 'floor' || (raw.mounting === 'auto' && whole(raw.heightMm) >= 1400);
+  const askedBays = whole(raw.bays);
+  let layout: PanelLayout;
+  if (preset === 'auto') layout = autoEnclosure(groups);
+  else {
+    const e = custom ? customEnclosure(whole(raw.widthMm), whole(raw.heightMm), whole(raw.depthMm), floorIn) : ENCLOSURES.find((x) => x.key === preset)!;
+    if (!e.joinable) layout = layoutPanel(groups, e, 1);
+    else if (askedBays > 0) layout = layoutPanel(groups, e, Math.min(MAX_BAYS, askedBays));
+    else {
+      layout = layoutPanel(groups, e, 1);
+      for (let b = 2; !layout.fits && b <= MAX_BAYS; b++) layout = layoutPanel(groups, e, b);
+    }
+    // Bays asked for beyond what the devices fill are drawn empty (spare).
+    while (e.joinable && askedBays > layout.bays.length && layout.bays.length < MAX_BAYS) layout.bays.push({ plate: plateOf(e), rows: [] });
+  }
+  const enc = layout.enclosure;
+  const bays = Math.max(1, layout.bays.length);
+  const floor = custom ? floorIn : enc.floor;
+  const bayW = custom ? whole(raw.widthMm) : enc.w;
+  const W = bayW * bays;
+  const H = custom ? whole(raw.heightMm) : enc.h;
+  const D = custom ? whole(raw.depthMm) : enc.d;
+  const bodyH = H - (custom ? 0 : enc.plinth);
+  const doors = (bayW > 800 ? 2 : 1) * bays;
+  const plate = custom ? { w: Math.max(0, bayW - 100), h: Math.max(0, H - 150) } : plateOf(enc);
+  const rows = custom ? Math.max(1, Math.floor(plate.h / 200)) : layout.rowCount;
+  const size = `${bayW} x ${H} x ${D} mm`;
+  let railLayoutMm: number;
+
+  if (custom) {
+    add(floor ? 'enclosureFloor' : 'enclosureWall', bays, `${doors} door${doors === 1 ? '' : 's'}, mounting plate ${plate.w} x ${plate.h} mm`, 'panel',
+      `${size} (W x H x D), ${doors / bays} door${doors / bays === 1 ? '' : 's'}, powder-coated steel, with mounting plate`);
+    add('plinth', floor ? bays : 0, 'Floor-standing — lifts the enclosure for cable entry');
+    add('ductH', sticks((rows + 1) * bays, plate.w), `${rows + 1} horizontal runs × ${plate.w} mm (above / below ${rows} rail rows)`);
+    add('ductV', sticks(2 * bays, plate.h), `2 vertical runs × ${plate.h} mm (both sides)`);
+    railLayoutMm = rows * plate.w * bays;
+    add('panelRail', sticks(rows * bays, plate.w), `${rows} rail rows × ${plate.w} mm`);
+  } else {
+    const leaves = bayW > 800 ? 2 : 1;
+    add(floor ? 'enclosureFloor' : 'enclosureWall', bays, `${bays > 1 ? `${bays} bays joined side by side, ` : ''}mounting plate ${plate.w} x ${plate.h} mm`, 'panel',
+      `${H}H × ${bayW}W × ${D}D mm${enc.plinth ? ` (incl. ${enc.plinth} mm plinth)` : ''}, ${leaves} door${leaves === 1 ? '' : 's'}, powder-coated steel, with mounting plate`, enc.brand);
+    add('bayKit', bays - 1, 'Joins the bays side by side');
+    const runW = plate.w - 2 * DUCT_V_W;
+    const hRuns = layout.bays.reduce((n, b) => n + (b.rows.length ? b.rows.length + 1 : 0), 0);
+    add('ductH', sticks(hRuns, runW), `${hRuns} horizontal runs × ${runW} mm (above / below each rail row)`);
+    add('ductV', sticks(2 * bays, plate.h), `2 vertical runs × ${plate.h} mm per bay (both sides)`);
+    railLayoutMm = layout.rowCount * runW;
+    add('panelRail', sticks(layout.rowCount, runW), `${layout.rowCount} rail rows × ${runW} mm (from the layout)`);
+    if (preset === 'auto') notes.push(`Auto enclosure: ${bays > 1 ? `${bays} × ` : ''}${enc.label} — the smallest that fits the layout.`);
+    if (!layout.fits) notes.push(`Doesn't fit${enc.joinable ? ` in ${bays} bay${bays === 1 ? '' : 's'}` : ''}: ${layout.unplaced.join(', ')} — pick a bigger enclosure${enc.joinable ? ' or more bays' : ''}.`);
+  }
 
   // Heat inside the panel: auto from the components, or as entered.
   const psuA = Math.max(0, Number(raw.psuA) || 0);
@@ -207,11 +287,12 @@ export function configurePanel(raw: PanelInputs): PanelConfig {
 
   // Heat: fans + exhaust filters, thermostat
   const dT = Math.max(1, Number(raw.deltaT) || 10);
-  const area = 1.8 * (H / 1000) * ((W + D) / 1000) + 1.4 * (W / 1000) * (D / 1000);
+  const area = 1.8 * (bodyH / 1000) * ((W + D) / 1000) + 1.4 * (W / 1000) * (D / 1000);
   const qSurface = 5.5 * area * dT;
   const airflow = Math.max(0, Math.round((3.1 * (heatW - qSurface)) / dT));
   const fan = FANS.find((f) => f.airflow >= airflow) ?? FANS[FANS.length - 1];
-  const fanQty = airflow > 0 ? Math.max(1, Math.ceil(airflow / fan.airflow)) : 1;
+  // At least one fan per joined bay — each bay needs its own airflow.
+  const fanQty = Math.max(airflow > 0 ? Math.ceil(airflow / fan.airflow) : 1, !custom && floor ? bays : 1);
   add(fan.key, fanQty, airflow > 0
     ? `${heatW} W inside${raw.heatAuto ? ' (auto)' : ''}, ${Math.round(qSurface)} W through the walls at ΔT ${dT} K → ≈ ${airflow} m³/h`
     : `The walls dissipate the ${heatW} W${raw.heatAuto ? ' (auto)' : ''} at ΔT ${dT} K — one fan for hot ambient / sun`);
@@ -285,10 +366,10 @@ export function configurePanel(raw: PanelInputs): PanelConfig {
 
   // Rail check: terminals + devices + breakers vs. what the layout holds.
   const railNeededMm = Math.ceil(stripRailMm + (1 + branches) * 36 + 2 * 12 + psuQty * 90);
-  if (railNeededMm > railLayoutMm) notes.push(`The terminals, devices and breakers need ≈ ${(railNeededMm / 1000).toFixed(1)} m of DIN rail but a ${W} x ${H} panel holds ≈ ${(railLayoutMm / 1000).toFixed(1)} m — go bigger or add a panel.`);
+  if (custom && railNeededMm > railLayoutMm) notes.push(`The terminals, devices and breakers need ≈ ${(railNeededMm / 1000).toFixed(1)} m of DIN rail but a ${W} x ${H} panel holds ≈ ${(railLayoutMm / 1000).toFixed(1)} m — go bigger or add a panel.`);
   if (W < 400 || H < 400) notes.push('Very small enclosure — check the layout by hand.');
   if (airflow > FANS[FANS.length - 1].airflow) notes.push(`≈ ${airflow} m³/h is more than one ${FANS[FANS.length - 1].sizeMm} mm fan — ${fanQty} fans, or consider a panel air conditioner.`);
   notes.push('230 V circuits are 2-pole (L1 / L2) — 1.5 mm² white for L1, black for L2.');
 
-  return { lines, floor, doors, plate, rows, railLayoutMm, railNeededMm, airflow, heatW, heatAutoW, heatSources, loadA, mainA, wiring, wires15, notes };
+  return { lines, floor, doors, plate, rows, railLayoutMm, railNeededMm, airflow, heatW, heatAutoW, heatSources, loadA, mainA, wiring, wires15, layout, notes };
 }
