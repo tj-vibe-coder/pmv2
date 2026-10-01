@@ -754,3 +754,32 @@ Goal: every page fits the phone screen, with no sideways-sliding page and no zoo
   - **Enclosures** (`panelLayout.ts` `ENCLOSURES`): Tekpan floor-standing 2100H (incl. 100 mm plinth) × 800W / 1200W × 800D, joined side by side as bays; Tibox wall-mount 1000H × 800W × 300D and 800H × 600W × 300D; "Auto" (dialog default) = smallest that fits (Tibox 800×600 → Tibox 1000×800 → Tekpan 800/1200 with the fewest bays); "Custom" keeps the old W × H × D behaviour (and is `DEFAULT_PANEL_INPUTS`, so existing callers/tests are unchanged). Plate ≈ W − 100 × (body − 150).
   - **Layout engine** (`layoutPanel`): components placed to scale in rows — power (incoming terminals, main + branch 2P MCBs, thermostat, socket, PSUs) → controller (devices from the PLC configurator via new `PanelIo.devices`: S7-1200 CPU + SMs, S7-1500 rail with central modules, each ET 200SP station, switches; else one block of `deviceRailMm`) → relays → terminal strips (terminals share the relays' rail); 60 mm vertical ducts both sides, 40 mm duct above each row; runs split across rows / bays. Device sizes (`DIMS`) are planning figures from datasheets. Fit check, bays, ducts, DIN rail, doors, baying kit (`bayKit`, bays − 1), lights and ≥ 1 fan per floor bay now come from the layout.
   - **Drawings** (`panelDrawing.ts`, `panelDrawingPdf.ts`, `PanelDrawingPreview.tsx`): front view of the joined bays (doors, handles, plinth, overall dimensions), side view (depth, mounting plate dashed), mounting plate per bay (ducts, rails, devices with -tags, unit divisions, device names) — standard scales (1:2…1:50) to fit A3; text/ticks sized in paper mm. Export **PDF** (A3 landscape, no title block: GA, plate sheets (3 bays/sheet), device list, terminal schedule, BOM) and **DXF** (AutoCAD R12, 1:1 mm, layers OUTLINE/PLATE/DUCT/RAIL/DEVICE/DIM/TEXT/HIDDEN; validated with ezdxf: 0 errors). Preview tabs in the dialog. Door devices not drawn (TJ does motor-control panels separately).
+- **Control Panel — layout editor + row-detail drawings at 1:2** (2026-10-02):
+  - **Layout editor** (`PanelLayoutEditor.tsx`, logic in `utils/calcsheet/panelLayoutEdit.ts`): full-screen, every bay's mounting plate side by side to scale.
+    - **Drag** a device or a terminal / relay run onto another rail row or bay; neighbours are pushed aside, and a taller device grows its row.
+    - **Nudge** a selected item with ← → (Shift = 10 mm) or the buttons.
+    - **Split** a run after N units, so one strip can spread over rows, and **join** it back.
+    - **Add / remove** rail rows (× on an empty row).
+    - **Undo** (Ctrl/⌘+Z, 50 steps) and **Reset to auto layout**.
+    - Zoom 1 fits the whole panel in the canvas. Works with touch (pointer events) and at phone width.
+  - **Integration:** `PanelInputs.layoutEdit` carries the edited layout into `configurePanel`.
+    - It's used while it holds the same devices as the auto layout (`layoutSignature`: enclosure, bay count and per-device totals — moves and splits don't change it). When the I/O / devices change, the dialog drops it and says so.
+    - The edited layout drives the drawings, PDF, DXF, device list and the rail / horizontal-duct quantities. `PanelConfig.autoLayout` / `layoutEdited` are new.
+    - The dialog shows an "Edited layout" chip; deleting the chip goes back to auto.
+  - **Row details** (`rowDetailViews` in `panelLayout.ts`, sheets via `rowDetailSheets` in `panelDrawing.ts`):
+    - Every rail row is drawn unit by unit at **1:2**, from the DIMS planning sizes (not the WAGO CAD files themselves):
+      - push-in terminals with clamp openings, slots and their number on the marker;
+      - 2-level terminals with the second clamp pair and deck step;
+      - fuse terminals with the lever;
+      - slim relays with base clamps and LED, tagged K1…;
+      - 2P MCBs (-Q1.1…);
+      - other devices as named blocks.
+    - Also drawn: the top-hat rail TS 35, an end stop after each run, run labels (-X2 DI terminals…) and the row length.
+    - Numbering follows mounting order across rows and bays (per strip tag, so X3 fuse + standard terminals don't repeat numbers).
+    - Rows longer than 700 mm split into parts; views stack on A3 sheets. They're in the dialog's new "Row details (1:2)" tab, in the PDF after the mounting plates, and in the DXF.
+    - `LayoutGroup` / `Placed` gained an optional `kind` (terminal / terminal2 / fuse / terminalIn / relay / mcb / device), set in `panelGroups`.
+  - **Tests:** `panelLayoutEdit.test.ts` (signature, move / refuse / nudge / split / join / rows, configurePanel edit + drop, row-detail numbering / parts / sheets) and `PanelLayoutEditor.test.tsx`.
+  - **Verified in-browser** (Playwright against a standalone build of the dialog):
+    - split K, dragged a piece onto row 1; dragged X2 into bay 2; Done → chip; changing DI drops the edit with the notice;
+    - PDF row-detail sheets rendered and checked;
+    - phone width: no overflow.
