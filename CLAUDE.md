@@ -170,3 +170,21 @@ The phase-by-phase log and the full "Recent additions" change history — OneDri
 - **Use existing tools**: Read/Edit/Write for files, not `cat`/`sed`/`echo`.
 - **Type-check before claiming done**: `npx tsc --noEmit` from repo root (CRA project — may fall back to `npm run build` if tsc isn't configured).
 - **Lint check**: `CI=true npm run build` will surface lint errors (CRA treats warnings as errors under CI).
+
+---
+
+## 7. General reminders (everyone — RJ, TJ, Renzel, Nylle, and any agent)
+
+- **Keep it mobile-compatible.** The whole app was made phone-friendly on 2026-10-01.
+  - Every new or changed page and dialog must work at **360 px** (check in browser devtools device mode) as well as on desktop.
+  - The theme in `App.tsx` already handles phones: scrollable tabs, dialog margins, smaller headings, tighter tables, and no iOS zoom on input focus.
+  - On a page: header rows (title + buttons) get `flexWrap: 'wrap'` plus row/column gap; form fields use `minWidth: { xs: '100%', sm: N }`, never a bare fixed `minWidth`; tables go in a `TableContainer` / `overflowX: 'auto'` box; dense dialogs use `fullScreen` below `sm`.
+  - Full rules: `docs/DESIGN_PHILOSOPHY.md` → "Mobile".
+- **`npm start` writes to PRODUCTION Firestore.** To test with fake data, use the emulator: `npm run emulator`, then run the server with `FIRESTORE_EMULATOR_HOST=127.0.0.1:8080`. Never seed test data into prod.
+- **Ship only through a PR into `main`.** Merging triggers the auto-deploy. Check that the Actions "Deploy to Firebase" run went green; don't push straight to `main`.
+- **Quotation line descriptions are brand-neutral** (no SIMATIC / WAGO / SITOP in the text). Brand and exact item go in the **Brand** and **Part No.** columns; hide the Part No. column manually if a client copy shouldn't show it.
+- **Configurator prices (Siemens PLC, Desigo BMS, Control Panel, Installation Work):**
+  - A Sales → Pricelists item with the **same part number** overrides the built-in price.
+  - Unpriced items go in at ₱0 as **"For inquiry"**. Once the supplier quotes, add the price to Pricelists with that part number so every future quotation picks it up.
+- **Known failing test, not caused by recent work:** `src/components/CollectionsDashboard.test.tsx` (3 tests, "useAuth must be used within an AuthProvider"). Don't let it hide new failures — compare against that baseline.
+- **No secrets in the repo, docs, or chat logs.** Use env-var names and placeholders (see §4).
