@@ -965,6 +965,9 @@ function sanitizeWhiteboardLink(link) {
   return { type, id, label: String(label || '').trim().slice(0, 200) };
 }
 
+// Team-wide lists on the board (src/types/Whiteboard.ts WHITEBOARD_CATEGORIES).
+const WHITEBOARD_CATEGORIES = ['general', 'project', 'sales', 'finance'];
+
 function whiteboardPersonOf(user) {
   const words = [user.full_name, user.username, String(user.email || '').split('@')[0]]
     .filter(Boolean)
@@ -980,11 +983,12 @@ app.get('/api/whiteboard', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    const [publicSnap, privateSnap] = await Promise.all([
+    const [publicSnap, generalSnap, privateSnap] = await Promise.all([
       db.collection('whiteboard_items').where('visibility', '==', 'public').get(),
+      db.collection('whiteboard_items').where('visibility', '==', 'general').get(),
       db.collection('whiteboard_items').where('visibility', '==', 'private').where('createdBy', '==', user.id).get(),
     ]);
-    const items = [...publicSnap.docs, ...privateSnap.docs]
+    const items = [...publicSnap.docs, ...generalSnap.docs, ...privateSnap.docs]
       .map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; })
       .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
     res.json({ success: true, items });
@@ -995,11 +999,16 @@ app.post('/api/whiteboard', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    const { kind, visibility, text, done, dueDate, assignedTo } = req.body || {};
+    const { visibility, text, done, dueDate, assignedTo } = req.body || {};
+    // 'general' = the team-wide General updates list (the whole shared board):
+    // always a to-do, visible to everyone, never assigned to a person.
+    const kind = visibility === 'general' ? 'todo' : (req.body || {}).kind;
     const link = sanitizeWhiteboardLink(req.body && req.body.link);
     if (link === false) return res.status(400).json({ error: 'Invalid link' });
     if (!['update', 'note', 'todo'].includes(kind)) return res.status(400).json({ error: 'Invalid kind' });
-    if (!['public', 'private'].includes(visibility)) return res.status(400).json({ error: 'Invalid visibility' });
+    if (!['public', 'private', 'general'].includes(visibility)) return res.status(400).json({ error: 'Invalid visibility' });
+    const category = (req.body || {}).category || 'general';
+    if (!WHITEBOARD_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'Text is required' });
     // assignedTo picks the board column (see WHITEBOARD_PEOPLE) — required
     // for a public sticky note (it needs somewhere to live on the board),
@@ -1011,6 +1020,7 @@ app.post('/api/whiteboard', async (req, res) => {
     const doc = {
       kind, visibility, text: String(text).trim(),
       ...(visibility === 'public' ? { assignedTo } : {}),
+      ...(visibility === 'general' ? { category } : {}),
       ...(kind === 'todo' ? { done: !!done, ...(dueDate ? { dueDate } : {}) } : {}),
       ...(link ? { link } : {}),
       createdBy: user.id,
@@ -1038,8 +1048,22 @@ app.put('/api/whiteboard/:id', async (req, res) => {
       !isOwner && existing.kind === 'todo' && existing.visibility === 'public' &&
       !!existing.assignedTo && existing.assignedTo === whiteboardPersonOf(user) &&
       Object.keys(req.body || {}).every((k) => k === 'done');
-    if (!isOwner && !isAssigneeDoneToggle) return res.status(403).json({ error: 'Not allowed to edit this item' });
-    const patch = isAssigneeDoneToggle ? { done: !!req.body.done } : { ...req.body };
+    // General updates (and items from the old per-person 'public' columns,
+    // which now show in General too): anyone signed in may tick them done;
+    // editing the text or deleting stays poster-only.
+    const bodyKeys = Object.keys(req.body || {});
+    const isGeneralShared =
+      !isOwner && ['general', 'public'].includes(existing.visibility) && bodyKeys.length > 0 &&
+      bodyKeys.every((k) => k === 'done');
+    if (!isOwner && !isAssigneeDoneToggle && !isGeneralShared) return res.status(403).json({ error: 'Not allowed to edit this item' });
+    const patch = isAssigneeDoneToggle ? { done: !!req.body.done }
+      : isGeneralShared ? { done: !!req.body.done }
+      : { ...req.body };
+    if ('category' in patch && !WHITEBOARD_CATEGORIES.includes(patch.category)) return res.status(400).json({ error: 'Invalid category' });
+    if ('assignedTo' in patch) {
+      if (patch.assignedTo === null || patch.assignedTo === '') patch.assignedTo = FieldValue.delete();
+      else if (!Object.keys(WHITEBOARD_PERSON_ALIASES).includes(patch.assignedTo)) return res.status(400).json({ error: 'Invalid assignedTo' });
+    }
     // Owner edits may set, change, or clear (null) the link — validate it.
     if (!isAssigneeDoneToggle && 'link' in patch) {
       const link = sanitizeWhiteboardLink(patch.link);

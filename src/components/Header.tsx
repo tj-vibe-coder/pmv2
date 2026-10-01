@@ -12,6 +12,7 @@ import {
   ListItemIcon,
   ListItemText,
   Avatar,
+  Badge,
   Chip,
   ToggleButton,
   ToggleButtonGroup
@@ -26,6 +27,7 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import WhiteboardDialog from './WhiteboardDialog';
+import { useWhiteboardStore } from '../store/whiteboardStore';
 
 // Shown once per browser tab session, right after login — sessionStorage
 // clears itself when the tab/window closes, so it naturally re-shows on the
@@ -49,6 +51,13 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
   const workspace = isEmployeeWorkspace ? 'employee' : isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects';
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
   const [whiteboardOpen, setWhiteboardOpen] = useState(false);
+  // Pending "General updates" — shown as a badge on the Whiteboard button so
+  // the team always sees there's an open item, even with the board closed.
+  const fetchWhiteboard = useWhiteboardStore((s) => s.fetchItems);
+  const generalPending = useWhiteboardStore((s) => s.items.filter((i) => (i.visibility === 'general' || i.visibility === 'public') && !i.done).length);
+  useEffect(() => {
+    if (isAuthenticated) fetchWhiteboard().catch(() => {});
+  }, [isAuthenticated, fetchWhiteboard]);
 
   // Auto-popup once per login session (see WHITEBOARD_SEEN_KEY above) — not on
   // every route change, since this effect only re-runs when isAuthenticated
@@ -185,10 +194,12 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
 
               <IconButton
                 onClick={() => setWhiteboardOpen(true)}
-                title="Whiteboard — notes, to-dos & updates"
+                title={generalPending ? `Whiteboard — ${generalPending} pending general update${generalPending === 1 ? '' : 's'}` : 'Whiteboard — notes, to-dos & updates'}
                 sx={{ color: '#2c5aa0' }}
               >
-                <StickyNote2Icon />
+                <Badge badgeContent={generalPending} color="warning" max={99}>
+                  <StickyNote2Icon />
+                </Badge>
               </IconButton>
 
               <IconButton

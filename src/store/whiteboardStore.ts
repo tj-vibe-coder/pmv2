@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { WhiteboardItem, WhiteboardKind, WhiteboardLink, WhiteboardPerson, WhiteboardVisibility } from '../types/Whiteboard';
+import type { WhiteboardCategory, WhiteboardItem, WhiteboardKind, WhiteboardLink, WhiteboardPerson, WhiteboardVisibility } from '../types/Whiteboard';
 
 // App-wide (not calcsheet-scoped) — talks to /api/whiteboard directly, same
 // auth-header convention as quotationStore's api() helper.
@@ -46,12 +46,12 @@ interface WhiteboardActions {
   fetchLinkOptions: () => Promise<void>;
   // Adds a just-created project to the picker without a refetch.
   addLinkOption: (link: WhiteboardLink) => void;
-  addItem: (item: { kind: WhiteboardKind; visibility: WhiteboardVisibility; assignedTo?: WhiteboardPerson; text: string; done?: boolean; dueDate?: string; link?: WhiteboardLink }) => Promise<WhiteboardItem>;
+  addItem: (item: { kind: WhiteboardKind; visibility: WhiteboardVisibility; category?: WhiteboardCategory; assignedTo?: WhiteboardPerson; text: string; done?: boolean; dueDate?: string; link?: WhiteboardLink }) => Promise<WhiteboardItem>;
   // assignedTo/dueDate/link accept `null` (not just `undefined`) to
   // explicitly clear a previously-set value — `undefined` fields are dropped
   // by JSON.stringify before the request even goes out, so they'd silently
   // leave the old value in place rather than clearing it.
-  updateItem: (id: string, patch: Partial<Pick<WhiteboardItem, 'text' | 'visibility' | 'done'>> & { assignedTo?: WhiteboardPerson | null; dueDate?: string | null; link?: WhiteboardLink | null }) => Promise<void>;
+  updateItem: (id: string, patch: Partial<Pick<WhiteboardItem, 'text' | 'visibility' | 'done' | 'category'>> & { assignedTo?: WhiteboardPerson | null; dueDate?: string | null; link?: WhiteboardLink | null }) => Promise<void>;
   deleteItem: (id: string) => Promise<void>;
   setOpen: (open: boolean) => void;
 }
@@ -127,6 +127,7 @@ export const useWhiteboardStore = create<WhiteboardState & WhiteboardActions>()(
         if (patch.text !== undefined) next.text = patch.text;
         if (patch.visibility !== undefined) next.visibility = patch.visibility;
         if (patch.done !== undefined) next.done = patch.done;
+        if (patch.category !== undefined) next.category = patch.category;
         if ('assignedTo' in patch) next.assignedTo = patch.assignedTo ?? undefined;
         if ('dueDate' in patch) next.dueDate = patch.dueDate ?? undefined;
         if ('link' in patch) next.link = patch.link ?? undefined;

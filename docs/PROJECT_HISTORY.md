@@ -685,3 +685,58 @@ Goal: every page fits the phone screen, with no sideways-sliding page and no zoo
 - Desktop layout is unchanged except that header rows can now wrap when they don't fit.
 - `CollectionsDashboard.test.tsx` was already failing (3 tests, "useAuth must be used within an AuthProvider"). It fails the same way without these changes.
 - **0.5 mm² signal wire priced from the supplier quote** (2026-10-01): the PLC/Control Panel wiring lines were a placeholder ₱1,500 per 100 m roll with no part number. Now H05V-K 1x0.5 mm² **RED 8110041** (+24 V DC) and **BLUE 8110021** (0 V DC) at **₱9.14/m**, sold by the metre (UOM m), quantity = wires × run length + 10%, rounded up to whole 10 m (`WIRE_STEP_M`, `WIRE_PRICE_PER_M` in `terminalWiring.ts`, replacing `WIRE_ROLL_M/PRICE`).
+
+## 2026-10-01 — Whiteboard "General updates" (team pending list)
+
+**What it is**: a pinned "General updates" box at the top of the Whiteboard, so the whole team always sees open items.
+- It's a plain checklist, not sticky notes.
+- Items are unassigned by default, and no "unassigned" label is shown.
+- Done items fold away under "Show done (n)".
+- The header's Whiteboard button shows a warning-colored badge with the pending count, so the open items are visible even with the board closed.
+- The board now force-reloads every time it opens, so teammates' new items appear without a page refresh.
+
+**Data**: `whiteboard_items` gains `visibility: 'general'`.
+- Always `kind: 'todo'`; `assignedTo` is optional.
+- `GET /api/whiteboard` returns general items to everyone.
+
+**Permissions**
+- `POST` accepts `general`; the server forces `kind` to `todo` and validates `assignedTo` when given.
+- `PUT`: any signed-in user may change only `done` and/or `assignedTo` on a general item.
+- Editing the text and deleting stay poster-only.
+- `assignedTo: null` now removes the field (`FieldValue.delete()`) instead of storing null.
+- An invalid `assignedTo` is rejected with 400.
+
+**UI**: `GeneralUpdates` in `WhiteboardDialog.tsx`.
+- Add from an inline field (Enter adds).
+- Assign from the person icon. Once assigned, a colored name chip shows; click it to reassign or remove the assignment.
+- Edit / delete for the poster. The edit dialog hides the Public/Private toggle and column picker for general items.
+- Badge logic is in `Header.tsx`.
+
+**Verified** against the Firestore emulator:
+- API rules: a non-owner can assign and tick done; their text edit, mixed done+text patch and delete get 403; an invalid person gets 400; unassign removes the field.
+- In-browser at 1366 px and 360 px: added an item and assigned it via the UI; the badge counted 3; no horizontal overflow.
+- **Whiteboard is now General-only** (same day, user request "remove the per people assignment… move all task to general updates").
+  - **Removed:** the per-person columns (TJ / RJ / Renzel / Nylle / Kim), the Column picker, drag-to-move, the Update/Note/To-Do composer and the assign-to-person button/chip.
+  - **The board is now two checklists:**
+    - **General updates** (team-wide, pinned on top, with the header badge count);
+    - **Just for me** (private).
+  - Both have an inline Add field, a checkbox on every item, and done items under "Show done".
+  - The owner's edit dialog keeps text, link to project/proposal, due date and a General ⇄ Private toggle.
+  - **Old items aren't migrated in Firestore.** Items still stored as `visibility: 'public'` (old column posts) are shown in General updates and counted in the badge; their old Update/Note kind shows as a small icon. Editing one saves it as `general` and clears `assignedTo`.
+  - **Server:**
+    - `POST` with `visibility: 'general'` ignores `assignedTo`.
+    - Non-owners may only patch `done`, on `general` *and* legacy `public` items. Assigning is now 403.
+  - **Verified** on the emulator:
+    - API: general post stores no assignee; non-owner assign → 403; non-owner tick general / legacy public → 200; non-owner text edit → 403; another user ticking my private item → 403.
+    - UI at 1366 / 360 px: badge 3, no overflow.
+- **Whiteboard lists: General / Project / Sales / Finance** (same day).
+  - **Layout:** the shared board is now four team-wide checklists, each with its own Add field, "n pending / All clear" chip and Show done. Desktop shows 4 columns side by side (`lg`), tablets 2, phones stack them. "Just for me" (private) stays below.
+  - **Data:** shared items carry `category` (`'general' | 'project' | 'sales' | 'finance'`; `WHITEBOARD_CATEGORIES` in `types/Whiteboard.ts`, mirrored in `server.js`).
+    - Items with no category, including old `'public'` column posts, show in General (`whiteboardCategoryOf`). No Firestore migration.
+    - The header badge counts pending items across all four lists.
+  - **Editing:** the owner's edit dialog has a "List" picker to move an item between lists.
+  - **Server:**
+    - `POST` defaults `category` to `general` and rejects unknown values with 400.
+    - The owner can change `category` (validated).
+    - Non-owners can still only toggle `done`; moving another person's item to a different list → 403.
+  - **Verified** on the emulator: API rules as above; UI at 1440 / 800 / 360 px, badge 6, no overflow.

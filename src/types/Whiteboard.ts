@@ -5,7 +5,24 @@
 // whiteboardStore.ts.
 
 export type WhiteboardKind = 'update' | 'note' | 'todo';
-export type WhiteboardVisibility = 'public' | 'private';
+// 'general' = the team-wide "General updates" list — the whole shared board:
+// always a to-do, visible to everyone, no per-person assignment (anyone may
+// tick it; only the poster edits or deletes). 'public' items come from the old
+// per-person columns and are shown as General too.
+export type WhiteboardVisibility = 'public' | 'private' | 'general';
+
+// Team-wide lists on the board. Every shared item sits in one of these;
+// items saved before categories existed (or from the old person columns)
+// count as 'general'.
+export type WhiteboardCategory = 'general' | 'project' | 'sales' | 'finance';
+export const WHITEBOARD_CATEGORIES: { key: WhiteboardCategory; label: string; color: string; lightColor: string }[] = [
+  { key: 'general', label: 'General', color: '#c77d12', lightColor: '#fffaf0' },
+  { key: 'project', label: 'Project', color: '#2c5aa0', lightColor: '#f2f6fc' },
+  { key: 'sales', label: 'Sales', color: '#2e7d32', lightColor: '#f3faf3' },
+  { key: 'finance', label: 'Finance', color: '#7b4fa6', lightColor: '#f7f2fb' },
+];
+export const whiteboardCategoryOf = (item: { category?: WhiteboardCategory }): WhiteboardCategory =>
+  item.category && WHITEBOARD_CATEGORIES.some((c) => c.key === item.category) ? item.category : 'general';
 
 // Fixed roster (TJ, RJ, Renzel, Nylle, Kim) — the board's columns, not an open-ended list. Real
 // names are kept here only as a comment/reference for whoever edits this.
@@ -77,6 +94,8 @@ export interface WhiteboardItem {
   // private ones.
   assignedTo?: WhiteboardPerson;
   text: string;
+  // Which team-wide list a shared item is in (absent = 'general').
+  category?: WhiteboardCategory;
   // Only meaningful when kind === 'todo'.
   done?: boolean;
   // Optional deadline, YYYY-MM-DD. Only meaningful when kind === 'todo'.
