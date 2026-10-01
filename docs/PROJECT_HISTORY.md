@@ -728,3 +728,14 @@ Goal: every page fits the phone screen, with no sideways-sliding page and no zoo
   - **Verified** on the emulator:
     - API: general post stores no assignee; non-owner assign → 403; non-owner tick general / legacy public → 200; non-owner text edit → 403; another user ticking my private item → 403.
     - UI at 1366 / 360 px: badge 3, no overflow.
+- **Whiteboard lists: General / Project / Sales / Finance** (same day).
+  - **Layout:** the shared board is now four team-wide checklists, each with its own Add field, "n pending / All clear" chip and Show done. Desktop shows 4 columns side by side (`lg`), tablets 2, phones stack them. "Just for me" (private) stays below.
+  - **Data:** shared items carry `category` (`'general' | 'project' | 'sales' | 'finance'`; `WHITEBOARD_CATEGORIES` in `types/Whiteboard.ts`, mirrored in `server.js`).
+    - Items with no category, including old `'public'` column posts, show in General (`whiteboardCategoryOf`). No Firestore migration.
+    - The header badge counts pending items across all four lists.
+  - **Editing:** the owner's edit dialog has a "List" picker to move an item between lists.
+  - **Server:**
+    - `POST` defaults `category` to `general` and rejects unknown values with 400.
+    - The owner can change `category` (validated).
+    - Non-owners can still only toggle `done`; moving another person's item to a different list → 403.
+  - **Verified** on the emulator: API rules as above; UI at 1440 / 800 / 360 px, badge 6, no overflow.

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   Alert, Autocomplete, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
-  IconButton, Stack, TextField, Tooltip, Typography,
+  IconButton, MenuItem, Stack, TextField, Tooltip, Typography,
   useMediaQuery, useTheme,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -21,14 +21,14 @@ import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useWhiteboardStore } from '../store/whiteboardStore';
-import { whiteboardLinkHref } from '../types/Whiteboard';
-import type { WhiteboardItem, WhiteboardKind, WhiteboardLink } from '../types/Whiteboard';
+import { WHITEBOARD_CATEGORIES, whiteboardCategoryOf, whiteboardLinkHref } from '../types/Whiteboard';
+import type { WhiteboardCategory, WhiteboardItem, WhiteboardKind, WhiteboardLink } from '../types/Whiteboard';
 
-// The Whiteboard is one shared "General updates" list for the whole team
-// (pinned on top) plus each user's private "Just for me" list. There are no
+// The Whiteboard is four shared team lists — General, Project, Sales,
+// Finance — plus each user's private "Just for me" list. There are no
 // per-person columns or assignments. Items posted to the old person columns
-// (visibility 'public') are shown in General updates too — nothing is migrated
-// in Firestore, they're simply treated as general.
+// (visibility 'public') and items saved before categories existed show in
+// General — nothing is migrated in Firestore.
 const isGeneral = (i: WhiteboardItem) => i.visibility === 'general' || i.visibility === 'public';
 
 const linkIcon = (link: WhiteboardLink) =>
@@ -217,6 +217,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
   const [editing, setEditing] = useState<WhiteboardItem | null>(null);
   const [editText, setEditText] = useState('');
   const [editPrivate, setEditPrivate] = useState(false);
+  const [editCategory, setEditCategory] = useState<WhiteboardCategory>('general');
   const [editDueDate, setEditDueDate] = useState('');
   const [editLink, setEditLink] = useState<WhiteboardLink | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -243,16 +244,19 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
   };
 
   // Oldest first, like a checklist — new items go to the bottom.
-  const general = useMemo(() => items.filter(isGeneral).sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [items]);
+  const byCategory = useMemo(() => {
+    const map = Object.fromEntries(WHITEBOARD_CATEGORIES.map((c) => [c.key, [] as WhiteboardItem[]])) as Record<WhiteboardCategory, WhiteboardItem[]>;
+    items.filter(isGeneral).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).forEach((i) => map[whiteboardCategoryOf(i)].push(i));
+    return map;
+  }, [items]);
   const myPrivate = useMemo(() => items.filter((i) => i.visibility === 'private').sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [items]);
-  const pendingGeneral = general.filter((i) => !i.done).length;
 
   const isOwner = (item: WhiteboardItem) => String(item.createdBy) === String(user?.id);
 
-  const add = (visibility: 'general' | 'private') => async (t: string) => {
+  const add = (visibility: 'general' | 'private', category?: WhiteboardCategory) => async (t: string) => {
     setError(null);
     try {
-      await addItem({ kind: 'todo', visibility, text: t, done: false });
+      await addItem({ kind: 'todo', visibility, text: t, done: false, ...(category ? { category } : {}) });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not add that item.');
       throw e;
@@ -280,6 +284,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
     setEditing(item);
     setEditText(item.text);
     setEditPrivate(item.visibility === 'private');
+    setEditCategory(whiteboardCategoryOf(item));
     setEditDueDate(item.dueDate ?? '');
     setEditLink(item.link ?? null);
   };
@@ -294,6 +299,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
       await updateItem(editing.id, {
         text: trimmed,
         visibility: editPrivate ? 'private' : 'general',
+        ...(editPrivate ? {} : { category: editCategory }),
         assignedTo: null,
         dueDate: editDueDate || null,
         link: editLink,
@@ -309,7 +315,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
   const listProps = { isOwner, onToggleDone: toggleDone, onEdit: startEdit, onDelete: remove, onOpenLink: openLink };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth fullScreen={isPhone}>
+    <Dialog open={open} onClose={onClose} maxWidth="xl" fullWidth fullScreen={isPhone}>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         Whiteboard
         <IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
@@ -322,22 +328,30 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
           <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>Loading…</Typography>
         ) : (
           <>
-            {/* ── General updates — the whole team's pending list ── */}
-            <Box sx={{ border: '1px solid', borderColor: '#f0b357', bgcolor: '#fffaf0', borderRadius: 1.5, p: 1.25 }}>
-              <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.75 }}>
-                <PushPinOutlinedIcon sx={{ fontSize: 18, color: '#c77d12' }} />
-                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>General updates</Typography>
-                <Chip
-                  size="small" label={pendingGeneral ? `${pendingGeneral} pending` : 'All clear'}
-                  color={pendingGeneral ? 'warning' : 'success'} sx={{ height: 20, fontSize: 11, fontWeight: 600 }}
-                />
-              </Stack>
-              <ItemList
-                {...listProps} items={general} maxHeight="45vh"
-                emptyText="Nothing pending — add an item below so the whole team sees it."
-                placeholder="Add a pending item for the team…"
-                onAdd={add('general')}
-              />
+            {/* ── Team lists — General, Project, Sales, Finance (side by side on wide screens) ── */}
+            <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' } }}>
+              {WHITEBOARD_CATEGORIES.map((c) => {
+                const list = byCategory[c.key];
+                const pending = list.filter((i) => !i.done).length;
+                return (
+                  <Box key={c.key} sx={{ border: '1px solid', borderColor: c.color, bgcolor: c.lightColor, borderRadius: 1.5, p: 1.25, minWidth: 0 }}>
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.75 }}>
+                      {c.key === 'general' && <PushPinOutlinedIcon sx={{ fontSize: 18, color: c.color }} />}
+                      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: c.color }}>{c.label}</Typography>
+                      <Chip
+                        size="small" label={pending ? `${pending} pending` : 'All clear'}
+                        color={pending ? 'warning' : 'success'} sx={{ height: 20, fontSize: 11, fontWeight: 600 }}
+                      />
+                    </Stack>
+                    <ItemList
+                      {...listProps} items={list} maxHeight="40vh"
+                      emptyText={`Nothing pending in ${c.label}.`}
+                      placeholder={`Add to ${c.label}…`}
+                      onAdd={add('general', c.key)}
+                    />
+                  </Box>
+                );
+              })}
             </Box>
 
             {/* ── Just for me — private, only you see these ── */}
@@ -376,12 +390,17 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
               <Chip
                 size="small"
                 icon={editPrivate ? <LockIcon fontSize="small" /> : <PublicIcon fontSize="small" />}
-                label={editPrivate ? 'Private — just for me' : 'General — whole team'}
+                label={editPrivate ? 'Private — just for me' : 'Shared — whole team'}
                 color={editPrivate ? 'default' : 'primary'}
                 variant={editPrivate ? 'outlined' : 'filled'}
                 onClick={() => setEditPrivate((v) => !v)}
                 sx={{ cursor: 'pointer' }}
               />
+              {!editPrivate && (
+                <TextField select size="small" label="List" value={editCategory} onChange={(e) => setEditCategory(e.target.value as WhiteboardCategory)} sx={{ width: 140 }}>
+                  {WHITEBOARD_CATEGORIES.map((c) => <MenuItem key={c.key} value={c.key}>{c.label}</MenuItem>)}
+                </TextField>
+              )}
               <TextField
                 type="date" size="small" label="Due date" InputLabelProps={{ shrink: true }}
                 value={editDueDate}
