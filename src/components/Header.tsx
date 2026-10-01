@@ -54,7 +54,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
   // Pending "General updates" — shown as a badge on the Whiteboard button so
   // the team always sees there's an open item, even with the board closed.
   const fetchWhiteboard = useWhiteboardStore((s) => s.fetchItems);
-  const generalPending = useWhiteboardStore((s) => s.items.filter((i) => i.visibility === 'general' && !i.done).length);
+  const generalPending = useWhiteboardStore((s) => s.items.filter((i) => (i.visibility === 'general' || i.visibility === 'public') && !i.done).length);
   useEffect(() => {
     if (isAuthenticated) fetchWhiteboard().catch(() => {});
   }, [isAuthenticated, fetchWhiteboard]);

@@ -714,3 +714,17 @@ Goal: every page fits the phone screen, with no sideways-sliding page and no zoo
 **Verified** against the Firestore emulator:
 - API rules: a non-owner can assign and tick done; their text edit, mixed done+text patch and delete get 403; an invalid person gets 400; unassign removes the field.
 - In-browser at 1366 px and 360 px: added an item and assigned it via the UI; the badge counted 3; no horizontal overflow.
+- **Whiteboard is now General-only** (same day, user request "remove the per people assignment… move all task to general updates").
+  - **Removed:** the per-person columns (TJ / RJ / Renzel / Nylle / Kim), the Column picker, drag-to-move, the Update/Note/To-Do composer and the assign-to-person button/chip.
+  - **The board is now two checklists:**
+    - **General updates** (team-wide, pinned on top, with the header badge count);
+    - **Just for me** (private).
+  - Both have an inline Add field, a checkbox on every item, and done items under "Show done".
+  - The owner's edit dialog keeps text, link to project/proposal, due date and a General ⇄ Private toggle.
+  - **Old items aren't migrated in Firestore.** Items still stored as `visibility: 'public'` (old column posts) are shown in General updates and counted in the badge; their old Update/Note kind shows as a small icon. Editing one saves it as `general` and clears `assignedTo`.
+  - **Server:**
+    - `POST` with `visibility: 'general'` ignores `assignedTo`.
+    - Non-owners may only patch `done`, on `general` *and* legacy `public` items. Assigning is now 403.
+  - **Verified** on the emulator:
+    - API: general post stores no assignee; non-owner assign → 403; non-owner tick general / legacy public → 200; non-owner text edit → 403; another user ticking my private item → 403.
+    - UI at 1366 / 360 px: badge 3, no overflow.

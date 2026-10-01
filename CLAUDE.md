@@ -187,5 +187,5 @@ The phase-by-phase log and the full "Recent additions" change history — OneDri
   - A Sales → Pricelists item with the **same part number** overrides the built-in price.
   - Unpriced items go in at ₱0 as **"For inquiry"**. Once the supplier quotes, add the price to Pricelists with that part number so every future quotation picks it up.
 - **Known failing test, not caused by recent work:** `src/components/CollectionsDashboard.test.tsx` (3 tests, "useAuth must be used within an AuthProvider"). Don't let it hide new failures — compare against that baseline.
-- **Team pending items go in Whiteboard → "General updates"** (pinned at the top; the header badge shows the count). Anyone can assign or tick them; only the poster edits or deletes. Data: `whiteboard_items` with `visibility: 'general'`.
+- **Team pending items go in Whiteboard → "General updates"** (the shared list; the header badge shows the pending count). There are no per-person columns or assignments any more. Anyone can tick an item done; only the poster edits or deletes. Data: `whiteboard_items` with `visibility: 'general'`; old `'public'` column posts show there too.
 - **No secrets in the repo, docs, or chat logs.** Use env-var names and placeholders (see §4).

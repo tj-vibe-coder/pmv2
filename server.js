@@ -997,16 +997,13 @@ app.post('/api/whiteboard', async (req, res) => {
     const user = await requireActiveUser(req, res);
     if (!user) return;
     const { visibility, text, done, dueDate, assignedTo } = req.body || {};
-    // 'general' = the team-wide pending list at the top of the board: always a
-    // to-do, visible to everyone, unassigned unless someone assigns it.
+    // 'general' = the team-wide General updates list (the whole shared board):
+    // always a to-do, visible to everyone, never assigned to a person.
     const kind = visibility === 'general' ? 'todo' : (req.body || {}).kind;
     const link = sanitizeWhiteboardLink(req.body && req.body.link);
     if (link === false) return res.status(400).json({ error: 'Invalid link' });
     if (!['update', 'note', 'todo'].includes(kind)) return res.status(400).json({ error: 'Invalid kind' });
     if (!['public', 'private', 'general'].includes(visibility)) return res.status(400).json({ error: 'Invalid visibility' });
-    if (visibility === 'general' && assignedTo && !Object.keys(WHITEBOARD_PERSON_ALIASES).includes(assignedTo)) {
-      return res.status(400).json({ error: 'Invalid assignedTo' });
-    }
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'Text is required' });
     // assignedTo picks the board column (see WHITEBOARD_PEOPLE) — required
     // for a public sticky note (it needs somewhere to live on the board),
@@ -1017,7 +1014,7 @@ app.post('/api/whiteboard', async (req, res) => {
     const now = new Date().toISOString();
     const doc = {
       kind, visibility, text: String(text).trim(),
-      ...(visibility === 'public' || (visibility === 'general' && assignedTo) ? { assignedTo } : {}),
+      ...(visibility === 'public' ? { assignedTo } : {}),
       ...(kind === 'todo' ? { done: !!done, ...(dueDate ? { dueDate } : {}) } : {}),
       ...(link ? { link } : {}),
       createdBy: user.id,
@@ -1045,15 +1042,16 @@ app.put('/api/whiteboard/:id', async (req, res) => {
       !isOwner && existing.kind === 'todo' && existing.visibility === 'public' &&
       !!existing.assignedTo && existing.assignedTo === whiteboardPersonOf(user) &&
       Object.keys(req.body || {}).every((k) => k === 'done');
-    // General (team-wide) reminders: anyone signed in may tick them done or
-    // (re)assign / unassign them; editing the text or deleting stays poster-only.
+    // General updates (and items from the old per-person 'public' columns,
+    // which now show in General too): anyone signed in may tick them done;
+    // editing the text or deleting stays poster-only.
     const bodyKeys = Object.keys(req.body || {});
     const isGeneralShared =
-      !isOwner && existing.visibility === 'general' && bodyKeys.length > 0 &&
-      bodyKeys.every((k) => k === 'done' || k === 'assignedTo');
+      !isOwner && ['general', 'public'].includes(existing.visibility) && bodyKeys.length > 0 &&
+      bodyKeys.every((k) => k === 'done');
     if (!isOwner && !isAssigneeDoneToggle && !isGeneralShared) return res.status(403).json({ error: 'Not allowed to edit this item' });
     const patch = isAssigneeDoneToggle ? { done: !!req.body.done }
-      : isGeneralShared ? Object.fromEntries(bodyKeys.map((k) => [k, k === 'done' ? !!req.body.done : req.body[k]]))
+      : isGeneralShared ? { done: !!req.body.done }
       : { ...req.body };
     if ('assignedTo' in patch) {
       if (patch.assignedTo === null || patch.assignedTo === '') patch.assignedTo = FieldValue.delete();
