@@ -84,7 +84,7 @@ it('redundancy switches to an S7-1500R pair with HF interface modules and manage
   expect(sections.map((g) => g.header)).toEqual(['PLC — SIEMENS S7-1500R']);
   const [plc] = sections.map((g) => Object.fromEntries(g.rows.map((r) => [r.partNo || r.description, r])));
   expect(plc['6ES7513-1RM03-0AB0']).toMatchObject({ qty: 2 });
-  expect(plc['6ES7155-6AU30-0CN0']).toMatchObject({ qty: 1 });
+  expect(plc['6ES7155-6AU01-0CN0']).toMatchObject({ qty: 1 });             // IM 155-6 PN/2 HF
   expect(plc['6GK5208-0BA00-2AC2']).toMatchObject({ qty: 2 });
   expect(usePanelIoStore.getState().io).toMatchObject({ source: 'Siemens S7-1500R', di: 18 });
 });

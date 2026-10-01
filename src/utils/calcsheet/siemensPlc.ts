@@ -405,7 +405,8 @@ const CATALOG: SiemensPart[] = [
     description: 'SIMATIC ET 200SP, BaseUnit BU15-P16+A0+2D/T, BU type A1, Push-in terminals, with temperature sensor (thermocouple cold junction), new load group (light), WxH: 15x 117 mm' },
   { verify: true, key: 'buDarkA1', partNo: '6ES7193-6BP00-0BA1', price: 0,
     description: 'SIMATIC ET 200SP, BaseUnit BU15-P16+A0+2B/T, BU type A1, Push-in terminals, with temperature sensor (thermocouple cold junction), bridged to the left, WxH: 15x 117 mm' },
-  { verify: true, key: 'imHf', partNo: '6ES7155-6AU30-0CN0', price: 0,
+  // 6ES7155-6AU01-0CN0 = IM155-6PN/2 HF (TIA Selection Tool); 6AU30 is the PN/3 HF.
+  { key: 'imHf', partNo: '6ES7155-6AU01-0CN0', price: 0,
     description: 'SIMATIC ET 200SP, PROFINET interface module IM 155-6 PN/2 High Feature, system redundancy S2 (S7-1500R/H), max. 64 I/O modules, incl. server module, BusAdapter ordered separately' },
   { key: 'busAdapter', partNo: '6ES7193-6AR00-0AA0', price: 0,
     description: 'SIMATIC ET 200SP, BusAdapter BA 2x RJ45, for the IM 155-6 PN HF interface module' },
