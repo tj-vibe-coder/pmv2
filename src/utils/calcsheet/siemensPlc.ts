@@ -527,7 +527,9 @@ export function genericDescription(key: string): string {
   // CPUs are named by family only on the proposal (TJ's convention): "CPU, S7-1200" / "CPU, S7-1500".
   const cpu = CPU_MODELS.find((m) => m.key === key);
   if (cpu) {
-    if (cpu.redundancy === 'H') return 'CPU, S7-1500 (redundant system: 2 × CPU with synchronization modules and sync cables)';
+    // Redundant: Siemens' system names — S7-1500R (2 CPUs synced over the PROFINET ring), S7-1500H (bundle, sync modules).
+    if (cpu.redundancy === 'H') return 'Redundant CPU, S7-1500H (2 CPUs with synchronization modules and sync cables)';
+    if (cpu.redundancy === 'R') return 'Redundant CPU, S7-1500R';
     return `CPU, ${cpu.family}`;
   }
   const mem = MEMORY_CARDS.find((c) => c.key === key);

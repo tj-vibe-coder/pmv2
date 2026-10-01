@@ -426,8 +426,9 @@ describe('brand-neutral quotation descriptions', () => {
     expect(SIEMENS_PARTS.cpu1214.generic).toBe('CPU, S7-1200');
     expect(SIEMENS_PARTS.cpu1212ac.generic).toBe('CPU, S7-1200');
     expect(SIEMENS_PARTS.cpu1511c.generic).toBe('CPU, S7-1500');
-    expect(SIEMENS_PARTS.cpu1513r.generic).toBe('CPU, S7-1500');
-    expect(SIEMENS_PARTS.cpu1517h.generic).toMatch(/^CPU, S7-1500 \(redundant system/);
+    expect(SIEMENS_PARTS.cpu1513r.generic).toBe('Redundant CPU, S7-1500R');
+    expect(SIEMENS_PARTS.cpu1515r.generic).toBe('Redundant CPU, S7-1500R');
+    expect(SIEMENS_PARTS.cpu1517h.generic).toMatch(/^Redundant CPU, S7-1500H \(2 CPUs/);
     expect(SIEMENS_PARTS.wagoSw8.generic).toBe('Industrial Ethernet switch, unmanaged, 8 x RJ45 10/100 Mbit/s');
   });
 });
