@@ -287,7 +287,7 @@ const ReimbursementDashboard: React.FC = () => {
           severity={(financeFocus.focusError || focusLoadError) ? 'warning' : 'info'}
           sx={{ mb: 1.5 }}
           action={(
-            <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
               {financeFocus.hasBackSource && <Button color="inherit" size="small" onClick={financeFocus.backToSource}>Back to source</Button>}
               <Button color="inherit" size="small" onClick={financeFocus.clearFocus}>Clear focus</Button>
             </Box>
@@ -340,7 +340,7 @@ const ReimbursementDashboard: React.FC = () => {
 
       <Box sx={{ flexGrow: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2 }}>
-          <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0', display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, alignItems: 'center', justifyContent: 'space-between' }}>
             <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
               Reimbursement Claims ({displayedReimbursements.length})
             </Typography>

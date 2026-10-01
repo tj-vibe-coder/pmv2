@@ -533,7 +533,7 @@ export default function UsersPage() {
                   </TableCell>
                   <TableCell align="right">
                     {editingId === u.id ? (
-                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                      <Stack direction="row" flexWrap="wrap" useFlexGap spacing={0.5} justifyContent="flex-end">
                         <Button
                           size="small"
                           startIcon={<SaveIcon />}

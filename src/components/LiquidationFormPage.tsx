@@ -1914,7 +1914,7 @@ export default function LiquidationFormPage() {
           severity={financeFocusError ? 'warning' : 'info'}
           sx={{ mb: 2 }}
           action={(
-            <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
               {new URLSearchParams(location.search).get('from') && (
                 <Button color="inherit" size="small" onClick={backToFinanceSource}>Back to source</Button>
               )}
@@ -2095,7 +2095,7 @@ export default function LiquidationFormPage() {
                 />
               )}
             </Box>
-            <Box sx={{ display: 'flex', gap: 1 }}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
               {loadedReimb && isAdmin && !loadedReimb.caId && (
                 <Button
                   variant="outlined"
@@ -2162,7 +2162,7 @@ export default function LiquidationFormPage() {
                 {' '}total ₱{totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} → ₱{pendingRevision.totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
               </Typography>
               {user?.role === 'superadmin' && (
-                <Box sx={{ display: 'flex', gap: 1 }}>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                   <Button variant="contained" size="small" color="success" disabled={saving} onClick={() => resolveRevision('approve')}>
                     Approve
                   </Button>

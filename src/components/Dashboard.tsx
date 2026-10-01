@@ -1232,11 +1232,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       
       {/* Projects Table */}
       <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2, flexGrow: 1 }}>
-        <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e0e0e0' }}>
+        <Box sx={{ p: 1.5, display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e0e0e0' }}>
           <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
             Projects ({filteredProjects.length})
           </Typography>
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
             <input
               type="file"
               ref={fileInputRef}
@@ -1319,7 +1319,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
               <Typography variant="body2" color="textSecondary">
                 {selectedProjects.size} project(s) selected
               </Typography>
-              <Stack direction="row" spacing={1}>
+              <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
                 <Button
                   size="small"
                   variant="outlined"
@@ -1536,7 +1536,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
         PaperProps={{
           sx: {
             borderRadius: 3,
-            minWidth: 400
+            minWidth: { xs: 0, sm: 400 }
           }
         }}
       >

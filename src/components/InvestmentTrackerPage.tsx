@@ -453,7 +453,7 @@ const InvestmentTrackerPage: React.FC = () => {
           severity={financeFocus.focusError ? 'warning' : 'info'}
           sx={{ mb: 1.5 }}
           action={(
-            <Stack direction="row" spacing={0.5}>
+            <Stack direction="row" flexWrap="wrap" useFlexGap spacing={0.5}>
               {financeFocus.hasBackSource && <Button color="inherit" size="small" onClick={financeFocus.backToSource}>Back to source</Button>}
               <Button color="inherit" size="small" onClick={financeFocus.clearFocus}>Clear focus</Button>
             </Stack>
@@ -543,7 +543,7 @@ const InvestmentTrackerPage: React.FC = () => {
 
       {/* Main Ledger Table */}
       <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2, mb: 2 }}>
-        <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e0e0e0' }}>
+        <Box sx={{ p: 1.5, display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e0e0e0' }}>
           <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
             Investment Ledger ({investments.length})
           </Typography>

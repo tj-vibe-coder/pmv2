@@ -1598,7 +1598,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
               <Chip label={`Editing ${serviceReports.find(r => r.id === editingServiceReportId)?.reportNo || ''}`} size="small" color="info" variant="outlined" />
             )}
           </Box>
-          <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, flexShrink: { xs: 1, sm: 0 } }}>
             <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={resetServiceReportForm} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>New</Button>
             <Button variant="outlined" size="small" onClick={handleSaveServiceReport} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{serviceReportSaveFeedback ? 'Saved' : 'Save'}</Button>
             <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview</Button>

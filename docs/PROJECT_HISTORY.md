@@ -644,3 +644,43 @@ Fixes Renzel reported while preparing the ADI B1P1 BMS Correction (IOCT2607003) 
   - Tables sit in an `overflowX: auto` box. In the item tables, the part no. and unit price columns fold into the item cell (`HIDE_ON_PHONE`).
   - Divider labels wrap, and the dialog action buttons wrap.
   - Checked at 390 px wide with Playwright: no horizontal overflow in any of the four dialogs. The desktop layout is unchanged.
+
+## 2026-10-01 — App-wide mobile compatibility
+
+Goal: every page fits the phone screen, with no sideways-sliding page and no zoomed-out page.
+
+**Method**
+- Local stack: the Firestore emulator (project `demo-pmv2`, seeded with a demo superadmin + sample projects, clients, calcsheet project/quotation, expenses, employee); `server.js` pointed at it via `FIRESTORE_EMULATOR_HOST`; a local production build served with an `/api` proxy.
+- A Playwright audit visited ~60 routes at 320 / 360 / 414 / 768 px with mobile emulation. It flagged:
+  - page-level horizontal overflow, including the case where the phone browser zooms the whole page out (`innerWidth > clientWidth`);
+  - content cut off by an `overflow: hidden` ancestor.
+- It also opened 11 common dialogs at 360 px.
+
+**Theme-wide (`App.tsx` `createTheme`, `PHONE` = below 600 px)**
+- Smaller h3–h6 on phones.
+- `MuiTabs` default to `variant="scrollable"` with scroll buttons, so tab bars scroll instead of clipping.
+- Dialogs keep an 8 px margin (full-screen ones none), with tighter title / content / action padding and wrapping action buttons.
+- Table cells get 6×8 padding on phones.
+- `TablePagination` wraps.
+
+**Global CSS (`index.css`)**: on WebKit touch devices (iPhone / iPad, `@supports (-webkit-touch-callout: none)`), form fields are kept at 16 px so iOS Safari doesn't zoom in on focus.
+
+**Per-page fixes**
+- Page and section header rows (title + action buttons) now wrap: `flexWrap` + row/column gap on the header row and its button group. Applied by a codemod to h4 / h5 / h6 headers and button rows in ~40 components.
+- Fixed `minWidth` form fields are full width on phones: CA form, Estimates, Tax Ledger, Reports, Calcsheet projects search, Whiteboard link picker.
+- Quotation Editor: action toolbars wrap; terms grid is 2 columns on phones; cost summary is 1 column; margin/total boxes stack.
+- Quotation compare view: minmax grids so long amounts no longer push the cards wider.
+- Wide tables not in a `TableContainer` now sit in an `overflowX: auto` box: Calcsheet projects list, project detail quotations, presets, legacy import.
+- Project Details header: back button + title, buttons wrap below.
+- Whiteboard: people's columns stack vertically on phones instead of a sideways board.
+- Gantt PDF export dialog: settings above the preview on phones.
+- Report / Service Report sticky action bars wrap.
+- Analytics Studio: header chips wrap, canvas header shrinks.
+- `margin: -2` page roots (Reports, EHS, ID Generator) now match the phone layout padding (`{ xs: -1, md: -2 }`).
+
+**Result**
+- No page overflows or zooms out at 320–768 px.
+- Remaining audit hits are intentional sideways-scrolling rows (Analytics "Quick Formulations" chips) and an MUI Switch false positive.
+- All 11 dialogs fit at 360 px.
+- Desktop layout is unchanged except that header rows can now wrap when they don't fit.
+- `CollectionsDashboard.test.tsx` was already failing (3 tests, "useAuth must be used within an AuthProvider"). It fails the same way without these changes.

@@ -116,7 +116,7 @@ const PayrollRegister: React.FC<Props> = ({ onNewRun, onViewRun, onEditRun }) =>
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h6" fontWeight={600}>Payroll Register</Typography>
         <Button variant="contained" startIcon={<AddIcon />} onClick={onNewRun}
           sx={{ bgcolor: '#2853c0' }}>

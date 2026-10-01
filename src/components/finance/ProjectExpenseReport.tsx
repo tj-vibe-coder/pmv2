@@ -190,7 +190,7 @@ const ProjectExpenseReport: React.FC = () => {
 
   return (
     <Box sx={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ mb: 1.5, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+      <Box sx={{ mb: 1.5, display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <Box>
           <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
             Project Expenses — {projectName}

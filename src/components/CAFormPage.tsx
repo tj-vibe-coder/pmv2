@@ -876,7 +876,7 @@ export default function CAFormPage() {
           severity={financeFocus.focusError ? 'warning' : 'info'}
           sx={{ mb: 2 }}
           action={(
-            <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
               {financeFocus.hasBackSource && <Button color="inherit" size="small" onClick={financeFocus.backToSource}>Back to source</Button>}
               <Button color="inherit" size="small" onClick={financeFocus.clearFocus}>Clear focus</Button>
             </Box>
@@ -901,7 +901,7 @@ export default function CAFormPage() {
             value={selectedProject}
             onChange={(_, v) => setSelectedProject(v)}
             renderInput={(params) => <TextField {...params} label="Project" placeholder="Select project (optional for prospects)" />}
-            sx={{ minWidth: 280 }}
+            sx={{ minWidth: { xs: '100%', sm: 280 } }}
           />
           <TextField
             size="small"
@@ -921,7 +921,7 @@ export default function CAFormPage() {
               value={purpose}
               onChange={(e) => setPurpose(e.target.value)}
               helperText="No project yet? Describe what this CA is for."
-              sx={{ minWidth: 320, flex: 1 }}
+              sx={{ minWidth: { xs: '100%', sm: 320 }, flex: 1 }}
             />
           )}
         </Box>
@@ -935,7 +935,7 @@ export default function CAFormPage() {
               value={onBehalfUserId}
               onChange={(e) => setOnBehalfUserId(e.target.value)}
               helperText="Leave as yourself unless submitting on behalf of another employee"
-              sx={{ minWidth: 260 }}
+              sx={{ minWidth: { xs: '100%', sm: 260 } }}
             >
               <MenuItem value="">Myself ({user?.full_name || user?.username})</MenuItem>
               {onBehalfUsers.filter((u) => String(u.id) !== String(user?.id)).map((u) => (
@@ -960,7 +960,7 @@ export default function CAFormPage() {
                 size="small"
                 label="Paid From"
                 value={fundingType}
-                sx={{ minWidth: 220 }}
+                sx={{ minWidth: { xs: '100%', sm: 220 } }}
                 onChange={(e) => {
                   const v = e.target.value as 'corporate_bank' | 'investor_outofpocket';
                   setFundingType(v);
@@ -976,7 +976,7 @@ export default function CAFormPage() {
                   size="small"
                   label="Investor"
                   value={fundingInvestor}
-                  sx={{ minWidth: 220 }}
+                  sx={{ minWidth: { xs: '100%', sm: 220 } }}
                   onChange={(e) => handleFundingInvestorChange(e.target.value)}
                 >
                   <MenuItem value="">— Select investor —</MenuItem>
@@ -989,7 +989,7 @@ export default function CAFormPage() {
                   size="small"
                   label="Link to Existing Investment (Optional)"
                   value={linkedInvestmentId}
-                  sx={{ minWidth: 280 }}
+                  sx={{ minWidth: { xs: '100%', sm: 280 } }}
                   onChange={(e) => setLinkedInvestmentId(e.target.value)}
                 >
                   <MenuItem value="">— New investment entry —</MenuItem>

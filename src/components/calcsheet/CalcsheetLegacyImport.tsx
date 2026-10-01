@@ -703,6 +703,7 @@ export default function CalcsheetLegacyImport() {
 
       {rows.length > 0 && (
         <Paper>
+          <Box sx={{ overflowX: 'auto' }}>
           <Table size="small">
             <TableHead>
               <TableRow>
@@ -871,6 +872,7 @@ export default function CalcsheetLegacyImport() {
               })}
             </TableBody>
           </Table>
+          </Box>
         </Paper>
       )}
 

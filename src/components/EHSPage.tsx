@@ -442,7 +442,7 @@ const EHSPage: React.FC = () => {
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        margin: -2,
+        margin: { xs: -1, md: -2 },
         backgroundColor: '#f5f5f5',
       }}
     >

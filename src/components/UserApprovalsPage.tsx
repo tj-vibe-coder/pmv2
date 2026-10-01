@@ -288,7 +288,7 @@ const UserApprovalsPage: React.FC = () => {
                     {r.request_count > 1 ? ` (×${r.request_count})` : ''}
                   </TableCell>
                   <TableCell align="right">
-                    <Stack direction="row" spacing={1} justifyContent="flex-end">
+                    <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} justifyContent="flex-end">
                       <Button
                         variant="contained"
                         size="small"

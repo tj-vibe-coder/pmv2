@@ -1594,7 +1594,7 @@ export default function ProjectDetail() {
           {oneDriveSignedIn && (
             activeRootFolderId ? (
               <Box sx={{ mt: 1.5 }}>
-                <Stack direction="row" alignItems="center" spacing={0.5}>
+                <Stack direction="row" flexWrap="wrap" useFlexGap alignItems="center" spacing={0.5}>
                   <Button
                     size="small"
                     variant="text"
@@ -1734,9 +1734,9 @@ export default function ProjectDetail() {
         </Paper>
       )}
 
-      <Stack direction="row" alignItems="center" justifyContent="space-between">
+      <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} alignItems="center" justifyContent="space-between">
         <Typography variant="h5" sx={{ fontWeight: 600 }}>Quotations</Typography>
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
           <Button
             component={Link}
             to={`/sales/calcsheet/projects/${project.id}/schedule`}
@@ -1803,6 +1803,7 @@ export default function ProjectDetail() {
       </Stack>
 
       <Paper>
+        <Box sx={{ overflowX: 'auto' }}>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -1881,6 +1882,7 @@ export default function ProjectDetail() {
             )}
           </TableBody>
         </Table>
+        </Box>
       </Paper>
 
       <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth>

@@ -337,6 +337,16 @@ Always `size="small"` for buttons inside table header bars.
 | `Box mb` below title | `1.5` |
 | `Grid mb` after KPI cards | `2` |
 
+### Mobile (phones < 600 px)
+
+The theme in `App.tsx` already shrinks headings, makes `Tabs` scrollable, keeps dialog margins and tightens table padding on phones. On a page:
+
+- **Header rows** (title + buttons): add `flexWrap: 'wrap', columnGap: 2, rowGap: 1` to the row, and `flexWrap` (`useFlexGap` on a `Stack`) to the button group. Buttons then drop below the title instead of being cut off.
+- **Fixed widths**: write `minWidth: { xs: '100%', sm: 280 }`, never a bare `minWidth: 280`, on form fields in a wrapping row. Grids use responsive columns (`{ xs: '1fr', md: 'repeat(3, 1fr)' }`), and `minmax(0, 1fr)` where long numbers sit.
+- **Tables** always sit in a `TableContainer` (or a `Box sx={{ overflowX: 'auto' }}`) so they scroll sideways inside the page, never the page itself.
+- **Page roots** that cancel the layout padding use `margin: { xs: -1, md: -2 }` (the layout pads 1 on phones, 2 on desktop).
+- **Dense dialogs** (configurators, editors): `fullScreen` below `sm` via `useMediaQuery(theme.breakpoints.down('sm'))`.
+
 ---
 
 ## 14. Reference Implementations

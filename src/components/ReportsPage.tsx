@@ -232,7 +232,7 @@ const ReportsPage: React.FC = () => {
       display: 'flex', 
       flexDirection: 'column',
       overflow: 'hidden',
-      margin: -2, // Counteract AppLayout padding
+      margin: { xs: -1, md: -2 }, // Counteract AppLayout padding
       backgroundColor: '#f5f5f5',
     }}>
       <Box sx={{ flexShrink: 0, p: 2, borderBottom: '1px solid #e0e0e0', bgcolor: '#fff' }}>
@@ -257,7 +257,7 @@ const ReportsPage: React.FC = () => {
               }
             }}
             renderInput={(params) => <TextField {...params} label="Select Project" size="small" />}
-            sx={{ flex: 1, minWidth: 300, maxWidth: 600 }}
+            sx={{ flex: 1, minWidth: { xs: '100%', sm: 300 }, maxWidth: 600 }}
           />
           <RadioGroup
             row

@@ -72,7 +72,7 @@ export default function CompareView() {
     const t = computeTotals(q);
     const recipient = clients.find((c) => c.id === q.recipientId);
     return (
-      <Paper sx={{ p: 3 }}>
+      <Paper sx={{ p: { xs: 2, sm: 3 }, minWidth: 0 }}>
         <Stack spacing={2}>
           <Stack direction="row" spacing={1} alignItems="center">
             <Chip size="small" label={q.kind} color={color} />
@@ -92,7 +92,7 @@ export default function CompareView() {
               ) : null;
             })()}
           </Box>
-          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 1, columnGap: 4 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 1, columnGap: { xs: 2, sm: 4 } }}>
             <Typography variant="body2">A. General Requirements</Typography>
             <Typography sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(t.generalReqtsSubtotal)}</Typography>
             <Typography variant="body2">B. Components</Typography>
@@ -149,7 +149,7 @@ export default function CompareView() {
 
   return (
     <Stack spacing={3}>
-      <Stack direction="row" alignItems="flex-start" justifyContent="space-between">
+      <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} alignItems="flex-start" justifyContent="space-between">
         <Stack spacing={0.5}>
           <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>{project.code || 'Draft'}</Typography>
           <Typography variant="h5" sx={{ fontWeight: 600 }}>{project.name} · Comparison</Typography>
@@ -170,7 +170,7 @@ export default function CompareView() {
             <Picker label="Against (newer)" value={rightId} onChange={setRightId} />
           </Stack>
 
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
             <Col q={left} color="primary" />
             <Col q={right} color="secondary" />
           </Box>

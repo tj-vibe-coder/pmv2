@@ -185,7 +185,7 @@ const PayslipCard: React.FC<Props> = ({ payslip: s, onBack, canSeeRate = true })
         </Box>
 
         {/* Net Pay */}
-        <Box sx={{ bgcolor: '#2853c0', color: 'white', p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Box sx={{ bgcolor: '#2853c0', color: 'white', p: 2, display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center' }}>
           <Typography variant="h6" fontWeight={700}>NET PAY</Typography>
           <Typography variant="h5" fontWeight={800}>₱{fmt(s.netPay)}</Typography>
         </Box>

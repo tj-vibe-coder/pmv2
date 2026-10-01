@@ -214,7 +214,7 @@ const EstimatesPage: React.FC = () => {
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           size="small"
-          sx={{ minWidth: 220 }}
+          sx={{ minWidth: { xs: '100%', sm: 220 } }}
         />
         <TextField
           label="Project ref"

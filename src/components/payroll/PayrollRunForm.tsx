@@ -520,7 +520,7 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel, editRun }) => {
               </TableBody>
             </Table>
           </TableContainer>
-          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, justifyContent: 'flex-end' }}>
             <Button onClick={() => setStep(0)}>Back</Button>
             <Button variant="contained" onClick={handleNextSelection} sx={{ bgcolor: '#2853c0' }}>Next</Button>
           </Box>
@@ -579,7 +579,7 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel, editRun }) => {
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
             Count each calendar day under exactly one holiday/rest-day column (e.g. a regular holiday worked on a rest day goes in "Reg Hol Rest Days" only, not also "Reg Hol Days") to avoid double-paying the same day.
           </Typography>
-          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, justifyContent: 'flex-end' }}>
             <Button onClick={() => setStep(1)}>Back</Button>
             <Button variant="contained" onClick={handleNextStep2} sx={{ bgcolor: '#2853c0' }}>Preview</Button>
           </Box>
@@ -639,7 +639,7 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel, editRun }) => {
               <Typography>Total Net Pay: <strong style={{ color: '#2853c0' }}>{fmt(totalNetPay)}</strong></Typography>
             </Box>
           </Paper>
-          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, justifyContent: 'flex-end' }}>
             <Button onClick={() => setStep(2)}>Back</Button>
             <Button variant="contained" onClick={handleSaveDraft} disabled={saving} sx={{ bgcolor: '#2853c0' }}>
               {saving ? <CircularProgress size={20} /> : isEditMode ? 'Save Changes' : 'Save as Draft'}
@@ -672,7 +672,7 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel, editRun }) => {
           <Alert severity="warning" sx={{ mb: 3 }}>
             Approving this run locks its figures for normal use. Only a superadmin can edit or delete it afterward.
           </Alert>
-          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, justifyContent: 'flex-end' }}>
             <Button onClick={onCancel}>Close (keep as Draft)</Button>
             <Button variant="contained" color="success" onClick={handleApprove} disabled={saving}>
               {saving ? <CircularProgress size={20} /> : 'Approve & Lock'}

@@ -1512,7 +1512,7 @@ export default function QuotationEditor() {
             />
           )}
         </Stack>
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           {!isLegacy && canLiveSync && (
             <Tooltip title="Refresh this quotation from the server every 2 seconds, so rows added by an agent appear live. Unsaved edits are never overwritten.">
               <FormControlLabel
@@ -1656,7 +1656,7 @@ export default function QuotationEditor() {
 
       {/* Header / metadata */}
       <Paper sx={{ p: 2 }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 2 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, 1fr)' }, gap: 2 }}>
           <TextField
             select
             label="Recipient"
@@ -2151,7 +2151,7 @@ export default function QuotationEditor() {
               label={<Typography variant="caption">Client supplies materials — Sales counts services only</Typography>}
             />
           </Stack>
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
             {selectedCompIds.size >= 2 && !componentsLocked && (
               <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen('components')}>
                 Group selected ({selectedCompIds.size})
@@ -2466,8 +2466,8 @@ export default function QuotationEditor() {
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'right', maxWidth: 560, ml: 'auto', mb: 2, mt: -1 }}>
           % = share of Subtotal (VAT-EX) — use to sanity-check the cost mix while balancing the sheet
         </Typography>
-        <Stack direction="row" spacing={2} justifyContent="flex-end">
-          <Box sx={{ p: 2, border: '1px solid', borderColor: 'success.light', borderRadius: 1, bgcolor: 'rgba(46,125,50,0.05)', textAlign: 'right', minWidth: 240 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="flex-end">
+          <Box sx={{ p: 2, border: '1px solid', borderColor: 'success.light', borderRadius: 1, bgcolor: 'rgba(46,125,50,0.05)', textAlign: 'right', minWidth: { xs: 0, sm: 240 } }}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>Total Margin (markup only)</Typography>
             <Typography variant="h6" sx={{ fontFamily: 'monospace', color: 'success.dark', fontWeight: 700 }}>
               {PHP(marginSummary?.value ?? 0)}
@@ -2481,7 +2481,7 @@ export default function QuotationEditor() {
               </Typography>
             )}
           </Box>
-          <Box sx={{ p: 2, bgcolor: 'primary.main', borderRadius: 1, textAlign: 'right', minWidth: 220 }}>
+          <Box sx={{ p: 2, bgcolor: 'primary.main', borderRadius: 1, textAlign: 'right', minWidth: { xs: 0, sm: 220 } }}>
             <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.75)', display: 'block', mb: 0.5 }}>GRAND TOTAL</Typography>
             <Typography variant="h5" sx={{ fontFamily: 'monospace', color: 'white', fontWeight: 700 }}>
               {PHP(totals.grandTotal)}
@@ -2493,7 +2493,7 @@ export default function QuotationEditor() {
       {/* Cost breakdown — internal only, never appears in PDF */}
       <Paper sx={{ p: 2 }}>
         <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>Internal Breakdown (not shown to client)</Typography>
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 2 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, 1fr)' }, gap: 2 }}>
           <BreakdownCard label="A. General Req." color="primary"
             cost={totals.generalReqtsCost}
             contingency={null}

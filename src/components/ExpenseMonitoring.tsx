@@ -1461,11 +1461,11 @@ const ExpenseMonitoring: React.FC = () => {
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto' }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
         <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
           Expense Monitoring
         </Typography>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
           <ScanWithPhoneButton />
           <Button
             variant="outlined"
@@ -1510,7 +1510,7 @@ const ExpenseMonitoring: React.FC = () => {
           severity={financeFocus.focusError ? 'warning' : 'info'}
           sx={{ mb: 2 }}
           action={(
-            <Stack direction="row" spacing={0.5}>
+            <Stack direction="row" flexWrap="wrap" useFlexGap spacing={0.5}>
               {financeFocus.hasBackSource && <Button color="inherit" size="small" onClick={financeFocus.backToSource}>Back to source</Button>}
               <Button color="inherit" size="small" onClick={financeFocus.clearFocus}>Clear focus</Button>
             </Stack>
@@ -2269,7 +2269,7 @@ const ExpenseMonitoring: React.FC = () => {
           </Box>
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
             <Button
               size="small"
               color="primary"

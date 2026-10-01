@@ -57,7 +57,7 @@ export default function AiProposalCard({
           {proposal.reason}
         </Typography>
       ) : null}
-      <Stack direction="row" spacing={1} sx={{ mt: 1.25 }}>
+      <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} sx={{ mt: 1.25 }}>
         <Button
           disabled={busy}
           onClick={onConfirm}
