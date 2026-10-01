@@ -500,16 +500,11 @@ export const SIEMENS_PARTS: Record<string, SiemensPart> = (() => {
  */
 export function genericDescription(key: string): string {
   if (TERMINAL_GENERIC[key]) return TERMINAL_GENERIC[key];
+  // CPUs are named by family only on the proposal (TJ's convention): "CPU, S7-1200" / "CPU, S7-1500".
   const cpu = CPU_MODELS.find((m) => m.key === key);
   if (cpu) {
-    const io = cpu.onboard;
-    const onboard = io.di + io.do + io.ai + io.ao > 0
-      ? `, on-board ${io.di} DI / ${io.do} DO${cpu.relayOutputs ? ' (relay)' : ''}${io.ai ? ` / ${io.ai} AI` : ''}${io.ao ? ` / ${io.ao} AO` : ''}` : '';
-    if (cpu.redundancy === 'H') return 'Redundant PLC system: 2 × CPU with synchronization modules and sync cables';
-    if (cpu.redundancy === 'R') return 'Redundant PLC CPU, PROFINET (order 2 per system)';
-    const kind = cpu.failSafe ? 'Safety PLC CPU' : 'PLC CPU';
-    const power = cpu.family === 'S7-1200' ? (cpu.drawA === 0 ? ', 120/230 V AC powered' : ', 24 V DC powered') : '';
-    return `${kind}${cpu.family === 'S7-1200' ? ', compact' : ''}, PROFINET${cpu.memory ? `, ${cpu.memory}` : ''}${onboard}${power}`;
+    if (cpu.redundancy === 'H') return 'CPU, S7-1500 (redundant system: 2 × CPU with synchronization modules and sync cables)';
+    return `CPU, ${cpu.family}`;
   }
   const mem = MEMORY_CARDS.find((c) => c.key === key);
   if (mem) return `PLC memory card, ${mem.label}`;

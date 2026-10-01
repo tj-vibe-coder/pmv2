@@ -375,7 +375,13 @@ describe('brand-neutral quotation descriptions', () => {
     expect(SIEMENS_PARTS.relay.generic).toBe('Slim relay module, 24 V DC coil, 1 changeover contact, 6 A');
     expect(SIEMENS_PARTS.di16.generic).toBe('Digital input module, 16 x 24 V DC');
     expect(SIEMENS_PARTS.psu100s20.generic).toBe('Power supply 24 V DC, 20 A, 1-phase input');
-    expect(SIEMENS_PARTS.cpu1513.generic).toBe('PLC CPU, PROFINET, 600 KB program, 2.5 MB data');
+    expect(SIEMENS_PARTS.cpu1513.generic).toBe('CPU, S7-1500');
+    // Proposal naming: every CPU by family only.
+    expect(SIEMENS_PARTS.cpu1214.generic).toBe('CPU, S7-1200');
+    expect(SIEMENS_PARTS.cpu1212ac.generic).toBe('CPU, S7-1200');
+    expect(SIEMENS_PARTS.cpu1511c.generic).toBe('CPU, S7-1500');
+    expect(SIEMENS_PARTS.cpu1513r.generic).toBe('CPU, S7-1500');
+    expect(SIEMENS_PARTS.cpu1517h.generic).toMatch(/^CPU, S7-1500 \(redundant system/);
     expect(SIEMENS_PARTS.wagoSw8.generic).toBe('Industrial Ethernet switch, unmanaged, 8 x RJ45 10/100 Mbit/s');
   });
 });
