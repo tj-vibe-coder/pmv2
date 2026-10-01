@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   Alert, Autocomplete, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
-  IconButton, MenuItem, Stack, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
+  IconButton, Menu, MenuItem, Stack, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
   useMediaQuery, useTheme,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -16,6 +16,8 @@ import ChecklistIcon from '@mui/icons-material/Checklist';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
 import AddIcon from '@mui/icons-material/Add';
+import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
+import PersonAddAltOutlinedIcon from '@mui/icons-material/PersonAddAltOutlined';
 import NewCalcsheetProjectDialog, { type NewProjectNotice } from './calcsheet/NewCalcsheetProjectDialog';
 import type { Project } from '../types/Quotation';
 import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
@@ -236,6 +238,123 @@ function WhiteboardColumn({
   );
 }
 
+// "General updates" — the team-wide pending list pinned at the top of the
+// board so nobody forgets an open item. Items start unassigned (no label is
+// shown for that); anyone can assign one to a person or tick it done, and only
+// the poster can edit or delete it. Done items fold away under "Show done".
+function GeneralUpdates({
+  items: general, isOwner, onAdd, onToggleDone, onAssign, onEdit, onDelete, onOpenLink,
+}: {
+  items: WhiteboardItem[];
+  isOwner: (item: WhiteboardItem) => boolean;
+  onAdd: (text: string) => Promise<void>;
+  onToggleDone: (item: WhiteboardItem) => void;
+  onAssign: (item: WhiteboardItem, person: WhiteboardPerson | null) => void;
+  onEdit: (item: WhiteboardItem) => void;
+  onDelete: (item: WhiteboardItem) => void;
+  onOpenLink: (link: WhiteboardLink) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [showDone, setShowDone] = useState(false);
+  const [menu, setMenu] = useState<{ anchor: HTMLElement; item: WhiteboardItem } | null>(null);
+  const pending = general.filter((i) => !i.done);
+  const done = general.filter((i) => i.done);
+  const add = async () => {
+    const t = draft.trim();
+    if (!t) return;
+    setAdding(true);
+    try { await onAdd(t); setDraft(''); } finally { setAdding(false); }
+  };
+  const row = (item: WhiteboardItem) => {
+    const person = WHITEBOARD_PEOPLE.find((p) => p.key === item.assignedTo);
+    const due = dueInfo(item);
+    return (
+      <Stack key={item.id} direction="row" alignItems="flex-start" spacing={1} sx={{ py: 0.5, borderBottom: '1px dashed', borderColor: 'divider', '&:last-of-type': { borderBottom: 0 } }}>
+        <Checkbox size="small" checked={!!item.done} onChange={() => onToggleDone(item)} sx={{ p: 0, mt: 0.25 }} title={item.done ? 'Mark as pending' : 'Mark as done'} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', textDecoration: item.done ? 'line-through' : undefined, color: item.done ? 'text.secondary' : 'text.primary' }}>
+            {item.text}
+          </Typography>
+          <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 0.25 }}>
+            {person && (
+              <Chip
+                size="small" label={person.label} onClick={(e) => setMenu({ anchor: e.currentTarget, item })} title="Change who it's assigned to"
+                sx={{ height: 18, fontSize: 11, fontWeight: 600, bgcolor: person.color, color: 'white', '& .MuiChip-label': { px: 0.75 } }}
+              />
+            )}
+            {due && (
+              <Chip size="small" label={due.label} color={due.color === 'text.secondary' ? 'default' : due.color} variant={due.color === 'text.secondary' ? 'outlined' : 'filled'}
+                sx={{ height: 18, fontSize: 11, '& .MuiChip-label': { px: 0.75 } }} />
+            )}
+            {item.link && (
+              <Chip size="small" icon={linkIcon(item.link)} label={item.link.label} onClick={() => onOpenLink(item.link!)} variant="outlined"
+                sx={{ height: 18, fontSize: 11, maxWidth: '100%', '& .MuiChip-label': { px: 0.75, overflow: 'hidden', textOverflow: 'ellipsis' } }} />
+            )}
+            <Typography variant="caption" color="text.disabled">{item.createdByName} · {format(new Date(item.createdAt), 'MMM d')}</Typography>
+          </Stack>
+        </Box>
+        {!person && (
+          <IconButton size="small" onClick={(e) => setMenu({ anchor: e.currentTarget, item })} title="Assign to someone" sx={{ p: 0.25 }}>
+            <PersonAddAltOutlinedIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        )}
+        {isOwner(item) && (
+          <>
+            <IconButton size="small" onClick={() => onEdit(item)} title="Edit" sx={{ p: 0.25 }}><EditOutlinedIcon sx={{ fontSize: 16 }} /></IconButton>
+            <IconButton size="small" onClick={() => onDelete(item)} title="Delete" sx={{ p: 0.25 }}><DeleteOutlineIcon sx={{ fontSize: 16 }} /></IconButton>
+          </>
+        )}
+      </Stack>
+    );
+  };
+  return (
+    <Box sx={{ mb: 2, flexShrink: 0, border: '1px solid', borderColor: '#f0b357', bgcolor: '#fffaf0', borderRadius: 1.5, p: 1.25 }}>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.75 }}>
+        <PushPinOutlinedIcon sx={{ fontSize: 18, color: '#c77d12' }} />
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>General updates</Typography>
+        <Chip
+          size="small" label={pending.length ? `${pending.length} pending` : 'All clear'}
+          color={pending.length ? 'warning' : 'success'} sx={{ height: 20, fontSize: 11, fontWeight: 600 }}
+        />
+      </Stack>
+      <Box sx={{ maxHeight: { xs: 'none', sm: '22vh' }, overflowY: 'auto', pr: 0.5 }}>
+        {pending.length === 0 && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', py: 0.5 }}>Nothing pending — add a reminder below so the whole team sees it.</Typography>
+        )}
+        {pending.map(row)}
+        {showDone && done.map(row)}
+      </Box>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
+        <TextField
+          size="small" fullWidth placeholder="Add a pending item for the team…" value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void add(); } }}
+          sx={{ bgcolor: 'white' }}
+        />
+        <Button variant="contained" size="small" disabled={!draft.trim() || adding} onClick={() => void add()} sx={{ flexShrink: 0 }}>
+          {adding ? 'Adding…' : 'Add'}
+        </Button>
+      </Stack>
+      {done.length > 0 && (
+        <Button size="small" onClick={() => setShowDone((v) => !v)} sx={{ mt: 0.5, px: 0.5, minWidth: 0 }}>
+          {showDone ? 'Hide done' : `Show done (${done.length})`}
+        </Button>
+      )}
+      <Menu anchorEl={menu?.anchor} open={!!menu} onClose={() => setMenu(null)}>
+        {WHITEBOARD_PEOPLE.map((p) => (
+          <MenuItem key={p.key} selected={menu?.item.assignedTo === p.key} onClick={() => { if (menu) onAssign(menu.item, p.key); setMenu(null); }}>
+            <Box component="span" sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: p.color, mr: 1 }} />{p.label}
+          </MenuItem>
+        ))}
+        {menu?.item.assignedTo && (
+          <MenuItem onClick={() => { if (menu) onAssign(menu.item, null); setMenu(null); }} sx={{ color: 'text.secondary' }}>Remove assignment</MenuItem>
+        )}
+      </Menu>
+    </Box>
+  );
+}
+
 interface WhiteboardDialogProps {
   open: boolean;
   onClose: () => void;
@@ -283,7 +402,8 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
   // Wide screens: "Just for me" is a fifth full-height column beside the board.
   const isWide = useMediaQuery(theme.breakpoints.up('lg'));
 
-  useEffect(() => { if (open) { fetchItems(); fetchLinkOptions(); } }, [open, fetchItems, fetchLinkOptions]);
+  // Always reload on open so teammates' new items (and general updates) show up.
+  useEffect(() => { if (open) { fetchItems({ force: true }).catch(() => {}); fetchLinkOptions(); } }, [open, fetchItems, fetchLinkOptions]);
 
   // Clicking a note's link chip closes the Whiteboard and opens that page.
   const openLink = (l: WhiteboardLink) => {
@@ -308,6 +428,12 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
       .forEach((i) => map[i.assignedTo as WhiteboardPerson]?.push(i));
     return map;
   }, [items]);
+
+  // Oldest first, like a checklist — new reminders go to the bottom.
+  const general = useMemo(
+    () => items.filter((i) => i.visibility === 'general').sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    [items],
+  );
 
   const myPrivate = useMemo(
     () => items.filter((i) => i.visibility === 'private').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -354,6 +480,24 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
     }
   };
 
+  const addGeneral = async (t: string) => {
+    setError(null);
+    try {
+      await addItem({ kind: 'todo', visibility: 'general', text: t, done: false });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not add that item.');
+      throw e;
+    }
+  };
+
+  const assignGeneral = async (item: WhiteboardItem, person: WhiteboardPerson | null) => {
+    try {
+      await updateItem(item.id, { assignedTo: person });
+    } catch {
+      setError('Could not assign that item.');
+    }
+  };
+
   const remove = async (item: WhiteboardItem) => {
     try {
       await deleteItem(item.id);
@@ -378,10 +522,11 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
     setSavingEdit(true);
     setError(null);
     try {
+      const isGeneral = editing.visibility === 'general';
       await updateItem(editing.id, {
         text: trimmed,
-        visibility: editVisibility,
-        assignedTo: editVisibility === 'public' ? editAssignedTo : null,
+        // General items keep their place and assignment (assigned from the list).
+        ...(isGeneral ? {} : { visibility: editVisibility, assignedTo: editVisibility === 'public' ? editAssignedTo : null }),
         ...(editing.kind === 'todo' ? { dueDate: editDueDate || null } : {}),
         link: editLink,
       });
@@ -436,6 +581,12 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {error && <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setError(null)}>{error}</Alert>}
         {notice && <Alert severity={notice.severity} sx={{ mb: 1.5 }} onClose={() => setNotice(null)}>{notice.message}</Alert>}
+
+        {/* ── General updates (team-wide pending list) ── */}
+        <GeneralUpdates
+          items={general} isOwner={isOwner} onAdd={addGeneral} onToggleDone={toggleDone} onAssign={assignGeneral}
+          onEdit={startEdit} onDelete={remove} onOpenLink={openLink}
+        />
 
         {/* ── Composer ── */}
         <Stack spacing={1} sx={{ mb: 2, flexShrink: 0 }}>
@@ -558,6 +709,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
             />
             <LinkPicker value={editLink} onChange={setEditLink} options={linkOptions} onCreateNew={() => setNewProposalFor('edit')} />
             <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" gap={1}>
+              {editing?.visibility !== 'general' && (<>
               <Chip
                 size="small"
                 icon={editVisibility === 'public' ? <PublicIcon fontSize="small" /> : <LockIcon fontSize="small" />}
@@ -576,6 +728,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
                   {WHITEBOARD_PEOPLE.map((p) => <MenuItem key={p.key} value={p.key}>{p.label}</MenuItem>)}
                 </TextField>
               )}
+              </>)}
               {editing?.kind === 'todo' && (
                 <TextField
                   type="date" size="small" label="Due date" InputLabelProps={{ shrink: true }}
