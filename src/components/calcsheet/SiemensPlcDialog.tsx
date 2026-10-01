@@ -13,7 +13,7 @@ import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import {
   ANALOG_KINDS, DEFAULT_CPU, DEFAULT_PLC_INPUTS, DEFAULT_REDUNDANT_CPU, HMI_LINES, HMI_PANELS, LICENSE_EDITIONS, MEMORY_CARDS, PSU_LINES,
   REDUNDANCY_OPTIONS, SIEMENS_PARTS, UNIFIED_LOGGING_PACKAGES, WINCC81_ARCHIVE_PACKAGES, SITOP_OPTIONS, SWITCHES, TERMINALS_HEADER, WIRES_HEADER, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuChoices, panelHeat, cpuModel,
-  effectiveSwitches, estimate24V, noAnalog, onboardText, siemensPrice,
+  ET200SP_GROUP_MAX_A, effectiveSwitches, estimate24V, noAnalog, onboardText, psuQtyFor, siemensPrice,
   type AnalogKey, type HmiLine, type PlcSection, type LicenseEdition, type ModbusMode, type PlcFamily, type PlcInputs, type Redundancy, type ScadaKind,
   type SwitchType, type WinccLicense,
 } from '../../utils/calcsheet/siemensPlc';
@@ -63,6 +63,9 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
   const cpu = cpuModel(inp.family, cfg.cpuKey, inp.redundancy);
   const psu = SITOP_OPTIONS.find((s) => s.key === inp.sitop);
   const psuA = psu ? psu.ratingA : null;
+  const psuQty = Math.max(1, Math.round(inp.psuQty || 1));
+  const psuNeeded = psuA ? psuQtyFor(psuA, load.withMarginA) : 1;
+  const psuSet = (n: number) => `${n > 1 ? `${n} × ` : ''}${psuA} A${n > 1 ? ` = ${n * (psuA ?? 0)} A` : ''}`;
   const panel = HMI_PANELS.find((h) => h.key === inp.hmi);
   const [showLoad, setShowLoad] = useState(false);
   const is1200 = inp.family === 'S7-1200' && !redundant;
@@ -145,9 +148,11 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
       <ListSubheader key={line}>{label} · {opts[0].input.split(' ')[0]}</ListSubheader>,
       ...opts.map((s) => {
         const priced = siemensPrice(SIEMENS_PARTS[s.key], catalog).price > 0;
-        const tag = s.ratingA < load.withMarginA ? ' · too small' : s.ratingA === load.suggestedA ? ' · suggested' : '';
+        // Too small alone → how many it takes, so a smaller model can still be picked in quantity.
+        const tag = s.ratingA < load.withMarginA ? ` · needs ${psuQtyFor(s.ratingA, load.withMarginA)} pcs`
+          : s.ratingA === load.suggestedA ? ' · suggested' : '';
         return (
-          <MenuItem key={s.key} value={s.key} sx={{ color: s.ratingA < load.withMarginA ? 'text.disabled' : undefined }}>
+          <MenuItem key={s.key} value={s.key}>
             {`${line} ${s.ratingA} A — ${s.partNo}${priced ? '' : ' · for inquiry'}${tag}`}
           </MenuItem>
         );
@@ -270,8 +275,15 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             {cfg.stations > 0 && (
               <Typography variant="caption" color="text.secondary">
                 Using {cfg.stations} station{cfg.stations === 1 ? '' : 's'} for {cfg.ioModules} module{cfg.ioModules === 1 ? '' : 's'}
-                {' '}(max {redundant ? 64 : 32} per {redundant ? 'IM 155-6 PN/2 HF' : 'IM 155-6 PN ST'}).
+                {' '}(max {redundant ? 64 : 32} per {redundant ? 'IM 155-6 PN/2 HF' : 'IM 155-6 PN ST'}) · {cfg.potentialGroups} potential
+                group{cfg.potentialGroups === 1 ? '' : 's'} (light BaseUnits, max {ET200SP_GROUP_MAX_A} A each).
               </Typography>
+            )}
+            {cfg.stations > 0 && inp.do > 0 && (
+              <FormControlLabel
+                control={<Checkbox size="small" checked={inp.dqOwnGroup} onChange={(e) => set('dqOwnGroup', e.target.checked)} />}
+                label={<Typography variant="body2">DQ outputs on their own 24 V group (e.g. cut by the E-stop)</Typography>}
+              />
             )}
           </Stack>
 
@@ -431,8 +443,8 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                   </Box>
                   <Box>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Suggested supply</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3, color: load.suggestedA ? 'success.main' : 'error.main' }}>
-                      {load.suggestedA ? `${load.suggestedA} A` : 'over 40 A — split supplies'}
+                    <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3, color: load.suggestedQty > 1 ? 'warning.main' : 'success.main' }}>
+                      {load.suggestedA ? `${load.suggestedQty > 1 ? `${load.suggestedQty} × ` : ''}${load.suggestedA} A` : '—'}
                     </Typography>
                   </Box>
                   <Box sx={{ flexGrow: 1 }} />
@@ -444,12 +456,31 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                     <MenuItem value="none">None — I&apos;ll add it myself</MenuItem>
                     {psuItems}
                   </TextField>
+                  {psuA !== null && (
+                    <TextField
+                      label="PSU qty" size="small" sx={{ width: 90 }} type="text" inputMode="numeric"
+                      value={inp.psuQty || ''} placeholder="1"
+                      onChange={(e) => set('psuQty', Math.max(1, Math.round(parseLenientFloat(e.target.value)) || 1))}
+                      onFocus={(e) => e.target.select()}
+                    />
+                  )}
                   {psuA === null ? (
-                    <Typography variant="body2" color="warning.main">No power supply selected — pick one for {load.withMarginA.toFixed(1)} A or more.</Typography>
-                  ) : psuA < load.withMarginA ? (
-                    <Typography variant="body2" color="error.main">{psuA} A is below the {load.withMarginA.toFixed(1)} A needed — pick a {load.suggestedA ?? 40}+ A supply.</Typography>
+                    <Typography variant="body2" color="warning.main">
+                      No power supply selected — pick one for {load.withMarginA.toFixed(1)} A or more
+                      {load.suggestedQty > 1 ? ` (e.g. ${load.suggestedQty} × ${load.suggestedA} A)` : ''}.
+                    </Typography>
+                  ) : psuA * psuQty < load.withMarginA ? (
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Typography variant="body2" color="error.main">
+                        {psuSet(psuQty)} is below the {load.withMarginA.toFixed(1)} A needed — use {psuNeeded} × {psuA} A.
+                      </Typography>
+                      <Button size="small" variant="outlined" color="error" onClick={() => set('psuQty', psuNeeded)}>Use {psuNeeded}</Button>
+                    </Stack>
                   ) : (
-                    <Typography variant="body2" color="success.main">{psuA} A covers {load.withMarginA.toFixed(1)} A ({Math.round((load.withMarginA / psuA) * 100)}% loaded).</Typography>
+                    <Typography variant="body2" color="success.main">
+                      {psuSet(psuQty)} covers {load.withMarginA.toFixed(1)} A ({Math.round((load.withMarginA / (psuA * psuQty)) * 100)}% loaded)
+                      {psuQty > 1 ? ' — split the 24 V loads across the supplies (e.g. one per potential group / circuit).' : '.'}
+                    </Typography>
                   )}
                   <Box sx={{ flexGrow: 1 }} />
                   <Button size="small" onClick={() => setShowLoad((v) => !v)}>{showLoad ? 'Hide breakdown' : 'Show breakdown'}</Button>

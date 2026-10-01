@@ -1,5 +1,5 @@
 import {
-  DEFAULT_PLC_INPUTS, SIEMENS_PARTS, cheapestModules, configurePlc, estimate24V, noAnalog, siemensPrice,
+  DEFAULT_PLC_INPUTS, SIEMENS_PARTS, cheapestModules, configurePlc, estimate24V, noAnalog, psuQtyFor, siemensPrice,
   type AnalogCount, type AnalogKey, type PlcInputs,
 } from './siemensPlc';
 
@@ -31,8 +31,12 @@ describe('Siemens PLC configurator', () => {
     const c = cfg({ family: 'S7-1200', di: 40, do: 20, analog: an({ aiI: 10, aoU: 3 }) });
     expect([qty(c, 'di16'), qty(c, 'dq16'), qty(c, 'ai8'), qty(c, 'aq4')]).toEqual([2, 1, 2, 1]);
     expect(qty(c, 'imBundle')).toBe(1);
-    expect(qty(c, 'buLight')).toBe(1);
-    expect(qty(c, 'buDark')).toBe(5); // 6 modules − 1 light
+    // Inputs (2 DI16, 2 AI8, AQ4) on one potential group, the DQ16 on its own → 2 light, 4 dark.
+    expect(qty(c, 'buLight')).toBe(2);
+    expect(qty(c, 'buDark')).toBe(4);
+    expect(c.potentialGroups).toBe(2);
+    const shared = cfg({ family: 'S7-1200', di: 40, do: 20, analog: an({ aiI: 10, aoU: 3 }), dqOwnGroup: false });
+    expect([qty(shared, 'buLight'), qty(shared, 'buDark')]).toEqual([1, 5]);
     expect(c.channels.ai.provided).toBe(16); // on-board AI are 0–10 V only, so they don't take 4–20 mA
   });
 
@@ -182,10 +186,52 @@ describe('24 V load estimate', () => {
     expect(e.suggestedA).toBe(5);
   });
 
-  it('heavier DO loads push the suggestion up; beyond 40 A there is no single-SITOP suggestion', () => {
+  it('heavier DO loads push the suggestion up; beyond 40 A it suggests several 40 A supplies', () => {
     const base = { ...DEFAULT_PLC_INPUTS, sparePct: 0, family: 'S7-1500' as const, do: 64 };
-    expect(estimate24V({ ...base, doLoadA: 0.3 }, configurePlc({ ...base, doLoadA: 0.3 })).suggestedA).toBe(40);
-    expect(estimate24V({ ...base, doLoadA: 0.5 }, configurePlc({ ...base, doLoadA: 0.5 })).suggestedA).toBeNull();
+    const e3 = estimate24V({ ...base, doLoadA: 0.3 }, configurePlc({ ...base, doLoadA: 0.3 }));
+    expect([e3.suggestedA, e3.suggestedQty]).toEqual([40, 1]);
+    const e5 = estimate24V({ ...base, doLoadA: 0.5 }, configurePlc({ ...base, doLoadA: 0.5 }));
+    expect(e5.withMarginA).toBeGreaterThan(40);
+    expect([e5.suggestedA, e5.suggestedQty]).toEqual([40, Math.ceil(e5.withMarginA / 40)]);
+  });
+
+  it('the chosen supply comes in the quantity asked for', () => {
+    const c = cfg({ family: 'S7-1500', do: 64, doLoadA: 0.5, sitop: 'psu100s20', psuQty: 3 });
+    expect(qty(c, 'psu100s20')).toBe(3);
+    expect(c.lines.find((l) => l.key === 'psu100s20')?.why).toMatch(/3 × 20 A = 60 A/);
+    expect(psuQtyFor(20, 52.3)).toBe(3);
+    expect(psuQtyFor(20, 40)).toBe(2);
+    expect(psuQtyFor(20, 3)).toBe(1);
+  });
+});
+
+describe('ET 200SP potential groups (light BaseUnits)', () => {
+  it('a new light BaseUnit whenever a group would pass 10 A', () => {
+    // 4 × DQ16 at 0.5 A per output ≈ 8.05 A each → every DQ16 needs its own group.
+    const heavy = cfg({ family: 'S7-1500', do: 64, doLoadA: 0.5 });
+    expect(qty(heavy, 'dq16')).toBe(4);
+    expect([qty(heavy, 'buLight'), qty(heavy, 'buDark')]).toEqual([4, 0]);
+    expect(heavy.lines.find((l) => l.key === 'buLight')?.why).toMatch(/3 more to keep each group under 10 A/);
+    // At 0.1 A per output (≈ 1.65 A per DQ16) six fit in a group: 8 modules → 2 groups.
+    const light = cfg({ family: 'S7-1500', do: 128, doLoadA: 0.1 });
+    expect([qty(light, 'buLight'), qty(light, 'buDark')]).toEqual([2, 6]);
+  });
+
+  it('inputs stay on one group up to 10 A — 30 DI16 modules on a single light BaseUnit', () => {
+    const c = cfg({ family: 'S7-1500', di: 30 * 16 });
+    expect([qty(c, 'buLight'), qty(c, 'buDark'), c.potentialGroups]).toEqual([1, 29, 1]);
+  });
+
+  it('flags a single output module that alone is over 10 A', () => {
+    const c = cfg({ family: 'S7-1500', do: 16, doLoadA: 0.7 });
+    expect(c.notes.join(' ')).toMatch(/over the 10 A a potential group carries/);
+  });
+});
+
+describe('24 V load estimate — leftovers', () => {
+  it('no load → no suggestion', () => {
+    const inp = { ...DEFAULT_PLC_INPUTS, sparePct: 0, cpu: 'cpu1211ac', family: 'S7-1200' as const };
+    expect(estimate24V(inp, configurePlc(inp)).suggestedA).toBeNull();
   });
 });
 
@@ -247,18 +293,18 @@ describe('WAGO terminals and wiring', () => {
     expect(qty(c, 'relayJumper')).toBe(9);
     expect(qty(c, 'tbFuse')).toBe(8);     // 4 × 1 + 2 × 2
     expect(qty(c, 'fuse5x20')).toBe(8);
-    // 8 analog + 2 × 4 distribution (CPU, IM, light BU, PSU feed)
-    expect(qty(c, 'tbStd')).toBe(16);
+    // 8 analog + 2 × 5 distribution (CPU, IM, 2 light BUs — DQ on its own group — and the PSU feed)
+    expect(qty(c, 'tbStd')).toBe(18);
     expect(qty(c, 'tb2LevelEnd')).toBe(1);
     expect(qty(c, 'tbStdEnd')).toBe(1);
     expect(qty(c, 'jumper10')).toBe(4);   // 2 DI level + 2 distribution
     expect(qty(c, 'endStop')).toBe(8);    // 4 groups × 2
-    expect(qty(c, 'markers')).toBe(56);
+    expect(qty(c, 'markers')).toBe(58);
   });
 
   it('0.5 mm² red (+24 V) and blue (0 V) wire sized from the I/O and the panel', () => {
-    expect(c.wiring).toMatchObject({ redWires: 44, blueWires: 13, runM: 1.3, redM: 63, blueM: 19 });
-    expect([qty(c, 'wireRed'), qty(c, 'wireBlue')]).toEqual([70, 20]); // metres, whole 10 m
+    expect(c.wiring).toMatchObject({ redWires: 45, blueWires: 14, runM: 1.3, redM: 65, blueM: 21 });
+    expect([qty(c, 'wireRed'), qty(c, 'wireBlue')]).toEqual([70, 30]); // metres, whole 10 m
     expect(qty(c, 'ferrule05')).toBe(200);
     // a bigger panel means longer wires
     expect(cfg({ di: 100, panelW: 2000, panelH: 2200 }).wiring!.runM).toBe(2.4);

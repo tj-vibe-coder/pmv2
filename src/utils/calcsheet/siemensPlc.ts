@@ -595,6 +595,10 @@ export interface PlcInputs {
   modbusPorts: number;
   /** SITOP_OPTIONS key, or 'none'. */
   sitop: string;
+  /** How many of that supply (loads split across them when one isn't enough). */
+  psuQty: number;
+  /** ET 200SP: DQ outputs on their own potential group (own light BaseUnit / 24 V feed). */
+  dqOwnGroup: boolean;
   /** S7-1200: include a memory card (always included for S7-1500, where it's required). */
   memoryCard: boolean;
   /** MEMORY_CARDS key, or 'auto' (24 MB on S7-1500, 4 MB on S7-1200). */
@@ -652,7 +656,7 @@ export interface PlcInputs {
 export const DEFAULT_PLC_INPUTS: PlcInputs = {
   family: 'S7-1200', cpu: 'cpu1214', redundancy: 'none', expansion: 'et200sp', moduleSizes: 'standard', failSafe: false,
   ups: false, upsMinutes: 10, upsLoad: 'controller', pnCabling: false, pnFieldLinks: 0, pnFieldM: 50, di: 0, do: 0, analog: noAnalog(), sparePct: 10,
-  modbus: 'none', modbusPorts: 1, sitop: 'none', memoryCard: false, memCard: 'memCard',
+  modbus: 'none', modbusPorts: 1, sitop: 'none', psuQty: 1, dqOwnGroup: true, memoryCard: false, memCard: 'memCard',
   hmi: 'none', hmiQty: 1, scada: 'none', winccLicense: 'RC', licenseEdition: 'standard', scadaPackage: '2048', scadaQty: 1,
   scadaClients: 0, scadaRedundant: false, scadaLogging: 'none', scadaDbStorage: false,
   imStations: 0, switchQty: 0, switchType: 'unmanaged', terminals: true, panelW: 800, panelH: 1200,
@@ -662,6 +666,8 @@ export const DEFAULT_PLC_INPUTS: PlcInputs = {
 export const CHANNELS = { di16: 16, dq16: 16, ai8: 8, ai8u: 8, rtd8: 8, rtd4: 4, aq4: 4 } as const;
 export const IM_MAX_MODULES = 32;
 export const IM_HF_MAX_MODULES = 64;
+/** ET 200SP: max. current per potential group (P1/P2 bus fed by one light BaseUnit). */
+export const ET200SP_GROUP_MAX_A = 10;
 
 /** Which Section B header a line goes under: the PLC, the terminal strip, or the wiring. */
 export type PlcSection = 'plc' | 'terminals' | 'wiring';
@@ -687,6 +693,8 @@ export interface PlcConfig {
   /** Channels needed (incl. spare) per analog type and wiring. */
   analog: Record<AnalogKey, AnalogCount>;
   stations: number;
+  /** ET 200SP potential groups = light BaseUnits (A0 + A1). */
+  potentialGroups: number;
   /** Fewest stations the module count needs (the auto value). */
   suggestedStations: number;
   ioModules: number;
@@ -900,41 +908,73 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
   const spAiU = pickSp(modNeed.aiU, [{ key: 'ai8u', ch: 8 }, { key: 'ai4u', ch: 4 }]);
   const spRtd2 = pickSp(analog.aiRtd.w2, [{ key: 'rtd8', ch: 8 }, { key: 'rtd4', ch: 4 }]);
   const spAq = pickSp(modNeed.aoI + modNeed.aoU, [{ key: 'aq4', ch: 4 }, { key: 'aq2', ch: 2 }]);
-  const n = (m: Record<string, number>) => Object.values(m).reduce((a, b) => a + b, 0);
-  const diMods = n(spDi);
-  const dqMods = n(spDq);
-  const aiMods = n(spAiI);
-  const aiUMods = n(spAiU);
   const rtd8Mods = spRtd2.rtd8 ?? 0;
   const rtd4Mods = (spRtd2.rtd4 ?? 0) + (useLocal ? 0 : Math.ceil(analog.aiRtd.w4 / CHANNELS.rtd4));
   const tcMods = useLocal ? 0 : Math.ceil(analog.aiTc.w2 / CHANNELS.rtd8);
-  const aqMods = n(spAq);
 
   const useCb = is1200 && rtuPorts >= 1;
   const cmMods = useLocal ? 0 : is1200 ? Math.max(0, rtuPorts - 1) : rtuPorts;
 
-  // Modules in slot order: A0 first, thermocouple modules (type A1) last, so a
-  // station only opens on an A1 BaseUnit when it holds nothing but TC modules.
+  // Modules in slot order: inputs / analog / CM first, then the DQ outputs,
+  // thermocouple modules (type A1 BaseUnits) last — so a station only opens on
+  // an A1 BaseUnit when it holds nothing but TC modules.
   const imMax = redundant ? IM_HF_MAX_MODULES : IM_MAX_MODULES;
-  const a0Count = diMods + dqMods + aiMods + aiUMods + rtd8Mods + rtd4Mods + aqMods + cmMods;
-  const ioModules = a0Count + tcMods;
+  const doLoad = Math.max(0, Number(inp.doLoadA) || 0);
+  type SlotModule = { a1: boolean; dq: boolean; amps: number };
+  const slots: SlotModule[] = [];
+  const put = (count: number, m: SlotModule) => { for (let i = 0; i < count; i++) slots.push(m); };
+  // Current each module takes from its potential group (P1/P2), at full channel
+  // capacity: electronics + sensor / loop / output-load current per channel.
+  const groupAmps = (electronics: number, channels: number, perChannel: number) => electronics + channels * perChannel;
+  put(spDi.di16 ?? 0, { a1: false, dq: false, amps: groupAmps(0.05, 16, 0.01) });
+  put(spDi.di8 ?? 0, { a1: false, dq: false, amps: groupAmps(0.03, 8, 0.01) });
+  put(spAiI.ai8 ?? 0, { a1: false, dq: false, amps: groupAmps(0.03, 8, 0.02) });
+  put(spAiI.ai4i ?? 0, { a1: false, dq: false, amps: groupAmps(0.03, 4, 0.02) });
+  put(spAiU.ai8u ?? 0, { a1: false, dq: false, amps: groupAmps(0.03, 8, 0.02) });
+  put(spAiU.ai4u ?? 0, { a1: false, dq: false, amps: groupAmps(0.03, 4, 0.02) });
+  put(rtd8Mods + rtd4Mods, { a1: false, dq: false, amps: 0.03 });
+  put(spAq.aq4 ?? 0, { a1: false, dq: false, amps: groupAmps(0.05, 4, 0.02) });
+  put(spAq.aq2 ?? 0, { a1: false, dq: false, amps: groupAmps(0.04, 2, 0.02) });
+  put(cmMods, { a1: false, dq: false, amps: 0.05 });
+  put(spDq.dq16 ?? 0, { a1: false, dq: true, amps: groupAmps(0.05, 16, doLoad) });
+  put(spDq.dq8 ?? 0, { a1: false, dq: true, amps: groupAmps(0.03, 8, doLoad) });
+  put(tcMods, { a1: true, dq: false, amps: 0.03 });
+  const ioModules = slots.length;
   // Stations: the minimum the module count needs, or more when asked for
   // (e.g. a separate IM per area / panel) — never more than one per module.
   const suggestedStations = ioModules > 0 ? Math.ceil(ioModules / imMax) : 0;
   const askedStations = whole(inp.imStations);
   const stations = ioModules > 0 ? Math.min(ioModules, Math.max(suggestedStations, askedStations)) : 0;
   const bu = { lightA0: 0, darkA0: 0, lightA1: 0, darkA1: 0 };
-  // Modules shared out evenly: the first (ioModules % stations) stations take one more.
+  // A light BaseUnit (…+2D) starts a potential group: it takes the 24 V in and
+  // feeds the P1/P2 bus of the dark ones to its right. A new group starts at
+  // the first module of every station, whenever the group would pass 10 A, and
+  // — when asked — where the DQ outputs begin (own supply, e.g. switched off
+  // by the E-stop) and where the inputs resume after them.
+  const groupReasons = { overCurrent: 0, outputs: 0 };
+  let groupsMaxA = 0;
   let first = 0;
   for (let s = 0; s < stations; s++) {
+    // Modules shared out evenly: the first (ioModules % stations) stations take one more.
     const size = Math.floor(ioModules / stations) + (s < ioModules % stations ? 1 : 0);
-    const last = first + size; // exclusive
-    const a0InStation = Math.max(0, Math.min(last, a0Count) - first);
-    const a1InStation = (last - first) - a0InStation;
-    if (a0InStation > 0) { bu.lightA0 += 1; bu.darkA0 += a0InStation - 1; bu.darkA1 += a1InStation; }
-    else { bu.lightA1 += 1; bu.darkA1 += a1InStation - 1; }
-    first = last;
+    let groupA = 0;
+    let prev: SlotModule | null = null;
+    for (const m of slots.slice(first, first + size)) {
+      const split = !!prev && inp.dqOwnGroup && m.dq !== prev.dq;
+      const over = !!prev && !split && groupA + m.amps > ET200SP_GROUP_MAX_A;
+      if (!prev || split || over) {
+        if (split) groupReasons.outputs += 1;
+        if (over) groupReasons.overCurrent += 1;
+        if (m.a1) bu.lightA1 += 1; else bu.lightA0 += 1;
+        groupA = 0;
+      } else if (m.a1) bu.darkA1 += 1; else bu.darkA0 += 1;
+      groupA += m.amps;
+      groupsMaxA = Math.max(groupsMaxA, groupA);
+      prev = m;
+    }
+    first += size;
   }
+  const potentialGroups = bu.lightA0 + bu.lightA1;
 
   // Network switches: model from the ports each one needs.
   const sw = effectiveSwitches(inp);
@@ -991,7 +1031,12 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
   };
   Object.entries(localMods).forEach(([k, q]) => add(k, q, `On the CPU — ${LOCAL_WHY[k] ?? k}`));
   add('cmPtp', cmMods, is1200 ? 'Extra Modbus RTU ports (CB 1241 gives only one)' : '1 per Modbus RTU (RS-485) port');
-  add('buLight', bu.lightA0, 'First BaseUnit of each station (starts the potential group)');
+  const groupWhy = [
+    stations ? `start of ${stations === 1 ? 'the station' : `each of ${stations} stations`}` : '',
+    groupReasons.outputs ? `${groupReasons.outputs} where the DQ outputs start / end (own 24 V group)` : '',
+    groupReasons.overCurrent ? `${groupReasons.overCurrent} more to keep each group under ${ET200SP_GROUP_MAX_A} A` : '',
+  ].filter(Boolean).join('; ');
+  add('buLight', bu.lightA0, `Starts a potential group (24 V feed) — ${groupWhy}`);
   add('buDark', bu.darkA0, 'One BaseUnit per remaining module');
   add('buLightA1', bu.lightA1, 'First BaseUnit of a thermocouple-only station');
   add('buDarkA1', bu.darkA1, 'Thermocouple modules — temperature sensor for cold-junction compensation');
@@ -1024,7 +1069,8 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
     }
   }
   const psu = SITOP_OPTIONS.find((s) => s.key === inp.sitop);
-  if (psu) add(psu.key, 1, `24 V DC supply — ${psu.ratingA} A`);
+  const psuQty = Math.max(1, whole(inp.psuQty));
+  if (psu) add(psu.key, psuQty, psuQty > 1 ? `24 V DC supply — ${psuQty} × ${psu.ratingA} A = ${psuQty * psu.ratingA} A, loads split across them` : `24 V DC supply — ${psu.ratingA} A`);
 
   // ── WAGO terminal strip + 0.5 mm² wiring ──
   let wiring: WiringSummary | null = null;
@@ -1035,9 +1081,9 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
   const panelIo: PanelIo = {
     source: `Siemens ${redundant ? `S7-1500${inp.redundancy}` : family}`,
     di: need.di, dq: need.do, a2, a4,
-    distPoints: (cpu.drawA > 0 ? cpuUnits : 0) + 2 * stations + (panel ? inp.hmiQty : 0) + sw.qty + 1,
+    distPoints: (cpu.drawA > 0 ? cpuUnits : 0) + stations + potentialGroups + (panel ? inp.hmiQty : 0) + sw.qty + psuQty,
     deviceRailMm: stations * (50 + 12.5) + ioModules * 15 + (is1200 ? 110 : 0),
-    ...(psu ? { psuA: psu.ratingA, psuQty: 1 } : {}),
+    ...(psu ? { psuA: psu.ratingA, psuQty } : {}),
   };
   if (inp.terminals && need.di + need.do + a2 + a4 > 0) {
     const strip = terminalStrip({
@@ -1057,6 +1103,8 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
   if (netSwitch && netSwitch.ports < portsPerSwitch) notes.push(`About ${portsPerSwitch} ports are needed per switch but the largest ${sw.type} one has ${netSwitch.ports} — add more switches.`);
   if (inp.modbus === 'tcp') notes.push('Modbus TCP runs on the CPU\'s PROFINET port — no extra hardware.');
   if (is1200 && need.ai > 0 && tot('aiU') < cpu.onboard.ai) notes.push('The CPU\'s on-board AI are 0–10 V only — other analog inputs go on ET 200SP modules.');
+  if (potentialGroups > stations) notes.push(`${potentialGroups} ET 200SP potential groups (one light BaseUnit each, its own 24 V feed): max. ${ET200SP_GROUP_MAX_A} A per group${inp.dqOwnGroup && groupReasons.outputs ? ', DQ outputs on their own group' : ''}.`);
+  if (groupsMaxA > ET200SP_GROUP_MAX_A) notes.push(`One output module alone takes about ${Math.round(groupsMaxA * 10) / 10} A at ${doLoad} A per output — over the ${ET200SP_GROUP_MAX_A} A a potential group carries. Use 8-channel DQ modules or interposing relays.`);
   if (analog.aiTc.w2 > 0) notes.push('Thermocouple modules sit on type A1 BaseUnits for internal cold-junction compensation.');
   if (cpu.relayOutputs && inp.do > 0) notes.push('This CPU\'s on-board outputs are relays (2 A) — fine for contactors, not for fast pulse outputs.');
   if (cpu.drawA === 0) notes.push('AC/DC/RLY CPU is powered from 120/230 V AC — it is not counted in the 24 V load.');
@@ -1109,6 +1157,7 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
     },
     analog,
     stations,
+    potentialGroups,
     suggestedStations,
     ioModules,
     network: { switchKey: netSwitch?.key ?? null, qty: netSwitch ? sw.qty : 0, devices, portsPerSwitch },
@@ -1150,7 +1199,18 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
 export const SITOP_RATINGS_A = [2.5, 5, 10, 20, 40];
 
 export interface LoadLine { label: string; qty: number; eachA: number; totalA: number }
-export interface LoadEstimate { lines: LoadLine[]; totalA: number; withMarginA: number; suggestedA: number | null }
+export interface LoadEstimate {
+  lines: LoadLine[];
+  totalA: number;
+  withMarginA: number;
+  /** Smallest standard rating that covers the load alone; past 40 A, 40 A (× suggestedQty). Null with no load. */
+  suggestedA: number | null;
+  /** How many of suggestedA it takes (1 up to 40 A). */
+  suggestedQty: number;
+}
+
+/** Supplies of `ratingA` needed to carry `needA` (at least 1). */
+export const psuQtyFor = (ratingA: number, needA: number) => Math.max(1, Math.ceil(needA / ratingA - 1e-9));
 
 export function estimate24V(raw: PlcInputs, cfg: PlcConfig): LoadEstimate {
   const count = (k: string) => cfg.lines.find((l) => l.key === k)?.qty ?? 0;
@@ -1185,8 +1245,11 @@ export function estimate24V(raw: PlcInputs, cfg: PlcConfig): LoadEstimate {
   add('Analog outputs', cfg.channels.ao.needed, 0.02);
   const totalA = Math.round(lines.reduce((a, l) => a + l.totalA, 0) * 100) / 100;
   const withMarginA = Math.round(totalA * (1 + Math.max(0, Number(raw.psuMarginPct) || 0) / 100) * 100) / 100;
-  const suggestedA = SITOP_RATINGS_A.find((r) => r >= withMarginA) ?? null;
-  return { lines, totalA, withMarginA, suggestedA };
+  const largest = SITOP_RATINGS_A[SITOP_RATINGS_A.length - 1];
+  const single = SITOP_RATINGS_A.find((r) => r >= withMarginA);
+  const suggestedA = withMarginA <= 0 ? null : single ?? largest;
+  const suggestedQty = single || suggestedA === null ? 1 : psuQtyFor(largest, withMarginA);
+  return { lines, totalA, withMarginA, suggestedA, suggestedQty };
 }
 
 /**
