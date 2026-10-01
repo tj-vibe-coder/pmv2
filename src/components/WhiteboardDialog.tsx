@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useState, type DragEvent, type ReactElement } from 'react';
 import {
   Alert, Autocomplete, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
-  IconButton, MenuItem, Stack, TextField, Tooltip, Typography,
-  useMediaQuery, useTheme,
+  IconButton, ListItemIcon, Menu, MenuItem, Stack, TextField, Tooltip, Typography,
 } from '@mui/material';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
+import CircleIcon from '@mui/icons-material/Circle';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
@@ -89,19 +91,36 @@ function dueInfo(item: WhiteboardItem): DueInfo {
   return { label, color };
 }
 
-// One checklist line — used by both the General and the private list.
-function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink }: {
+// Drag payload type for moving a shared item between the team lists.
+const DRAG_TYPE = 'application/x-whiteboard-item';
+
+// One checklist line — used by both the team lists and the private list.
+// Shared items (onMove set) can be dragged to another list or moved with the
+// "Move to…" menu — by anyone, like ticking them done.
+function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink, onMove }: {
   item: WhiteboardItem;
   canEdit: boolean;
   onToggleDone: (item: WhiteboardItem) => void;
   onEdit: (item: WhiteboardItem) => void;
   onDelete: (item: WhiteboardItem) => void;
   onOpenLink: (link: WhiteboardLink) => void;
+  onMove?: (item: WhiteboardItem, category: WhiteboardCategory) => void;
 }) {
   const due = dueInfo(item);
   const kind = KIND_ICON[item.kind];
+  const [moveAnchor, setMoveAnchor] = useState<HTMLElement | null>(null);
+  const current = whiteboardCategoryOf(item);
   return (
-    <Stack direction="row" alignItems="flex-start" spacing={1} sx={{ py: 0.5, borderBottom: '1px dashed', borderColor: 'divider', '&:last-of-type': { borderBottom: 0 } }}>
+    <Stack
+      direction="row" alignItems="flex-start" spacing={1} data-testid={`wb-item-${item.id}`}
+      draggable={!!onMove}
+      onDragStart={onMove ? (e) => { e.dataTransfer.setData(DRAG_TYPE, item.id); e.dataTransfer.effectAllowed = 'move'; } : undefined}
+      sx={{
+        py: 0.5, borderBottom: '1px dashed', borderColor: 'divider', '&:last-of-type': { borderBottom: 0 },
+        ...(onMove ? { cursor: 'grab', '&:hover .wb-drag': { opacity: 1 } } : {}),
+      }}
+    >
+      {onMove && <DragIndicatorIcon className="wb-drag" sx={{ fontSize: 16, color: 'text.disabled', mt: 0.25, ml: -0.5, mr: -0.75, opacity: { xs: 0, sm: 0.35 } }} />}
       <Checkbox size="small" checked={!!item.done} onChange={() => onToggleDone(item)} sx={{ p: 0, mt: 0.25 }} title={item.done ? 'Mark as pending' : 'Mark as done'} />
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', textDecoration: item.done ? 'line-through' : undefined, color: item.done ? 'text.secondary' : 'text.primary' }}>
@@ -123,6 +142,22 @@ function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink }: 
           <Typography variant="caption" color="text.disabled">{item.createdByName} · {format(new Date(item.createdAt), 'MMM d')}</Typography>
         </Stack>
       </Box>
+      {onMove && (
+        <>
+          <IconButton size="small" onClick={(e) => setMoveAnchor(e.currentTarget)} title="Move to another list" aria-label="Move to another list" sx={{ p: 0.25 }}>
+            <DriveFileMoveOutlinedIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+          <Menu anchorEl={moveAnchor} open={!!moveAnchor} onClose={() => setMoveAnchor(null)}>
+            <MenuItem disabled dense sx={{ fontSize: 12 }}>Move to…</MenuItem>
+            {WHITEBOARD_CATEGORIES.filter((c) => c.key !== current).map((c) => (
+              <MenuItem key={c.key} dense onClick={() => { setMoveAnchor(null); onMove(item, c.key); }}>
+                <ListItemIcon sx={{ minWidth: 24 }}><CircleIcon sx={{ fontSize: 10, color: c.color }} /></ListItemIcon>
+                {c.label}
+              </MenuItem>
+            ))}
+          </Menu>
+        </>
+      )}
       {canEdit && (
         <>
           <IconButton size="small" onClick={() => onEdit(item)} title="Edit" sx={{ p: 0.25 }}><EditOutlinedIcon sx={{ fontSize: 16 }} /></IconButton>
@@ -136,7 +171,7 @@ function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink }: 
 // A checklist with an inline "add" field and done items folded away under
 // "Show done". Used for General updates (team-wide) and Just for me (private).
 function ItemList({
-  items, emptyText, placeholder, isOwner, onAdd, onToggleDone, onEdit, onDelete, onOpenLink, maxHeight,
+  items, emptyText, placeholder, isOwner, onAdd, onToggleDone, onEdit, onDelete, onOpenLink, onMove, maxHeight,
 }: {
   items: WhiteboardItem[];
   emptyText: string;
@@ -147,7 +182,9 @@ function ItemList({
   onEdit: (item: WhiteboardItem) => void;
   onDelete: (item: WhiteboardItem) => void;
   onOpenLink: (link: WhiteboardLink) => void;
-  maxHeight: string;
+  onMove?: (item: WhiteboardItem, category: WhiteboardCategory) => void;
+  /** Cap on the scroll area; omit to fill the parent (a flex column) instead. */
+  maxHeight?: string;
 }) {
   const [draft, setDraft] = useState('');
   const [adding, setAdding] = useState(false);
@@ -161,11 +198,11 @@ function ItemList({
     try { await onAdd(t); setDraft(''); } catch { /* error shown by the dialog */ } finally { setAdding(false); }
   };
   const row = (item: WhiteboardItem) => (
-    <ItemRow key={item.id} item={item} canEdit={isOwner(item)} onToggleDone={onToggleDone} onEdit={onEdit} onDelete={onDelete} onOpenLink={onOpenLink} />
+    <ItemRow key={item.id} item={item} canEdit={isOwner(item)} onToggleDone={onToggleDone} onEdit={onEdit} onDelete={onDelete} onOpenLink={onOpenLink} onMove={onMove} />
   );
   return (
     <>
-      <Box sx={{ maxHeight: { xs: 'none', sm: maxHeight }, overflowY: 'auto', pr: 0.5 }}>
+      <Box sx={{ overflowY: 'auto', pr: 0.5, ...(maxHeight ? { maxHeight: { xs: 'none', sm: maxHeight } } : { flex: { sm: 1 }, minHeight: 0 }) }}>
         {pending.length === 0 && (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', py: 0.5 }}>{emptyText}</Typography>
         )}
@@ -221,9 +258,8 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
   const [editDueDate, setEditDueDate] = useState('');
   const [editLink, setEditLink] = useState<WhiteboardLink | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
-
-  const theme = useTheme();
-  const isPhone = useMediaQuery(theme.breakpoints.down('sm'));
+  // Team list a dragged item is hovering over (highlighted as a drop target).
+  const [dropTarget, setDropTarget] = useState<WhiteboardCategory | null>(null);
 
   // Always reload on open so teammates' new items show up.
   useEffect(() => { if (open) { fetchItems({ force: true }).catch(() => {}); fetchLinkOptions(); } }, [open, fetchItems, fetchLinkOptions]);
@@ -272,6 +308,35 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
     }
   };
 
+  // Anyone may move a shared item to another team list (drag or "Move to…").
+  const move = async (item: WhiteboardItem, category: WhiteboardCategory) => {
+    if (whiteboardCategoryOf(item) === category) return;
+    setError(null);
+    try {
+      await updateItem(item.id, { category });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not move that item.');
+    }
+  };
+
+  const dropProps = (category: WhiteboardCategory) => ({
+    onDragOver: (e: DragEvent) => {
+      if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (dropTarget !== category) setDropTarget(category);
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget((t) => (t === category ? null : t));
+    },
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      setDropTarget(null);
+      const item = items.find((i) => i.id === e.dataTransfer.getData(DRAG_TYPE));
+      if (item) void move(item, category);
+    },
+  });
+
   const remove = async (item: WhiteboardItem) => {
     try {
       await deleteItem(item.id);
@@ -315,12 +380,17 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
   const listProps = { isOwner, onToggleDone: toggleDone, onEdit: startEdit, onDelete: remove, onOpenLink: openLink };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xl" fullWidth fullScreen={isPhone}>
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        Whiteboard
-        <IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
+    <Dialog open={open} onClose={onClose} fullScreen>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1.25 }}>
+        <Box>
+          Whiteboard
+          <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1.5, display: { xs: 'none', sm: 'inline' } }}>
+            Drag an item to another list to move it
+          </Typography>
+        </Box>
+        <IconButton size="small" onClick={onClose} aria-label="Close"><CloseIcon fontSize="small" /></IconButton>
       </DialogTitle>
-      <DialogContent>
+      <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {error && <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setError(null)}>{error}</Alert>}
         {notice && <Alert severity={notice.severity} sx={{ mb: 1.5 }} onClose={() => setNotice(null)}>{notice.message}</Alert>}
 
@@ -328,13 +398,25 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
           <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>Loading…</Typography>
         ) : (
           <>
-            {/* ── Team lists — General, Project, Sales, Finance (side by side on wide screens) ── */}
-            <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' } }}>
+            {/* ── Team lists — General, Project, Sales, Finance; fill the screen, items drag between them ── */}
+            <Box sx={{
+              display: 'grid', gap: 1.5, flex: { sm: 1 }, minHeight: { sm: 0 },
+              gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' },
+              gridAutoRows: { sm: 'minmax(0, 1fr)' },
+            }}>
               {WHITEBOARD_CATEGORIES.map((c) => {
                 const list = byCategory[c.key];
                 const pending = list.filter((i) => !i.done).length;
+                const isTarget = dropTarget === c.key;
                 return (
-                  <Box key={c.key} sx={{ border: '1px solid', borderColor: c.color, bgcolor: c.lightColor, borderRadius: 1.5, p: 1.25, minWidth: 0 }}>
+                  <Box
+                    key={c.key} data-testid={`wb-list-${c.key}`} {...dropProps(c.key)}
+                    sx={{
+                      border: isTarget ? '2px dashed' : '1px solid', borderColor: c.color, bgcolor: c.lightColor, borderRadius: 1.5,
+                      p: isTarget ? 'calc(10px - 1px)' : 1.25, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column',
+                      boxShadow: isTarget ? `0 0 0 3px ${c.color}33` : undefined, transition: 'box-shadow 120ms',
+                    }}
+                  >
                     <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.75 }}>
                       {c.key === 'general' && <PushPinOutlinedIcon sx={{ fontSize: 18, color: c.color }} />}
                       <Typography variant="subtitle2" sx={{ fontWeight: 700, color: c.color }}>{c.label}</Typography>
@@ -344,7 +426,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
                       />
                     </Stack>
                     <ItemList
-                      {...listProps} items={list} maxHeight="40vh"
+                      {...listProps} items={list} onMove={move}
                       emptyText={`Nothing pending in ${c.label}.`}
                       placeholder={`Add to ${c.label}…`}
                       onAdd={add('general', c.key)}
@@ -361,7 +443,7 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
               </Typography>
             </Divider>
             <ItemList
-              {...listProps} items={myPrivate} maxHeight="25vh"
+              {...listProps} items={myPrivate} maxHeight="20vh"
               emptyText="Nothing private yet — only you can see what you add here."
               placeholder="Add a private reminder…"
               onAdd={add('private')}
