@@ -136,9 +136,9 @@ export default function ScheduleExportDialog({ open, onClose, projectId, project
   return (
     <Dialog open={open} onClose={() => !busy && onClose()} maxWidth="xl" fullWidth PaperProps={{ sx: { height: '92vh' } }}>
       <DialogTitle sx={{ pb: 1 }}>Export Gantt PDF</DialogTitle>
-      <DialogContent dividers sx={{ p: 0, display: 'flex', minHeight: 0 }}>
-        {/* Settings */}
-        <Box sx={{ width: 380, flexShrink: 0, overflowY: 'auto', p: 2, borderRight: 1, borderColor: 'divider' }}>
+      <DialogContent dividers sx={{ p: 0, display: 'flex', flexDirection: { xs: 'column', md: 'row' }, minHeight: 0 }}>
+        {/* Settings (above the preview on phones) */}
+        <Box sx={{ width: { xs: '100%', md: 380 }, maxHeight: { xs: '45%', md: 'none' }, flexShrink: 0, overflowY: 'auto', p: 2, borderRight: { md: 1 }, borderBottom: { xs: 1, md: 0 }, borderColor: 'divider' }}>
           <Section title="Layout">
             <ToggleButtonGroup size="small" exclusive fullWidth value={s.paper} onChange={(_, v: PaperSize | null) => v && set('paper', v)}>
               {(Object.keys(PAPER_SIZES) as PaperSize[]).map((p) => <ToggleButton key={p} value={p}>{PAPER_SIZES[p].label}</ToggleButton>)}

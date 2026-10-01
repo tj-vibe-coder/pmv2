@@ -39,7 +39,7 @@ function LinkPicker({ value, onChange, options, onCreateNew }: {
   onCreateNew: () => void;
 }) {
   return (
-    <Stack direction="row" spacing={1} alignItems="center">
+    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
       <Autocomplete
         size="small"
         options={options}
@@ -49,7 +49,7 @@ function LinkPicker({ value, onChange, options, onCreateNew }: {
         getOptionLabel={(o) => o.label}
         isOptionEqualToValue={(a, b) => a.type === b.type && a.id === b.id}
         renderInput={(params) => <TextField {...params} label="Link to project / calcsheet (optional)" />}
-        sx={{ minWidth: 240, flex: 1 }}
+        sx={{ minWidth: { xs: '100%', sm: 240 }, flex: 1 }}
       />
       <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={onCreateNew} sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
         New proposal
@@ -504,7 +504,8 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
             <Box
               sx={{
                 flex: 1, minHeight: isPhone ? 'auto' : 320, display: 'grid', gap: 2, overflowX: 'auto',
-                gridTemplateColumns: `repeat(${WHITEBOARD_PEOPLE.length + (isWide ? 1 : 0)}, minmax(190px, 1fr))`,
+                // Phones: one person per row (stacked) instead of a sideways-scrolling board.
+                gridTemplateColumns: isPhone ? '1fr' : `repeat(${WHITEBOARD_PEOPLE.length + (isWide ? 1 : 0)}, minmax(190px, 1fr))`,
                 gridTemplateRows: isPhone ? 'auto' : 'minmax(0, 1fr)',
               }}
             >

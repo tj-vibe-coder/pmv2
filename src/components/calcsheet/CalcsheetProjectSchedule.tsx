@@ -1550,7 +1550,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             {code} — {name}
           </Typography>
         </Box>
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
           <Button variant="outlined" startIcon={<HistoryIcon />} onClick={() => void openHistory()}>
             History
           </Button>
@@ -1951,7 +1951,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
               helperText="Negative = lead (overlap)"
               onWheel={blurNumberInputOnWheel}
             />
-            <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+            <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} sx={{ mt: 1.5 }}>
               {linkPop.existing && <Button color="error" size="small" onClick={() => void saveLinkPop(true)}>Delete link</Button>}
               <Box sx={{ flexGrow: 1 }} />
               <Button size="small" onClick={() => setLinkPop(null)}>Cancel</Button>

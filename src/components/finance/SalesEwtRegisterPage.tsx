@@ -61,7 +61,7 @@ export default function SalesEwtRegisterPage() {
 
   return (
     <Box sx={{ height: '100%', overflow: 'hidden' }}>
-      <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <Box sx={{ mb: 1.5, display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center' }}>
         <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
           Sales EWT / BIR 2307
         </Typography>

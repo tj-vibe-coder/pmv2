@@ -11,3 +11,13 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+/* iOS Safari zooms the page when a focused field's text is under 16px —
+   keep form text at 16px on touch iPhones / iPads (WebKit only). */
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 1024px) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+  }
+}

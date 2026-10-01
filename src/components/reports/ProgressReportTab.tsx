@@ -2022,7 +2022,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
             />
           </Box>
           {/* Right: action buttons */}
-          <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, flexShrink: { xs: 1, sm: 0 } }}>
             <Button
               variant="outlined"
               size="small"

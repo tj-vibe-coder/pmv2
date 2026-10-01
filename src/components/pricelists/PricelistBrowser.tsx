@@ -177,7 +177,7 @@ export default function PricelistBrowser() {
   return (
     // AppLayout only sets minHeight, so bind to the viewport (80px header + page padding) for internal scrolling
     <Box sx={{ height: { xs: 'calc(100vh - 96px)', md: 'calc(100vh - 112px)' }, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
-      <Box sx={{ p: 2, pb: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 2 }}>
+      <Box sx={{ p: 2, pb: 0, display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'flex-start', gap: 2 }}>
         <Box>
           <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>Pricelists</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>

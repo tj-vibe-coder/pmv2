@@ -938,16 +938,16 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   }, [project.id, project.po_date, project.start_date, project.completion_date]);
 
   return (
-    <Container maxWidth="xl" sx={{ py: 4 }}>
-      <Box display="flex" alignItems="center" mb={3}>
-        <IconButton onClick={onBack} sx={{ mr: 2 }}>
+    <Container maxWidth="xl" sx={{ py: { xs: 1, sm: 4 }, px: { xs: 0.5, sm: 2, md: 3 } }}>
+      <Box display="flex" alignItems="center" flexWrap="wrap" rowGap={1} mb={{ xs: 2, sm: 3 }}>
+        <IconButton onClick={onBack} sx={{ mr: { xs: 1, sm: 2 } }}>
           <ArrowBackIcon />
         </IconButton>
-        <Typography variant="h4" component="h1" sx={{ flexGrow: 1, color: '#2c5aa0' }}>
+        <Typography variant="h4" component="h1" sx={{ flexGrow: 1, flexBasis: { xs: 'calc(100% - 56px)', sm: 0 }, minWidth: 0, color: '#2c5aa0' }}>
           {project.project_name}
         </Typography>
         {isCorporateOneDriveConfigured() && (
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} alignItems="center">
             {!oneDriveSignedIn ? (
               <Button
                 variant="outlined"
@@ -1686,7 +1686,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                       );
                     })()}
 
-                    <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+                    <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} sx={{ mt: 1.5 }}>
                       <Button size="small" startIcon={<AddIcon />} variant="text" onClick={addMilestoneRow}>
                         Add Milestone
                       </Button>

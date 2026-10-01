@@ -105,6 +105,7 @@ export default function Presets() {
           <Typography variant="caption" color="text.secondary">{rows.length} role{rows.length !== 1 ? 's' : ''}</Typography>
         </Stack>
       </Box>
+      <Box sx={{ overflowX: 'auto' }}>
       <Table size="small">
         <TableHead>
           <TableRow>
@@ -135,6 +136,7 @@ export default function Presets() {
           )}
         </TableBody>
       </Table>
+      </Box>
     </Paper>
   );
 
@@ -186,7 +188,7 @@ export default function Presets() {
       </Paper>
 
       {/* ── Labor Rate Presets ── */}
-      <Stack direction="row" alignItems="center" justifyContent="space-between">
+      <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} alignItems="center" justifyContent="space-between">
         <Stack spacing={0.5}>
           <Typography variant="h5" sx={{ fontWeight: 600 }}>Labor Rate Presets</Typography>
           <Typography variant="body2" color="text.secondary">
@@ -194,7 +196,7 @@ export default function Presets() {
             Edit when rates change so future quotations stay current.
           </Typography>
         </Stack>
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
           <Button variant="outlined" startIcon={<RestartAltIcon />} onClick={() => setConfirmReset(true)} size="small">
             Reset to defaults
           </Button>
@@ -216,6 +218,7 @@ export default function Presets() {
         </Typography>
       </Stack>
       <Paper>
+        <Box sx={{ overflowX: 'auto' }}>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -250,6 +253,7 @@ export default function Presets() {
             ))}
           </TableBody>
         </Table>
+        </Box>
         <Box sx={{ p: 2, display: 'flex', justifyContent: 'flex-end' }}>
           <Button
             variant="contained"

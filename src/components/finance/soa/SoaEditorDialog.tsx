@@ -306,7 +306,7 @@ export default function SoaEditorDialog({
               <Typography variant="subtitle2" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary }}>
                 2. Account Summary Line Items ({items.length})
               </Typography>
-              <Box sx={{ display: 'flex', gap: 1 }}>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                 <Button
                   size="small"
                   variant="outlined"

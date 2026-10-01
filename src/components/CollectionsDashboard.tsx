@@ -869,11 +869,11 @@ export default function CollectionsDashboard() {
   return (
     <Box sx={{ height: '100%', overflow: 'hidden' }}>
       {/* Title */}
-      <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <Box sx={{ mb: 1.5, display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center' }}>
         <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
           Collections & Receivables
         </Typography>
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
           <Button
             variant="outlined"
             size="small"
@@ -1227,7 +1227,7 @@ export default function CollectionsDashboard() {
 
           {/* Invoices Table */}
           <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2, flexGrow: 1 }}>
-            <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e0e0e0' }}>
+            <Box sx={{ p: 1.5, display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e0e0e0' }}>
               <Typography variant="h6" sx={{ fontSize: '1.05rem', fontWeight: 600 }}>
                 Invoices ({filteredReceivables.length})
               </Typography>

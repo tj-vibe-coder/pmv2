@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel,
   MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography,
+  useMediaQuery, useTheme,
 } from '@mui/material';
 import { nanoid } from 'nanoid';
 import { usePricelistStore } from '../../store/pricelistStore';
@@ -23,6 +24,9 @@ import type { PlcSubmitSection } from './SiemensPlcDialog';
 // Components under "CONTROL PANEL", "TERMINAL BLOCKS & RELAYS" and "WIRES".
 // The I/O is pre-filled from the last PLC / BMS configuration added.
 
+/** Part no. and unit price columns fold into the item cell on phones. */
+const HIDE_ON_PHONE = { display: { xs: 'none', sm: 'table-cell' } } as const;
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -35,6 +39,8 @@ const SECTION_ORDER: PanelSection[] = ['panel', 'terminals', 'wiring'];
 const SECTION_HEADER: Record<PanelSection, string> = { panel: PANEL_HEADER, terminals: TERMINALS_HEADER, wiring: WIRES_HEADER };
 
 export default function ControlPanelDialog({ open, onClose, productContingencyPct, onSubmit }: Props) {
+  // Phones: full-screen dialog, fields stack two per row, tables scroll sideways.
+  const fullScreen = useMediaQuery(useTheme().breakpoints.down('sm'));
   const lastIo = usePanelIoStore((s) => s.io);
   const [inp, setInp] = useState<PanelInputs>(() => ({ ...DEFAULT_PANEL_INPUTS, io: lastIo ?? emptyPanelIo() }));
   const set = <K extends keyof PanelInputs>(k: K, v: PanelInputs[K]) => setInp((p) => ({ ...p, [k]: v }));
@@ -93,10 +99,10 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
   };
 
   return (
-    <Dialog open={open} onClose={close} maxWidth="md" fullWidth>
+    <Dialog open={open} onClose={close} maxWidth="md" fullWidth fullScreen={fullScreen} sx={{ '& .MuiDivider-wrapper': { whiteSpace: 'normal' } }}>
       <DialogTitle>
         Control Panel
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, display: { xs: 'none', sm: 'block' } }}>
           Enter the panel size — the enclosure, wireduct, DIN rail, fans, light, thermostat, 2-pole MCBs, terminals, wiring and marker tube are
           worked out for you and added to B. Supply of Components.
         </Typography>
@@ -105,10 +111,10 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
         <Stack spacing={2}>
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Enclosure</Typography></Divider>
           <Stack direction="row" spacing={2} alignItems="flex-start" flexWrap="wrap" useFlexGap>
-            <Box sx={{ width: 120 }}>{num('widthMm', 'Width (mm)')}</Box>
-            <Box sx={{ width: 120 }}>{num('heightMm', 'Height (mm)')}</Box>
-            <Box sx={{ width: 120 }}>{num('depthMm', 'Depth (mm)')}</Box>
-            <TextField select label="Mounting" size="small" sx={{ minWidth: 190 }} value={inp.mounting} onChange={(e) => set('mounting', e.target.value as PanelInputs['mounting'])}
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('widthMm', 'Width (mm)')}</Box>
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('heightMm', 'Height (mm)')}</Box>
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('depthMm', 'Depth (mm)')}</Box>
+            <TextField select label="Mounting" size="small" sx={{ minWidth: { xs: '100%', sm: 190 } }} value={inp.mounting} onChange={(e) => set('mounting', e.target.value as PanelInputs['mounting'])}
               helperText={inp.mounting === 'auto' ? (cfg.floor ? 'Auto: floor-standing' : 'Auto: wall-mounted') : ' '}>
               <MenuItem value="auto">Auto (floor from 1400 mm)</MenuItem>
               <MenuItem value="wall">Wall-mounted</MenuItem>
@@ -126,8 +132,8 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
               label={<Typography variant="body2">Heat from the components</Typography>} />
             {inp.heatAuto
               ? <Typography variant="body2" sx={{ pt: 1, fontWeight: 600 }}>≈ {cfg.heatAutoW} W</Typography>
-              : <Box sx={{ width: 150 }}>{num('heatLossW', 'Heat loss inside (W)', `Auto would be ${cfg.heatAutoW} W`)}</Box>}
-            <Box sx={{ width: 150 }}>{num('deltaT', 'Allowed rise (K)', 'Inside over ambient')}</Box>
+              : <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 150 } }}>{num('heatLossW', 'Heat loss inside (W)', `Auto would be ${cfg.heatAutoW} W`)}</Box>}
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 150 } }}>{num('deltaT', 'Allowed rise (K)', 'Inside over ambient')}</Box>
             <Typography variant="body2" sx={{ pt: 1 }}>
               {cfg.airflow > 0 ? `≈ ${cfg.airflow} m³/h of fan airflow needed` : 'Wall surface dissipates the heat — 1 fan for hot ambient'}
             </Typography>
@@ -143,16 +149,16 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">230 V AC (2-pole ABB MCBs)</Typography></Divider>
           <Stack direction="row" spacing={2} alignItems="flex-start" flexWrap="wrap" useFlexGap>
-            <TextField select label="Main incomer" size="small" sx={{ width: 170 }} value={inp.mainA}
+            <TextField select label="Main incomer" size="small" sx={{ width: { xs: '100%', sm: 170 } }} value={inp.mainA}
               onChange={(e) => set('mainA', e.target.value === 'auto' ? 'auto' : Number(e.target.value) as McbRating)}
               helperText={inp.mainA === 'auto' ? `Auto: 2P C${cfg.mainA} (${cfg.loadA} A load)` : `Load ${cfg.loadA} A`}>
               <MenuItem value="auto">Auto (from load)</MenuItem>
               {MCB_RATINGS.map((a) => <MenuItem key={a} value={a}>{`2P C${a}`}</MenuItem>)}
             </TextField>
-            <Box sx={{ width: 140 }}>{num('psuQty', '24 V DC supplies', '1 MCB each')}</Box>
-            <Box sx={{ width: 140 }}>{num('psuA', 'Supply rating (A)', 'Output, each')}</Box>
-            <Box sx={{ width: 140 }}>{num('extraCircuits', 'Other 230 V loads', '1 MCB each (C10)')}</Box>
-            {inp.extraCircuits > 0 && <Box sx={{ width: 140 }}>{num('extraLoadA', 'Load each (A)')}</Box>}
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 140 } }}>{num('psuQty', '24 V DC supplies', '1 MCB each')}</Box>
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 140 } }}>{num('psuA', 'Supply rating (A)', 'Output, each')}</Box>
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 140 } }}>{num('extraCircuits', 'Other 230 V loads', '1 MCB each (C10)')}</Box>
+            {inp.extraCircuits > 0 && <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 140 } }}>{num('extraLoadA', 'Load each (A)')}</Box>}
             <FormControlLabel control={<Checkbox size="small" checked={inp.socket} onChange={(e) => set('socket', e.target.checked)} />}
               label={<Typography variant="body2">Service socket</Typography>} />
           </Stack>
@@ -185,13 +191,14 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
           {cfg.notes.map((n) => <Alert key={n} severity={/need ≈|Very small|more than one/.test(n) ? 'warning' : 'info'} sx={{ py: 0 }}>{n}</Alert>)}
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Items to add</Typography></Divider>
+          <Box sx={{ overflowX: 'auto' }}>
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell>Part no.</TableCell>
+                <TableCell sx={HIDE_ON_PHONE}>Part no.</TableCell>
                 <TableCell>Item</TableCell>
                 <TableCell align="right">Qty</TableCell>
-                <TableCell align="right">Unit price</TableCell>
+                <TableCell align="right" sx={HIDE_ON_PHONE}>Unit price</TableCell>
                 <TableCell align="right">Total</TableCell>
               </TableRow>
             </TableHead>
@@ -202,7 +209,7 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
                 </TableRow>,
                 ...g.rows.map((r) => (
                   <TableRow key={r.key}>
-                    <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                    <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap', ...HIDE_ON_PHONE }}>
                       {r.part.partNo || <Typography variant="body2" color="text.secondary">—</Typography>}
                       {r.part.partNo && r.part.verify && r.source !== 'catalog' && (
                         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'inherit' }}>verify P/N</Typography>
@@ -211,9 +218,12 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
                     <TableCell>
                       <Typography variant="body2">{describe(r)}</Typography>
                       <Typography variant="caption" color="text.secondary">{r.why}</Typography>
+                      <Typography variant="caption" sx={{ display: { xs: 'block', sm: 'none' }, fontFamily: 'monospace', color: r.unitCost === 0 ? 'warning.main' : 'text.secondary' }}>
+                        {r.part.partNo || 'Ask supplier'} · {r.unitCost === 0 ? 'for inquiry' : `@ ${PHP(r.unitCost)}`}
+                      </Typography>
                     </TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{r.qty}{r.part.uom && r.part.uom !== 'pc' ? ` ${r.part.uom}` : ''}</TableCell>
-                    <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap', color: r.unitCost === 0 ? 'warning.main' : undefined }}>
+                    <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap', color: r.unitCost === 0 ? 'warning.main' : undefined, ...HIDE_ON_PHONE }}>
                       {r.unitCost === 0 ? 'For inquiry' : PHP(r.unitCost)}
                       {r.source === 'catalog' && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>catalog</Typography>}
                     </TableCell>
@@ -222,11 +232,12 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
                 )),
               ])}
               <TableRow>
-                <TableCell colSpan={4} align="right" sx={{ fontWeight: 600 }}>Total{inquiry > 0 ? ` (excl. ${inquiry} for inquiry)` : ''}</TableCell>
+                <TableCell colSpan={fullScreen ? 2 : 4} align="right" sx={{ fontWeight: 600 }}>Total{inquiry > 0 ? ` (excl. ${inquiry} for inquiry)` : ''}</TableCell>
                 <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(total)}</TableCell>
               </TableRow>
             </TableBody>
           </Table>
+          </Box>
           {inquiry > 0 && (
             <Alert severity="warning" sx={{ py: 0 }}>
               {inquiry} item{inquiry === 1 ? '' : 's'} for inquiry — added at ₱0. Add the price in Sales → Pricelists (same part number) or on the row.
@@ -234,7 +245,7 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
           )}
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+      <DialogActions sx={{ px: { xs: 2, sm: 3 }, pb: 2, flexWrap: 'wrap', gap: 1 }}>
         <Button onClick={close}>Cancel</Button>
         <Button variant="contained" onClick={submit}>
           Add {rows.length} item{rows.length === 1 ? '' : 's'} · {PHP(total)} to Components

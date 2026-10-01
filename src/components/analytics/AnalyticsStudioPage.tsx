@@ -1324,7 +1324,7 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
       {/* Scope Switcher Banner */}
       <Paper sx={{ p: 1.5, mb: 2.5, borderRadius: 2, bgcolor: '#ffffff', border: '1px solid #e2e8f0' }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} alignItems="center" justifyContent="space-between" spacing={1.5}>
-          <Stack direction="row" alignItems="center" spacing={1}>
+          <Stack direction="row" alignItems="center" justifyContent="center" spacing={1} useFlexGap flexWrap="wrap">
             <Typography variant="body2" sx={{ fontWeight: 700, color: '#475569', textTransform: 'uppercase', fontSize: '0.75rem' }}>
               Studio Workspace:
             </Typography>
@@ -1356,7 +1356,7 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
             </ButtonGroup>
           </Stack>
 
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
             <Button
               variant="outlined"
               size="small"
@@ -1389,8 +1389,8 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
 
       {/* Studio Header */}
       <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" spacing={2} sx={{ mb: 2 }}>
-        <Box>
-          <Stack direction="row" alignItems="center" spacing={1.5}>
+        <Box sx={{ minWidth: 0 }}>
+          <Stack direction="row" alignItems="center" spacing={1.5} useFlexGap flexWrap="wrap">
             {config.icon}
             <Typography variant="h5" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary }}>
               {config.title}
@@ -1635,8 +1635,9 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
           <Paper
             elevation={0}
             sx={{
-              p: 3,
+              p: { xs: 1.5, sm: 3 },
               height: '100%',
+              minWidth: 0,
               borderRadius: 2,
               border: '1px solid #e2e8f0',
               display: 'flex',
@@ -1645,13 +1646,13 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
             }}
           >
             {/* Canvas Header */}
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-              <Box>
+            <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1} sx={{ mb: 2 }}>
+              <Box sx={{ minWidth: 0 }}>
                 <Typography variant="h6" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary }}>
                   {activeThread?.title || `${metric.replace('_', ' ').toUpperCase()} by ${dimension.toUpperCase()}`}
                 </Typography>
                 {summary && (
-                  <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+                  <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 0.5 }}>
                     <Chip
                       label={`Total: ${metric === 'count' ? summary.total : dataService.formatCurrency(summary.total)}`}
                       size="small"
@@ -1714,7 +1715,7 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
                   </Box>
 
                   <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
-                    <Stack direction="row" spacing={0.5}>
+                    <Stack direction="row" flexWrap="wrap" useFlexGap spacing={0.5}>
                       <Button
                         size="small"
                         variant={metric !== 'recurring_runrate' ? 'contained' : 'outlined'}
@@ -1866,7 +1867,7 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
 
                   <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
                     {/* Scenario Switcher */}
-                    <Stack direction="row" spacing={0.5} sx={{ bgcolor: '#e2e8f0', p: 0.3, borderRadius: 1.5 }}>
+                    <Stack direction="row" flexWrap="wrap" useFlexGap spacing={0.5} sx={{ bgcolor: '#e2e8f0', p: 0.3, borderRadius: 1.5 }}>
                       <Button
                         size="small"
                         variant={forecastScenario === 'p10' ? 'contained' : 'text'}
@@ -1918,7 +1919,7 @@ export default function AnalyticsStudioPage({ domainScope }: AnalyticsStudioPage
                     </Stack>
 
                     {/* Horizon Quick Toggles */}
-                    <Stack direction="row" spacing={0.5}>
+                    <Stack direction="row" flexWrap="wrap" useFlexGap spacing={0.5}>
                       <Button
                         size="small"
                         variant={scopeFilter === 'forecast_3m' ? 'contained' : 'outlined'}

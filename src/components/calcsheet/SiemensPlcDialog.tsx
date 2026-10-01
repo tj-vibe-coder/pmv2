@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel,
   ListSubheader, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup, Typography,
+  useMediaQuery, useTheme,
 } from '@mui/material';
 import { nanoid } from 'nanoid';
 import { usePricelistStore } from '../../store/pricelistStore';
@@ -25,6 +26,9 @@ import {
 
 export interface PlcSubmitSection { header: string; rows: ComponentLine[] }
 
+/** Part no. and unit price columns fold into the item cell on phones. */
+const HIDE_ON_PHONE = { display: { xs: 'none', sm: 'table-cell' } } as const;
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -43,6 +47,8 @@ const fresh = (): PlcInputs => ({
 });
 
 export default function SiemensPlcDialog({ open, onClose, productContingencyPct, onSubmit }: Props) {
+  // Phones: full-screen dialog, fields stack two per row, tables scroll sideways.
+  const fullScreen = useMediaQuery(useTheme().breakpoints.down('sm'));
   const [inp, setInp] = useState<PlcInputs>(fresh);
   const setPanelIo = usePanelIoStore((s) => s.setIo);
   const set = <K extends keyof PlcInputs>(k: K, v: PlcInputs[K]) => setInp((p) => ({ ...p, [k]: v }));
@@ -150,10 +156,10 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
   });
 
   return (
-    <Dialog open={open} onClose={close} maxWidth="md" fullWidth>
+    <Dialog open={open} onClose={close} maxWidth="md" fullWidth fullScreen={fullScreen} sx={{ '& .MuiDivider-wrapper': { whiteSpace: 'normal' } }}>
       <DialogTitle>
         Siemens PLC
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, display: { xs: 'none', sm: 'block' } }}>
           Enter the I/O count and pick the PLC — the CPU, ET 200SP remote I/O, BaseUnits, Modbus hardware, switches, HMI, SCADA
           license, 24 V supply and the WAGO terminals &amp; wiring are selected for you and added to B. Supply of Components. Items
           without a price go in at ₱0 for inquiry.
@@ -170,10 +176,10 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
               <ToggleButton value="S7-1200" disabled={redundant}>S7-1200</ToggleButton>
               <ToggleButton value="S7-1500">S7-1500</ToggleButton>
             </ToggleButtonGroup>
-            <TextField select label="Redundancy" size="small" sx={{ minWidth: 220 }} value={inp.redundancy} onChange={(e) => setRedundancy(e.target.value as Redundancy)}>
+            <TextField select label="Redundancy" size="small" sx={{ minWidth: { xs: '100%', sm: 220 } }} value={inp.redundancy} onChange={(e) => setRedundancy(e.target.value as Redundancy)}>
               {REDUNDANCY_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
             </TextField>
-            <TextField select label="CPU" size="small" sx={{ minWidth: 280 }} value={inp.cpu === 'auto' ? 'auto' : cpu.key} onChange={(e) => set('cpu', e.target.value)}
+            <TextField select label="CPU" size="small" sx={{ minWidth: { xs: '100%', sm: 280 } }} value={inp.cpu === 'auto' ? 'auto' : cpu.key} onChange={(e) => set('cpu', e.target.value)}
               helperText={inp.cpu === 'auto' ? `Auto: ${cpu.label}` : ' '}>
               <MenuItem value="auto">Auto — lowest-cost fit</MenuItem>
               {cpuChoices(inp.family, inp.redundancy).map((m) => (
@@ -190,14 +196,14 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
           </Stack>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
             {is1200 && (
-              <TextField select label="I/O expansion" size="small" sx={{ minWidth: 250 }} value={inp.expansion} onChange={(e) => set('expansion', e.target.value as PlcInputs['expansion'])}
+              <TextField select label="I/O expansion" size="small" sx={{ minWidth: { xs: '100%', sm: 250 } }} value={inp.expansion} onChange={(e) => set('expansion', e.target.value as PlcInputs['expansion'])}
                 helperText={inp.expansion === 'auto' ? `Auto: ${cfg.expansion === 'local' ? `signal modules on the CPU (${cfg.local?.modules ?? 0} of ${cfg.local?.slots ?? 0} slots)` : cfg.expansion === 'et200sp' ? 'ET 200SP' : 'on-board only'}` : ' '}>
                 <MenuItem value="auto">Auto — on the CPU when it fits</MenuItem>
                 <MenuItem value="local">Signal modules on the CPU (SM 12xx)</MenuItem>
                 <MenuItem value="et200sp">ET 200SP remote I/O</MenuItem>
               </TextField>
             )}
-            <TextField select label="Module sizes" size="small" sx={{ minWidth: 230 }} value={inp.moduleSizes} onChange={(e) => set('moduleSizes', e.target.value as PlcInputs['moduleSizes'])}
+            <TextField select label="Module sizes" size="small" sx={{ minWidth: { xs: '100%', sm: 230 } }} value={inp.moduleSizes} onChange={(e) => set('moduleSizes', e.target.value as PlcInputs['moduleSizes'])}
               helperText=" ">
               <MenuItem value="auto">Cheapest mix (8/16 DI·DQ, 4/8 AI, 2/4 AQ)</MenuItem>
               <MenuItem value="standard">Standard only (DI16 / DQ16 / AI8 / AQ4)</MenuItem>
@@ -255,7 +261,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
 
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
             <TextField
-              label="ET 200SP stations (IM)" size="small" sx={{ width: 190 }} type="text" inputMode="numeric"
+              label="ET 200SP stations (IM)" size="small" sx={{ width: { xs: '100%', sm: 190 } }} type="text" inputMode="numeric"
               value={inp.imStations || ''} placeholder={`Auto (${cfg.suggestedStations})`}
               helperText={cfg.suggestedStations > 0 ? `Suggested: ${cfg.suggestedStations} — more for a separate IM per area` : 'Blank = auto'}
               onChange={(e) => set('imStations', Math.max(0, Math.round(parseLenientFloat(e.target.value))))}
@@ -271,7 +277,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Network switches</Typography></Divider>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
-            <Box sx={{ width: 140 }}>{num('switchQty', 'Switches', redundant ? 'Min. 2 for redundancy' : undefined)}</Box>
+            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 140 } }}>{num('switchQty', 'Switches', redundant ? 'Min. 2 for redundancy' : undefined)}</Box>
             <ToggleButtonGroup
               size="small" exclusive value={sw.type}
               onChange={(_, v: SwitchType | null) => v && set('switchType', v)}
@@ -293,8 +299,8 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
               label={<Typography variant="body2">PROFINET cabling</Typography>} />
             {inp.pnCabling && (
               <>
-                <Box sx={{ width: 170 }}>{num('pnFieldLinks', 'Links leaving the panel', 'Rest = 2 m patch cords')}</Box>
-                <Box sx={{ width: 150 }}>{num('pnFieldM', 'Avg. field run (m)', '+10% on the cable')}</Box>
+                <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 170 } }}>{num('pnFieldLinks', 'Links leaving the panel', 'Rest = 2 m patch cords')}</Box>
+                <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 150 } }}>{num('pnFieldM', 'Avg. field run (m)', '+10% on the cable')}</Box>
                 <Typography variant="caption" color="text.secondary">
                   {cfg.profinet
                     ? `${cfg.profinet.links} link${cfg.profinet.links === 1 ? '' : 's'} — ${cfg.profinet.patch} patch cord${cfg.profinet.patch === 1 ? '' : 's'}${cfg.profinet.field ? `, ${cfg.profinet.cableM} m FC cable + ${cfg.profinet.field * 2} plugs` : ''}`
@@ -308,8 +314,8 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
               label={<Typography variant="body2">24 V DC UPS</Typography>} />
             {inp.ups && (
               <>
-                <Box sx={{ width: 140 }}>{num('upsMinutes', 'Backup (min)')}</Box>
-                <TextField select label="Buffered load" size="small" sx={{ minWidth: 220 }} value={inp.upsLoad} onChange={(e) => set('upsLoad', e.target.value as PlcInputs['upsLoad'])}>
+                <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 140 } }}>{num('upsMinutes', 'Backup (min)')}</Box>
+                <TextField select label="Buffered load" size="small" sx={{ minWidth: { xs: '100%', sm: 220 } }} value={inp.upsLoad} onChange={(e) => set('upsLoad', e.target.value as PlcInputs['upsLoad'])}>
                   <MenuItem value="controller">Controller electronics only</MenuItem>
                   <MenuItem value="all">Whole 24 V load (incl. DO / field)</MenuItem>
                 </TextField>
@@ -365,8 +371,8 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
           </Box>
           {inp.scada !== 'none' && (
             <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Box sx={{ width: 120 }}>{num('scadaClients', 'Clients', inp.scada === 'unifiedPc' ? 'Operate clients' : 'RT Client stations')}</Box>
-              <TextField select label="Data logging" size="small" sx={{ minWidth: 220 }} value={inp.scadaLogging} onChange={(e) => set('scadaLogging', e.target.value)}
+              <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('scadaClients', 'Clients', inp.scada === 'unifiedPc' ? 'Operate clients' : 'RT Client stations')}</Box>
+              <TextField select label="Data logging" size="small" sx={{ minWidth: { xs: '100%', sm: 220 } }} value={inp.scadaLogging} onChange={(e) => set('scadaLogging', e.target.value)}
                 helperText={inp.scada === 'wincc81' ? '512 archive tags included' : 'Logging tags per server'}>
                 <MenuItem value="none">{inp.scada === 'wincc81' ? 'Base only (512 archive tags)' : 'None'}</MenuItem>
                 {(inp.scada === 'wincc81' ? WINCC81_ARCHIVE_PACKAGES : UNIFIED_LOGGING_PACKAGES).map((p) => (
@@ -430,11 +436,11 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                     </Typography>
                   </Box>
                   <Box sx={{ flexGrow: 1 }} />
-                  <Box sx={{ width: 150 }}>{dec('doLoadA', 'Load per DO (A)', 'Relay / pilot ≈ 0.1')}</Box>
-                  <Box sx={{ width: 110 }}>{dec('psuMarginPct', 'Margin %')}</Box>
+                  <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 150 } }}>{dec('doLoadA', 'Load per DO (A)', 'Relay / pilot ≈ 0.1')}</Box>
+                  <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 110 } }}>{dec('psuMarginPct', 'Margin %')}</Box>
                 </Stack>
                 <Stack direction="row" spacing={2} alignItems="center" sx={{ mt: 1.5 }} flexWrap="wrap" useFlexGap>
-                  <TextField select label="Power supply" size="small" sx={{ minWidth: 340 }} value={inp.sitop} onChange={(e) => set('sitop', e.target.value)}>
+                  <TextField select label="Power supply" size="small" sx={{ minWidth: { xs: '100%', sm: 340 } }} value={inp.sitop} onChange={(e) => set('sitop', e.target.value)}>
                     <MenuItem value="none">None — I&apos;ll add it myself</MenuItem>
                     {psuItems}
                   </TextField>
@@ -449,6 +455,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                   <Button size="small" onClick={() => setShowLoad((v) => !v)}>{showLoad ? 'Hide breakdown' : 'Show breakdown'}</Button>
                 </Stack>
                 {showLoad && (
+                  <Box sx={{ overflowX: 'auto' }}>
                   <Table size="small" sx={{ mt: 1 }}>
                     <TableHead>
                       <TableRow>
@@ -469,6 +476,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                       ))}
                     </TableBody>
                   </Table>
+                  </Box>
                 )}
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
                   Typical draws: CPU, interface module and HMI per Siemens datasheets; module electronics and field loads (10 mA per DI, 20 mA
@@ -477,13 +485,14 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
               </Box>
 
               <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Modules to add</Typography></Divider>
+              <Box sx={{ overflowX: 'auto' }}>
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Part no.</TableCell>
+                    <TableCell sx={HIDE_ON_PHONE}>Part no.</TableCell>
                     <TableCell>Item</TableCell>
                     <TableCell align="right">Qty</TableCell>
-                    <TableCell align="right">Unit price</TableCell>
+                    <TableCell align="right" sx={HIDE_ON_PHONE}>Unit price</TableCell>
                     <TableCell align="right">Total</TableCell>
                   </TableRow>
                 </TableHead>
@@ -496,7 +505,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                     )] : []),
                     ...g.rows.map((r) => (
                     <TableRow key={r.key}>
-                      <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                      <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap', ...HIDE_ON_PHONE }}>
                         {r.part.partNo || <Typography variant="body2" color="warning.main">Ask supplier</Typography>}
                         {r.part.partNo && r.part.verify && r.source !== 'catalog' && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'inherit' }}>verify P/N</Typography>
@@ -505,9 +514,12 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                       <TableCell>
                         <Typography variant="body2">{r.part.description.split(', ').slice(0, 3).join(', ')}</Typography>
                         <Typography variant="caption" color="text.secondary">{r.why}</Typography>
+                        <Typography variant="caption" sx={{ display: { xs: 'block', sm: 'none' }, fontFamily: 'monospace', color: r.unitCost === 0 ? 'warning.main' : 'text.secondary' }}>
+                          {r.part.partNo || 'Ask supplier'} · {r.unitCost === 0 ? 'for inquiry' : `@ ${PHP(r.unitCost)}`}
+                        </Typography>
                       </TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{r.qty}{r.part.uom && r.part.uom !== 'pc' ? ` ${r.part.uom}` : ''}</TableCell>
-                      <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap', color: r.unitCost === 0 ? 'warning.main' : undefined }}>
+                      <TableCell align="right" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap', color: r.unitCost === 0 ? 'warning.main' : undefined, ...HIDE_ON_PHONE }}>
                         {r.unitCost === 0 ? 'For inquiry' : PHP(r.unitCost)}
                         {r.source === 'catalog' && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>catalog</Typography>}
                       </TableCell>
@@ -516,11 +528,12 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                     )),
                   ])}
                   <TableRow>
-                    <TableCell colSpan={4} align="right" sx={{ fontWeight: 600 }}>Total{inquiry > 0 ? ` (excl. ${inquiry} for inquiry)` : ''}</TableCell>
+                    <TableCell colSpan={fullScreen ? 2 : 4} align="right" sx={{ fontWeight: 600 }}>Total{inquiry > 0 ? ` (excl. ${inquiry} for inquiry)` : ''}</TableCell>
                     <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP(total)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
               {inquiry > 0 && (
                 <Alert severity="warning" sx={{ py: 0 }}>
                   {inquiry} item{inquiry === 1 ? '' : 's'} for inquiry — added at ₱0. When the supplier quotes, add the price in Sales → Pricelists
@@ -534,7 +547,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
           )}
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+      <DialogActions sx={{ px: { xs: 2, sm: 3 }, pb: 2, flexWrap: 'wrap', gap: 1 }}>
         <Button onClick={close}>Cancel</Button>
         <Button variant="contained" onClick={submit} disabled={!ready}>
           Add {rows.length} item{rows.length === 1 ? '' : 's'} · {PHP(total)} to Components

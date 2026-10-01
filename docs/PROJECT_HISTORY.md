@@ -637,3 +637,50 @@ Fixes Renzel reported while preparing the ADI B1P1 BMS Correction (IOCT2607003) 
 - **PLC configurator — more models, HMI, SCADA, SITOP list** (2026-09-30): CPU picker per family (`CPU_MODELS`) — S7-1200 1211C/1212C/1214C/1215C in DC/DC/DC, AC/DC/RLY, DC/DC/RLY, 1217C, 1212FC/1214FC/1215FC; S7-1500 1511-1/1513-1/1515-2/1516-3 PN (+ F versions) and the 1511C/1512C compact CPUs. On-board I/O per model feeds the ET 200SP sizing (1215C/1217C on-board AQ counted; 1500 compact AI counted as 4–20 mA; AC-powered CPUs left out of the 24 V load). Memory card size picker (4/12/24/256 MB). HMI by line + size (Basic KTP, Comfort TP, Unified Comfort MTP; HMI draw added to the 24 V estimate). SCADA license: WinCC V8.1 RC/RT by PowerTags or WinCC Unified PC Runtime by tags — **part numbers left blank ("Ask supplier")**. SITOP list: PSU100S 2.5/5/10/20 A, PSU8200 5/10/20/40 A and 3-phase 20/40 A, each tagged "suggested"/"too small" from the load estimate. Only the quoted parts are priced; the rest go in at ₱0 as **"For inquiry"**, and unquoted part numbers (from Siemens' catalog) show **"verify P/N"** until a catalog price with that part number exists. SITOP part keys renamed (`psu100s20`, `psu8200_20`, …); `PlcInputs.sitop` is now a part key.
 - **PLC configurator — part numbers checked in the Siemens TIA Selection Tool** (2026-09-30, cloud version at tiaselectiontool.siemens.com, global search): S7-1200 CPUs all confirmed. S7-1500 CPUs moved to the current "…03" generation (1511-1 PN 6ES7511-1AL03, 1515-2 PN 2AN03, 1516-3 PN/DP 3AP03, 1511C 1CL03, 1512C 1CM03, F-CPUs 1FL03/1FM03/2FN03/3FP03 — the "…02/…01" ones still exist but are the older generation). Memory cards 4/12/24 MB are "…04" (8LC04/8LE04/8LF04; the "…03" ones don't exist). Comfort TP1500/TP1900/TP2200 end "…0AX2/0AX1/0AX1" (not 0AX0). SITOP: 6EP1333/1334-3BA10 are **PSU200M** (not PSU8200); 6EP1337-3BA00 / 6EP1436-3BA10 / 6EP1437-3BA10 don't exist — replaced with PSU300S 3-phase 20 A 6EP1436-2BA10 / 40 A 6EP1437-2BA20. **WinCC V8.1** licenses now carry real part numbers: `6AV6381-2B?08-1A??` (RC 128/512/2048/8192/65536/102400 = BM/BN/BP/BS/BQ/BT; RT = BC/BD/BE/BH/BF/BJ; AX0 standard, AV0 Asia, AH0 download) — 150k/256k packages removed (not offered). **WinCC Unified V21 PC Runtime** packages: `6AV2155-???02-5AA0` (Asia 5BA0) for 150/500/1k/2.5k/5k/10k/50k (3DB/1EB/2EB/2MB/1FB/2FB/1GB); 30k/100k/max removed (100k/max only exist as upgrades). New "Edition" picker (Standard / Asia / Download). "verify P/N" hint removed. Also noted: a new S7-1200 G2 generation exists (e.g. 1212C G2 6ES7212-1AG50-0XB0) — not added.
 - **PLC configurator — PROFINET cabling + 24 V UPS** (2026-09-29, after the optimization PR): **PROFINET cabling** (on by default in the dialog): one cable per link. With switches, every device goes to a switch plus the switch-to-switch links (plus one ring-closing link for MRP when redundant with > 2 switches). Without switches, the devices are daisy-chained (devices − 1). "Links leaving the panel" get IE FC TP GP 2x2 cable 6XV1840-2AH10 (average run × 1.1, per metre) + 2 × FC RJ45 Plug 180 6GK1901-1BB10-2AA0 each. The rest get 2 m TP cords 6XV1870-3QH20. **24 V UPS** (opt-in): SITOP UPS1600 10/20/40 A (6EP4134/4136/4137-3AB00-0AY0), sized by the buffered load × 1.2. The buffered load is either the controller electronics or the whole 24 V load (`estimate24V`). The UPS1100 battery (1.2/3.2/7/12 Ah, 6EP4131/4133/4134/4135-0GB00-0AY0) is sized as Ah = A × min ÷ 60 ÷ 0.7 derating; the 1.2 Ah battery is used only with the 10 A unit, and 12 Ah modules are paralleled beyond that. All the new parts are unpriced ("For inquiry") with generic descriptions. The user declined ET 200SP accessories (labels, shield connectors). Tests in `siemensPlc.test.ts`.
+- **Mobile view for the calcsheet configurators** (2026-09-29): on phones (below MUI `sm`, 600 px), the Siemens PLC, Desigo BMS, Control Panel and Installation Work dialogs change as follows:
+  - They open **full-screen** (`useMediaQuery(theme.breakpoints.down('sm'))`).
+  - The description under the title is hidden.
+  - Fixed-width number fields become half-width, two per row; selects and text fields go full width. The Installation Work cable rows wrap.
+  - Tables sit in an `overflowX: auto` box. In the item tables, the part no. and unit price columns fold into the item cell (`HIDE_ON_PHONE`).
+  - Divider labels wrap, and the dialog action buttons wrap.
+  - Checked at 390 px wide with Playwright: no horizontal overflow in any of the four dialogs. The desktop layout is unchanged.
+
+## 2026-10-01 — App-wide mobile compatibility
+
+Goal: every page fits the phone screen, with no sideways-sliding page and no zoomed-out page.
+
+**Method**
+- Local stack: the Firestore emulator (project `demo-pmv2`, seeded with a demo superadmin + sample projects, clients, calcsheet project/quotation, expenses, employee); `server.js` pointed at it via `FIRESTORE_EMULATOR_HOST`; a local production build served with an `/api` proxy.
+- A Playwright audit visited ~60 routes at 320 / 360 / 414 / 768 px with mobile emulation. It flagged:
+  - page-level horizontal overflow, including the case where the phone browser zooms the whole page out (`innerWidth > clientWidth`);
+  - content cut off by an `overflow: hidden` ancestor.
+- It also opened 11 common dialogs at 360 px.
+
+**Theme-wide (`App.tsx` `createTheme`, `PHONE` = below 600 px)**
+- Smaller h3–h6 on phones.
+- `MuiTabs` default to `variant="scrollable"` with scroll buttons, so tab bars scroll instead of clipping.
+- Dialogs keep an 8 px margin (full-screen ones none), with tighter title / content / action padding and wrapping action buttons.
+- Table cells get 6×8 padding on phones.
+- `TablePagination` wraps.
+
+**Global CSS (`index.css`)**: on WebKit touch devices (iPhone / iPad, `@supports (-webkit-touch-callout: none)`), form fields are kept at 16 px so iOS Safari doesn't zoom in on focus.
+
+**Per-page fixes**
+- Page and section header rows (title + action buttons) now wrap: `flexWrap` + row/column gap on the header row and its button group. Applied by a codemod to h4 / h5 / h6 headers and button rows in ~40 components.
+- Fixed `minWidth` form fields are full width on phones: CA form, Estimates, Tax Ledger, Reports, Calcsheet projects search, Whiteboard link picker.
+- Quotation Editor: action toolbars wrap; terms grid is 2 columns on phones; cost summary is 1 column; margin/total boxes stack.
+- Quotation compare view: minmax grids so long amounts no longer push the cards wider.
+- Wide tables not in a `TableContainer` now sit in an `overflowX: auto` box: Calcsheet projects list, project detail quotations, presets, legacy import.
+- Project Details header: back button + title, buttons wrap below.
+- Whiteboard: people's columns stack vertically on phones instead of a sideways board.
+- Gantt PDF export dialog: settings above the preview on phones.
+- Report / Service Report sticky action bars wrap.
+- Analytics Studio: header chips wrap, canvas header shrinks.
+- `margin: -2` page roots (Reports, EHS, ID Generator) now match the phone layout padding (`{ xs: -1, md: -2 }`).
+
+**Result**
+- No page overflows or zooms out at 320–768 px.
+- Remaining audit hits are intentional sideways-scrolling rows (Analytics "Quick Formulations" chips) and an MUI Switch false positive.
+- All 11 dialogs fit at 360 px.
+- Desktop layout is unchanged except that header rows can now wrap when they don't fit.
+- `CollectionsDashboard.test.tsx` was already failing (3 tests, "useAuth must be used within an AuthProvider"). It fails the same way without these changes.

@@ -616,7 +616,7 @@ const IDGeneratorPage: React.FC = () => {
   };
 
   return (
-    <Box sx={{ height: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column', overflow: 'hidden', margin: -2, backgroundColor: '#f5f5f5' }}>
+    <Box sx={{ height: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column', overflow: 'hidden', margin: { xs: -1, md: -2 }, backgroundColor: '#f5f5f5' }}>
       <Box sx={{ flexShrink: 0, p: 2, borderBottom: '1px solid #e0e0e0', bgcolor: '#fff' }}>
         <Box display="flex" alignItems="center" mb={1}>
           <IconButton onClick={() => navigate('/dashboard')} sx={{ mr: 2 }}>

@@ -121,7 +121,7 @@ const EmployeeList: React.FC<EmployeeListProps> = ({ onViewDTR, onViewDashboard 
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h6" fontWeight={600}>Employees</Typography>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => { setEditing(null); setFormOpen(true); }}
           sx={{ bgcolor: '#2853c0' }}>

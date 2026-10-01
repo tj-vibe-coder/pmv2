@@ -78,7 +78,7 @@ export default function SoaPdfPreviewDialog({ open, soa, onClose }: SoaPdfPrevie
         <Typography variant="h6" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
           {soa.soaNo} — Statement of Account Preview
         </Typography>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
           <Button
             size="small"
             variant="outlined"

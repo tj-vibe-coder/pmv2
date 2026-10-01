@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton,
   MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
+  useMediaQuery, useTheme,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -34,6 +35,8 @@ interface InstallationWorkDialogProps {
 }
 
 export default function InstallationWorkDialog({ open, onClose, productContingencyPct, onSubmit }: InstallationWorkDialogProps) {
+  // Phones: full-screen dialog, fields stack two per row, tables scroll sideways.
+  const fullScreen = useMediaQuery(useTheme().breakpoints.down('sm'));
   const installMaterialPrices = useQuotationStore((s) => s.installMaterialPrices);
   // Materials catalog (Sales → Pricelists) — the default price for each material.
   const catalog = usePricelistStore((s) => s.items);
@@ -147,10 +150,10 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
   const article = CONDUIT_TYPES.find((c) => c.value === form.conduitType)?.article ?? '';
 
   return (
-    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
+    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth fullScreen={fullScreen} sx={{ '& .MuiDivider-wrapper': { whiteSpace: 'normal' } }}>
       <DialogTitle>
         Installation Work
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, display: { xs: 'none', sm: 'block' } }}>
           Describe each conduit run — pipes, junction boxes and the conduit accessories are computed for you
           (PEC 2017 support rules). Add as many runs as this project needs, then submit once to drop the totals
           into B. Supply of Components.
@@ -192,12 +195,12 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
 
           {/* Wires → PEC Chapter 9 conduit fill → recommended pipe size */}
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+            <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
               <Typography variant="body2" sx={{ fontWeight: 600 }}>Cables in this conduit</Typography>
               <Typography variant="caption" color="text.secondary">— sizes the pipe per PEC 2017 Chapter 9 (conduit fill)</Typography>
               <Box sx={{ flexGrow: 1 }} />
               <TextField
-                select size="small" label="Insulation" value={form.insulation} sx={{ width: 170 }}
+                select size="small" label="Insulation" value={form.insulation} sx={{ width: { xs: '100%', sm: 170 } }}
                 onChange={(e) => setField('insulation', e.target.value as Insulation)}
               >
                 {INSULATIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
@@ -205,27 +208,27 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
             </Stack>
             {form.conductors.map((g, i) => (
               <Box key={i} sx={{ mb: 1.25 }}>
-                <Stack direction="row" spacing={1} alignItems="center">
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
                   <TextField
-                    select size="small" label="Cable size" value={g.size} sx={{ width: 220 }}
+                    select size="small" label="Cable size" value={g.size} sx={{ width: { xs: '100%', sm: 220 } }}
                     onChange={(e) => setConductor(i, { size: e.target.value as WireSize })}
                   >
                     {WIRE_SIZES.map((w) => <MenuItem key={w.value} value={w.value}>{w.label}</MenuItem>)}
                   </TextField>
                   <TextField
-                    size="small" label="Cores" type="text" inputMode="numeric" sx={{ width: 90 }}
+                    size="small" label="Cores" type="text" inputMode="numeric" sx={{ width: { xs: 'auto', sm: 90 }, flex: { xs: '1 1 80px', sm: 'none' } }}
                     value={g.cores && g.cores > 1 ? g.cores : ''} placeholder="1"
                     onChange={(e) => setConductor(i, { cores: Math.max(1, Math.round(parseLenientFloat(e.target.value))) })}
                   />
                   {isMulticore(g) && (
                     <TextField
-                      size="small" label="Cable OD (mm)" type="text" inputMode="decimal" sx={{ width: 130 }}
+                      size="small" label="Cable OD (mm)" type="text" inputMode="decimal" sx={{ width: { xs: 'auto', sm: 130 }, flex: { xs: '1 1 80px', sm: 'none' } }}
                       value={g.odMm ? String(g.odMm) : ''} placeholder={String(estimateCableOdMm(g.size, g.cores ?? 1, form.insulation))}
                       onChange={(e) => { const v = parseLenientFloat(e.target.value); setConductor(i, { odMm: v > 0 ? v : null }); }}
                     />
                   )}
                   <TextField
-                    size="small" label="Cables QTY" type="text" inputMode="numeric" sx={{ width: 120 }}
+                    size="small" label="Cables QTY" type="text" inputMode="numeric" sx={{ width: { xs: 'auto', sm: 120 }, flex: { xs: '1 1 80px', sm: 'none' } }}
                     value={g.qty || ''} placeholder="0"
                     onChange={(e) => setConductor(i, { qty: Math.max(0, Math.round(parseLenientFloat(e.target.value))) })}
                   />
@@ -346,6 +349,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
           {entries.length > 0 && (
             <>
               <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Runs added ({entries.length})</Typography></Divider>
+              <Box sx={{ overflowX: 'auto' }}>
               <Table size="small">
                 <TableHead>
                   <TableRow>
@@ -386,8 +390,10 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                   })}
                 </TableBody>
               </Table>
+              </Box>
 
               <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Total to add to Section B</Typography></Divider>
+              <Box sx={{ overflowX: 'auto' }}>
               <Table size="small">
                 <TableHead>
                   <TableRow>
@@ -424,6 +430,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
               {totalRows.some((r) => r.unitCost === 0) && (
                 <Alert severity="warning" sx={{ py: 0 }}>
                   Some materials above have no price in the catalog (Sales → Pricelists) or Presets yet — they'll be added at ₱0 and can be priced there, or edited directly on the row afterward.
@@ -433,7 +440,7 @@ export default function InstallationWorkDialog({ open, onClose, productContingen
           )}
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+      <DialogActions sx={{ px: { xs: 2, sm: 3 }, pb: 2, flexWrap: 'wrap', gap: 1 }}>
         <Button onClick={handleClose}>Cancel</Button>
         <Button variant="contained" onClick={handleFinalSubmit} disabled={totalRows.length === 0}>
           Add {totalRows.length > 0 ? `${totalRows.length} item${totalRows.length === 1 ? '' : 's'} · ${PHP(grandTotal)}` : ''} to Components

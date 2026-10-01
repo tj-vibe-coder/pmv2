@@ -64,6 +64,9 @@ import ScanPage from './components/ScanPage';
 import { useQuotationStore } from './store/quotationStore';
 import { saveLastPage, getLastPage } from './utils/lastPage';
 
+// Phones (below MUI's sm breakpoint). Used by the theme-wide mobile overrides below.
+const PHONE = '@media (max-width:599.95px)';
+
 const theme = createTheme({
   palette: {
     mode: 'light',
@@ -95,18 +98,22 @@ const theme = createTheme({
     h3: {
       fontWeight: 600,
       letterSpacing: '-0.01em',
+      [PHONE]: { fontSize: '1.6rem' },
     },
     h4: {
       fontWeight: 600,
       letterSpacing: '-0.01em',
+      [PHONE]: { fontSize: '1.6rem' },
     },
     h5: {
       fontWeight: 600,
       letterSpacing: '-0.005em',
+      [PHONE]: { fontSize: '1.25rem' },
     },
     h6: {
       fontWeight: 500,
       letterSpacing: '-0.005em',
+      [PHONE]: { fontSize: '1.05rem' },
     },
     body1: {
       fontWeight: 400,
@@ -128,6 +135,34 @@ const theme = createTheme({
     overline: {
       fontWeight: 500,
       letterSpacing: '0.05em',
+    },
+  },
+  // Mobile: tab bars scroll instead of clipping, dialogs keep a small margin,
+  // tables and pagination get tighter padding so more fits on a phone.
+  components: {
+    MuiTabs: {
+      defaultProps: { variant: 'scrollable', scrollButtons: 'auto', allowScrollButtonsMobile: true },
+    },
+    MuiDialog: {
+      styleOverrides: {
+        paper: { [PHONE]: { margin: 8, width: 'calc(100% - 16px)', maxWidth: 'calc(100% - 16px)', maxHeight: 'calc(100% - 16px)' } },
+        paperFullScreen: { [PHONE]: { margin: 0, width: '100%', maxWidth: '100%', maxHeight: '100%' } },
+      },
+    },
+    MuiDialogTitle: { styleOverrides: { root: { [PHONE]: { padding: '12px 16px' } } } },
+    MuiDialogContent: { styleOverrides: { root: { [PHONE]: { paddingLeft: 16, paddingRight: 16 } } } },
+    MuiDialogActions: { styleOverrides: { root: { [PHONE]: { flexWrap: 'wrap', gap: 8, padding: '8px 16px 12px' } } } },
+    MuiTableCell: {
+      styleOverrides: {
+        root: { [PHONE]: { '&:not(.MuiTableCell-paddingCheckbox):not(.MuiTableCell-paddingNone)': { padding: '6px 8px' } } },
+      },
+    },
+    MuiTablePagination: {
+      styleOverrides: {
+        toolbar: { [PHONE]: { flexWrap: 'wrap', justifyContent: 'flex-end', paddingLeft: 8, paddingRight: 8 } },
+        spacer: { [PHONE]: { display: 'none' } },
+        actions: { [PHONE]: { marginLeft: 8 } },
+      },
     },
   },
 });

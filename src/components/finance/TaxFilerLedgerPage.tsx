@@ -532,7 +532,7 @@ const TaxFilerLedgerPage: React.FC = () => {
             placeholder="Search supplier, invoice, TIN..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            sx={{ minWidth: 220 }}
+            sx={{ minWidth: { xs: '100%', sm: 220 } }}
           />
           <FormControl size="small" sx={{ minWidth: 150 }}>
             <InputLabel>Source</InputLabel>

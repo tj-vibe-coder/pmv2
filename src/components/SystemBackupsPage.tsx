@@ -257,7 +257,7 @@ export default function SystemBackupsPage(): React.ReactElement {
     <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1400, mx: 'auto' }}>
       {/* Header */}
       <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ xs: 'flex-start', sm: 'center' }} justifyContent="space-between" spacing={2} sx={{ mb: 3 }}>
-        <Stack direction="row" alignItems="center" spacing={1.5}>
+        <Stack direction="row" flexWrap="wrap" useFlexGap alignItems="center" spacing={1.5}>
           <Button
             startIcon={<ArrowBackIcon />}
             onClick={() => navigate('/utilities')}
@@ -272,7 +272,7 @@ export default function SystemBackupsPage(): React.ReactElement {
           <Chip label="Admin" size="small" color="primary" sx={{ fontWeight: 600 }} />
         </Stack>
 
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
           <Button
             startIcon={<RefreshIcon />}
             onClick={() => void loadData()}
@@ -617,7 +617,7 @@ export default function SystemBackupsPage(): React.ReactElement {
         fullWidth
       >
         <DialogTitle sx={{ bgcolor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between">
+          <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} alignItems="center" justifyContent="space-between">
             <Typography variant="h6" fontWeight={700} sx={{ color: NET_PACIFIC_PRIMARY }}>
               Backup Details & Collection Breakdown
             </Typography>

@@ -173,7 +173,7 @@ export default function SoaDashboardPage() {
   return (
     <Box sx={{ height: '100%', overflowY: 'auto', p: 3 }}>
       {/* Page Title */}
-      <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, alignItems: 'center', mb: 2 }}>
         <ReceiptLongIcon sx={{ mr: 1.5, color: NET_PACIFIC_COLORS.primary, fontSize: 32 }} />
         <Typography variant="h4" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
           Statements of Account

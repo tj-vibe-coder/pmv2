@@ -426,9 +426,9 @@ export default function Projects() {
 
   return (
     <Stack spacing={2}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between">
+      <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} alignItems="center" justifyContent="space-between">
         <Typography variant="h5" sx={{ fontWeight: 600 }}>Projects</Typography>
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
           {isCorporateOneDriveConfigured() && unlinkedProjects.length > 0 && (
             <Tooltip title={`Scan OneDrive and link the ${unlinkedProjects.length} project${unlinkedProjects.length === 1 ? '' : 's'} with no folder yet`}>
               <Button
@@ -575,7 +575,7 @@ export default function Projects() {
             placeholder="Search code, name, customer…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            sx={{ minWidth: 280, flex: '1 1 280px', maxWidth: 380 }}
+            sx={{ minWidth: { xs: '100%', sm: 280 }, flex: '1 1 280px', maxWidth: 380 }}
             InputProps={{
               startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>,
               endAdornment: search ? (
@@ -655,6 +655,7 @@ export default function Projects() {
       </Paper>
 
       <Paper>
+        <Box sx={{ overflowX: 'auto' }}>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -866,6 +867,7 @@ export default function Projects() {
             )}
           </TableBody>
         </Table>
+        </Box>
       </Paper>
 
       <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
