@@ -684,6 +684,7 @@ Goal: every page fits the phone screen, with no sideways-sliding page and no zoo
 - All 11 dialogs fit at 360 px.
 - Desktop layout is unchanged except that header rows can now wrap when they don't fit.
 - `CollectionsDashboard.test.tsx` was already failing (3 tests, "useAuth must be used within an AuthProvider"). It fails the same way without these changes.
+- **0.5 mm² signal wire priced from the supplier quote** (2026-10-01): the PLC/Control Panel wiring lines were a placeholder ₱1,500 per 100 m roll with no part number. Now H05V-K 1x0.5 mm² **RED 8110041** (+24 V DC) and **BLUE 8110021** (0 V DC) at **₱9.14/m**, sold by the metre (UOM m), quantity = wires × run length + 10%, rounded up to whole 10 m (`WIRE_STEP_M`, `WIRE_PRICE_PER_M` in `terminalWiring.ts`, replacing `WIRE_ROLL_M/PRICE`).
 
 ## 2026-10-01 — Whiteboard "General updates" (team pending list)
 
@@ -739,3 +740,4 @@ Goal: every page fits the phone screen, with no sideways-sliding page and no zoo
     - The owner can change `category` (validated).
     - Non-owners can still only toggle `done`; moving another person's item to a different list → 403.
   - **Verified** on the emulator: API rules as above; UI at 1440 / 800 / 360 px, badge 6, no overflow.
+- **Whiteboard: move items between lists + full screen** (2026-10-01): shared items (General / Project / Sales / Finance, incl. legacy 'public' items shown in General) can be moved to another list by anyone signed in — drag an item onto another column (drop target highlights), or the "Move to…" button on each item (works on phones). Server: `PUT /api/whiteboard/:id` now lets non-posters send `category` (validated) as well as `done` on shared items; text edits and deletes stay poster-only. The Whiteboard dialog is now always full screen with the four columns filling the height (each scrolls on its own); "Just for me" stays below, capped at 20vh. Test: `src/components/WhiteboardDialog.test.tsx`.

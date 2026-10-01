@@ -411,7 +411,7 @@ const MEM_PART_NO: Record<string, string> = { memCard4: '6ES7954-8LC04-0AA0', me
 
 // WAGO terminals, relays, accessories and 0.5 mm² wire (TERMINAL_PARTS) are
 // shared with the other vendors' configurators — see terminalWiring.ts.
-export { WIRE_ROLL_M, WIRE_ROLL_PRICE } from './terminalWiring';
+export { WIRE_STEP_M, WIRE_PRICE_PER_M } from './terminalWiring';
 
 function cpuDescription(m: CpuModel): string {
   const io = m.onboard;

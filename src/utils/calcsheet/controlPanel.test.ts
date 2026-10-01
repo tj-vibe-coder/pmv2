@@ -67,6 +67,7 @@ describe('terminal strip from the PLC / BMS I/O', () => {
     expect(qty(c, 'tbFuse')).toBe(8);
     expect(qty(c, 'dinRail')).toBe(0);   // the strip's own rail estimate is replaced by the layout rails
     expect(qty(c, 'wireRed')).toBeGreaterThan(0);
+    expect(qty(c, 'wireRed') % 10).toBe(0);   // H05V-K by the metre, in whole 10 m
     expect(qty(c, 'tube05')).toBe(1);
     expect(c.lines.find((l) => l.key === 'tb2Level')?.section).toBe('terminals');
   });
@@ -125,5 +126,14 @@ describe('heat load from the components', () => {
     expect(c.airflow).toBeGreaterThan(100);
     expect(qty(c, 'fan200')).toBe(1);
     expect(cfg({ heatAuto: false, heatLossW: 40, io: io({ electronicsW: 500 }) }).heatW).toBe(40);
+  });
+});
+
+describe('0.5 mm² signal wire (supplier quote)', () => {
+  it('H05V-K 1x0.5 red 8110041 / blue 8110021 at ₱9.14 per metre', () => {
+    const red = PANEL_PARTS.wireRed;
+    const blue = PANEL_PARTS.wireBlue;
+    expect(red).toMatchObject({ partNo: '8110041', price: 9.14, uom: 'm' });
+    expect(blue).toMatchObject({ partNo: '8110021', price: 9.14, uom: 'm' });
   });
 });

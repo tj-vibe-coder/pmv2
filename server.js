@@ -1048,16 +1048,20 @@ app.put('/api/whiteboard/:id', async (req, res) => {
       !isOwner && existing.kind === 'todo' && existing.visibility === 'public' &&
       !!existing.assignedTo && existing.assignedTo === whiteboardPersonOf(user) &&
       Object.keys(req.body || {}).every((k) => k === 'done');
-    // General updates (and items from the old per-person 'public' columns,
-    // which now show in General too): anyone signed in may tick them done;
+    // Shared team lists (and items from the old per-person 'public' columns,
+    // which now show in General too): anyone signed in may tick them done or
+    // move them to another list (General / Project / Sales / Finance);
     // editing the text or deleting stays poster-only.
     const bodyKeys = Object.keys(req.body || {});
     const isGeneralShared =
       !isOwner && ['general', 'public'].includes(existing.visibility) && bodyKeys.length > 0 &&
-      bodyKeys.every((k) => k === 'done');
+      bodyKeys.every((k) => k === 'done' || k === 'category');
     if (!isOwner && !isAssigneeDoneToggle && !isGeneralShared) return res.status(403).json({ error: 'Not allowed to edit this item' });
     const patch = isAssigneeDoneToggle ? { done: !!req.body.done }
-      : isGeneralShared ? { done: !!req.body.done }
+      : isGeneralShared ? {
+        ...('done' in req.body ? { done: !!req.body.done } : {}),
+        ...('category' in req.body ? { category: req.body.category } : {}),
+      }
       : { ...req.body };
     if ('category' in patch && !WHITEBOARD_CATEGORIES.includes(patch.category)) return res.status(400).json({ error: 'Invalid category' });
     if ('assignedTo' in patch) {

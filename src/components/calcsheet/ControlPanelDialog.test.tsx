@@ -24,5 +24,5 @@ it('picks up the last PLC I/O and adds panel, terminals and wires under their ow
   expect(terminals.find((r) => r.partNo === '2002-2201')).toMatchObject({ qty: 20, brand: 'WAGO', description: 'Terminal block, 2-level, 2.5 mm²' });
   expect(wires.some((r) => /1\.5 mm², white/.test(r.description))).toBe(true);
   expect(wires.some((r) => /marker tube Ø2\.5/.test(r.description))).toBe(true);
-  expect(wires.find((r) => /0\.5 mm², red/.test(r.description))).toMatchObject({ unitCost: 1500, uom: 'roll' });
+  expect(wires.find((r) => /H05V-K 1x0\.5 mm² wire, red/.test(r.description))).toMatchObject({ unitCost: 9.14, uom: 'm', partNo: '8110041' });
 });
