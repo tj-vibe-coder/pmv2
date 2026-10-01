@@ -5,7 +5,10 @@
 // whiteboardStore.ts.
 
 export type WhiteboardKind = 'update' | 'note' | 'todo';
-export type WhiteboardVisibility = 'public' | 'private';
+// 'general' = the team-wide "General updates" pending list pinned at the top
+// of the board: always a to-do, visible to everyone, unassigned unless someone
+// assigns it (anyone may assign / tick it; only the poster edits or deletes).
+export type WhiteboardVisibility = 'public' | 'private' | 'general';
 
 // Fixed roster (TJ, RJ, Renzel, Nylle, Kim) — the board's columns, not an open-ended list. Real
 // names are kept here only as a comment/reference for whoever edits this.

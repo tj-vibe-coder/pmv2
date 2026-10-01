@@ -684,3 +684,33 @@ Goal: every page fits the phone screen, with no sideways-sliding page and no zoo
 - All 11 dialogs fit at 360 px.
 - Desktop layout is unchanged except that header rows can now wrap when they don't fit.
 - `CollectionsDashboard.test.tsx` was already failing (3 tests, "useAuth must be used within an AuthProvider"). It fails the same way without these changes.
+
+## 2026-10-01 — Whiteboard "General updates" (team pending list)
+
+**What it is**: a pinned "General updates" box at the top of the Whiteboard, so the whole team always sees open items.
+- It's a plain checklist, not sticky notes.
+- Items are unassigned by default, and no "unassigned" label is shown.
+- Done items fold away under "Show done (n)".
+- The header's Whiteboard button shows a warning-colored badge with the pending count, so the open items are visible even with the board closed.
+- The board now force-reloads every time it opens, so teammates' new items appear without a page refresh.
+
+**Data**: `whiteboard_items` gains `visibility: 'general'`.
+- Always `kind: 'todo'`; `assignedTo` is optional.
+- `GET /api/whiteboard` returns general items to everyone.
+
+**Permissions**
+- `POST` accepts `general`; the server forces `kind` to `todo` and validates `assignedTo` when given.
+- `PUT`: any signed-in user may change only `done` and/or `assignedTo` on a general item.
+- Editing the text and deleting stay poster-only.
+- `assignedTo: null` now removes the field (`FieldValue.delete()`) instead of storing null.
+- An invalid `assignedTo` is rejected with 400.
+
+**UI**: `GeneralUpdates` in `WhiteboardDialog.tsx`.
+- Add from an inline field (Enter adds).
+- Assign from the person icon. Once assigned, a colored name chip shows; click it to reassign or remove the assignment.
+- Edit / delete for the poster. The edit dialog hides the Public/Private toggle and column picker for general items.
+- Badge logic is in `Header.tsx`.
+
+**Verified** against the Firestore emulator:
+- API rules: a non-owner can assign and tick done; their text edit, mixed done+text patch and delete get 403; an invalid person gets 400; unassign removes the field.
+- In-browser at 1366 px and 360 px: added an item and assigned it via the UI; the badge counted 3; no horizontal overflow.
