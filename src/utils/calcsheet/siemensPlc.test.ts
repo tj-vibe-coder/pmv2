@@ -258,7 +258,7 @@ describe('WAGO terminals and wiring', () => {
 
   it('0.5 mm² red (+24 V) and blue (0 V) wire sized from the I/O and the panel', () => {
     expect(c.wiring).toMatchObject({ redWires: 44, blueWires: 13, runM: 1.3, redM: 63, blueM: 19 });
-    expect([qty(c, 'wireRed'), qty(c, 'wireBlue')]).toEqual([1, 1]);
+    expect([qty(c, 'wireRed'), qty(c, 'wireBlue')]).toEqual([70, 20]); // metres, whole 10 m
     expect(qty(c, 'ferrule05')).toBe(200);
     // a bigger panel means longer wires
     expect(cfg({ di: 100, panelW: 2000, panelH: 2200 }).wiring!.runM).toBe(2.4);
@@ -271,8 +271,9 @@ describe('WAGO terminals and wiring', () => {
     expect(siemensPrice(SIEMENS_PARTS.tb2Level, [])).toEqual({ price: 99.41, source: 'quote' });
     expect(siemensPrice(SIEMENS_PARTS.relay, [])).toEqual({ price: 554.69, source: 'quote' });
     expect(SIEMENS_PARTS.wagoEco10).toMatchObject({ partNo: '787-732', price: 5337.3, brand: 'WAGO' });
-    expect(siemensPrice(SIEMENS_PARTS.wireRed, [])).toEqual({ price: 1500, source: 'quote' }); // per 100 m roll
-    expect(siemensPrice(SIEMENS_PARTS.wireBlue, [])).toEqual({ price: 1500, source: 'quote' });
+    expect(SIEMENS_PARTS.wireRed).toMatchObject({ partNo: '8110041', uom: 'm' });
+    expect(siemensPrice(SIEMENS_PARTS.wireRed, [])).toEqual({ price: 9.14, source: 'quote' }); // per metre
+    expect(siemensPrice(SIEMENS_PARTS.wireBlue, [])).toEqual({ price: 9.14, source: 'quote' });
     expect(SIEMENS_PARTS.ferrule05.description).toBe('0.5mm2 ferrule');
   });
 

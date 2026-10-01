@@ -49,8 +49,8 @@ export const TERMINAL_GENERIC: Record<string, string> = {
   dinRail: 'DIN rail 35 mm, 2 m',
   ferrule05: '0.5mm2 ferrule',
   fuse5x20: 'Miniature fuse 5 x 20 mm, 0.5 A',
-  wireRed: 'Hook-up wire 0.5 mm², red (+24 V DC), 100 m roll',
-  wireBlue: 'Hook-up wire 0.5 mm², blue (0 V DC), 100 m roll',
+  wireRed: 'H05V-K 1x0.5 mm² wire, red (+24 V DC)',
+  wireBlue: 'H05V-K 1x0.5 mm² wire, blue (0 V DC)',
 };
 
 // `quoted` ones carry the part number and VAT-ex unit price from the ISTS
@@ -58,9 +58,10 @@ export const TERMINAL_GENERIC: Record<string, string> = {
 // inquiry. A pricelist item with the same part number still wins.
 const WQ = { brand: 'WAGO', quoted: true };
 const W = { brand: 'WAGO', price: 0 };
-export const WIRE_ROLL_M = 100;
-/** ₱ per 100 m roll of 0.5 mm² wire (IOCT price, any colour). */
-export const WIRE_ROLL_PRICE = 1500;
+/** H05V-K 1x0.5 mm² is quoted and sold by the metre; order in whole 10 m. */
+export const WIRE_STEP_M = 10;
+/** ₱ per metre of H05V-K 1x0.5 mm² (supplier quote, any colour). */
+export const WIRE_PRICE_PER_M = 9.14;
 export const TERMINAL_PARTS: CatalogPart[] = [
   { ...WQ, key: 'tb2Level', partNo: '2002-2201', price: 99.41,
     description: 'WAGO double-deck terminal block, through/through, L/L, without marker carrier, for DIN-rail 35 x 15 and 35 x 7.5, 2.5 mm², Push-in CAGE CLAMP, gray (1 per DI)' },
@@ -79,8 +80,8 @@ export const TERMINAL_PARTS: CatalogPart[] = [
   { ...W, verify: true, key: 'dinRail', partNo: '210-113', description: 'WAGO steel DIN rail 35 x 7.5 mm, 1 mm thick, slotted, 2 m length' },
   { ...W, verify: true, key: 'ferrule05', partNo: '216-201', description: '0.5mm2 ferrule' },
   { key: 'fuse5x20', brand: '', partNo: '', price: 0, description: 'Miniature glass fuse 5 x 20 mm, 0.5 A fast-acting — for the analog fuse terminals' },
-  { key: 'wireRed', brand: '', partNo: '', price: WIRE_ROLL_PRICE, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), red — +24 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
-  { key: 'wireBlue', brand: '', partNo: '', price: WIRE_ROLL_PRICE, uom: 'roll', description: `Stranded hook-up wire 0.5 mm² (20 AWG), blue — 0 V DC signal wiring, ${WIRE_ROLL_M} m roll` },
+  { key: 'wireRed', brand: '', partNo: '8110041', price: WIRE_PRICE_PER_M, uom: 'm', quoted: true, description: 'H05V-K 1x0.5 mm² RED — flexible single-core wire, +24 V DC signal wiring' },
+  { key: 'wireBlue', brand: '', partNo: '8110021', price: WIRE_PRICE_PER_M, uom: 'm', quoted: true, description: 'H05V-K 1x0.5 mm² BLUE — flexible single-core wire, 0 V DC signal wiring' },
 ];
 
 export interface WiringSummary {
@@ -179,8 +180,9 @@ export function terminalStrip(t: TerminalStripInput): { lines: StripLine[]; wiri
   add('endStop', endStops, `2 per terminal group (${groups} groups)`);
   add('markers', terminals, '1 marker per terminal / relay');
   add('dinRail', Math.ceil(railMm / 2000), `≈ ${(railMm / 1000).toFixed(1)} m of rail for ${t.railFor} (+20%)`);
-  add('wireRed', Math.ceil(redM / WIRE_ROLL_M), `0.5 mm² red (+24 V DC): ${redWires} wires × ${runM} m ≈ ${redM} m`, 'wiring');
-  add('wireBlue', Math.ceil(blueM / WIRE_ROLL_M), `0.5 mm² blue (0 V DC): ${blueWires} wires × ${runM} m ≈ ${blueM} m`, 'wiring');
+  const toStep = (m: number) => Math.ceil(m / WIRE_STEP_M) * WIRE_STEP_M;
+  add('wireRed', toStep(redM), `0.5 mm² red (+24 V DC): ${redWires} wires × ${runM} m + 10% ≈ ${redM} m`, 'wiring');
+  add('wireBlue', toStep(blueM), `0.5 mm² blue (0 V DC): ${blueWires} wires × ${runM} m + 10% ≈ ${blueM} m`, 'wiring');
   add('ferrule05', ferrules, 'Both ends of every 0.5 mm² wire (+10%)', 'wiring');
   return { lines, wiring: { redWires, blueWires, runM, redM, blueM, terminals, railMm } };
 }
