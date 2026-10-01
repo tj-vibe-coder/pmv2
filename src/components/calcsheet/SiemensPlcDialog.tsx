@@ -12,7 +12,7 @@ import { PHP } from '../../utils/calcsheet/calc';
 import { parseLenientFloat } from '../../utils/calcsheet/numberInput';
 import {
   ANALOG_KINDS, DEFAULT_CPU, DEFAULT_PLC_INPUTS, DEFAULT_REDUNDANT_CPU, HMI_LINES, HMI_PANELS, LICENSE_EDITIONS, MEMORY_CARDS, PSU_LINES,
-  REDUNDANCY_OPTIONS, SIEMENS_PARTS, UNIFIED_LOGGING_PACKAGES, WINCC81_ARCHIVE_PACKAGES, SITOP_OPTIONS, SWITCHES, TERMINALS_HEADER, WIRES_HEADER, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuChoices, panelHeat, cpuModel,
+  REDUNDANCY_OPTIONS, SIEMENS_PARTS, UNIFIED_LOGGING_PACKAGES, WINCC81_ARCHIVE_PACKAGES, SITOP_OPTIONS, SWITCHES, TERMINALS_HEADER, WIRES_HEADER, UNIFIED_PC_PACKAGES, WINCC81_PACKAGES, configurePlc, cpuChoices, panelHeat, cpuModel, tagPackageSize,
   ET200SP_GROUP_MAX_A, effectiveSwitches, estimate24V, noAnalog, onboardText, psuQtyFor, siemensPrice,
   type AnalogKey, type HmiLine, type PlcSection, type LicenseEdition, type ModbusMode, type PlcFamily, type PlcInputs, type Redundancy, type ScadaKind,
   type SwitchType, type WinccLicense,
@@ -43,7 +43,7 @@ const id = () => nanoid(6);
 // The dialog starts on the optimizing defaults: auto CPU, cheapest module sizes, S7-1200 local expansion
 // when it fits, auto memory card.
 const fresh = (): PlcInputs => ({
-  ...DEFAULT_PLC_INPUTS, analog: noAnalog(), terminals: false, cpu: 'auto', expansion: 'auto', moduleSizes: 'auto', memCard: 'auto', pnCabling: true,
+  ...DEFAULT_PLC_INPUTS, analog: noAnalog(), terminals: false, cpu: 'auto', expansion: 'auto', moduleSizes: 'auto', memCard: 'auto', pnCabling: true, scadaPackage: 'auto',
 });
 
 export default function SiemensPlcDialog({ open, onClose, productContingencyPct, onSubmit }: Props) {
@@ -86,14 +86,14 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
     .map((sec) => ({ sec, header: SECTION_HEADER[sec], rows: rows.filter((r) => r.section === sec) }))
     .filter((g) => g.rows.length > 0);
 
-  const dec = (k: 'doLoadA' | 'psuMarginPct', label: string, helper?: string) => (
+  const dec = (k: 'doLoadA' | 'psuMarginPct' | 'tagsPerPoint', label: string, helper?: string) => (
     <TextField
       label={label} size="small" fullWidth type="text" inputMode="decimal" value={String(inp[k])} helperText={helper}
       onChange={(e) => set(k, Math.max(0, parseLenientFloat(e.target.value)))}
       onFocus={(e) => e.target.select()}
     />
   );
-  const num = (k: 'di' | 'do' | 'sparePct' | 'modbusPorts' | 'hmiQty' | 'scadaQty' | 'scadaClients' | 'switchQty' | 'panelW' | 'panelH' | 'upsMinutes' | 'pnFieldLinks' | 'pnFieldM', label: string, helper?: string) => (
+  const num = (k: 'di' | 'do' | 'sparePct' | 'modbusPorts' | 'hmiQty' | 'scadaQty' | 'scadaClients' | 'switchQty' | 'panelW' | 'panelH' | 'upsMinutes' | 'pnFieldLinks' | 'pnFieldM' | 'extraTags', label: string, helper?: string) => (
     <TextField
       label={label} size="small" fullWidth type="text" inputMode="numeric"
       value={inp[k] || (k === 'sparePct' ? '0' : '')} placeholder="0" helperText={helper}
@@ -123,7 +123,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
   const setHmiLine = (line: HmiLine | 'none') => set('hmi', line === 'none' ? 'none'
     : (HMI_PANELS.find((h) => h.line === line && h.sizeIn === 7) ?? HMI_PANELS.find((h) => h.line === line))!.key);
   const setScada = (kind: ScadaKind) => setInp((p) => ({
-    ...p, scada: kind, scadaPackage: kind === 'unifiedPc' ? '1k' : '2048', scadaLogging: 'none',
+    ...p, scada: kind, scadaPackage: 'auto', scadaLogging: 'none',
     licenseEdition: kind === 'unifiedPc' && p.licenseEdition === 'dl' ? 'standard' : p.licenseEdition,
   }));
 
@@ -196,7 +196,7 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
             <Typography variant="caption" color="text.secondary">
               {SIEMENS_PARTS[cpu.key].partNo} · {redundant
                 ? `${cpu.redundancy === 'H' ? 'bundle of 2 CPUs + sync modules' : '2 CPUs'}; ET 200SP on IM 155-6 PN/2 HF; managed switches`
-                : `${onboardText(cpu)}${is1200 ? (cfg.expansion === 'local' ? '; the rest on signal modules' : '; the rest on ET 200SP') : '; memory card required'}`}
+                : `${onboardText(cpu)}${is1200 ? (cfg.expansion === 'local' ? '; the rest on signal modules' : '; the rest on ET 200SP') : `; ${cfg.expansion === 'local' ? 'I/O on the CPU rack' : 'I/O on ET 200SP'}; memory card required`}`}
             </Typography>
           </Stack>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -206,6 +206,16 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
                 <MenuItem value="auto">Auto — on the CPU when it fits</MenuItem>
                 <MenuItem value="local">Signal modules on the CPU (SM 12xx)</MenuItem>
                 <MenuItem value="et200sp">ET 200SP remote I/O</MenuItem>
+              </TextField>
+            )}
+            {!is1200 && !redundant && (
+              <TextField select label="I/O expansion" size="small" sx={{ minWidth: { xs: '100%', sm: 250 } }} value={inp.expansion === 'local' ? 'local' : 'et200sp'}
+                onChange={(e) => set('expansion', e.target.value as PlcInputs['expansion'])}
+                helperText={cfg.central && !cfg.central.fallback
+                  ? `${cfg.central.modules} of ${cfg.central.slots} slots · ${cfg.central.powerW} W backplane${cfg.central.ps ? ` (+ PS ${cfg.central.ps === 'c1500ps25' ? '25' : '60'} W)` : ''}`
+                  : cfg.central?.fallback ? 'Doesn\'t fit the rack — ET 200SP used' : ' '}>
+                <MenuItem value="et200sp">ET 200SP remote I/O</MenuItem>
+                <MenuItem value="local">Central I/O on the CPU rack (S7-1500 modules)</MenuItem>
               </TextField>
             )}
             <TextField select label="Module sizes" size="small" sx={{ minWidth: { xs: '100%', sm: 230 } }} value={inp.moduleSizes} onChange={(e) => set('moduleSizes', e.target.value as PlcInputs['moduleSizes'])}
@@ -368,8 +378,12 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
               </TextField>
             ) : <Box />}
             {inp.scada !== 'none' ? (
-              <TextField select label="PowerTags" size="small" fullWidth value={inp.scadaPackage} onChange={(e) => set('scadaPackage', e.target.value)}>
-                {(inp.scada === 'wincc81' ? WINCC81_PACKAGES : UNIFIED_PC_PACKAGES).map((p) => <MenuItem key={p} value={p}>{p}</MenuItem>)}
+              <TextField select label="PowerTags" size="small" fullWidth value={inp.scadaPackage} onChange={(e) => set('scadaPackage', e.target.value)}
+                helperText={cfg.scadaTags ? `~${cfg.scadaTags.estimate} tags needed` : ' '}>
+                <MenuItem value="auto">Auto{cfg.scadaTags ? ` — ${cfg.scadaTags.autoPackage}` : ''}</MenuItem>
+                {(inp.scada === 'wincc81' ? WINCC81_PACKAGES : UNIFIED_PC_PACKAGES).map((p) => (
+                  <MenuItem key={p} value={p}>{p}{cfg.scadaTags && tagPackageSize(p) < cfg.scadaTags.estimate ? ' · too small' : ''}</MenuItem>
+                ))}
               </TextField>
             ) : <Box />}
             {inp.scada !== 'none' ? (
@@ -384,6 +398,15 @@ export default function SiemensPlcDialog({ open, onClose, productContingencyPct,
           {inp.scada !== 'none' && (
             <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
               <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('scadaClients', 'Clients', inp.scada === 'unifiedPc' ? 'Operate clients' : 'RT Client stations')}</Box>
+              <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 130 } }}>{dec('tagsPerPoint', 'Tags per I/O point', 'Value + alarms / status')}</Box>
+              <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 130 } }}>{num('extraTags', 'Extra tags', 'Modbus, setpoints…')}</Box>
+              {cfg.scadaTags && (
+                <Typography variant="caption" color="text.secondary" sx={{ width: '100%' }}>
+                  PowerTags: {cfg.scadaTags.points} I/O points (incl. spare) × {cfg.scadaTags.perPoint}
+                  {cfg.scadaTags.extra ? ` + ${cfg.scadaTags.extra} extra` : ''} ≈ {cfg.scadaTags.estimate} tags → {cfg.scadaTags.package} package
+                  {inp.scadaPackage === 'auto' ? ' (auto)' : ''}.
+                </Typography>
+              )}
               <TextField select label="Data logging" size="small" sx={{ minWidth: { xs: '100%', sm: 220 } }} value={inp.scadaLogging} onChange={(e) => set('scadaLogging', e.target.value)}
                 helperText={inp.scada === 'wincc81' ? '512 archive tags included' : 'Logging tags per server'}>
                 <MenuItem value="none">{inp.scada === 'wincc81' ? 'Base only (512 archive tags)' : 'None'}</MenuItem>

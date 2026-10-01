@@ -1,5 +1,5 @@
 import {
-  DEFAULT_PLC_INPUTS, SIEMENS_PARTS, cheapestModules, configurePlc, estimate24V, noAnalog, psuQtyFor, siemensPrice,
+  DEFAULT_PLC_INPUTS, SIEMENS_PARTS, cheapestModules, configurePlc, estimate24V, noAnalog, psuQtyFor, siemensPrice, tagPackageSize,
   type AnalogCount, type AnalogKey, type PlcInputs,
 } from './siemensPlc';
 
@@ -532,5 +532,63 @@ describe('Siemens PLC — PROFINET cabling and 24 V UPS', () => {
     const c = cfg({ di: 16 });
     expect(c.ups).toBeNull();
     expect(c.lines.some((l) => /^(ups|bat)/.test(l.key))).toBe(false);
+  });
+});
+
+describe('S7-1500 central I/O (modules on the CPU rack)', () => {
+  it('puts the I/O on S7-1500 modules — no ET 200SP, front connectors for AI / AQ', () => {
+    const c = cfg({ family: 'S7-1500', cpu: 'cpu1513', expansion: 'local', di: 64, do: 32, analog: an({ aiI: 6, aiRtd: 2, aoI: 3 }) });
+    expect([qty(c, 'c1500di32'), qty(c, 'c1500dq32')]).toEqual([2, 1]);
+    expect(qty(c, 'c1500ai8')).toBe(2);   // 6 × 4–20 mA + 2 RTD × 2 channels = 10 → 2 modules
+    expect(qty(c, 'c1500aq4')).toBe(1);
+    expect(qty(c, 'c1500fc40')).toBe(3);  // one per AI / AQ module; the BA digital modules come with theirs
+    expect(qty(c, 'imBundle') + qty(c, 'di16') + qty(c, 'buLight')).toBe(0);
+    expect(c.expansion).toBe('local');
+    expect(c.central).toMatchObject({ modules: 6, ps: null });
+    expect(c.channels.di).toEqual({ needed: 64, provided: 64 });
+    // Rail: CPU 35 mm + 3 × 25 mm BA + 3 × 35 mm = 215 mm → the 245 mm rail.
+    expect(qty(c, 'rail1500_245')).toBe(1);
+  });
+
+  it('adds a system power supply when the modules need more than the CPU feeds', () => {
+    const c = cfg({ family: 'S7-1500', cpu: 'cpu1513', expansion: 'local', di: 12 * 32 });
+    expect(qty(c, 'c1500di32')).toBe(12);  // 12 W > 10 W
+    expect(qty(c, 'c1500ps25')).toBe(1);
+    expect(c.notes.join(' ')).toMatch(/PS 25 W/);
+  });
+
+  it('falls back to ET 200SP when the rack is full; Modbus RTU uses CM PtP HF centrally', () => {
+    const full = cfg({ family: 'S7-1500', cpu: 'cpu1513', expansion: 'local', di: 31 * 32 });
+    expect(full.central?.fallback).toBe(true);
+    expect(qty(full, 'imBundle')).toBeGreaterThan(0);
+    expect(full.notes.join(' ')).toMatch(/doesn't fit the S7-1500 rack/);
+    const rtu = cfg({ family: 'S7-1500', cpu: 'cpu1513', expansion: 'local', di: 16, modbus: 'rtu', modbusPorts: 2 });
+    expect([qty(rtu, 'c1500cmPtp'), qty(rtu, 'cmPtp')]).toEqual([2, 0]);
+  });
+
+  it('S7-1500 stays on ET 200SP unless central I/O is chosen; R/H never use central I/O', () => {
+    expect(qty(cfg({ family: 'S7-1500', cpu: 'cpu1513', expansion: 'auto', di: 32 }), 'imBundle')).toBe(1);
+    const r = cfg({ redundancy: 'R', expansion: 'local', di: 32 });
+    expect(r.central).toBeNull();
+    expect(qty(r, 'imHf')).toBe(1);
+  });
+});
+
+describe('SCADA PowerTags from the I/O', () => {
+  it('estimates tags from the I/O points and picks the smallest package that covers them', () => {
+    // 200 DI + 100 DO + 40 AI + 10 AO = 350 points × 1.5 = 525 + 100 extra = 625 → WinCC V8.1 2048
+    const c = cfg({ scada: 'wincc81', scadaPackage: 'auto', di: 200, do: 100, analog: an({ aiI: 40, aoI: 10 }), extraTags: 100 });
+    expect(c.scadaTags).toMatchObject({ points: 350, estimate: 625, autoPackage: '2048', package: '2048' });
+    expect(qty(c, 'wincc81_RC_2048_standard')).toBe(1);
+    // The same on WinCC Unified → 1k
+    const u = cfg({ scada: 'unifiedPc', scadaPackage: 'auto', di: 200, do: 100, analog: an({ aiI: 40, aoI: 10 }), extraTags: 100 });
+    expect(u.scadaTags?.package).toBe('1k');
+  });
+
+  it('a package picked by hand is kept, with a note when it is too small', () => {
+    const c = cfg({ scada: 'wincc81', scadaPackage: '128', di: 200 });
+    expect(c.scadaTags?.package).toBe('128');
+    expect(c.notes.join(' ')).toMatch(/128 PowerTag package is below the ~300 tags/);
+    expect(tagPackageSize('2.5k')).toBe(2500);
   });
 });

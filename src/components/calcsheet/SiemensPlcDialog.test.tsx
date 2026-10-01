@@ -66,7 +66,8 @@ it('adds another CPU model, an HMI by size and a WinCC license — unpriced ones
   expect(rows.find((r) => r.partNo === '6ES7212-1AE40-0XB0')).toMatchObject({ qty: 1, unitCost: 0 });
   expect(rows.find((r) => r.partNo === '6AV2128-3MB06-0AX1')).toMatchObject({ qty: 1, unitCost: 0 });
   // Brand-neutral description on the quotation; the exact item is in the part number.
-  expect(rows.find((r) => r.partNo === '6AV6381-2BP08-1AV0')).toMatchObject({ qty: 1, uom: 'lic', description: 'SCADA runtime & configuration license, 2048 tags' });
+  // PowerTags on auto: no I/O entered → the smallest package (128).
+  expect(rows.find((r) => r.partNo === '6AV6381-2BM08-1AV0')).toMatchObject({ qty: 1, uom: 'lic', description: 'SCADA runtime & configuration license, 128 tags' });
   expect(rows.find((r) => r.partNo === '6ES7212-1AE40-0XB0')?.description).toBe('CPU, S7-1200');
   rows.forEach((r) => expect(r.description).not.toMatch(/SIMATIC|Siemens|SITOP|WinCC|SCALANCE|WAGO|ET 200/i));
 });

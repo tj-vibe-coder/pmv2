@@ -254,6 +254,8 @@ export function unifiedClientPacks(clients: number): { n: number; qty: number }[
   return out;
 }
 
+/** Tag count of a package name: '2048' → 2048, '2.5k' → 2500. */
+export const tagPackageSize = (p: string) => (p.endsWith('k') ? Number(p.slice(0, -1)) * 1000 : Number(p));
 export const scadaKey = (kind: Exclude<ScadaKind, 'none'>, license: WinccLicense, pkg: string, edition: LicenseEdition = 'standard') =>
   kind === 'wincc81' ? `wincc81_${license}_${pkg}_${edition}` : `unifiedPc_${pkg}_${edition === 'asia' ? 'asia' : 'standard'}`;
 
@@ -371,6 +373,28 @@ const CATALOG: SiemensPart[] = [
   { key: 'pnCable', partNo: '6XV1840-2AH10', price: 0, uom: 'm', description: 'SIMATIC NET IE FC TP Standard Cable GP 2x2 (PROFINET Type A), Cat 5e, shielded, sold by the metre' },
   { key: 'pnPlug', partNo: '6GK1901-1BB10-2AA0', price: 0, description: 'SIMATIC NET IE FC RJ45 Plug 180 2x2, RJ45 connector with metal enclosure and FastConnect, 180° cable outlet' },
   { key: 'cm1241', partNo: '6ES7241-1CH32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Communication module CM 1241, RS-422/485, 9-pin sub D (Modbus RTU / Freeport)' },
+  // S7-1500 central I/O (on the CPU's mounting rail) — order numbers from the TIA Selection Tool;
+  // DI 32 / DQ 32 BA prices from Exponent Q-DBG-2609-035 (VAT-inc, like the other quoted figures).
+  { key: 'c1500di32', partNo: '6ES7521-1BL10-0AA0', price: 22987.09, quoted: true,
+    description: 'SIMATIC S7-1500, digital input module DI 32x24 V DC BA, 32 channels in groups of 16, input delay typ. 3.2 ms, type 3 (IEC 61131); incl. push-in front connector' },
+  { key: 'c1500di16', partNo: '6ES7521-1BH10-0AA0', price: 0,
+    description: 'SIMATIC S7-1500, digital input module DI 16x24 V DC BA, 16 channels; incl. push-in front connector' },
+  { key: 'c1500dq32', partNo: '6ES7522-1BL10-0AA0', price: 27946.41, quoted: true,
+    description: 'SIMATIC S7-1500, digital output module DQ 32x24 V DC/0.5 A BA, 32 channels in groups of 8, 4 A per group; incl. push-in front connector' },
+  { key: 'c1500dq16', partNo: '6ES7522-1BH10-0AA0', price: 0,
+    description: 'SIMATIC S7-1500, digital output module DQ 16x24 V DC/0.5 A BA, 16 channels; incl. push-in front connector' },
+  { key: 'c1500ai8', partNo: '6ES7531-7KF00-0AB0', price: 0,
+    description: 'SIMATIC S7-1500, analog input module AI 8xU/I/RTD/TC ST, 16 bit, 8 channels (4 for RTD); front connector ordered separately' },
+  { key: 'c1500aq4', partNo: '6ES7532-5HD00-0AB0', price: 0,
+    description: 'SIMATIC S7-1500, analog output module AQ 4xU/I ST, 16 bit, 4 channels; front connector ordered separately' },
+  { key: 'c1500fc40', partNo: '6ES7592-1BM00-0XB0', price: 0,
+    description: 'SIMATIC S7-1500, front connector, push-in terminals, 40-pole, for 35 mm wide modules' },
+  { key: 'c1500cmPtp', partNo: '6ES7541-1AB01-0AB0', price: 0,
+    description: 'SIMATIC S7-1500, communication module CM PtP RS422/485 HF, 15-pin D-sub, Freeport, 3964(R), Modbus RTU master/slave' },
+  { key: 'c1500ps25', partNo: '6ES7505-0KA00-0AB0', price: 0,
+    description: 'SIMATIC S7-1500, system power supply PS 25 W 24 V DC — feeds the backplane bus when the CPU alone can\'t' },
+  { key: 'c1500ps60', partNo: '6ES7505-0RA00-0AB0', price: 0,
+    description: 'SIMATIC S7-1500, system power supply PS 60 W 24/48/60 V DC — feeds the backplane bus when the CPU alone can\'t' },
   { key: 'ai8u', partNo: '6ES7134-6FF00-0AA1', price: 0,
     description: 'SIMATIC ET 200SP, Analog input module, AI 8xU Basic, 0-10 V / ±10 V, suitable for BU type A0, A1, Color code CC01, Module diagnostics, 16 bit' },
   { key: 'rtd8', partNo: '6ES7134-6JF00-0CA1', price: 0,
@@ -563,6 +587,16 @@ export function genericDescription(key: string): string {
     sb1231ai1: 'PLC signal board, 1 analog input 0–10 V / 4–20 mA',
     sb1232aq1: 'PLC signal board, 1 analog output 0–10 V / 4–20 mA',
     cm1241: 'PLC communication module RS-422 / RS-485 (Modbus RTU)',
+    c1500di32: 'PLC digital input module, 32 x 24 V DC, with front connector',
+    c1500di16: 'PLC digital input module, 16 x 24 V DC, with front connector',
+    c1500dq32: 'PLC digital output module, 32 x 24 V DC / 0.5 A, with front connector',
+    c1500dq16: 'PLC digital output module, 16 x 24 V DC / 0.5 A, with front connector',
+    c1500ai8: 'PLC analog input module, 8 x 0–10 V / 4–20 mA / RTD / thermocouple',
+    c1500aq4: 'PLC analog output module, 4 x 0–10 V / 4–20 mA',
+    c1500fc40: 'PLC front connector, 40-pole, push-in',
+    c1500cmPtp: 'PLC serial communication module RS-422 / RS-485 (Modbus RTU)',
+    c1500ps25: 'PLC system power supply, 25 W',
+    c1500ps60: 'PLC system power supply, 60 W',
     ups10: 'DC UPS 24 V DC, 10 A (battery buffered)',
     ups20: 'DC UPS 24 V DC, 20 A (battery buffered)',
     ups40: 'DC UPS 24 V DC, 40 A (battery buffered)',
@@ -627,6 +661,9 @@ export interface PlcInputs {
   licenseEdition: LicenseEdition;
   /** Tag package (WINCC81_PACKAGES / UNIFIED_PC_PACKAGES). */
   scadaPackage: string;
+  /** PowerTag estimate for 'auto': tags per I/O point (value + alarms / status) and extra tags (Modbus devices, setpoints, recipes…). */
+  tagsPerPoint: number;
+  extraTags: number;
   /** SCADA servers (or single stations); with redundancy each gets a partner. */
   scadaQty: number;
   /** Client stations viewing the server(s). */
@@ -657,7 +694,7 @@ export const DEFAULT_PLC_INPUTS: PlcInputs = {
   family: 'S7-1200', cpu: 'cpu1214', redundancy: 'none', expansion: 'et200sp', moduleSizes: 'standard', failSafe: false,
   ups: false, upsMinutes: 10, upsLoad: 'controller', pnCabling: false, pnFieldLinks: 0, pnFieldM: 50, di: 0, do: 0, analog: noAnalog(), sparePct: 10,
   modbus: 'none', modbusPorts: 1, sitop: 'none', psuQty: 1, dqOwnGroup: true, memoryCard: false, memCard: 'memCard',
-  hmi: 'none', hmiQty: 1, scada: 'none', winccLicense: 'RC', licenseEdition: 'standard', scadaPackage: '2048', scadaQty: 1,
+  hmi: 'none', hmiQty: 1, scada: 'none', winccLicense: 'RC', licenseEdition: 'standard', scadaPackage: '2048', tagsPerPoint: 1.5, extraTags: 0, scadaQty: 1,
   scadaClients: 0, scadaRedundant: false, scadaLogging: 'none', scadaDbStorage: false,
   imStations: 0, switchQty: 0, switchType: 'unmanaged', terminals: true, panelW: 800, panelH: 1200,
   doLoadA: 0.1, psuMarginPct: 25,
@@ -686,6 +723,10 @@ export interface PlcConfig {
   expansion: 'local' | 'et200sp' | 'none';
   /** S7-1200 local expansion: signal modules used / CPU slots, and 5 V backplane current (mA) used / available. */
   local: { modules: number; slots: number; busMa: number; busMaxMa: number } | null;
+  /** SCADA PowerTags: I/O points × tags per point + extra = estimate; the package 'auto' picks and the one used. */
+  scadaTags: { points: number; perPoint: number; extra: number; estimate: number; autoPackage: string; package: string } | null;
+  /** S7-1500 central I/O: modules / rack slots, backplane power (W) vs. what the CPU feeds, the system PS added, rail length; fallback = didn't fit, ET 200SP used. */
+  central: { modules: number; slots: number; powerW: number; feedW: number; ps: string | null; railMm: number; fallback?: boolean } | null;
   /** PROFINET links (patch inside the panel, field runs) and the UPS sizing, when asked for. */
   profinet: { links: number; patch: number; field: number; cableM: number } | null;
   ups: { loadA: number; ah: number; minutes: number } | null;
@@ -739,6 +780,7 @@ const RANK_PRICE: Record<string, number> = {
   sm1231rtd4: 15000, sm1231rtd8: 23000, sm1231tc4: 14000, sm1231tc8: 22000, sm1232aq2: 12000, sm1232aq4: 20000,
   sb1231ai1: 7000, sb1232aq1: 7500, cm1241: 8000, cmPtp: 22526, imHf: 38000, busAdapter: 3500,
   buLightA1: 2200, buDarkA1: 1700, rail1500_160: 1500, rail1500_245: 1900,
+  c1500di16: 14000, c1500dq16: 16000, c1500ai8: 30000, c1500aq4: 30000, c1500fc40: 1500, c1500cmPtp: 30000, c1500ps25: 15000, c1500ps60: 25000,
 };
 /** Unit cost for ranking: pricelist → quote → rough relative price. */
 function rankCost(key: string, priceOf?: (key: string) => number): number {
@@ -772,6 +814,15 @@ export function cheapestModules(need: number, options: { key: string; ch: number
 
 // S7-1200: signal-module slots on the right of the CPU, and the 5 V
 // backplane current each CPU supplies / each module draws (mA, planning figures).
+// S7-1500 central I/O: modules per rack (slots 2–31), power the CPU feeds into
+// the backplane bus, and what each module takes from it (W) — planning figures
+// from the Siemens manuals; check the power budget in the TIA Portal.
+const C1500_MAX_MODULES = 30;
+const C1500_CPU_FEED_W = 10;
+const C1500_BUS_W: Record<string, number> = { c1500di32: 1, c1500di16: 0.8, c1500dq32: 1, c1500dq16: 0.8, c1500ai8: 0.7, c1500aq4: 0.8, c1500cmPtp: 0.6 };
+/** Module width on the S7-1500 rail (mm): BA digital 25 mm, the others 35 mm. */
+const C1500_WIDTH_MM: Record<string, number> = { c1500di32: 25, c1500di16: 25, c1500dq32: 25, c1500dq16: 25, c1500ai8: 35, c1500aq4: 35, c1500cmPtp: 35 };
+
 const SM_SLOTS = (key: string) => (/^cpu1211/.test(key) ? 0 : /^cpu1212/.test(key) ? 2 : 8);
 const BUS_MA_MAX = (key: string) => (/^cpu1211/.test(key) || /^cpu1212/.test(key) ? 1000 : 1600);
 const BUS_MA: Record<string, number> = {
@@ -898,6 +949,41 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
     else local = inp.expansion === 'local' ? local : null;
   }
 
+  // ── S7-1500 central I/O: modules on the CPU's own mounting rail (chosen, never auto) ──
+  // Slot 0 = system power supply, slot 1 = CPU, slots 2–31 = up to 30 modules.
+  // R/H CPUs take no central I/O (ET 200SP over system redundancy only).
+  let central: PlcConfig['central'] = null;
+  if (!is1200 && !redundant && inp.expansion === 'local') {
+    const lm: Record<string, number> = {};
+    const merge = (m: Record<string, number>) => Object.entries(m).forEach(([k, v]) => { lm[k] = (lm[k] ?? 0) + v; });
+    const small = inp.moduleSizes === 'auto';
+    merge(cheapestModules(leftDi, [{ key: 'c1500di32', ch: 32 }, ...(small ? [{ key: 'c1500di16', ch: 16 }] : [])], cost));
+    merge(cheapestModules(leftDo, [{ key: 'c1500dq32', ch: 32 }, ...(small ? [{ key: 'c1500dq16', ch: 16 }] : [])], cost));
+    // AI 8xU/I/RTD/TC ST takes every input type; an RTD uses 2 channels (4 RTD per module).
+    const aiUnits = modNeed.aiI + modNeed.aiU + analog.aiTc.w2 + 2 * (analog.aiRtd.w2 + analog.aiRtd.w4);
+    if (aiUnits > 0) lm.c1500ai8 = Math.ceil(aiUnits / 8);
+    const aq = modNeed.aoI + modNeed.aoU;
+    if (aq > 0) lm.c1500aq4 = Math.ceil(aq / 4);
+    if (rtuPorts > 0) lm.c1500cmPtp = rtuPorts;
+    const fc = (lm.c1500ai8 ?? 0) + (lm.c1500aq4 ?? 0);
+    const modules = Object.values(lm).reduce((a, b) => a + b, 0);
+    // Backplane power (planning figures): the CPU feeds ~10 W; above that a system PS in slot 0.
+    const powerW = Math.round(Object.entries(lm).reduce((w, [k, q]) => w + (C1500_BUS_W[k] ?? 1) * q, 0) * 10) / 10;
+    const ps = powerW <= C1500_CPU_FEED_W ? null : powerW <= C1500_CPU_FEED_W + 25 ? 'c1500ps25' : 'c1500ps60';
+    const railMm = (CPU1500_WIDTH_MM[cpu.key] ?? 70) + (ps === 'c1500ps25' ? 35 : ps === 'c1500ps60' ? 70 : 0)
+      + Object.entries(lm).reduce((mm, [k, q]) => mm + (C1500_WIDTH_MM[k] ?? 35) * q, 0);
+    const fits = modules <= C1500_MAX_MODULES && powerW <= C1500_CPU_FEED_W + 60;
+    if (fits && whole(inp.imStations) === 0) {
+      useLocal = true;
+      if (fc > 0) lm.c1500fc40 = fc;
+      if (ps) lm[ps] = 1;
+      localMods = lm;
+      central = { modules, slots: C1500_MAX_MODULES, powerW, feedW: C1500_CPU_FEED_W, ps, railMm };
+    } else {
+      central = { modules, slots: C1500_MAX_MODULES, powerW, feedW: C1500_CPU_FEED_W, ps, railMm, fallback: true };
+    }
+  }
+
   // ── ET 200SP modules (cheapest mix; each module also takes a BaseUnit) ──
   const buCost = SIEMENS_PARTS.buDark.price;
   const sizes = inp.moduleSizes === 'auto';
@@ -998,8 +1084,11 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
   else if (!is1200) add(card, 1, 'Required by every S7-1500 CPU');
   else if (inp.memoryCard) add(card, 1, 'Optional on S7-1200 (program backup / transfer)');
   if (!is1200) {
-    const rail = mountingRailFor(cpu.key);
-    add(rail.key, cpuUnits, `S7-1500 mounting rail for the CPU (${CPU1500_WIDTH_MM[cpu.key] ?? 70} mm wide)${redundant ? ' — one per CPU' : ''}`);
+    const onRail = central && !central.fallback ? central.railMm : CPU1500_WIDTH_MM[cpu.key] ?? 70;
+    const rail = MOUNTING_RAILS.find((r) => r.lengthMm >= onRail) ?? MOUNTING_RAILS[MOUNTING_RAILS.length - 1];
+    add(rail.key, cpuUnits, central && !central.fallback
+      ? `S7-1500 mounting rail — CPU${central.ps ? ' + system PS' : ''} + ${central.modules} central module${central.modules === 1 ? '' : 's'} ≈ ${onRail} mm`
+      : `S7-1500 mounting rail for the CPU (${CPU1500_WIDTH_MM[cpu.key] ?? 70} mm wide)${redundant ? ' — one per CPU' : ''}`);
   }
   add('cb1241', useCb ? 1 : 0, 'Modbus RTU port on the CPU (1 × RS-485)');
   if (redundant) {
@@ -1028,8 +1117,12 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
     sm1231ai8: '8 AI 0–10 V / 4–20 mA', sm1231ai4: '4 AI 0–10 V / 4–20 mA', sm1231rtd8: '8 RTD', sm1231rtd4: '4 RTD',
     sm1231tc8: '8 thermocouple', sm1231tc4: '4 thermocouple', sm1232aq4: '4 AQ', sm1232aq2: '2 AQ',
     sb1231ai1: 'signal board, 1 AI (front of the CPU)', sb1232aq1: 'signal board, 1 AQ (front of the CPU)', cm1241: 'extra Modbus RTU port (left of the CPU, max. 3)',
+    c1500di32: '32 DI (central)', c1500di16: '16 DI (central)', c1500dq32: '32 DQ (central)', c1500dq16: '16 DQ (central)',
+    c1500ai8: '8 AI — 0–10 V, 4–20 mA, TC (4 RTD) (central)', c1500aq4: '4 AQ (central)', c1500cmPtp: '1 per Modbus RTU (RS-485) port (central)',
+    c1500fc40: 'front connector for each AI / AQ module', c1500ps25: `system power supply — the modules need ${central?.powerW ?? 0} W, the CPU feeds ${C1500_CPU_FEED_W} W`,
+    c1500ps60: `system power supply — the modules need ${central?.powerW ?? 0} W, the CPU feeds ${C1500_CPU_FEED_W} W`,
   };
-  Object.entries(localMods).forEach(([k, q]) => add(k, q, `On the CPU — ${LOCAL_WHY[k] ?? k}`));
+  Object.entries(localMods).forEach(([k, q]) => add(k, q, `${k.startsWith('c1500') ? 'On the CPU rack' : 'On the CPU'} — ${LOCAL_WHY[k] ?? k}`));
   add('cmPtp', cmMods, is1200 ? 'Extra Modbus RTU ports (CB 1241 gives only one)' : '1 per Modbus RTU (RS-485) port');
   const groupWhy = [
     stations ? `start of ${stations === 1 ? 'the station' : `each of ${stations} stations`}` : '',
@@ -1044,9 +1137,22 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
     add(netSwitch.key, sw.qty, `${sw.type === 'managed' ? 'Managed' : 'Unmanaged'} — ${devices} network device${devices === 1 ? '' : 's'}, ~${portsPerSwitch} ports per switch${redundant ? ' (MRP ring for the redundant system)' : ''}`);
   }
   if (panel) add(panel.key, inp.hmiQty, `Operator panel — ${panel.sizeIn}"`);
+  // ── SCADA PowerTags: estimated from the I/O (incl. spare) for the 'auto' package ──
+  let scadaTags: PlcConfig['scadaTags'] = null;
   if (inp.scada !== 'none') {
     const pkgs = inp.scada === 'wincc81' ? WINCC81_PACKAGES : UNIFIED_PC_PACKAGES;
-    const pkg = pkgs.includes(inp.scadaPackage) ? inp.scadaPackage : pkgs[0];
+    const points = need.di + need.do + need.ai + need.ao;
+    const perPoint = Math.max(0, Number(inp.tagsPerPoint) || 0);
+    const extra = whole(inp.extraTags);
+    const estimate = Math.ceil(points * perPoint - 1e-9) + extra;
+    const autoPackage = pkgs.find((p) => tagPackageSize(p) >= estimate) ?? pkgs[pkgs.length - 1];
+    scadaTags = { points, perPoint, extra, estimate, autoPackage, package: autoPackage };
+  }
+  if (inp.scada !== 'none') {
+    const pkgs = inp.scada === 'wincc81' ? WINCC81_PACKAGES : UNIFIED_PC_PACKAGES;
+    const est = scadaTags!;
+    const pkg = inp.scadaPackage === 'auto' ? est.autoPackage : pkgs.includes(inp.scadaPackage) ? inp.scadaPackage : pkgs[0];
+    est.package = pkg;
     const red = inp.scadaRedundant;
     add(scadaKey(inp.scada, inp.winccLicense, pkg, inp.licenseEdition), scadaServers,
       red ? `SCADA base license — ${inp.scadaQty} redundant server pair${inp.scadaQty === 1 ? '' : 's'} (2 servers each)` : 'SCADA license — one per server / PC station');
@@ -1081,7 +1187,8 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
   const panelIo: PanelIo = {
     source: `Siemens ${redundant ? `S7-1500${inp.redundancy}` : family}`,
     di: need.di, dq: need.do, a2, a4,
-    distPoints: (cpu.drawA > 0 ? cpuUnits : 0) + stations + potentialGroups + (panel ? inp.hmiQty : 0) + sw.qty + psuQty,
+    distPoints: (cpu.drawA > 0 ? cpuUnits : 0) + stations + potentialGroups + (panel ? inp.hmiQty : 0) + sw.qty + psuQty
+      + (central && !central.fallback ? central.modules + (central.ps ? 1 : 0) : 0),
     deviceRailMm: stations * (50 + 12.5) + ioModules * 15 + (is1200 ? 110 : 0),
     ...(psu ? { psuA: psu.ratingA, psuQty } : {}),
   };
@@ -1096,11 +1203,19 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
 
   const notes: string[] = [];
   if (useLocal && local) notes.push(`S7-1200 local expansion: ${local.modules} of ${local.slots} signal-module slots, ${local.busMa} of ${local.busMaxMa} mA backplane current — no ET 200SP station needed.`);
+  if (central && !central.fallback) notes.push(`S7-1500 central I/O: ${central.modules} of ${central.slots} module slots on the CPU rack, ${central.powerW} W backplane power (CPU feeds ${central.feedW} W${central.ps ? ` + ${central.ps === 'c1500ps25' ? 'PS 25 W' : 'PS 60 W'}` : ''}) — planning figures, check the power budget in TIA Portal. No ET 200SP station needed.`);
+  if (central?.fallback) notes.push(`Central I/O doesn't fit the S7-1500 rack (${central.modules} modules for ${central.slots} slots${central.powerW > central.feedW + 60 ? `, ${central.powerW} W backplane power` : ''}${whole(inp.imStations) > 0 ? ', or ET 200SP stations were asked for' : ''}) — using ET 200SP instead.`);
   if (is1200 && inp.expansion === 'local' && !useLocal && local) notes.push(`Doesn't fit on the CPU (${local.modules} signal modules for ${local.slots} slots, ${local.busMa} / ${local.busMaxMa} mA) — using ET 200SP instead.`);
   if (redundant) notes.push(`${inp.redundancy === 'R' ? 'S7-1500R' : 'S7-1500H'}: ET 200SP on IM 155-6 PN/2 HF (system redundancy S2) and the PROFINET ring on managed switches (MRP). Consider a second 24 V supply with a redundancy module.`);
   if (redundant && whole(inp.switchQty) < 2) notes.push('Redundancy needs at least 2 managed switches — added automatically.');
   if (redundant && inp.switchType === 'unmanaged' && whole(inp.switchQty) > 0) notes.push('Unmanaged switches can\'t run the MRP ring — managed ones are used instead.');
   if (netSwitch && netSwitch.ports < portsPerSwitch) notes.push(`About ${portsPerSwitch} ports are needed per switch but the largest ${sw.type} one has ${netSwitch.ports} — add more switches.`);
+  if (scadaTags) {
+    const t = scadaTags;
+    const pkgs = inp.scada === 'wincc81' ? WINCC81_PACKAGES : UNIFIED_PC_PACKAGES;
+    if (t.estimate > tagPackageSize(pkgs[pkgs.length - 1])) notes.push(`About ${t.estimate} PowerTags — more than the largest ${inp.scada === 'wincc81' ? 'WinCC V8.1' : 'WinCC Unified'} package (${pkgs[pkgs.length - 1]}); split the project or check with Siemens.`);
+    else if (tagPackageSize(t.package) < t.estimate) notes.push(`The ${t.package} PowerTag package is below the ~${t.estimate} tags estimated — the ${t.autoPackage} package would cover it.`);
+  }
   if (inp.modbus === 'tcp') notes.push('Modbus TCP runs on the CPU\'s PROFINET port — no extra hardware.');
   if (is1200 && need.ai > 0 && tot('aiU') < cpu.onboard.ai) notes.push('The CPU\'s on-board AI are 0–10 V only — other analog inputs go on ET 200SP modules.');
   if (potentialGroups > stations) notes.push(`${potentialGroups} ET 200SP potential groups (one light BaseUnit each, its own 24 V feed): max. ${ET200SP_GROUP_MAX_A} A per group${inp.dqOwnGroup && groupReasons.outputs ? ', DQ outputs on their own group' : ''}.`);
@@ -1119,6 +1234,7 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
     sm1221di16: ['di', 16], sm1221di8: ['di', 8], sm1222dq16: ['do', 16], sm1222dq8: ['do', 8],
     sm1231ai8: ['ai', 8], sm1231ai4: ['ai', 4], sm1231rtd8: ['ai', 8], sm1231rtd4: ['ai', 4], sm1231tc8: ['ai', 8], sm1231tc4: ['ai', 4],
     sm1232aq4: ['ao', 4], sm1232aq2: ['ao', 2], sb1231ai1: ['ai', 1], sb1232aq1: ['ao', 1],
+    c1500di32: ['di', 32], c1500di16: ['di', 16], c1500dq32: ['do', 32], c1500dq16: ['do', 16], c1500ai8: ['ai', 8], c1500aq4: ['ao', 4],
   };
   const localCh = { di: 0, do: 0, ai: 0, ao: 0 };
   Object.entries(localMods).forEach(([k, q]) => { const c = LOCAL_CH[k]; if (c) localCh[c[0]] += c[1] * q; });
@@ -1148,7 +1264,9 @@ function configurePlcFor(raw: PlcInputs, priceOf?: (key: string) => number): Plc
     lines,
     cpuKey: cpu.key,
     expansion: useLocal ? 'local' : ioModules > 0 ? 'et200sp' : 'none',
-    local: useLocal ? local : null,
+    local: useLocal && is1200 ? local : null,
+    central,
+    scadaTags,
     channels: {
       di: { needed: need.di, provided: provided.di },
       do: { needed: need.do, provided: provided.do },
@@ -1234,6 +1352,8 @@ export function estimate24V(raw: PlcInputs, cfg: PlcConfig): LoadEstimate {
   add('AQ 4 module electronics', count('aq4'), 0.05);
   add('AQ 2 module electronics', count('aq2'), 0.04);
   add('CM PtP module', count('cmPtp'), 0.05);
+  // S7-1500 central I/O: the backplane power (fed by the CPU / system PS) comes from the 24 V supply.
+  if (cfg.central && !cfg.central.fallback) add(`S7-1500 backplane — ${cfg.central.modules} central module${cfg.central.modules === 1 ? '' : 's'} (${cfg.central.powerW} W ÷ 24 V ÷ 85%)`, 1, Math.round((cfg.central.powerW / 24 / 0.85) * 100) / 100);
   const sw = SWITCHES.find((s) => s.key === cfg.network.switchKey);
   if (sw) add(sw.model, cfg.network.qty, sw.drawA);
   const panel = HMI_PANELS.find((h) => h.key === raw.hmi);
