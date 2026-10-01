@@ -16,10 +16,11 @@ import {
   type McbRating, type PanelInputs, type PanelSection,
 } from '../../utils/calcsheet/controlPanel';
 import type { PanelIo } from '../../utils/calcsheet/terminalWiring';
-import { ENCLOSURES, deviceList, frontView, plateView, sideView, terminalSchedule, type EnclosureKey } from '../../utils/calcsheet/panelLayout';
+import { ENCLOSURES, deviceList, frontView, plateView, rowDetailViews, sideView, terminalSchedule, type EnclosureKey } from '../../utils/calcsheet/panelLayout';
 import { panelDrawingDxf, panelSheets } from '../../utils/calcsheet/panelDrawing';
 import { panelDrawingPdf } from '../../utils/calcsheet/panelDrawingPdf';
 import PanelDrawingPreview from './PanelDrawingPreview';
+import PanelLayoutEditor from './PanelLayoutEditor';
 import type { PlcSubmitSection } from './SiemensPlcDialog';
 
 // Control Panel configurator: enclosure size + the panel's I/O → enclosure,
@@ -49,6 +50,8 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
   // The dialog starts on the smallest standard enclosure that fits (Tibox / Tekpan).
   const [inp, setInp] = useState<PanelInputs>(() => ({ ...DEFAULT_PANEL_INPUTS, enclosure: 'auto', io: lastIo ?? emptyPanelIo() }));
   const [drawTab, setDrawTab] = useState(0);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [layoutNotice, setLayoutNotice] = useState<string | null>(null);
   const set = <K extends keyof PanelInputs>(k: K, v: PanelInputs[K]) => setInp((p) => ({ ...p, [k]: v }));
   const setIo = <K extends keyof PanelIo>(k: K, v: PanelIo[K]) => setInp((p) => ({ ...p, io: { ...p.io, [k]: v } }));
   // Pick up the latest PLC / BMS I/O each time the dialog opens.
@@ -60,6 +63,13 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
   useEffect(() => { if (open && catalog.length === 0) void fetchCatalog().catch(() => {}); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cfg = configurePanel(inp);
+  // Hand edits only hold while the devices stay the same — drop them (and say so) when they change.
+  useEffect(() => {
+    if (inp.layoutEdit && !cfg.layoutEdited) {
+      setInp((p) => ({ ...p, layoutEdit: null }));
+      setLayoutNotice('The devices changed, so the layout went back to auto — edit it again if needed.');
+    }
+  }, [inp.layoutEdit, cfg.layoutEdited]);
   const rows = cfg.lines.map((l) => {
     const part = PANEL_PARTS[l.key];
     const p = siemensPrice(part, catalog);
@@ -75,15 +85,15 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
   // Drawings: general arrangement + one mounting plate per bay, to scale.
   const views = useMemo(() => {
     const plates = cfg.layout.bays.map((_, i) => plateView(cfg.layout, i));
-    return { front: frontView(cfg.layout), side: sideView(cfg.layout), plates };
+    return { front: frontView(cfg.layout), side: sideView(cfg.layout), plates, rows: rowDetailViews(cfg.layout) };
   }, [cfg.layout]);
-  const drawTabs = ['General arrangement', ...views.plates.map((_, i) => `Mounting plate — bay ${i + 1}`)];
+  const drawTabs = ['General arrangement', ...views.plates.map((_, i) => `Mounting plate — bay ${i + 1}`), 'Row details (1:2)'];
   const tab = Math.min(drawTab, drawTabs.length - 1);
   const heading = `${cfg.layout.bays.length > 1 ? `${cfg.layout.bays.length} × ` : ''}${cfg.layout.enclosure.label}`;
   const exportPdf = () => {
     const doc = panelDrawingPdf({
       heading,
-      sheets: panelSheets(views.front, views.side, views.plates),
+      sheets: panelSheets(views.front, views.side, views.plates, views.rows),
       devices: deviceList(cfg.layout),
       schedule: inp.terminals ? terminalSchedule(inp.io) : [],
       bom: rows.map((r) => ({ qty: r.qty, uom: r.part.uom ?? 'pc', description: describe(r), brand: r.brand ?? r.part.brand ?? '', partNo: r.part.partNo })),
@@ -91,7 +101,7 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
     doc.save('control-panel-drawings.pdf');
   };
   const exportDxf = () => {
-    const blob = new Blob([panelDrawingDxf([views.front, views.side, ...views.plates])], { type: 'application/dxf' });
+    const blob = new Blob([panelDrawingDxf([views.front, views.side, ...views.plates, ...views.rows])], { type: 'application/dxf' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -118,7 +128,7 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
     />
   );
 
-  const reset = () => { setInp({ ...DEFAULT_PANEL_INPUTS, enclosure: 'auto', io: lastIo ?? emptyPanelIo(), ...fromIo(lastIo) }); setDrawTab(0); };
+  const reset = () => { setInp({ ...DEFAULT_PANEL_INPUTS, enclosure: 'auto', io: lastIo ?? emptyPanelIo(), ...fromIo(lastIo) }); setDrawTab(0); setLayoutNotice(null); };
   const close = () => { reset(); onClose(); };
   const submit = () => {
     onSubmit(sections.map((g) => ({
@@ -242,19 +252,32 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
           <Tabs value={tab} onChange={(_, v: number) => setDrawTab(v)} variant="scrollable" scrollButtons="auto" sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, textTransform: 'none' } }}>
             {drawTabs.map((t) => <Tab key={t} label={t} />)}
           </Tabs>
-          {tab === 0
-            ? (
-              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '3fr 1fr' }, gap: 1 }}>
-                <PanelDrawingPreview view={views.front} height={fullScreen ? 300 : 420} />
-                <PanelDrawingPreview view={views.side} height={fullScreen ? 300 : 420} />
-              </Box>
-            )
-            : <PanelDrawingPreview view={views.plates[tab - 1]} height={fullScreen ? 360 : 520} />}
+          {tab === 0 && (
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '3fr 1fr' }, gap: 1 }}>
+              <PanelDrawingPreview view={views.front} height={fullScreen ? 300 : 420} />
+              <PanelDrawingPreview view={views.side} height={fullScreen ? 300 : 420} />
+            </Box>
+          )}
+          {tab > 0 && tab <= views.plates.length && <PanelDrawingPreview view={views.plates[tab - 1]} height={fullScreen ? 360 : 520} />}
+          {tab === views.plates.length + 1 && (
+            views.rows.length
+              ? (
+                <Stack spacing={1} sx={{ maxHeight: 560, overflowY: 'auto', pr: 0.5 }}>
+                  {views.rows.map((v) => <PanelDrawingPreview key={v.title} view={v} height={fullScreen ? 120 : 170} />)}
+                </Stack>
+              )
+              : <Typography variant="body2" color="text.secondary">No rail rows yet.</Typography>
+          )}
+          {layoutNotice && <Alert severity="info" sx={{ py: 0 }} onClose={() => setLayoutNotice(null)}>{layoutNotice}</Alert>}
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Button size="small" variant="contained" onClick={() => setEditorOpen(true)}>Edit layout</Button>
+            {cfg.layoutEdited && (
+              <Chip size="small" color="primary" label="Edited layout" onDelete={() => set('layoutEdit', null)} />
+            )}
             <Button size="small" variant="outlined" onClick={exportPdf}>Export drawings (PDF)</Button>
             <Button size="small" variant="outlined" onClick={exportDxf}>Export DXF (AutoCAD)</Button>
             <Typography variant="caption" color="text.secondary">
-              A3, no title block: general arrangement, mounting plates, device list, terminal schedule and BOM. DXF is 1:1 in mm, one layer per kind.
+              A3, no title block: general arrangement, mounting plates, row details at 1:2 (terminals, relays, devices), device list, terminal schedule and BOM. DXF is 1:1 in mm, one layer per kind.
             </Typography>
           </Stack>
 
@@ -313,6 +336,13 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
           )}
         </Stack>
       </DialogContent>
+      <PanelLayoutEditor
+        open={editorOpen}
+        layout={cfg.layout}
+        autoLayout={cfg.autoLayout}
+        onCancel={() => setEditorOpen(false)}
+        onDone={(l) => { set('layoutEdit', l); setLayoutNotice(null); setEditorOpen(false); }}
+      />
       <DialogActions sx={{ px: { xs: 2, sm: 3 }, pb: 2, flexWrap: 'wrap', gap: 1 }}>
         <Button onClick={close}>Cancel</Button>
         <Button variant="contained" onClick={submit}>

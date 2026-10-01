@@ -96,14 +96,38 @@ export function composeSheet(title: string, views: View[]): Sheet {
   return { title, views: placed };
 }
 
-/** Sheets: general arrangement (front + side), then mounting plates (up to 3 bays per sheet). */
-export function panelSheets(front: View, side: View, plates: View[]): Sheet[] {
+/** Scale of the row-detail sheets (1 : ROW_DETAIL_K). */
+export const ROW_DETAIL_K = 2;
+
+/**
+ * Row-detail views stacked top to bottom at 1:2, as many per A3 sheet as fit
+ * (views come from rowDetailViews, already split to fit the sheet width).
+ */
+export function rowDetailSheets(rows: View[], k = ROW_DETAIL_K): Sheet[] {
+  const top = SHEET.margin + 14;
+  const bottom = SHEET.h - SHEET.margin - 8;
+  const pages: PlacedView[][] = [];
+  let page: PlacedView[] = [];
+  let y = top;
+  rows.forEach((v) => {
+    const b = viewBox(v, k);
+    const h = b.h / k + 6; // + the view title under it
+    if (page.length && y + h > bottom) { pages.push(page); page = []; y = top; }
+    page.push({ view: v, k, ox: (SHEET.w - b.w / k) / 2 - b.x / k, oy: y - b.y / k });
+    y += h + 4;
+  });
+  if (page.length) pages.push(page);
+  return pages.map((views, i) => ({ title: pages.length > 1 ? `ROW DETAILS — TERMINALS, RELAYS & DEVICES (${i + 1}/${pages.length})` : 'ROW DETAILS — TERMINALS, RELAYS & DEVICES', views }));
+}
+
+/** Sheets: general arrangement (front + side), mounting plates (up to 3 bays per sheet), then the row details at 1:2. */
+export function panelSheets(front: View, side: View, plates: View[], rows: View[] = []): Sheet[] {
   const sheets: Sheet[] = [composeSheet('GENERAL ARRANGEMENT', [front, side])];
   for (let i = 0; i < plates.length; i += 3) {
     const group = plates.slice(i, i + 3);
     sheets.push(composeSheet(plates.length > 3 ? `MOUNTING PLATE LAYOUT (${i / 3 + 1}/${Math.ceil(plates.length / 3)})` : 'MOUNTING PLATE LAYOUT', group));
   }
-  return sheets;
+  return [...sheets, ...rowDetailSheets(rows)];
 }
 
 // ── DXF (AutoCAD R12, 1:1 millimetres) ───────────────────────────────────

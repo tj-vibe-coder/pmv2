@@ -19,9 +19,10 @@
 //  • One LED light + door switch per door (2 doors above 800 mm wide).
 
 import { TERMINAL_PARTS, TERMINAL_GENERIC, terminalStrip, type CatalogPart, type PanelIo, type StripLine, type WiringSummary } from './terminalWiring';
+import { cloneLayout, layoutSignature, restack } from './panelLayoutEdit';
 import {
   DIMS, DUCT_V_W, ENCLOSURES, MAX_BAYS, autoEnclosure, customEnclosure, layoutPanel, plateOf,
-  type EnclosureKey, type LayoutGroup, type PanelLayout,
+  type DeviceKind, type EnclosureKey, type LayoutGroup, type PanelLayout,
 } from './panelLayout';
 
 export type PanelSection = 'panel' | 'terminals' | 'wiring';
@@ -116,6 +117,8 @@ export interface PanelInputs {
   enclosure: EnclosureKey | 'auto';
   /** Floor-standing bays joined side by side; 0 = as many as the layout needs. */
   bays: number;
+  /** Hand-edited layout (layout editor). Used while it holds the same devices as the auto layout, else ignored. */
+  layoutEdit?: PanelLayout | null;
 }
 
 export const emptyPanelIo = (): PanelIo => ({ source: '', di: 0, dq: 0, a2: 0, a4: 0, distPoints: 1, deviceRailMm: 0 });
@@ -154,6 +157,10 @@ export interface PanelConfig {
   wires15: number;
   /** Components placed on the mounting plate(s) — for the drawings and the fit check. */
   layout: PanelLayout;
+  /** The layout as the engine places it (before hand edits). */
+  autoLayout: PanelLayout;
+  /** True when `layout` is the hand-edited one. */
+  layoutEdited: boolean;
   notes: string[];
 }
 
@@ -168,12 +175,12 @@ function sticks(pieces: number, pieceMm: number, stickMm = 2000): number {
 /** The panel's devices as layout runs: power row, controller, relays, terminal strips. */
 function panelGroups(raw: PanelInputs, io: PanelIo, psuQty: number, branches: number): LayoutGroup[] {
   const g: LayoutGroup[] = [];
-  const run = (tag: string, label: string, d: { w: number; h: number }, count: number, zone: LayoutGroup['zone'], splittable = true) => {
-    if (count > 0) g.push({ tag, label, unitW: d.w, unitH: d.h, count, splittable, zone });
+  const run = (tag: string, label: string, d: { w: number; h: number }, count: number, zone: LayoutGroup['zone'], splittable = true, kind?: DeviceKind) => {
+    if (count > 0) g.push({ tag, label, unitW: d.w, unitH: d.h, count, splittable, zone, ...(kind ? { kind } : {}) });
   };
-  run('X0', 'Incoming 230 V terminals', DIMS.tbIn4, 2, 'power');
-  run('Q0', 'Main breaker 2P', DIMS.mcb2p, 1, 'power', false);
-  run('Q1', 'Branch breakers 2P', DIMS.mcb2p, branches, 'power');
+  run('X0', 'Incoming 230 V terminals', DIMS.tbIn4, 2, 'power', true, 'terminalIn');
+  run('Q0', 'Main breaker 2P', DIMS.mcb2p, 1, 'power', false, 'mcb');
+  run('Q1', 'Branch breakers 2P', DIMS.mcb2p, branches, 'power', true, 'mcb');
   run('B1', 'Thermostat', DIMS.thermostat, 1, 'power', false);
   if (raw.socket) run('XS1', 'Service socket', DIMS.socket, 1, 'power', false);
   const psuA = Math.max(0, Number(raw.psuA) || 0);
@@ -187,12 +194,12 @@ function panelGroups(raw: PanelInputs, io: PanelIo, psuQty: number, branches: nu
     });
   } else if (io.deviceRailMm > 0) run('A1', `Controller (${io.source || 'PLC / BMS'})`, { w: 15, h: 120 }, Math.ceil(io.deviceRailMm / 15), 'control');
   if (raw.terminals) {
-    run('K', 'Interposing relays (DO)', DIMS.relay, io.dq, 'relays');
-    run('X1', '24 V DC distribution', DIMS.tbStd, 2 * io.distPoints, 'terminals');
-    run('X2', 'DI terminals, 2-level', DIMS.tb2Level, io.di, 'terminals');
-    run('X3', 'Analog fuse terminals', DIMS.tbFuse, io.a2 + 2 * io.a4, 'terminals');
-    run('X3', 'Analog terminals', DIMS.tbStd, io.a2 + 2 * io.a4, 'terminals');
-    run('PE', 'PE terminals', DIMS.tbStd, 2, 'terminals');
+    run('K', 'Interposing relays (DO)', DIMS.relay, io.dq, 'relays', true, 'relay');
+    run('X1', '24 V DC distribution', DIMS.tbStd, 2 * io.distPoints, 'terminals', true, 'terminal');
+    run('X2', 'DI terminals, 2-level', DIMS.tb2Level, io.di, 'terminals', true, 'terminal2');
+    run('X3', 'Analog fuse terminals', DIMS.tbFuse, io.a2 + 2 * io.a4, 'terminals', true, 'fuse');
+    run('X3', 'Analog terminals', DIMS.tbStd, io.a2 + 2 * io.a4, 'terminals', true, 'terminal');
+    run('PE', 'PE terminals', DIMS.tbStd, 2, 'terminals', true, 'terminal');
   }
   return g;
 }
@@ -234,6 +241,10 @@ export function configurePanel(raw: PanelInputs): PanelConfig {
     // Bays asked for beyond what the devices fill are drawn empty (spare).
     while (e.joinable && askedBays > layout.bays.length && layout.bays.length < MAX_BAYS) layout.bays.push({ plate: plateOf(e), rows: [] });
   }
+  // A hand-edited layout replaces the auto one while it holds the same devices.
+  const autoLayout = layout;
+  const layoutEdited = !!raw.layoutEdit && layoutSignature(raw.layoutEdit) === layoutSignature(layout);
+  if (layoutEdited) layout = restack(cloneLayout(raw.layoutEdit as PanelLayout));
   const enc = layout.enclosure;
   const bays = Math.max(1, layout.bays.length);
   const floor = custom ? floorIn : enc.floor;
@@ -371,5 +382,5 @@ export function configurePanel(raw: PanelInputs): PanelConfig {
   if (airflow > FANS[FANS.length - 1].airflow) notes.push(`≈ ${airflow} m³/h is more than one ${FANS[FANS.length - 1].sizeMm} mm fan — ${fanQty} fans, or consider a panel air conditioner.`);
   notes.push('230 V circuits are 2-pole (L1 / L2) — 1.5 mm² white for L1, black for L2.');
 
-  return { lines, floor, doors, plate, rows, railLayoutMm, railNeededMm, airflow, heatW, heatAutoW, heatSources, loadA, mainA, wiring, wires15, layout, notes };
+  return { lines, floor, doors, plate, rows, railLayoutMm, railNeededMm, airflow, heatW, heatAutoW, heatSources, loadA, mainA, wiring, wires15, layout, autoLayout, layoutEdited, notes };
 }

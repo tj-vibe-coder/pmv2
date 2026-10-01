@@ -44,8 +44,8 @@ export function plateOf(e: EnclosureSpec): { w: number; h: number } {
 // ── Layout constants (mm) ─────────────────────────────────────────────────
 export const DUCT_V_W = 60; // vertical duct 60 × 80, footprint 60 wide
 export const DUCT_H_H = 40; // horizontal duct 40 × 60, footprint 40 high
-const GAP = 10; // clearance between a device row and the ducts / next item
-const ROW_MIN = 60;
+export const GAP = 10; // clearance between a device row and the ducts / next item
+export const ROW_MIN = 60;
 
 /**
  * A run of identical devices (or a single one). Splittable runs (terminals,
@@ -61,9 +61,14 @@ export interface LayoutGroup {
   splittable: boolean;
   /** Row zone: devices of a new zone start on a new row. */
   zone: 'power' | 'control' | 'relays' | 'terminals';
+  /** What it is, for the unit-by-unit row-detail drawing (absent = a plain device block). */
+  kind?: DeviceKind;
 }
 
-export interface Placed { tag: string; label: string; x: number; y: number; w: number; h: number; count: number; zone: LayoutGroup['zone'] }
+/** Device kinds drawn in detail on the row sheets. */
+export type DeviceKind = 'terminal' | 'terminal2' | 'fuse' | 'terminalIn' | 'relay' | 'mcb' | 'device';
+
+export interface Placed { tag: string; label: string; x: number; y: number; w: number; h: number; count: number; zone: LayoutGroup['zone']; kind?: DeviceKind }
 export interface Row { y: number; h: number; items: Placed[] }
 export interface BayLayout { plate: { w: number; h: number }; rows: Row[] }
 export interface PanelLayout {
@@ -133,6 +138,7 @@ export function layoutPanel(groups: LayoutGroup[], enclosure: EnclosureSpec, bay
       r.items.push({
         tag: g.count > 1 && !g.splittable ? `${g.tag}${n}` : g.tag, label: g.label,
         x: DUCT_V_W + GAP + x, y: r.y + (r.h - g.unitH) / 2, w: fitN * g.unitW, h: g.unitH, count: fitN, zone: g.zone,
+        ...(g.kind ? { kind: g.kind } : {}),
       });
       x += fitN * g.unitW + (g.splittable ? 0 : GAP);
       left -= fitN;
@@ -316,4 +322,128 @@ export function deviceList(layout: PanelLayout): { tag: string; description: str
     m.set(key, e);
   })));
   return Array.from(m.values());
+}
+
+// ── Row detail (terminals, relays and devices drawn unit by unit, 1:2) ──────
+
+/** Longest stretch of a row on one row-detail view (model mm) — fits A3 at 1:2. */
+export const ROW_DETAIL_MAX = 700;
+
+/**
+ * Tag of the n-th unit of a run: terminals "X2:5", relays "K5", other runs
+ * "Q1.2"; a single device keeps its tag.
+ */
+const TERMINAL_KINDS: DeviceKind[] = ['terminal', 'terminal2', 'fuse', 'terminalIn'];
+export function unitTag(it: Placed, n: number, single: boolean): string {
+  if (single) return it.tag;
+  if (it.kind === 'relay' || /[A-Z]$/.test(it.tag)) return `${it.tag}${n}`;
+  if (it.kind && TERMINAL_KINDS.includes(it.kind)) return `${it.tag}:${n}`;
+  return `${it.tag}.${n}`;
+}
+/** Units of this run are numbered (terminals, relays, any run of more than one). */
+const numbered = (it: Placed) => it.count > 1 || it.kind === 'relay' || (!!it.kind && TERMINAL_KINDS.includes(it.kind));
+
+interface Unit { x: number; w: number; it: Placed; tag: string; first: boolean; last: boolean }
+
+/** One unit drawn in detail, in row coordinates (y = 0 at the top of the row). */
+function unitShapes(u: Unit, rowY: number): Shape[] {
+  const { it } = u;
+  const y = it.y - rowY;
+  const h = it.h;
+  const x = u.x;
+  const w = u.w;
+  const out: Shape[] = [{ t: 'rect', layer: 'DEVICE', x, y, w, h, fill: ZONE_FILL[it.zone] }];
+  const line = (x1: number, y1: number, x2: number, y2: number): Shape => ({ t: 'line', layer: 'DEVICE', x1, y1, x2, y2 });
+  const open = (cy: number, oh = 4): Shape => ({ t: 'rect', layer: 'DEVICE', x: x + 0.8, y: cy - oh / 2, w: Math.max(0.5, w - 1.6), h: oh, fill: '#ffffff' });
+  const kind = it.kind ?? 'device';
+  if (kind === 'terminal' || kind === 'terminalIn' || kind === 'fuse' || kind === 'terminal2') {
+    // Push-in clamp openings top and bottom, operating slots beside them, marker in the middle.
+    out.push(open(y + 6), open(y + h - 6));
+    out.push(line(x + 0.8, y + 11, x + w - 0.8, y + 11), line(x + 0.8, y + h - 11, x + w - 0.8, y + h - 11));
+    if (kind === 'terminal2') {
+      // Double-deck: a second pair of clamps one step in, and the deck step.
+      out.push(open(y + 17), open(y + h - 17));
+      out.push(line(x, y + h / 2, x + w, y + h / 2));
+    }
+    if (kind === 'fuse') {
+      // Fuse holder lever across the middle.
+      out.push({ t: 'rect', layer: 'DEVICE', x: x + 0.6, y: y + h / 2 - 12, w: w - 1.2, h: 24, fill: '#f2f2f2' });
+    }
+    out.push({ t: 'text', layer: 'TEXT', x: x + w / 2, y: y + (kind === 'fuse' ? h / 2 - 15 : kind === 'terminal2' ? h / 2 - 7 : h / 2), text: u.tag.split(':').pop() || u.tag, size: 1.4, anchor: 'middle', rotate: -90, dy: 0.5 });
+  } else if (kind === 'relay') {
+    // Slim relay: base with coil / contact clamps, relay body, LED.
+    out.push(open(y + 5), open(y + h - 5));
+    out.push(line(x, y + 14, x + w, y + 14), line(x, y + h - 14, x + w, y + h - 14));
+    out.push({ t: 'rect', layer: 'DEVICE', x: x + w / 2 - 1.2, y: y + 18, w: 2.4, h: 2.4, fill: '#f5b041' });
+    out.push({ t: 'text', layer: 'TEXT', x: x + w / 2, y: y + h / 2 + 6, text: u.tag, size: 1.4, anchor: 'middle', rotate: -90, dy: 0.5 });
+  } else if (kind === 'mcb') {
+    out.push(line(x, y + 18, x + w, y + 18), line(x, y + h - 18, x + w, y + h - 18));
+    out.push({ t: 'rect', layer: 'DEVICE', x: x + w / 2 - 4, y: y + h / 2 - 9, w: 8, h: 18, fill: '#ffffff' });
+    out.push({ t: 'text', layer: 'TEXT', x: x + w / 2, y: y + 12, text: `-${u.tag}`, size: 1.6, anchor: 'middle' });
+  } else {
+    const max = Math.max(3, Math.floor(w / 4.5));
+    const name = it.label.length > max ? `${it.label.slice(0, max - 1)}…` : it.label;
+    if (w >= 25) {
+      out.push({ t: 'text', layer: 'TEXT', x: x + w / 2, y: y + 8, text: `-${u.tag}`, size: 1.8, anchor: 'middle' });
+      out.push({ t: 'text', layer: 'TEXT', x: x + w / 2, y: y + h / 2, text: name, size: 1.4, anchor: 'middle', dy: 0.5 });
+    } else {
+      out.push({ t: 'text', layer: 'TEXT', x: x + w / 2, y: y + h / 2, text: `-${u.tag} ${name}`, size: 1.4, anchor: 'middle', rotate: -90, dy: 0.5 });
+    }
+  }
+  return out;
+}
+
+/**
+ * Row-detail views: every rail row with its terminals, relays, breakers and
+ * devices drawn unit by unit with their tags (numbered in mounting order
+ * across the whole panel), the top-hat rail and an end stop after each run.
+ * Rows longer than ROW_DETAIL_MAX are split into parts.
+ */
+export function rowDetailViews(layout: PanelLayout): View[] {
+  const counters: Record<string, number> = {};
+  const views: View[] = [];
+  let rowNo = 0;
+  layout.bays.forEach((b, bi) => b.rows.forEach((r) => {
+    rowNo += 1;
+    if (!r.items.length) return;
+    // Units in mounting order (numbers continue across rows and bays).
+    const units: Unit[] = [];
+    [...r.items].sort((a, c) => a.x - c.x).forEach((it) => {
+      const single = !numbered(it);
+      const uw = it.w / it.count;
+      for (let k = 0; k < it.count; k++) {
+        let tag = it.tag;
+        if (!single) { const key = it.tag; counters[key] = (counters[key] ?? 0) + 1; tag = unitTag(it, counters[key], false); }
+        units.push({ x: it.x + k * uw, w: uw, it, tag, first: k === 0, last: k === it.count - 1 });
+      }
+    });
+    // Split into parts no longer than ROW_DETAIL_MAX, at unit edges.
+    const parts: Unit[][] = [];
+    let cur: Unit[] = [];
+    units.forEach((u) => {
+      if (cur.length && u.x + u.w - cur[0].x > ROW_DETAIL_MAX) { parts.push(cur); cur = []; }
+      cur.push(u);
+    });
+    if (cur.length) parts.push(cur);
+    parts.forEach((part, pi) => {
+      const x0 = Math.floor(part[0].x) - 5;
+      const x1 = Math.ceil(part[part.length - 1].x + part[part.length - 1].w) + 12;
+      const w = x1 - x0;
+      const shapes: Shape[] = [];
+      // Top-hat rail TS 35 × 7.5 across the part.
+      const ry = r.h / 2 - 17.5;
+      shapes.push({ t: 'rect', layer: 'RAIL', x: 0, y: ry, w, h: 35, fill: '#f6f6f6' });
+      shapes.push({ t: 'line', layer: 'RAIL', x1: 0, y1: ry + 5, x2: w, y2: ry + 5 }, { t: 'line', layer: 'RAIL', x1: 0, y1: ry + 30, x2: w, y2: ry + 30 });
+      part.forEach((u) => {
+        unitShapes({ ...u, x: u.x - x0 }, r.y).forEach((s) => shapes.push(s));
+        // Run label above the first unit, end stop after the last unit of a run.
+        if (u.first && u.it.count > 1) shapes.push({ t: 'text', layer: 'TEXT', x: u.x - x0, y: u.it.y - r.y, dy: -1.2, text: `-${u.it.tag}  ${u.it.label}`, size: 1.8, anchor: 'start' });
+        if (u.last && u.it.count > 1) shapes.push({ t: 'rect', layer: 'DEVICE', x: u.x - x0 + u.w + 0.5, y: r.h / 2 - 22, w: 6, h: 44, fill: '#9e9e9e' });
+      });
+      shapes.push({ t: 'dim', layer: 'DIM', x1: part[0].x - x0, y1: r.h, x2: part[part.length - 1].x + part[part.length - 1].w - x0, y2: r.h, offset: 14 });
+      const of = parts.length > 1 ? ` — PART ${pi + 1}/${parts.length}` : '';
+      views.push({ title: `ROW ${rowNo}${layout.bays.length > 1 ? ` (BAY ${bi + 1})` : ''}${of}`, w, h: r.h, shapes });
+    });
+  }));
+  return views;
 }
