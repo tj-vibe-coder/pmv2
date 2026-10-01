@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel,
-  MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography,
+  MenuItem, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, TextField, Typography,
   useMediaQuery, useTheme,
 } from '@mui/material';
 import { nanoid } from 'nanoid';
@@ -16,6 +16,10 @@ import {
   type McbRating, type PanelInputs, type PanelSection,
 } from '../../utils/calcsheet/controlPanel';
 import type { PanelIo } from '../../utils/calcsheet/terminalWiring';
+import { ENCLOSURES, deviceList, frontView, plateView, sideView, terminalSchedule, type EnclosureKey } from '../../utils/calcsheet/panelLayout';
+import { panelDrawingDxf, panelSheets } from '../../utils/calcsheet/panelDrawing';
+import { panelDrawingPdf } from '../../utils/calcsheet/panelDrawingPdf';
+import PanelDrawingPreview from './PanelDrawingPreview';
 import type { PlcSubmitSection } from './SiemensPlcDialog';
 
 // Control Panel configurator: enclosure size + the panel's I/O → enclosure,
@@ -42,7 +46,9 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
   // Phones: full-screen dialog, fields stack two per row, tables scroll sideways.
   const fullScreen = useMediaQuery(useTheme().breakpoints.down('sm'));
   const lastIo = usePanelIoStore((s) => s.io);
-  const [inp, setInp] = useState<PanelInputs>(() => ({ ...DEFAULT_PANEL_INPUTS, io: lastIo ?? emptyPanelIo() }));
+  // The dialog starts on the smallest standard enclosure that fits (Tibox / Tekpan).
+  const [inp, setInp] = useState<PanelInputs>(() => ({ ...DEFAULT_PANEL_INPUTS, enclosure: 'auto', io: lastIo ?? emptyPanelIo() }));
+  const [drawTab, setDrawTab] = useState(0);
   const set = <K extends keyof PanelInputs>(k: K, v: PanelInputs[K]) => setInp((p) => ({ ...p, [k]: v }));
   const setIo = <K extends keyof PanelIo>(k: K, v: PanelIo[K]) => setInp((p) => ({ ...p, io: { ...p.io, [k]: v } }));
   // Pick up the latest PLC / BMS I/O each time the dialog opens.
@@ -66,7 +72,35 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
     .filter((g) => g.rows.length > 0);
   const describe = (r: (typeof rows)[number]) => `${r.part.generic || r.part.description}${r.detail ? `, ${r.detail}` : ''}`;
 
-  type NumKey = 'widthMm' | 'heightMm' | 'depthMm' | 'heatLossW' | 'deltaT' | 'psuQty' | 'psuA' | 'extraCircuits' | 'extraLoadA';
+  // Drawings: general arrangement + one mounting plate per bay, to scale.
+  const views = useMemo(() => {
+    const plates = cfg.layout.bays.map((_, i) => plateView(cfg.layout, i));
+    return { front: frontView(cfg.layout), side: sideView(cfg.layout), plates };
+  }, [cfg.layout]);
+  const drawTabs = ['General arrangement', ...views.plates.map((_, i) => `Mounting plate — bay ${i + 1}`)];
+  const tab = Math.min(drawTab, drawTabs.length - 1);
+  const heading = `${cfg.layout.bays.length > 1 ? `${cfg.layout.bays.length} × ` : ''}${cfg.layout.enclosure.label}`;
+  const exportPdf = () => {
+    const doc = panelDrawingPdf({
+      heading,
+      sheets: panelSheets(views.front, views.side, views.plates),
+      devices: deviceList(cfg.layout),
+      schedule: inp.terminals ? terminalSchedule(inp.io) : [],
+      bom: rows.map((r) => ({ qty: r.qty, uom: r.part.uom ?? 'pc', description: describe(r), brand: r.brand ?? r.part.brand ?? '', partNo: r.part.partNo })),
+    });
+    doc.save('control-panel-drawings.pdf');
+  };
+  const exportDxf = () => {
+    const blob = new Blob([panelDrawingDxf([views.front, views.side, ...views.plates])], { type: 'application/dxf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'control-panel.dxf';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  type NumKey = 'widthMm' | 'heightMm' | 'depthMm' | 'heatLossW' | 'deltaT' | 'psuQty' | 'psuA' | 'extraCircuits' | 'extraLoadA' | 'bays';
   const num = (k: NumKey, label: string, helper?: string) => (
     <TextField
       label={label} size="small" fullWidth type="text" inputMode="numeric"
@@ -84,13 +118,13 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
     />
   );
 
-  const reset = () => setInp({ ...DEFAULT_PANEL_INPUTS, io: lastIo ?? emptyPanelIo(), ...fromIo(lastIo) });
+  const reset = () => { setInp({ ...DEFAULT_PANEL_INPUTS, enclosure: 'auto', io: lastIo ?? emptyPanelIo(), ...fromIo(lastIo) }); setDrawTab(0); };
   const close = () => { reset(); onClose(); };
   const submit = () => {
     onSubmit(sections.map((g) => ({
       header: g.header,
       rows: g.rows.map((r): ComponentLine => ({
-        id: id(), code: '', description: describe(r), brand: r.part.brand ?? '', partNo: r.part.partNo,
+        id: id(), code: '', description: describe(r), brand: r.brand ?? r.part.brand ?? '', partNo: r.part.partNo,
         qty: r.qty, uom: r.part.uom ?? 'pc', unitCost: r.unitCost, forex: 1,
         contingencyPct: productContingencyPct ?? 0, contingencyPctOverridden: false, discountPct: 0,
       })),
@@ -111,18 +145,32 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
         <Stack spacing={2}>
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Enclosure</Typography></Divider>
           <Stack direction="row" spacing={2} alignItems="flex-start" flexWrap="wrap" useFlexGap>
-            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('widthMm', 'Width (mm)')}</Box>
-            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('heightMm', 'Height (mm)')}</Box>
-            <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('depthMm', 'Depth (mm)')}</Box>
-            <TextField select label="Mounting" size="small" sx={{ minWidth: { xs: '100%', sm: 190 } }} value={inp.mounting} onChange={(e) => set('mounting', e.target.value as PanelInputs['mounting'])}
-              helperText={inp.mounting === 'auto' ? (cfg.floor ? 'Auto: floor-standing' : 'Auto: wall-mounted') : ' '}>
-              <MenuItem value="auto">Auto (floor from 1400 mm)</MenuItem>
-              <MenuItem value="wall">Wall-mounted</MenuItem>
-              <MenuItem value="floor">Floor-standing</MenuItem>
+            <TextField select label="Enclosure" size="small" sx={{ minWidth: { xs: '100%', sm: 330 } }} value={inp.enclosure}
+              onChange={(e) => setInp((p) => ({ ...p, enclosure: e.target.value as EnclosureKey | 'auto', bays: 0 }))}
+              helperText={inp.enclosure === 'auto' ? `Auto: ${heading}` : ' '}>
+              <MenuItem value="auto">Auto — smallest that fits</MenuItem>
+              {ENCLOSURES.map((e) => <MenuItem key={e.key} value={e.key}>{e.label}</MenuItem>)}
+              <MenuItem value="custom">Custom size</MenuItem>
             </TextField>
+            {(cfg.layout.enclosure.joinable && inp.enclosure !== 'auto') && (
+              <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 130 } }}>{num('bays', 'Bays (joined)', `Auto: ${cfg.layout.bays.length}`)}</Box>
+            )}
           </Stack>
+          {inp.enclosure === 'custom' && (
+            <Stack direction="row" spacing={2} alignItems="flex-start" flexWrap="wrap" useFlexGap>
+              <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('widthMm', 'Width (mm)')}</Box>
+              <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('heightMm', 'Height (mm)')}</Box>
+              <Box sx={{ width: { xs: 'calc(50% - 8px)', sm: 120 } }}>{num('depthMm', 'Depth (mm)')}</Box>
+              <TextField select label="Mounting" size="small" sx={{ minWidth: { xs: '100%', sm: 190 } }} value={inp.mounting} onChange={(e) => set('mounting', e.target.value as PanelInputs['mounting'])}
+                helperText={inp.mounting === 'auto' ? (cfg.floor ? 'Auto: floor-standing' : 'Auto: wall-mounted') : ' '}>
+                <MenuItem value="auto">Auto (floor from 1400 mm)</MenuItem>
+                <MenuItem value="wall">Wall-mounted</MenuItem>
+                <MenuItem value="floor">Floor-standing</MenuItem>
+              </TextField>
+            </Stack>
+          )}
           <Typography variant="caption" color="text.secondary">
-            Mounting plate ≈ {cfg.plate.w} x {cfg.plate.h} mm · {cfg.rows} rail row{cfg.rows === 1 ? '' : 's'} ({(cfg.railLayoutMm / 1000).toFixed(1)} m of DIN rail) ·
+            Mounting plate ≈ {cfg.plate.w} x {cfg.plate.h} mm{cfg.layout.bays.length > 1 ? ` per bay × ${cfg.layout.bays.length} bays` : ''} · {cfg.rows} rail row{cfg.rows === 1 ? '' : 's'} ·
             {' '}{cfg.doors} door{cfg.doors === 1 ? '' : 's'}
           </Typography>
 
@@ -188,7 +236,27 @@ export default function ControlPanelDialog({ open, onClose, productContingencyPc
             <Chip size="small" variant="outlined" label={`DIN rail: ${(cfg.railNeededMm / 1000).toFixed(1)} m needed · ${(cfg.railLayoutMm / 1000).toFixed(1)} m fits`}
               color={cfg.railNeededMm > cfg.railLayoutMm ? 'warning' : 'default'} />
           </Stack>
-          {cfg.notes.map((n) => <Alert key={n} severity={/need ≈|Very small|more than one/.test(n) ? 'warning' : 'info'} sx={{ py: 0 }}>{n}</Alert>)}
+          {cfg.notes.map((n) => <Alert key={n} severity={/need ≈|Very small|more than one|Doesn't fit/.test(n) ? 'warning' : 'info'} sx={{ py: 0 }}>{n}</Alert>)}
+
+          <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Drawings (to scale)</Typography></Divider>
+          <Tabs value={tab} onChange={(_, v: number) => setDrawTab(v)} variant="scrollable" scrollButtons="auto" sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, textTransform: 'none' } }}>
+            {drawTabs.map((t) => <Tab key={t} label={t} />)}
+          </Tabs>
+          {tab === 0
+            ? (
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '3fr 1fr' }, gap: 1 }}>
+                <PanelDrawingPreview view={views.front} height={fullScreen ? 300 : 420} />
+                <PanelDrawingPreview view={views.side} height={fullScreen ? 300 : 420} />
+              </Box>
+            )
+            : <PanelDrawingPreview view={views.plates[tab - 1]} height={fullScreen ? 360 : 520} />}
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Button size="small" variant="outlined" onClick={exportPdf}>Export drawings (PDF)</Button>
+            <Button size="small" variant="outlined" onClick={exportDxf}>Export DXF (AutoCAD)</Button>
+            <Typography variant="caption" color="text.secondary">
+              A3, no title block: general arrangement, mounting plates, device list, terminal schedule and BOM. DXF is 1:1 in mm, one layer per kind.
+            </Typography>
+          </Stack>
 
           <Divider textAlign="left"><Typography variant="caption" color="text.secondary">Items to add</Typography></Divider>
           <Box sx={{ overflowX: 'auto' }}>

@@ -12,6 +12,8 @@ it('picks up the last PLC I/O and adds panel, terminals and wires under their ow
   const onSubmit = jest.fn();
   render(<ControlPanelDialog open onClose={() => {}} productContingencyPct={0} onSubmit={onSubmit} />);
   expect(screen.getByText('I/O from Siemens S7-1500')).toBeInTheDocument();
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /^Enclosure/ }));
+  fireEvent.click(screen.getByRole('option', { name: /Custom size/ }));
   fireEvent.change(screen.getByLabelText(/^Width/), { target: { value: '600' } });
   fireEvent.change(screen.getByLabelText(/^Height/), { target: { value: '800' } });
   fireEvent.click(screen.getByRole('button', { name: /to components/i }));
@@ -25,4 +27,17 @@ it('picks up the last PLC I/O and adds panel, terminals and wires under their ow
   expect(wires.some((r) => /1\.5 mm², white/.test(r.description))).toBe(true);
   expect(wires.some((r) => /marker tube Ø2\.5/.test(r.description))).toBe(true);
   expect(wires.find((r) => /H05V-K 1x0\.5 mm² wire, red/.test(r.description))).toMatchObject({ unitCost: 9.14, uom: 'm', partNo: '8110041' });
+});
+
+it('opens on the smallest standard enclosure that fits and shows the drawings to scale', () => {
+  act(() => { usePanelIoStore.setState({ io: { source: 'Siemens S7-1200', di: 16, dq: 8, a2: 4, a4: 0, distPoints: 4, deviceRailMm: 110, devices: [{ tag: 'A', label: 'CPU 1214C', widthMm: 110, heightMm: 100 }] } }); });
+  const onSubmit = jest.fn();
+  render(<ControlPanelDialog open onClose={() => {}} productContingencyPct={0} onSubmit={onSubmit} />);
+  expect(screen.getByText(/Auto: Tibox wall-mount 800H × 600W × 300D/)).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: 'General arrangement' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('tab', { name: /Mounting plate — bay 1/ }));
+  expect(screen.getByRole('img', { name: /MOUNTING PLATE — BAY 1/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /to components/i }));
+  const [panel] = (onSubmit.mock.calls[0][0] as Section[]).map((g) => g.rows);
+  expect(panel.find((r) => /^Panel enclosure, wall-mounted/.test(r.description))).toMatchObject({ brand: 'Tibox', description: expect.stringMatching(/800H × 600W × 300D mm/) });
 });
