@@ -965,6 +965,9 @@ function sanitizeWhiteboardLink(link) {
   return { type, id, label: String(label || '').trim().slice(0, 200) };
 }
 
+// Team-wide lists on the board (src/types/Whiteboard.ts WHITEBOARD_CATEGORIES).
+const WHITEBOARD_CATEGORIES = ['general', 'project', 'sales', 'finance'];
+
 function whiteboardPersonOf(user) {
   const words = [user.full_name, user.username, String(user.email || '').split('@')[0]]
     .filter(Boolean)
@@ -1004,6 +1007,8 @@ app.post('/api/whiteboard', async (req, res) => {
     if (link === false) return res.status(400).json({ error: 'Invalid link' });
     if (!['update', 'note', 'todo'].includes(kind)) return res.status(400).json({ error: 'Invalid kind' });
     if (!['public', 'private', 'general'].includes(visibility)) return res.status(400).json({ error: 'Invalid visibility' });
+    const category = (req.body || {}).category || 'general';
+    if (!WHITEBOARD_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'Text is required' });
     // assignedTo picks the board column (see WHITEBOARD_PEOPLE) — required
     // for a public sticky note (it needs somewhere to live on the board),
@@ -1015,6 +1020,7 @@ app.post('/api/whiteboard', async (req, res) => {
     const doc = {
       kind, visibility, text: String(text).trim(),
       ...(visibility === 'public' ? { assignedTo } : {}),
+      ...(visibility === 'general' ? { category } : {}),
       ...(kind === 'todo' ? { done: !!done, ...(dueDate ? { dueDate } : {}) } : {}),
       ...(link ? { link } : {}),
       createdBy: user.id,
@@ -1053,6 +1059,7 @@ app.put('/api/whiteboard/:id', async (req, res) => {
     const patch = isAssigneeDoneToggle ? { done: !!req.body.done }
       : isGeneralShared ? { done: !!req.body.done }
       : { ...req.body };
+    if ('category' in patch && !WHITEBOARD_CATEGORIES.includes(patch.category)) return res.status(400).json({ error: 'Invalid category' });
     if ('assignedTo' in patch) {
       if (patch.assignedTo === null || patch.assignedTo === '') patch.assignedTo = FieldValue.delete();
       else if (!Object.keys(WHITEBOARD_PERSON_ALIASES).includes(patch.assignedTo)) return res.status(400).json({ error: 'Invalid assignedTo' });
