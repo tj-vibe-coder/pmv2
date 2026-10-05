@@ -64,6 +64,7 @@ Description: Cash advance request/approval workflow with linked liquidation form
 
 Acceptance Criteria:
 - Users can request cash advances with itemized breakdown
+- Users can edit their own pending CA requests (project/purpose, request date, and breakdown). Superadmins can also edit approved requests; amount changes preserve already-liquidated funds by adjusting the remaining balance by the amount difference. Closed CA amounts remain fixed to preserve settlements.
 - Admins can approve or reject CAs
 - Liquidations can link to an approved CA
 - Submitting a liquidation deducts from the CA balance

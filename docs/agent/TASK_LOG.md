@@ -1,5 +1,27 @@
 # Task Log
 
+## 2026-10-06 — Cash Advance request editing
+
+### Completed
+
+- Added Edit, Save changes, and Cancel edit to the shared CA request form. Owners can edit their own pending requests; superadmins can edit approved requests too.
+- Added transactional detail-edit handlers in both local and Cloud Functions APIs. The server derives the total from valid breakdown lines and checks ownership/status before writing.
+- Approved amount edits adjust the remaining balance by the amount difference, retaining liquidation deductions and approval metadata. Approved investment funding entries are refreshed through the existing sync helper.
+- Approval now uses a transaction so a concurrent owner edit cannot overwrite an approval with stale request data. Closed issued amounts remain fixed to protect existing settlements.
+- Updated product requirements, project state, and known issues. Preserved unrelated existing workspace edits.
+
+### Verification
+
+- `node --test server/cashAdvanceEditing.test.js` — passed (14 tests across both API copies).
+- `CI=true npm test -- --watch=false --runInBand src/components/CAFormPage.editing.test.tsx` — passed (3 UI tests: owner save, superadmin approved edit/cancel, ordinary admin restriction).
+- `npx tsc --noEmit` — passed.
+- `npx eslint src/components/CAFormPage.tsx src/components/CAFormPage.editing.test.tsx` — passed.
+- `node --check server.js` and `node --check functions/server.js` — passed.
+- `npm run build` — passed; existing Browserslist, Node deprecation, and large-bundle notices remain.
+- `git diff --check` — passed.
+- No dedicated lint/typecheck package scripts exist; used direct commands. Browser/manual review with actual records was not performed; no deployment or live database writes.
+
+
 ## 2026-09-21 — Client-supplied materials Sales scope and heading layout repair
 
 ### Completed

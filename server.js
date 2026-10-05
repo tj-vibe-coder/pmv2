@@ -1994,6 +1994,59 @@ app.post('/api/cash-advances', async (req, res) => {
   }
 });
 
+// Edit request details separately from approval and funding controls.
+app.patch('/api/cash-advances/:id/details', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const { id } = req.params;
+  try {
+    const ref = db.collection('cash_advances').doc(id);
+    const result = await db.runTransaction(async transaction => {
+      const snap = await transaction.get(ref);
+      if (!snap.exists) return { code: 404, error: 'Cash advance not found' };
+      const ca = snap.data();
+      if (user.role !== 'superadmin' && (ca.user_id !== user.id || ca.status !== 'pending')) {
+        return { code: 403, error: 'You can only edit your own pending cash advance requests' };
+      }
+      const projectId = req.body.project_id != null ? String(req.body.project_id).trim() || null : null;
+      const purpose = String(req.body.purpose ?? '').trim() || null;
+      if (!projectId && !purpose) return { code: 400, error: 'Select a project or describe the purpose/prospect' };
+      const breakdown = Array.isArray(req.body.breakdown) ? req.body.breakdown.map(r => ({
+        category: String(r?.category ?? '').trim() || null,
+        description: String(r?.description ?? '').trim() || null,
+        amount: Number(r?.amount),
+      })) : [];
+      if (!breakdown.length || breakdown.some(r => !Number.isFinite(r.amount) || r.amount <= 0)) {
+        return { code: 400, error: 'Each breakdown line must have a valid positive amount' };
+      }
+      const amount = breakdown.reduce((sum, r) => sum + r.amount, 0);
+      if (!Number.isFinite(amount)) return { code: 400, error: 'Invalid total amount' };
+      const date = String(req.body.date_requested ?? '').trim();
+      const parsedDate = new Date(date + 'T12:00:00Z');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
+        return { code: 400, error: 'Enter a valid request date' };
+      }
+      const updates = { project_id: projectId, purpose, breakdown, amount,
+        requested_at: Math.floor(parsedDate.getTime() / 1000), updated_at: Math.floor(Date.now() / 1000) };
+      // Preserve liquidations and settlements already deducted from the approved advance.
+      if (ca.status === 'approved') updates.balance_remaining = Number(ca.balance_remaining || 0) + amount - Number(ca.amount);
+      // Closed advances already have settlement records; their issued amount must stay fixed.
+      if (ca.status === 'closed' && amount !== Number(ca.amount)) return { code: 400, error: 'The amount of a closed cash advance cannot be changed' };
+      transaction.update(ref, updates);
+      return { ca: { ...ca, ...updates } };
+    });
+    if (result.error) return res.status(result.code).json({ success: false, error: result.error });
+    if (result.ca.status === 'approved') {
+      await syncExpenseFundingInvestment(id, 'cash_advances', { ...result.ca,
+        date: new Date(result.ca.approved_at * 1000).toISOString().slice(0, 10) });
+    }
+    res.json({ success: true, ca_no: result.ca.ca_no, message: 'Cash advance updated' });
+  } catch (err) {
+    console.error('Error editing cash advance:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 app.patch('/api/cash-advances/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -2003,19 +2056,23 @@ app.patch('/api/cash-advances/:id', async (req, res) => {
   if (status !== 'approved' && status !== 'rejected') return res.status(400).json({ success: false, error: 'Status must be approved or rejected' });
   try {
     const ref = db.collection('cash_advances').doc(id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ success: false, error: 'Cash advance not found' });
-    const ca = doc.data();
-    if (ca.status !== 'pending') return res.status(400).json({ success: false, error: 'Already processed' });
     const now = Math.floor(Date.now() / 1000);
-    await ref.update({ status, balance_remaining: status === 'approved' ? ca.amount : 0, approved_at: status === 'approved' ? now : null, approved_by: status === 'approved' ? user.id : null, updated_at: now });
+    const result = await db.runTransaction(async transaction => {
+      const doc = await transaction.get(ref);
+      if (!doc.exists) return { code: 404, error: 'Cash advance not found' };
+      const ca = doc.data();
+      if (ca.status !== 'pending') return { code: 400, error: 'Already processed' };
+      transaction.update(ref, { status, balance_remaining: status === 'approved' ? ca.amount : 0,
+        approved_at: status === 'approved' ? now : null, approved_by: status === 'approved' ? user.id : null, updated_at: now });
+      return {};
+    });
+    if (result.error) return res.status(result.code).json({ success: false, error: result.error });
     // Money only actually leaves an investor's pocket once the request is approved — mirror
     // the run's funding source onto an Investment Tracker row at that point, same idiom as
     // syncPayrollOverheadExpenses. A rejected CA was never synced, so nothing to reverse.
     // Re-read after our own write (not the pre-write `ca`) so a fundingSource set by a
-    // concurrent PATCH .../funding request lands correctly — this doesn't eliminate the race
-    // (neither endpoint uses a transaction, matching this codebase's existing risk tolerance
-    // for balance_remaining elsewhere), but it closes the more likely ordering.
+    // concurrent PATCH .../funding request lands correctly. Funding synchronization remains
+    // best-effort outside the transaction, following the existing investment-sync convention.
     if (status === 'approved') {
       const freshCa = (await ref.get()).data();
       await syncExpenseFundingInvestment(id, 'cash_advances', { ...freshCa, date: new Date(now * 1000).toISOString().slice(0, 10) });

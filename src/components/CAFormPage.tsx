@@ -34,7 +34,7 @@ import {
   CardContent,
   Grid,
 } from '@mui/material';
-import { Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, PhotoCamera as PhotoCameraIcon, AccountBalanceWallet as WalletIcon } from '@mui/icons-material';
+import { Edit as EditIcon, Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, PhotoCamera as PhotoCameraIcon, AccountBalanceWallet as WalletIcon } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
@@ -188,6 +188,8 @@ export default function CAFormPage() {
   const [fundingInvestor, setFundingInvestor] = useState('');
   const [linkedInvestmentId, setLinkedInvestmentId] = useState('');
   const [linkedInvestments, setLinkedInvestments] = useState<{ id: string; date: string; category: string; description: string; amount: number }[]>([]);
+  const [editingCA, setEditingCA] = useState<CashAdvanceRow | null>(null);
+  const requestFormRef = useRef<HTMLDivElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CashAdvanceRow | null>(null);
@@ -721,6 +723,30 @@ export default function CAFormPage() {
     doc.save(ca.ca_no ? `${ca.ca_no}.pdf` : `Cash_Advance_${ca.id}_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
+  const resetRequestForm = () => {
+    setEditingCA(null);
+    setSelectedProject(null);
+    setPurpose('');
+    setDateRequested(new Date().toISOString().slice(0, 10));
+    setBreakdown([{ _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
+    pendingReceiptsRef.current = {};
+    setError(null);
+  };
+
+  const openRequestEdit = (ca: CashAdvanceRow) => {
+    setEditingCA(ca);
+    setSelectedProject(ca.project_id ? projects.find(p => p.id === ca.project_id) || { id: ca.project_id, project_name: ca.project_name || ca.project_id } : null);
+    setPurpose(ca.purpose || '');
+    setDateRequested(new Date((ca.requested_at || ca.created_at) * 1000).toISOString().slice(0, 10));
+    const rows = parseBreakdown(ca.breakdown);
+    setBreakdown((rows.length ? rows : [{ category: 'Materials', description: ca.purpose || '', amount: ca.amount }]).map(r => ({
+      _uid: crypto.randomUUID(), category: r.category || 'Materials', description: r.description || '', amount: String(r.amount || ''),
+    })));
+    pendingReceiptsRef.current = {};
+    setError(null);
+    requestFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const handleRequest = async () => {
     if (breakdownTotal <= 0) {
       setError('Add at least one breakdown line with an amount');
@@ -745,8 +771,8 @@ export default function CAFormPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/cash-advances`, {
-        method: 'POST',
+      const res = await fetch(`${API_BASE}/api/cash-advances${editingCA ? `/${editingCA.id}/details` : ''}`, {
+        method: editingCA ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           amount: breakdownTotal,
@@ -754,8 +780,8 @@ export default function CAFormPage() {
           purpose: purpose.trim() || undefined,
           date_requested: dateRequested || undefined,
           breakdown: items.length > 0 ? items : undefined,
-          ...(fundingSource ? { fundingSource } : {}),
-          ...(isAdmin && onBehalfUserId ? { on_behalf_of_user_id: onBehalfUserId } : {}),
+          ...(!editingCA && fundingSource ? { fundingSource } : {}),
+          ...(!editingCA && isAdmin && onBehalfUserId ? { on_behalf_of_user_id: onBehalfUserId } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -763,6 +789,7 @@ export default function CAFormPage() {
         const heldFiles = Object.values(pendingReceiptsRef.current);
         pendingReceiptsRef.current = {};
         if (data.ca_no) uploadPendingReceipts(String(data.ca_no), heldFiles);
+        setEditingCA(null);
         setDateRequested(new Date().toISOString().slice(0, 10));
         setSelectedProject(null);
         setPurpose('');
@@ -772,7 +799,7 @@ export default function CAFormPage() {
         setFundingInvestor('');
         setLinkedInvestmentId('');
         setLinkedInvestments([]);
-        setSnackbar(data.ca_no ? `Cash advance ${data.ca_no} requested` : 'Cash advance requested');
+        setSnackbar(editingCA ? 'Cash advance updated' : data.ca_no ? `Cash advance ${data.ca_no} requested` : 'Cash advance requested');
         fetchList();
       } else {
         setError(data.error || 'Request failed');
@@ -886,10 +913,10 @@ export default function CAFormPage() {
         </Alert>
       )}
 
-      <Paper sx={{ mb: 3, borderRadius: 2, overflow: 'hidden', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0' }}>
+      <Paper ref={requestFormRef} sx={{ mb: 3, borderRadius: 2, overflow: 'hidden', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0' }}>
         <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0' }}>
           <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
-            Request Cash Advance
+            {editingCA ? `Edit Cash Advance ${editingCA.ca_no || editingCA.id}` : 'Request Cash Advance'}
           </Typography>
         </Box>
         <Box sx={{ p: 2 }}>
@@ -926,7 +953,7 @@ export default function CAFormPage() {
           )}
         </Box>
 
-        {isAdmin && (
+        {isAdmin && !editingCA && (
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'flex-start', mb: 2 }}>
             <TextField
               select
@@ -945,7 +972,7 @@ export default function CAFormPage() {
           </Box>
         )}
 
-        {isAdmin && (
+        {isAdmin && !editingCA && (
           <>
             <Divider sx={{ my: 2 }} />
             <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5, color: NET_PACIFIC_COLORS.primary }}>
@@ -1107,8 +1134,9 @@ export default function CAFormPage() {
             disabled={submitting || !canSubmit || scanningRowId !== null}
             sx={{ bgcolor: NET_PACIFIC_COLORS.primary, '&:hover': { bgcolor: NET_PACIFIC_COLORS.secondary } }}
           >
-            Request CA
+            {editingCA ? 'Save changes' : 'Request CA'}
           </Button>
+          {editingCA && <Button onClick={resetRequestForm} disabled={submitting || scanningRowId !== null}>Cancel edit</Button>}
         </Box>
         </Box>
       </Paper>
@@ -1358,6 +1386,11 @@ export default function CAFormPage() {
                         : '—'}
                     </TableCell>
                     <TableCell align="right">
+                      {(user?.role === 'superadmin' || (ca.user_id === user?.id && ca.status === 'pending')) && (
+                        <Button size="small" startIcon={<EditIcon />} onClick={() => openRequestEdit(ca)} disabled={submitting || scanningRowId !== null}>
+                          Edit
+                        </Button>
+                      )}
                       {isAdmin && ca.status === 'pending' && (
                         <>
                           <Button
