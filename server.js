@@ -1362,13 +1362,14 @@ function projectIdForFundingDoc(collection, doc) {
   if (collection === 'project_expenses') return doc.projectId || null;
   if (collection === 'cash_advances') return doc.project_id || null;
   if (collection === 'reimbursements') return doc.projectId || null;
+  if (collection === 'reimbursement_payments') return null;
   return null;
 }
 
 function investmentCategoryForFundingDoc(collection) {
   if (collection === 'project_expenses') return 'Project Expense';
   if (collection === 'cash_advances') return 'Cash Advance';
-  if (collection === 'reimbursements') return 'Reimbursement';
+  if (collection === 'reimbursements' || collection === 'reimbursement_payments') return 'Reimbursement';
   return 'Overhead';
 }
 
@@ -2407,6 +2408,226 @@ app.get('/api/reimbursements', async (req, res) => {
   }
 });
 
+// ── Per-line reimbursement payments (ledger: reimbursement_payments) ──────────
+// A reimbursement doc stays 'pending' until fully paid. `paidAmount` / `paidRowIds`
+// accumulate as admins pay receipted lines now and the rest after the employee
+// complies; every payment (partial or whole) is one ledger doc.
+function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+function reimbursementRemaining(r) { return Math.max(0, round2((Number(r.amount) || 0) - (Number(r.paidAmount) || 0))); }
+// Proof of payment (e.g. an InstaPay/GCash screenshot already uploaded to OneDrive by the client).
+function normalizeProofRef(p) {
+  if (!p || typeof p !== 'object') return null;
+  const { oneDriveId, webUrl, filename } = p;
+  if (typeof oneDriveId !== 'string' || !oneDriveId.trim() || typeof webUrl !== 'string' || typeof filename !== 'string') return null;
+  return { oneDriveId: oneDriveId.trim(), webUrl, filename };
+}
+function parseJsonArray(raw) {
+  try { const v = typeof raw === 'string' ? JSON.parse(raw) : raw; return Array.isArray(v) ? v : []; } catch (e) { return []; }
+}
+// Ledger entry for a whole-form pay (settles whatever is left). Returns the new payment id.
+async function recordRemainingPayment(reimbursementId, r, remaining, fundingSource, reference, userId, now, proofRef) {
+  const payRef = db.collection('reimbursement_payments').doc();
+  await payRef.set({
+    reimbursementId, liquidationId: r.liquidationId || null, formNo: r.formNo || null,
+    employeeId: r.employeeId || null, employeeName: r.employeeName || null,
+    kind: 'remaining', rowIds: null, amount: remaining,
+    fundingSource: fundingSource || null,
+    reference: typeof reference === 'string' ? reference.trim() : '',
+    overrideReason: null, proofRef: normalizeProofRef(proofRef), paidAt: now, paidBy: userId, createdAt: now,
+  });
+  return payRef.id;
+}
+
+// Admin-only: the lines of a pending out-of-pocket claim with receipt + paid status,
+// plus its payment ledger. Drives the "Pay lines" dialog.
+app.get('/api/reimbursements/:id/lines', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  try {
+    const { id } = req.params;
+    const rSnap = await db.collection('reimbursements').doc(id).get();
+    if (!rSnap.exists) return res.status(404).json({ success: false, error: 'Reimbursement not found' });
+    const r = rSnap.data();
+    const liqSnap = await db.collection('liquidations').doc(r.liquidationId).get();
+    if (!liqSnap.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
+    const liq = liqSnap.data();
+    const receiptRowIds = new Set(parseJsonArray(liq.receipts_json).map(x => x && x.rowId).filter(Boolean));
+    const paid = new Set(r.paidRowIds || []);
+    const lines = parseJsonArray(liq.rows_json)
+      .filter(row => row && row.id && (parseFloat(row.amount) || 0) > 0)
+      .map(row => ({
+        rowId: row.id, date: row.date || '', category: row.category || '',
+        particulars: row.particulars || '', amount: parseFloat(row.amount) || 0,
+        hasReceipt: receiptRowIds.has(row.id), paid: paid.has(row.id),
+      }));
+    const paySnap = await db.collection('reimbursement_payments').where('reimbursementId', '==', id).get();
+    const payments = paySnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.paidAt || 0) - (a.paidAt || 0));
+    res.json({
+      success: true, lines, payments,
+      amount: Number(r.amount) || 0, paidAmount: Number(r.paidAmount) || 0, origin: r.origin, status: r.status,
+    });
+  } catch (err) {
+    console.error('Error fetching reimbursement lines:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Reads + validates one claim's line payment inside a transaction and returns the writes to apply.
+// All reads happen here (Firestore requires reads before writes), so a multi-claim transfer can
+// plan every claim first and then apply them together.
+async function planClaimLinePayment(txn, id, rowIds, ctx) {
+  const reimbRef = db.collection('reimbursements').doc(id);
+  const rSnap = await txn.get(reimbRef);
+  if (!rSnap.exists) throw Object.assign(new Error('Reimbursement not found'), { status: 404 });
+  const r = rSnap.data();
+  if (r.status !== 'pending') throw Object.assign(new Error(`${r.formNo || id} is not pending`), { status: 400 });
+  if (r.origin !== 'no_ca') throw Object.assign(new Error(`${r.formNo || id}: line-by-line payment is only for out-of-pocket claims — pay CA-excess claims as a whole`), { status: 400 });
+  const liqRef = db.collection('liquidations').doc(r.liquidationId);
+  const liqSnap = await txn.get(liqRef);
+  if (!liqSnap.exists) throw Object.assign(new Error('Liquidation not found'), { status: 404 });
+  const liq = liqSnap.data();
+  const rows = parseJsonArray(liq.rows_json);
+  const receiptRowIds = new Set(parseJsonArray(liq.receipts_json).map(x => x && x.rowId).filter(Boolean));
+  const alreadyPaid = new Set(r.paidRowIds || []);
+  const selected = [];
+  for (const rowId of rowIds) {
+    const row = rows.find(x => x && x.id === rowId);
+    if (!row) throw Object.assign(new Error(`Line ${rowId} is not on ${r.formNo || id}`), { status: 400 });
+    if (alreadyPaid.has(rowId)) throw Object.assign(new Error(`Line "${row.particulars || rowId}" on ${r.formNo || id} is already paid`), { status: 400 });
+    selected.push(row);
+  }
+  const noReceipt = selected.filter(row => !receiptRowIds.has(row.id));
+  if (noReceipt.length > 0 && !ctx.overrideReason) {
+    throw Object.assign(new Error(`${noReceipt.length} selected line(s) on ${r.formNo || id} have no receipt — attach receipts or give an override reason`), { status: 400 });
+  }
+  const amount = round2(selected.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0));
+  if (amount <= 0) throw Object.assign(new Error(`Selected lines on ${r.formNo || id} total zero`), { status: 400 });
+  const total = round2(r.amount);
+  const newPaidAmount = round2((Number(r.paidAmount) || 0) + amount);
+  if (newPaidAmount > total + 0.005) throw Object.assign(new Error(`Selected lines exceed the amount still owed on ${r.formNo || id}`), { status: 400 });
+  const complete = newPaidAmount >= total - 0.005;
+  const payRef = db.collection('reimbursement_payments').doc();
+  const { now, user, fs } = ctx;
+  return {
+    payRef, amount, complete, rowIds, formNo: r.formNo, employeeName: r.employeeName, claimId: id,
+    remaining: round2(total - newPaidAmount),
+    apply(t) {
+      t.set(payRef, {
+        reimbursementId: id, liquidationId: r.liquidationId, formNo: r.formNo || null,
+        employeeId: r.employeeId || null, employeeName: r.employeeName || null,
+        kind: 'lines', rowIds, amount, fundingSource: fs,
+        reference: ctx.reference,
+        overrideReason: noReceipt.length > 0 ? ctx.overrideReason : null,
+        noReceiptRowIds: noReceipt.map(row => row.id),
+        proofRef: ctx.proofRef,
+        transferId: ctx.transferId || null,
+        paidAt: now, paidBy: user.id, createdAt: now,
+      });
+      const update = { paidAmount: newPaidAmount, paidRowIds: [...alreadyPaid, ...rowIds], updatedAt: now };
+      if (complete) Object.assign(update, { status: 'paid', paidAt: now, paidBy: user.id, fundingSource: fs });
+      t.update(reimbRef, update);
+      if (complete) t.update(liqRef, { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
+    },
+  };
+}
+
+function validRowIdArray(rowIds) {
+  return Array.isArray(rowIds) && rowIds.length > 0 && rowIds.length <= 500
+    && rowIds.every(x => typeof x === 'string' && x.trim()) && new Set(rowIds).size === rowIds.length;
+}
+
+// Pays plans in one transaction, then mirrors each payment into the Investment Tracker.
+async function runClaimLinePayments(claims, ctx) {
+  const plans = await db.runTransaction(async (txn) => {
+    const out = [];
+    for (const c of claims) out.push(await planClaimLinePayment(txn, c.id, c.rowIds, ctx)); // all reads first
+    for (const plan of out) plan.apply(txn);
+    return out;
+  });
+  let syncOk = true;
+  for (const plan of plans) {
+    const ok = await syncExpenseFundingInvestment(plan.payRef.id, 'reimbursement_payments', {
+      date: new Date(ctx.now * 1000).toISOString().slice(0, 10),
+      amount: plan.amount,
+      fundingSource: ctx.fs,
+      description: `Reimbursement ${plan.formNo || plan.claimId} (${plan.rowIds.length} line${plan.rowIds.length === 1 ? '' : 's'}): ${plan.employeeName || ''}`.trim(),
+      createdAt: new Date(ctx.now * 1000).toISOString(),
+    });
+    if (!ok) syncOk = false;
+  }
+  return { plans, syncOk };
+}
+
+function claimPaymentContext(req, user) {
+  const body = req.body || {};
+  return {
+    user,
+    now: Math.floor(Date.now() / 1000),
+    fs: normalizeFundingSource(body.fundingSource),
+    reference: typeof body.reference === 'string' ? body.reference.trim() : '',
+    overrideReason: typeof body.overrideReason === 'string' ? body.overrideReason.trim() : '',
+    proofRef: normalizeProofRef(body.proofRef),
+  };
+}
+
+// Admin-only: pay selected lines of a pending out-of-pocket claim (e.g. only the lines
+// that have receipts). Lines without a receipt need an overrideReason. The claim flips
+// to 'paid' only once every peso is paid.
+app.post('/api/reimbursements/:id/pay-lines', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  const { rowIds } = req.body || {};
+  if (!validRowIdArray(rowIds)) return res.status(400).json({ success: false, error: 'rowIds must be a non-empty array of unique line ids' });
+  try {
+    const ctx = claimPaymentContext(req, user);
+    const { plans, syncOk } = await runClaimLinePayments([{ id, rowIds }], ctx);
+    const p = plans[0];
+    res.json({
+      success: true, paymentId: p.payRef.id, amount: p.amount, remaining: p.remaining, complete: p.complete,
+      message: p.complete ? 'Claim fully paid' : `Paid ${p.amount.toFixed(2)} — ${p.remaining.toFixed(2)} still owed`,
+      syncWarning: !syncOk,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ success: false, error: err.message });
+    console.error('Error paying reimbursement lines:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Admin-only: one transfer covering lines from SEVERAL claims (liquidation forms). Body:
+// { claims: [{ id, rowIds }], reference, fundingSource, proofRef, overrideReason }. All-or-nothing;
+// each claim still gets its own ledger entry, linked by a shared transferId.
+app.post('/api/reimbursements/pay-lines-batch', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { claims } = req.body || {};
+  if (!Array.isArray(claims) || claims.length === 0 || claims.length > 50
+    || claims.some(c => !c || typeof c.id !== 'string' || !c.id.trim() || !validRowIdArray(c.rowIds))
+    || new Set(claims.map(c => c.id)).size !== claims.length) {
+    return res.status(400).json({ success: false, error: 'claims must be a list of unique claims, each with its selected line ids' });
+  }
+  try {
+    const ctx = claimPaymentContext(req, user);
+    ctx.transferId = db.collection('reimbursement_payments').doc().id;
+    const { plans, syncOk } = await runClaimLinePayments(claims, ctx);
+    const total = round2(plans.reduce((sum, p) => sum + p.amount, 0));
+    res.json({
+      success: true, transferId: ctx.transferId, amount: total, claims: plans.length,
+      completed: plans.filter(p => p.complete).length,
+      message: `Paid ${total.toFixed(2)} across ${plans.length} claim${plans.length === 1 ? '' : 's'}`,
+      syncWarning: !syncOk,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ success: false, error: err.message });
+    console.error('Error paying reimbursement lines (batch):', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 // Admin-only: mark a single pending reimbursement as paid, optionally recording an
 // out-of-pocket funding source so it syncs into the Investment Tracker.
 app.post('/api/reimbursements/:id/pay', async (req, res) => {
@@ -2422,20 +2643,24 @@ app.post('/api/reimbursements/:id/pay', async (req, res) => {
     if (reimbursement.status !== 'pending') return res.status(400).json({ success: false, error: 'Reimbursement is not pending' });
     const fs = normalizeFundingSource(req.body.fundingSource);
     const now = Math.floor(Date.now() / 1000);
-    await ref.update({ status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, updatedAt: now });
+    // Earlier line-by-line payments (POST /:id/pay-lines) already settled part of this
+    // claim — whole-form pay settles only what is left.
+    const remaining = reimbursementRemaining(reimbursement);
+    const payRef = await recordRemainingPayment(id, reimbursement, remaining, fs, req.body.reference, user.id, now, req.body.proofRef);
+    await ref.update({ status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, paidAmount: Number(reimbursement.amount) || 0, updatedAt: now });
     await db.collection('liquidations').doc(reimbursement.liquidationId).update({ reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
     // Paying a ca_excess reimbursement is the company actually handing the employee
     // the amount their over-liquidation put the CA into the negative for — restore
     // that CA's balance_remaining toward zero by the same amount.
     if (reimbursement.origin === 'ca_excess' && reimbursement.caId) {
-      await db.collection('cash_advances').doc(reimbursement.caId).update({ balance_remaining: FieldValue.increment(reimbursement.amount), updated_at: now });
+      await db.collection('cash_advances').doc(reimbursement.caId).update({ balance_remaining: FieldValue.increment(remaining), updated_at: now });
     }
     // Re-read after our own write, same defensive pattern as the CA /funding endpoint,
     // so the sync sees the just-written fundingSource rather than a stale pre-write copy.
     const fresh = (await ref.get()).data();
     const syncOk = await syncExpenseFundingInvestment(id, 'reimbursements', {
       date: new Date(now * 1000).toISOString().slice(0, 10),
-      amount: fresh.amount,
+      amount: remaining,
       fundingSource: fresh.fundingSource,
       description: `Reimbursement ${fresh.formNo || id}: ${fresh.employeeName || ''}`.trim(),
     });
@@ -2467,15 +2692,17 @@ app.post('/api/reimbursements/batch-mark', async (req, res) => {
       if (!doc.exists) { skipped.push({ id, reason: 'not found' }); continue; }
       const r = doc.data();
       if (r.status !== 'pending') { skipped.push({ id, reason: 'not pending' }); continue; }
-      batch.update(ref, { status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, updatedAt: now });
+      const remaining = reimbursementRemaining(r);
+      await recordRemainingPayment(id, r, remaining, fs, req.body.reference, user.id, now);
+      batch.update(ref, { status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, paidAmount: Number(r.amount) || 0, updatedAt: now });
       if (r.liquidationId) {
         batch.update(db.collection('liquidations').doc(r.liquidationId), { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
       }
       // Same CA-balance restoration as the single-pay endpoint, batched.
       if (r.origin === 'ca_excess' && r.caId) {
-        batch.update(db.collection('cash_advances').doc(r.caId), { balance_remaining: FieldValue.increment(r.amount), updated_at: now });
+        batch.update(db.collection('cash_advances').doc(r.caId), { balance_remaining: FieldValue.increment(remaining), updated_at: now });
       }
-      toSync.push({ id, amount: r.amount, formNo: r.formNo, employeeName: r.employeeName });
+      toSync.push({ id, amount: remaining, formNo: r.formNo, employeeName: r.employeeName });
     }
     if (toSync.length > 0) await batch.commit();
     for (const r of toSync) {
@@ -2526,6 +2753,9 @@ app.delete('/api/liquidations/:id', async (req, res) => {
     // already-paid one stays as the payment record even though its source liquidation
     // is gone, same reasoning as applyLiquidationRevision's paid-amount guard.
     if (reimbursement && reimbursement.status === 'pending') {
+      if ((Number(reimbursement.paidAmount) || 0) > 0) {
+        return res.status(400).json({ success: false, error: 'This liquidation is partly reimbursed — it cannot be deleted.' });
+      }
       await reimbursementRef.delete();
     }
     await ref.delete();
@@ -2588,6 +2818,10 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
   const existingReimbursement = reimbursementSnap.exists ? reimbursementSnap.data() : null;
   if (existingReimbursement && existingReimbursement.status === 'paid' && (parseFloat(existingReimbursement.amount) || 0) !== newReimbursableAmount) {
     throw Object.assign(new Error('This revision would change an already-paid reimbursement amount — resolve the payment discrepancy manually before revising.'), { status: 400 });
+  }
+
+  if (existingReimbursement && existingReimbursement.status === 'pending' && (Number(existingReimbursement.paidAmount) || 0) > 0) {
+    throw Object.assign(new Error('This liquidation is partly reimbursed — finish paying it before revising, or resolve the payment discrepancy manually.'), { status: 400 });
   }
 
   if (caRef && caDelta !== 0) {

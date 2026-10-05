@@ -783,3 +783,12 @@ Goal: every page fits the phone screen, with no sideways-sliding page and no zoo
     - split K, dragged a piece onto row 1; dragged X2 into bay 2; Done → chip; changing DI drops the edit with the notice;
     - PDF row-detail sheets rendered and checked;
     - phone width: no overflow.
+
+## 2026-10-05 — Per-line reimbursement payments (Phase 1 of `docs/LIQUIDATION_REIMBURSEMENT_IMPROVEMENT_PLAN.md`)
+- **Why:** Kim's liquidations are only partly receipted (PHP 10,052 of 17,502). RJ wants to pay receipted lines now and the rest after compliance, with a trail of which is which.
+- **Server (`server.js`):** new ledger collection `reimbursement_payments` (one doc per payment: `reimbursementId`, `rowIds`, `amount`, `reference`, `fundingSource`, `overrideReason`, `paidAt/By`). `reimbursements/{liqId}` gains `paidAmount` + `paidRowIds`; it stays `pending` until fully paid. New `GET /api/reimbursements/:id/lines` and `POST /api/reimbursements/:id/pay-lines` (transactional; no-receipt lines need `overrideReason`; out-of-pocket (`no_ca`) claims only). Whole-form `/pay` and `/batch-mark` now pay only the remaining balance and write a ledger entry. Delete and revision of a partly paid liquidation are blocked. Investment sync runs per payment (`expense_sync_{paymentId}`).
+- **UI:** `ReimbursementDashboard.tsx` — "Pay lines" dialog (receipted lines pre-selected, reference, funding source, override reason, payment history); amount column shows remaining + "Partial" note.
+- **Proof of payment:** optional screenshot/PDF attached in the Pay lines and single-Pay dialogs; uploaded via `/api/onedrive/upload` to `Reimbursement Proofs/<year>/<form>/`, stored as `proofRef` on the ledger doc, linked in the payment history.
+- **One transfer, several forms:** `POST /api/reimbursements/pay-lines-batch` (all-or-nothing transaction; one ledger doc per claim sharing a `transferId`) + the "Pay lines (N)" button on the claims table. The single-claim `/:id/pay-lines` shares the same `planClaimLinePayment` code.
+- **Layout fix:** `/finance/reimbursements`, `/finance/payroll` and `/finance/investment-tracker` were missing the `AppLayout` wrapper (no sidebar/top bar); wrapped, with `src/App.financeNavigation.test.tsx` covering all three.
+- **Verified:** tsc/eslint clean; endpoint logic exercised against an in-memory Firestore fake (partial pay, double-pay, override, delete guard, whole-pay-after-partial, proof link, multi-form all-or-nothing). **Not** run on the Firestore emulator (no Java here) or in the browser against real data. Not committed.
