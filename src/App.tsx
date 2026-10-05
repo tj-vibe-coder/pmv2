@@ -636,7 +636,9 @@ function App() {
                 <ProtectedRoute>
                   <EmployeeGuard>
                     <TaxFilerBlock>
-                      <InvestmentTrackerPage />
+                      <AppLayout>
+                        <InvestmentTrackerPage />
+                      </AppLayout>
                     </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
@@ -649,7 +651,9 @@ function App() {
                   <EmployeeGuard>
                     <TaxFilerBlock>
                       <PayrollGuard>
-                        <PayrollDashboard />
+                        <AppLayout>
+                          <PayrollDashboard />
+                        </AppLayout>
                       </PayrollGuard>
                     </TaxFilerBlock>
                   </EmployeeGuard>
@@ -690,7 +694,9 @@ function App() {
                 <ProtectedRoute>
                   <EmployeeGuard>
                     <TaxFilerBlock>
-                      <ReimbursementDashboard />
+                      <AppLayout>
+                        <ReimbursementDashboard />
+                      </AppLayout>
                     </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>

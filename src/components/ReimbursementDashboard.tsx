@@ -6,6 +6,8 @@ import {
   DialogContentText, DialogActions, TextField, MenuItem,
 } from '@mui/material';
 import { API_BASE } from '../config/api';
+import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress';
+import { convertHeicToJpeg } from '../utils/receipts/imageUtils';
 import { useLocation, useNavigate } from 'react-router-dom';
 import MoneyTrailButton from './finance/MoneyTrailButton';
 import { getFinanceTrace } from '../services/financeTraceService';
@@ -51,6 +53,7 @@ interface Reimbursement {
   fundingSource: FundingSource | null;
   paidAt: number | null;
   paidBy: string | null;
+  paidAmount?: number;
   createdAt: number | string;
   updatedAt: number | string;
   username?: string;
@@ -69,6 +72,40 @@ interface CashAdvanceRow {
   username?: string;
   full_name?: string | null;
 }
+
+interface ClaimLine {
+  rowId: string; date: string; category: string; particulars: string;
+  amount: number; hasReceipt: boolean; paid: boolean;
+}
+interface ClaimPayment {
+  id: string; kind: 'lines' | 'remaining'; amount: number; paidAt: number;
+  reference?: string; overrideReason?: string | null; rowIds?: string[] | null;
+  proofRef?: ProofRef | null;
+}
+interface ProofRef { oneDriveId: string; webUrl: string; filename: string }
+
+const PROOF_ACCEPT = 'image/*,.pdf,.heic,.heif';
+
+// Upload a proof-of-payment file (screenshot/PDF) to OneDrive and return its reference.
+async function uploadPaymentProof(file: File, formNo: string | null, authToken: string | null): Promise<ProofRef> {
+  const safe = await convertHeicToJpeg(file);
+  const compressed = await compressForUpload(safe);
+  const contentBase64 = await blobToBase64(compressed);
+  const extMatch = safe.name.match(/\.[a-z0-9]+$/i);
+  const ext = extMatch ? extMatch[0] : (safe.type === 'application/pdf' ? '.pdf' : '.jpg');
+  const filename = `PROOF-${Date.now()}${ext}`;
+  const folderPath = `Reimbursement Proofs/${new Date().getFullYear()}/${(formNo || 'unassigned').replace(/[\\/:*?"<>|]/g, '-')}`;
+  const res = await fetch(`${API}/onedrive/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+    body: JSON.stringify({ folderPath, filename, contentBase64 }),
+  });
+  const data = await res.json().catch(() => ({ ok: false })) as { ok: boolean; id?: string; webUrl?: string };
+  if (!data.ok || !data.id || !data.webUrl) throw new Error('Proof upload to OneDrive failed. Try again.');
+  return { oneDriveId: data.id, webUrl: data.webUrl, filename };
+}
+
+const remainingOf = (r: Reimbursement) => Math.max(0, (Number(r.amount) || 0) - (Number(r.paidAmount) || 0));
 
 type PayDialogContext =
   | { kind: 'single-reimb'; reimb: Reimbursement }
@@ -92,6 +129,21 @@ const ReimbursementDashboard: React.FC = () => {
   const [payFundingType, setPayFundingType] = useState<'corporate_bank' | 'investor_outofpocket'>('corporate_bank');
   const [payInvestor, setPayInvestor] = useState('');
   const [paySubmitting, setPaySubmitting] = useState(false);
+
+  const [lineProofFile, setLineProofFile] = useState<File | null>(null);
+  const [payProofFile, setPayProofFile] = useState<File | null>(null);
+  // One or more claims (liquidation forms) paid by a single transfer. Empty = dialog closed.
+  const [linesTargets, setLinesTargets] = useState<Reimbursement[]>([]);
+  const [claimLines, setClaimLines] = useState<Record<string, ClaimLine[]>>({});
+  const [linePayments, setLinePayments] = useState<ClaimPayment[]>([]);
+  const [linesLoading, setLinesLoading] = useState(false);
+  const [lineSelected, setLineSelected] = useState<string[]>([]);
+  const [lineReference, setLineReference] = useState('');
+  const [lineOverride, setLineOverride] = useState('');
+  const [lineFundingType, setLineFundingType] = useState<'corporate_bank' | 'investor_outofpocket'>('corporate_bank');
+  const [lineInvestor, setLineInvestor] = useState('');
+  const [lineSubmitting, setLineSubmitting] = useState(false);
+  const [lineError, setLineError] = useState('');
 
   const [closeTarget, setCloseTarget] = useState<CashAdvanceRow | null>(null);
   const [closing, setClosing] = useState(false);
@@ -188,12 +240,17 @@ const ReimbursementDashboard: React.FC = () => {
   );
 
   const totalOwed = useMemo(
-    () => reimbursements.reduce((s, r) => s + (Number(r.amount) || 0), 0),
+    () => reimbursements.reduce((s, r) => s + remainingOf(r), 0),
     [reimbursements]
   );
   const totalHeld = useMemo(
     () => held.reduce((s, ca) => s + (Number(ca.balance_remaining) || 0), 0),
     [held]
+  );
+
+  const selectedClaims = useMemo(
+    () => reimbursements.filter(r => selectedIds.includes(r.id)),
+    [reimbursements, selectedIds]
   );
 
   const allSelected = reimbursements.length > 0 && selectedIds.length === reimbursements.length;
@@ -211,17 +268,28 @@ const ReimbursementDashboard: React.FC = () => {
   };
   const closePayDialog = () => {
     setPayDialog(null);
+    setPayProofFile(null);
     setPayFundingType('corporate_bank');
     setPayInvestor('');
   };
 
-  const confirmPay = () => {
+  const confirmPay = async () => {
     if (!payDialog || paySubmitting) return;
     const fundingSource = payFundingType === 'investor_outofpocket' && payInvestor
       ? { type: 'investor_outofpocket' as const, investor: payInvestor }
       : undefined;
     setPaySubmitting(true);
     setError('');
+    let proofRef: ProofRef | undefined;
+    if (payProofFile && payDialog.kind === 'single-reimb') {
+      try {
+        proofRef = await uploadPaymentProof(payProofFile, payDialog.reimb.formNo, localStorage.getItem('netpacific_token'));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Proof upload failed.');
+        setPaySubmitting(false);
+        return;
+      }
+    }
     const request = payDialog.kind === 'batch-reimb'
       ? fetch(`${API}/reimbursements/batch-mark`, {
           method: 'POST',
@@ -231,7 +299,7 @@ const ReimbursementDashboard: React.FC = () => {
       : fetch(`${API}/reimbursements/${payDialog.reimb.id}/pay`, {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ ...(fundingSource ? { fundingSource } : {}) }),
+          body: JSON.stringify({ ...(fundingSource ? { fundingSource } : {}), ...(proofRef ? { proofRef } : {}) }),
         });
     request
       .then(r => r.json())
@@ -247,6 +315,98 @@ const ReimbursementDashboard: React.FC = () => {
       })
       .catch(() => setError('Failed to pay reimbursement.'))
       .finally(() => setPaySubmitting(false));
+  };
+
+  const lineKey = (claimId: string, rowId: string) => `${claimId}::${rowId}`;
+  const openLinesDialog = (targets: Reimbursement[]) => {
+    setLinesTargets(targets);
+    setClaimLines({});
+    setLinePayments([]);
+    setLineSelected([]);
+    setLineReference('');
+    setLineProofFile(null);
+    setLineOverride('');
+    setLineFundingType('corporate_bank');
+    setLineInvestor('');
+    setLineError('');
+    setLinesLoading(true);
+    Promise.all(targets.map(t =>
+      fetch(`${API}/reimbursements/${t.id}/lines`, { headers: authHeaders() }).then(res => res.json()),
+    ))
+      .then(results => {
+        const failed = results.find(d => !d.success);
+        if (failed) { setLineError(failed.error || 'Failed to load lines.'); return; }
+        const byClaim: Record<string, ClaimLine[]> = {};
+        const selected: string[] = [];
+        results.forEach((data, i) => {
+          const loaded: ClaimLine[] = data.lines || [];
+          byClaim[targets[i].id] = loaded;
+          // Default: pay only what is supported by a receipt.
+          loaded.filter(l => l.hasReceipt && !l.paid).forEach(l => selected.push(lineKey(targets[i].id, l.rowId)));
+        });
+        setClaimLines(byClaim);
+        setLineSelected(selected);
+        if (targets.length === 1) setLinePayments(results[0].payments || []);
+      })
+      .catch(() => setLineError('Failed to load lines.'))
+      .finally(() => setLinesLoading(false));
+  };
+  const closeLinesDialog = () => { if (!lineSubmitting) setLinesTargets([]); };
+  const toggleLine = (key: string) =>
+    setLineSelected(prev => prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key]);
+  const selectedLineEntries = linesTargets.flatMap(t =>
+    (claimLines[t.id] || []).filter(l => lineSelected.includes(lineKey(t.id, l.rowId))).map(l => ({ claim: t, line: l })),
+  );
+  const selectedLineTotal = selectedLineEntries.reduce((sum, e) => sum + e.line.amount, 0);
+  const selectedNoReceipt = selectedLineEntries.filter(e => !e.line.hasReceipt);
+  const confirmPayLines = async () => {
+    if (linesTargets.length === 0 || lineSubmitting) return;
+    setLineSubmitting(true);
+    setLineError('');
+    let proofRef: ProofRef | undefined;
+    if (lineProofFile) {
+      try {
+        const proofName = linesTargets.length === 1 ? linesTargets[0].formNo : `Transfer-${linesTargets.map(t => t.formNo).filter(Boolean).join('+')}`.slice(0, 80);
+        proofRef = await uploadPaymentProof(lineProofFile, proofName, localStorage.getItem('netpacific_token'));
+      } catch (e) {
+        setLineError(e instanceof Error ? e.message : 'Proof upload failed.');
+        setLineSubmitting(false);
+        return;
+      }
+    }
+    const fundingSource = lineFundingType === 'investor_outofpocket' && lineInvestor
+      ? { type: 'investor_outofpocket' as const, investor: lineInvestor }
+      : undefined;
+    const common = {
+      reference: lineReference,
+      ...(proofRef ? { proofRef } : {}),
+      ...(selectedNoReceipt.length > 0 ? { overrideReason: lineOverride } : {}),
+      ...(fundingSource ? { fundingSource } : {}),
+    };
+    const claims = linesTargets
+      .map(t => ({ id: t.id, rowIds: selectedLineEntries.filter(e => e.claim.id === t.id).map(e => e.line.rowId) }))
+      .filter(c => c.rowIds.length > 0);
+    const request = linesTargets.length === 1
+      ? fetch(`${API}/reimbursements/${linesTargets[0].id}/pay-lines`, {
+          method: 'POST', headers: authHeaders(), body: JSON.stringify({ rowIds: claims[0]?.rowIds || [], ...common }),
+        })
+      : fetch(`${API}/reimbursements/pay-lines-batch`, {
+          method: 'POST', headers: authHeaders(), body: JSON.stringify({ claims, ...common }),
+        });
+    request
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          setToast(data.message || 'Lines paid');
+          setLinesTargets([]);
+          setSelectedIds([]);
+          fetchData();
+        } else {
+          setLineError(data.error || 'Failed to pay lines.');
+        }
+      })
+      .catch(() => setLineError('Failed to pay lines.'))
+      .finally(() => setLineSubmitting(false));
   };
 
   const handleCloseCa = (closureType: 'returned' | 'written_off') => {
@@ -344,6 +504,7 @@ const ReimbursementDashboard: React.FC = () => {
             <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
               Reimbursement Claims ({displayedReimbursements.length})
             </Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
             <Button
               variant="contained"
               size="small"
@@ -353,6 +514,16 @@ const ReimbursementDashboard: React.FC = () => {
             >
               Pay Selected ({selectedIds.length})
             </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              disabled={selectedIds.length === 0 || selectedClaims.some(r => r.origin !== 'no_ca' || r.status !== 'pending')}
+              onClick={() => openLinesDialog(selectedClaims)}
+              title="Pay selected lines from the selected forms as one transfer (out-of-pocket claims only)"
+            >
+              Pay lines ({selectedIds.length})
+            </Button>
+            </Box>
           </Box>
           <TableContainer sx={{ maxHeight: 'calc(50vh - 240px)', minHeight: 200 }}>
             <Table stickyHeader size="small">
@@ -438,8 +609,20 @@ const ReimbursementDashboard: React.FC = () => {
                       )}
                     </TableCell>
                     <TableCell sx={{ fontSize: '0.8rem' }}>{formatDate(r.createdAt)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }} align="right">{formatPHP(Number(r.amount) || 0)}</TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem' }} align="right">
+                      {historical ? formatPHP(Number(r.amount) || 0) : formatPHP(remainingOf(r))}
+                      {!historical && (Number(r.paidAmount) || 0) > 0 && (
+                        <Typography variant="caption" component="div" color="text.secondary">
+                          Partial · {formatPHP(Number(r.paidAmount))} of {formatPHP(Number(r.amount) || 0)} paid
+                        </Typography>
+                      )}
+                    </TableCell>
                     <TableCell align="right">
+                      {!historical && r.origin === 'no_ca' && (
+                        <Button size="small" onClick={() => openLinesDialog([r])} sx={{ color: NET_PACIFIC_COLORS.primary }}>
+                          Pay lines
+                        </Button>
+                      )}
                       {!historical && (
                         <Button size="small" onClick={() => openPayDialog({ kind: 'single-reimb', reimb: r })} sx={{ color: NET_PACIFIC_COLORS.primary }}>
                           Pay
@@ -505,7 +688,7 @@ const ReimbursementDashboard: React.FC = () => {
             {payDialog?.kind === 'batch-reimb'
               ? `Mark ${payDialog.ids.length} selected claim(s) as paid.`
               : payDialog?.kind === 'single-reimb'
-                ? `Mark the reimbursement claim for ${payDialog.reimb.employeeName || payDialog.reimb.full_name || payDialog.reimb.username || 'this employee'} (${formatPHP(payDialog.reimb.amount)}) as paid.`
+                ? `Mark the reimbursement claim for ${payDialog.reimb.employeeName || payDialog.reimb.full_name || payDialog.reimb.username || 'this employee'} (${formatPHP(remainingOf(payDialog.reimb))}${(Number(payDialog.reimb.paidAmount) || 0) > 0 ? ' remaining' : ''}) as paid.`
                 : ''}
           </DialogContentText>
           <TextField
@@ -531,7 +714,20 @@ const ReimbursementDashboard: React.FC = () => {
               value={payInvestor}
               onChange={(e) => setPayInvestor(e.target.value)}
               fullWidth
+              sx={{ mb: 2 }}
             />
+          )}
+          {payDialog?.kind === 'single-reimb' && (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 2 }}>
+            <Button component="label" size="small" variant="outlined" disabled={paySubmitting}>
+              {payProofFile ? 'Change proof' : 'Attach proof of payment'}
+              <input type="file" hidden accept={PROOF_ACCEPT} onChange={(e) => { setPayProofFile(e.target.files?.[0] || null); e.target.value = ''; }} />
+            </Button>
+            {payProofFile && (
+              <Chip size="small" label={payProofFile.name} onDelete={() => setPayProofFile(null)} />
+            )}
+            {!payProofFile && <Typography variant="caption" color="text.secondary">Optional — screenshot or PDF of the InstaPay / GCash receipt</Typography>}
+          </Box>
           )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
@@ -543,6 +739,136 @@ const ReimbursementDashboard: React.FC = () => {
             sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
           >
             {paySubmitting ? <CircularProgress size={20} /> : 'Confirm Payment'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={linesTargets.length > 0} onClose={closeLinesDialog} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ fontWeight: 600 }}>
+          {linesTargets.length > 1
+            ? `Pay lines — one transfer, ${linesTargets.length} forms`
+            : `Pay lines — ${linesTargets[0]?.formNo || ''} ${linesTargets[0]?.employeeName ? `· ${linesTargets[0].employeeName}` : ''}`}
+        </DialogTitle>
+        <DialogContent>
+          {lineError && <Alert severity="error" sx={{ mb: 2 }}>{lineError}</Alert>}
+          <DialogContentText sx={{ mb: 1.5 }}>
+            Receipted lines are pre-selected. Lines left unpaid stay on their claim and can be paid later once the receipt is attached.
+            {linesTargets.length > 1 && ' All selected lines are paid as one transfer: one reference and one proof, recorded against each form.'}
+          </DialogContentText>
+          {linesLoading ? (
+            <Box sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>
+          ) : (
+            <TableContainer sx={{ maxHeight: 320, mb: 2 }}>
+              <Table stickyHeader size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell padding="checkbox" />
+                    <TableCell sx={{ fontWeight: 600 }}>Date</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Particulars</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Receipt</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }} align="right">Amount</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {linesTargets.flatMap(t => [
+                    ...(linesTargets.length > 1 ? [(
+                      <TableRow key={`h-${t.id}`}>
+                        <TableCell colSpan={5} sx={{ fontWeight: 600, bgcolor: 'action.hover' }}>
+                          {t.formNo || t.id} · {t.employeeName || ''}
+                        </TableCell>
+                      </TableRow>
+                    )] : []),
+                    ...(claimLines[t.id] || []).map(l => (
+                    <TableRow key={`${t.id}-${l.rowId}`} hover sx={l.paid ? { opacity: 0.55 } : undefined}>
+                      <TableCell padding="checkbox">
+                        <Checkbox checked={lineSelected.includes(lineKey(t.id, l.rowId))} disabled={l.paid} onChange={() => toggleLine(lineKey(t.id, l.rowId))} />
+                      </TableCell>
+                      <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{l.date}</TableCell>
+                      <TableCell sx={{ fontSize: '0.8rem' }}>{l.particulars || l.category}</TableCell>
+                      <TableCell>
+                        {l.paid
+                          ? <Chip size="small" color="success" label="Paid" />
+                          : <Chip size="small" color={l.hasReceipt ? 'success' : 'warning'} variant="outlined" label={l.hasReceipt ? 'Attached' : 'Missing'} />}
+                      </TableCell>
+                      <TableCell sx={{ fontSize: '0.8rem' }} align="right">{formatPHP(l.amount)}</TableCell>
+                    </TableRow>
+                    )),
+                  ])}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            To pay now: {formatPHP(selectedLineTotal)} ({selectedLineEntries.length} line{selectedLineEntries.length === 1 ? '' : 's'}
+            {linesTargets.length > 1 ? ` across ${new Set(selectedLineEntries.map(e => e.claim.id)).size} forms` : ''})
+          </Typography>
+          {selectedNoReceipt.length > 0 && (
+            <TextField
+              size="small" fullWidth required sx={{ mb: 2 }}
+              label={`Override reason — ${selectedNoReceipt.length} selected line(s) have no receipt`}
+              value={lineOverride}
+              onChange={(e) => setLineOverride(e.target.value)}
+            />
+          )}
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mb: 2 }}>
+            <TextField
+              size="small" label="Payment reference (InstaPay / GCash ref)" value={lineReference}
+              onChange={(e) => setLineReference(e.target.value)} sx={{ flex: 1, minWidth: { xs: '100%', sm: 240 } }}
+            />
+            <TextField
+              select size="small" label="Funding Source" value={lineFundingType}
+              onChange={(e) => {
+                const v = e.target.value as 'corporate_bank' | 'investor_outofpocket';
+                setLineFundingType(v);
+                if (v !== 'investor_outofpocket') setLineInvestor('');
+              }}
+              sx={{ flex: 1, minWidth: { xs: '100%', sm: 240 } }}
+            >
+              <MenuItem value="corporate_bank">Corporate Bank / Petty Cash</MenuItem>
+              <MenuItem value="investor_outofpocket">Investor Out-of-Pocket</MenuItem>
+            </TextField>
+            {lineFundingType === 'investor_outofpocket' && (
+              <TextField size="small" label="Investor Name" value={lineInvestor} onChange={(e) => setLineInvestor(e.target.value)} fullWidth />
+            )}
+          </Box>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 2 }}>
+            <Button component="label" size="small" variant="outlined" disabled={lineSubmitting}>
+              {lineProofFile ? 'Change proof' : 'Attach proof of payment'}
+              <input type="file" hidden accept={PROOF_ACCEPT} onChange={(e) => { setLineProofFile(e.target.files?.[0] || null); e.target.value = ''; }} />
+            </Button>
+            {lineProofFile && (
+              <Chip size="small" label={lineProofFile.name} onDelete={() => setLineProofFile(null)} />
+            )}
+            {!lineProofFile && <Typography variant="caption" color="text.secondary">Optional — screenshot or PDF of the InstaPay / GCash receipt</Typography>}
+          </Box>
+          {linePayments.length > 0 && (
+            <>
+              <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Payment history</Typography>
+              {linePayments.map(pm => (
+                <Typography key={pm.id} variant="body2" color="text.secondary">
+                  {formatDate(pm.paidAt)} · {formatPHP(pm.amount)} · {pm.kind === 'lines' ? `${pm.rowIds?.length || 0} line(s)` : 'remaining balance'}
+                  {pm.reference ? ` · ref ${pm.reference}` : ''}{pm.overrideReason ? ` · override: ${pm.overrideReason}` : ''}
+                  {pm.proofRef?.webUrl && (
+                    <> · <a href={pm.proofRef.webUrl} target="_blank" rel="noreferrer">proof</a></>
+                  )}
+                </Typography>
+              ))}
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={closeLinesDialog} disabled={lineSubmitting}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={confirmPayLines}
+            disabled={
+              lineSubmitting || linesLoading || selectedLineEntries.length === 0
+              || (selectedNoReceipt.length > 0 && !lineOverride.trim())
+              || (lineFundingType === 'investor_outofpocket' && !lineInvestor)
+            }
+            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+          >
+            {lineSubmitting ? <CircularProgress size={20} /> : `Pay ${formatPHP(selectedLineTotal)}`}
           </Button>
         </DialogActions>
       </Dialog>
