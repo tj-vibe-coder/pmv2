@@ -1,13 +1,16 @@
 import { computeDueDate } from '../types/Invoice';
 import type { CommercialTrail, Project } from '../types/Project';
 
+const ACTI_NAME_RE = /advance controle|\bacti\b/i;
+
 export function isActiInvolved(
-  project: Pick<Project, 'with_acti' | 'partner_name' | 'partner_id'> | null | undefined,
+  project: Pick<Project, 'with_acti' | 'partner_name' | 'partner_id'> & { account_name?: string } | null | undefined,
 ): boolean {
   if (!project) return false;
   if (project.with_acti) return true;
-  const name = String(project.partner_name || '');
-  return /advance controle|\bacti\b/i.test(name);
+  if (ACTI_NAME_RE.test(String(project.partner_name || ''))) return true;
+  // Safety net: ACTI as the customer means ACTI fronts the job even if the Won sync missed the flag.
+  return ACTI_NAME_RE.test(String(project.account_name || ''));
 }
 
 /** Infer who received the customer PO. ACTI jobs → ACTI; direct jobs → IOCT. */
