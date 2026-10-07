@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { createProductHistoryRouter } = require('./server/calcsheetProductHistoryRouter');
 const { validateQuotationPurchaseTiming } = require('./server/calcsheetPurchaseTiming');
+const { resolveActiFronting } = require('./server/actiFronting');
 const { loadAiAssistConfig } = require('./server/aiAssist/config');
 const { createAiAssistRouter } = require('./server/aiAssist/router');
 const { createToolRegistry: createAiAssistToolRegistry } = require('./server/aiAssist/tools');
@@ -4328,7 +4329,7 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     db.collection('calcsheet_quotations').where('projectId', '==', projectId).get(),
   ]);
   const client = clientDoc && clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
-  const partner = partnerDoc && partnerDoc.exists ? { id: partnerDoc.id, ...partnerDoc.data() } : null;
+  const partnerFromDoc = partnerDoc && partnerDoc.exists ? { id: partnerDoc.id, ...partnerDoc.data() } : null;
   const quotations = qSnap.docs.map((d) => {
     const { id: _stored, ...data } = d.data();
     return { ...data, id: d.id };
@@ -4336,8 +4337,9 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
   const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
   const selectedQuotation = ioct || acti;
-  // Joint-with-ACTI: the project carries a partner link, or an ACTI-kind quotation exists.
-  const withActi = !!project.partnerId || quotations.some((q) => q.kind === 'ACTI');
+  // Joint-with-ACTI: a partner link, an ACTI-kind quotation, or ACTI as the customer
+  // (then the customer client doc stands in as the partner).
+  const { withActi, partner } = resolveActiFronting({ project, client, partner: partnerFromDoc, quotations });
   if (!selectedQuotation) {
     const err = new Error('No IOCT or ACTI quotation found to seed contract amount');
     err.status = 400;
