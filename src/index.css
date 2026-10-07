@@ -5,6 +5,30 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* No grey flash on tap, and no 300ms/double-tap-zoom delay on controls. */
+  -webkit-tap-highlight-color: transparent;
+  /* Stop pull-to-refresh / rubber-band bounce from fighting the app's scroll. */
+  overscroll-behavior-y: none;
+}
+
+button, a, [role='button'], input, select, textarea, .MuiTab-root {
+  touch-action: manipulation;
+}
+
+/* Scrollable panes (dialogs, drawers, menus) shouldn't pass their scroll on to the page behind. */
+.MuiDialog-paper, .MuiDrawer-paper, .MuiMenu-paper, .MuiPopover-paper, .MuiTableContainer-root {
+  overscroll-behavior: contain;
+}
+.MuiTableContainer-root {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Touch screens: give icon buttons a comfortable tap area. */
+@media (pointer: coarse) {
+  .MuiIconButton-root {
+    min-width: 40px;
+    min-height: 40px;
+  }
 }
 
 code {
