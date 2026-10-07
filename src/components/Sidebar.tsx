@@ -133,7 +133,8 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
       onMouseEnter={isMobile ? undefined : () => setIsHovered(true)}
       onMouseLeave={isMobile ? undefined : () => setIsHovered(false)}
       sx={{
-        width: isMobile ? 0 : (isExpanded ? SIDEBAR_WIDTH : SIDEBAR_COLLAPSED_WIDTH),
+        // viewport-fit=cover: the drawer sits at the screen edge, so add the notch inset to its width.
+        width: isMobile ? 0 : `calc(${isExpanded ? SIDEBAR_WIDTH : SIDEBAR_COLLAPSED_WIDTH}px + env(safe-area-inset-left))`,
         flexShrink: 0,
         whiteSpace: 'nowrap',
         transition: theme.transitions.create('width', {
@@ -141,7 +142,9 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
           duration: theme.transitions.duration.leavingScreen,
         }),
         '& .MuiDrawer-paper': {
-          width: isExpanded ? SIDEBAR_WIDTH : SIDEBAR_COLLAPSED_WIDTH,
+          width: `calc(${isExpanded ? SIDEBAR_WIDTH : SIDEBAR_COLLAPSED_WIDTH}px + env(safe-area-inset-left))`,
+          boxSizing: 'border-box',
+          paddingLeft: 'env(safe-area-inset-left)',
           transition: theme.transitions.create('width', {
             easing: theme.transitions.easing.sharp,
             duration: theme.transitions.duration.leavingScreen,
@@ -149,6 +152,13 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
           overflowX: 'hidden',
           top: isMobile ? 0 : '80px',
           height: isMobile ? '100%' : 'calc(100vh - 80px)',
+          // Short screens (phone in landscape): the header shrinks to 56px, so sit
+          // flush under it, and scroll the whole drawer as one list instead of
+          // squeezing the menu into a one-item window.
+          '@media (max-height: 600px)': {
+            overflowY: 'auto',
+            ...(isMobile ? {} : { top: '56px', height: 'calc(100vh - 56px)' }),
+          },
           backgroundColor: theme.palette.primary.main,
           color: 'white',
           borderRight: 'none',
@@ -225,7 +235,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
 
       <Divider sx={{ borderColor: 'rgba(255,255,255,0.2)', mx: isExpanded ? 2 : 1 }} />
 
-      <Box sx={{ flexGrow: 1, mt: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+      <Box sx={{ flexGrow: 1, mt: 1, overflowY: 'auto', overflowX: 'hidden', '@media (max-height: 600px)': { flexGrow: 0, flexShrink: 0, overflowY: 'visible' } }}>
         {isEmployeeWorkspace ? (
           <EmployeeNavList isExpanded={isExpanded} navBtnSx={navBtnSx} iconSx={iconSx} />
         ) : isFinanceWorkspace ? (

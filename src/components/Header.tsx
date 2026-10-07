@@ -105,7 +105,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
         borderBottom: '1px solid #e0e0e0'
       }}
     >
-      <Toolbar sx={{ minHeight: '80px', px: { xs: 1.5, md: 3 } }}>
+      <Toolbar sx={{ minHeight: '80px', pl: { xs: 'calc(12px + env(safe-area-inset-left))', md: 'calc(24px + env(safe-area-inset-left))' }, pr: { xs: 'calc(12px + env(safe-area-inset-right))', md: 'calc(24px + env(safe-area-inset-right))' }, '@media (max-height: 600px)': { minHeight: '56px' } }}>
         <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0 }}>
           {isAuthenticated && (
             <IconButton
@@ -121,7 +121,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
             component="img"
             src="/logo-ioct-only.svg?v=10"
             alt="IOCT Logo"
-            sx={{ height: { xs: 36, md: 48 }, mr: { xs: 1, md: 2 }, flexShrink: 0 }}
+            sx={{ height: { xs: 36, md: 48 }, mr: { xs: 1, md: 2 }, flexShrink: 0, '@media (max-height: 600px)': { height: 36 } }}
           />
           <Typography
             variant="h5"
