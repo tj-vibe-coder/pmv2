@@ -829,15 +829,15 @@ export default function QuotationEditor() {
     ] as GeneralReqLine[]);
 
   const generalCols: Column<GeneralReqLine>[] = [
-    { key: 'code', label: 'Code', width: 90, mono: true },
-    { key: 'description', label: 'Description', multiline: true },
-    { key: 'qty', label: 'Qty', width: 70, type: 'number', align: 'right' },
+    { key: 'code', card: 'eyebrow', label: 'Code', width: 90, mono: true },
+    { key: 'description', card: 'title', label: 'Description', multiline: true },
+    { key: 'qty', card: 'summary', label: 'Qty', width: 70, type: 'number', align: 'right' },
     { key: 'uom', label: 'UOM', width: 70 },
-    { key: 'unitPrice', label: 'Unit Price', width: 120, type: 'number', align: 'right', step: 0.01 },
+    { key: 'unitPrice', card: 'summary', label: 'Unit Price', width: 120, type: 'number', align: 'right', step: 0.01 },
     // Shows the global General Req. markup (greyed) until a per-line override is
     // typed; clearing the cell falls back to the global again.
     { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.generalReqMarkupPct || 0) },
-    { key: 'total', label: 'Total', width: 130, align: 'right',
+    { key: 'total', card: 'total', label: 'Total', width: 130, align: 'right',
       render: (r) => {
         const base = lineGeneralTotal(r);
         const markup = r.markupPct != null ? r.markupPct : (quotation.generalReqMarkupPct || 0);
@@ -930,8 +930,8 @@ export default function QuotationEditor() {
         title="Click to select/deselect · Shift+click to apply to the whole range"
       />
     ) },
-    { key: 'code', label: 'Code', width: 90, mono: true },
-    { key: 'description', label: 'Description', width: 260, render: (r, idx) => (
+    { key: 'code', card: 'eyebrow', label: 'Code', width: 90, mono: true },
+    { key: 'description', card: 'title', label: 'Description', width: 260, render: (r, idx) => (
       <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
         <TextField value={r.description ?? ''} onChange={(e) => updateRow('components', idx, 'description', e.target.value)}
           variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
@@ -958,11 +958,11 @@ export default function QuotationEditor() {
         )}
       </Stack>
     ) },
-    { key: 'brand', label: 'Brand', width: 90 },
+    { key: 'brand', card: 'summary', label: 'Brand', width: 90 },
     { key: 'partNo', label: 'Part No.', width: 100 },
-    { key: 'qty', label: 'Qty', width: 60, type: 'number', align: 'right' },
+    { key: 'qty', card: 'summary', label: 'Qty', width: 60, type: 'number', align: 'right' },
     { key: 'uom', label: 'UOM', width: 60 },
-    { key: 'unitCost', label: 'Unit Cost', width: 110, type: 'number', align: 'right', step: 0.01 },
+    { key: 'unitCost', card: 'summary', label: 'Unit Cost', width: 110, type: 'number', align: 'right', step: 0.01 },
     { key: 'forex', label: 'FX', width: 60, type: 'number', align: 'right', step: 0.0001 },
     { key: 'contingencyPct', label: 'Cont %', width: 80, type: 'number', align: 'right', step: 0.01 },
     // Shows the global Product markup (greyed) until a per-line override is
@@ -999,7 +999,7 @@ export default function QuotationEditor() {
     ) },
     { key: 'sellPrice', label: 'Selling/u', width: 110, align: 'right',
       render: (r) => <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: r.optional ? 'text.disabled' : undefined }}>{PHP(componentSellingUnit(r, quotation.productMarkupPct, quotation.ewtPct))}</Box> },
-    { key: 'total', label: 'Total', width: 130, align: 'right',
+    { key: 'total', card: 'total', label: 'Total', width: 130, align: 'right',
       render: (r) => (
         <Box sx={{ fontFamily: 'monospace', fontWeight: 500, color: r.optional ? 'text.disabled' : undefined, fontStyle: r.optional ? 'italic' : undefined }}>
           {PHP(componentLineTotal(r, quotation.productMarkupPct, quotation.ewtPct))}{r.optional ? ' *' : ''}
@@ -1197,8 +1197,8 @@ export default function QuotationEditor() {
             title="Click to select/deselect · Shift+click to apply to the whole range"
           />
         ) },
-        { key: 'code', label: 'Code', width: 90, mono: true },
-        { key: 'description', label: 'Description', render: (r, idx) => (
+        { key: 'code', card: 'eyebrow', label: 'Code', width: 90, mono: true },
+        { key: 'description', card: 'title', label: 'Description', render: (r, idx) => (
           <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
             <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)}
               variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
@@ -1207,18 +1207,18 @@ export default function QuotationEditor() {
             {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupSvc(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
           </Stack>
         ) },
-        { key: 'qty', label: 'QTY', width: 70, type: 'number', align: 'right', min: 0 },
+        { key: 'qty', card: 'summary', label: 'QTY', width: 70, type: 'number', align: 'right', min: 0 },
         { key: 'uom', label: 'UOM', width: 70 },
         // Shows the shared team daily rate (greyed) until a per-line override is
         // typed; editing recomputes the line amount, clearing falls back to the
         // shared rate. Amount = QTY × Unit Price × markup, so the pre-markup
         // budget is QTY × Unit Price — visible inline without scrolling down to
         // the Manpower table.
-        { key: 'unitPrice', label: 'Unit Price', width: 100, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(teamDailyRate || 0) },
+        { key: 'unitPrice', card: 'summary', label: 'Unit Price', width: 100, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(teamDailyRate || 0) },
         // Shows the global Labor markup (greyed) until a per-line override is typed;
         // editing recomputes the line amount, clearing falls back to the global.
         { key: 'markupPct', label: 'Markup %', width: 80, type: 'number', align: 'right', step: 0.01, nullable: true, placeholder: String(quotation.laborMarkupPct || 0) },
-        { key: 'amount', label: 'Amount', width: 140, type: 'number', align: 'right', step: 0.01 },
+        { key: 'amount', card: 'total', label: 'Amount', width: 140, type: 'number', align: 'right', step: 0.01 },
       ]
     : [
         // No markup column here: lump mode prices from manpower × Labor Markup %,
@@ -1228,14 +1228,14 @@ export default function QuotationEditor() {
             onClick={svcSelectClick(idx)}
             title="Click to select/deselect · Shift+click to apply to the whole range" />
         ) },
-        { key: 'code', label: 'Code', width: 90, mono: true },
-        { key: 'description', label: 'Description', render: (r, idx) => (
+        { key: 'code', card: 'eyebrow', label: 'Code', width: 90, mono: true },
+        { key: 'description', card: 'title', label: 'Description', render: (r, idx) => (
           <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
             <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)} variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }} inputProps={{ style: { padding: '6px 4px' } }} />
           </Stack>
         ) },
-        { key: 'amount', label: 'Amount', width: 150, type: 'number', align: 'right', step: 0.01 },
+        { key: 'amount', card: 'total', label: 'Amount', width: 150, type: 'number', align: 'right', step: 0.01 },
       ];
 
   const addManpower = () =>
@@ -1268,7 +1268,7 @@ export default function QuotationEditor() {
   const laborPresets = presets.filter((p) => p.group === 'labor');
 
   const mpCols: Column<ManpowerEntry>[] = [
-    { key: 'role', label: 'Role', width: 240,
+    { key: 'role', card: 'title', label: 'Role', width: 240,
       render: (r, idx) => {
         const isCustom = !r.presetId;
         // A saved presetId may not resolve to a currently-loaded preset (preset
@@ -1322,11 +1322,11 @@ export default function QuotationEditor() {
           <MenuItem value="labor">Labor</MenuItem>
         </TextField>
       ) },
-    { key: 'headcount', label: 'Pax', width: 60, type: 'number', align: 'right' },
-    { key: 'mandays', label: 'Mandays', width: 80, type: 'number', align: 'right' },
-    { key: 'dailyRate', label: 'Daily Rate', width: 110, type: 'number', align: 'right', step: 0.01 },
+    { key: 'headcount', card: 'summary', label: 'Pax', width: 60, type: 'number', align: 'right' },
+    { key: 'mandays', card: 'summary', label: 'Mandays', width: 80, type: 'number', align: 'right' },
+    { key: 'dailyRate', card: 'summary', label: 'Daily Rate', width: 110, type: 'number', align: 'right', step: 0.01 },
     { key: 'allowance', label: 'Allowance', width: 100, type: 'number', align: 'right', step: 0.01 },
-    { key: 'cost', label: 'Cost', width: 130, align: 'right',
+    { key: 'cost', card: 'total', label: 'Cost', width: 130, align: 'right',
       render: (r) => <Box sx={{ fontFamily: 'monospace' }}>{PHP(manpowerCost(r))}</Box> },
   ];
 
@@ -1922,9 +1922,9 @@ export default function QuotationEditor() {
       {/* Markup, Contingency & Tax */}
       <Paper sx={{ p: 2 }}>
         <Stack spacing={2}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center">
+          <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} justifyContent="space-between" alignItems="center">
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Pricing Controls</Typography>
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} alignItems="center">
               <FormControlLabel
                 control={
                   <Switch
@@ -2064,7 +2064,7 @@ export default function QuotationEditor() {
 
       {/* Section A */}
       <Paper sx={{ p: 2 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
+        <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} justifyContent="space-between" alignItems="center" mb={1}>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>A. General Requirements</Typography>
             {generalReqtsLocked && !isLegacy && (
@@ -2082,7 +2082,7 @@ export default function QuotationEditor() {
               label={<Typography variant="caption">Group in PDF/Excel</Typography>}
             />
             {!!quotation.exportGeneralReqtsAsLot && (
-              <Stack direction="row" spacing={1} alignItems="center">
+              <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} alignItems="center">
                 <NumField
                   label="Qty"
                   value={generalReqtsExportQty}
@@ -2136,7 +2136,7 @@ export default function QuotationEditor() {
 
       {/* Section B */}
       <Paper sx={{ p: 2 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
+        <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} justifyContent="space-between" alignItems="center" mb={1}>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>B. Supply of Components</Typography>
             {componentsLocked && !isLegacy && (
@@ -2226,9 +2226,9 @@ export default function QuotationEditor() {
 
       {/* Section C — Scope of Works (deliverables) */}
       <Paper sx={{ p: 2 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-          <Box>
-            <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} justifyContent="space-between" alignItems="center" mb={1}>
+          <Box sx={{ minWidth: 0 }}>
+            <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} alignItems="center">
               <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>C. Engineering Services</Typography>
               {servicesLocked && !isLegacy && (
                 <Chip label="Locked — Supply only" size="small" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
@@ -2242,7 +2242,7 @@ export default function QuotationEditor() {
                   : 'Scope of Works — each deliverable priced individually.'}
             </Typography>
           </Box>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} alignItems="center">
             <FormControlLabel
               control={<Switch size="small" checked={quotation.servicesFromManpower} onChange={(e) => setField('servicesFromManpower', e.target.checked)} disabled={servicesLocked} />}
               label={<Typography variant="caption">Price from manpower</Typography>}
@@ -2321,9 +2321,9 @@ export default function QuotationEditor() {
 
         {quotation.servicesFromManpower && (
           <Box sx={{ mt: 3 }}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
+            <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} justifyContent="space-between" alignItems="center" mb={1}>
               <Typography variant="body2" sx={{ fontWeight: 600 }}>Manpower (cost basis)</Typography>
-              <Stack direction="row" spacing={2} alignItems="center">
+              <Stack direction="row" flexWrap="wrap" useFlexGap spacing={2} alignItems="center">
                 {!quotation.servicesPerLinePricing && (
                   <Typography variant="caption" color="text.secondary">
                     Subtotal = Manpower cost / LOT × {engineeringServicesQty} LOT
@@ -2544,6 +2544,30 @@ export default function QuotationEditor() {
           </Box>
         </Box>
       </Paper>
+
+      {/* Phones: keep the numbers that matter in view while editing lines */}
+      <Box
+        sx={{
+          display: 'flex', position: 'sticky', bottom: 8, zIndex: 5,
+          alignItems: 'center', justifyContent: 'space-between', gap: 1,
+          px: 1.5, py: 1, borderRadius: 1.5, bgcolor: 'primary.main', color: 'white', boxShadow: 6,
+          // Shown on every phone/tablet screen (portrait or landscape); hidden on laptops/desktops.
+          '@media (min-width: 900px) and (min-height: 601px)': { display: 'none' },
+          // Landscape phones are short — keep it slim.
+          '@media (max-height: 600px)': { py: 0.5 },
+        }}
+      >
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="caption" sx={{ display: 'block', color: 'rgba(255,255,255,0.75)', lineHeight: 1.2 }}>Margin</Typography>
+          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
+            {(marginSummary?.pct ?? 0).toFixed(1)}%
+          </Typography>
+        </Box>
+        <Box sx={{ textAlign: 'right' }}>
+          <Typography variant="caption" sx={{ display: 'block', color: 'rgba(255,255,255,0.75)', lineHeight: 1.2 }}>GRAND TOTAL</Typography>
+          <Typography variant="subtitle1" sx={{ fontFamily: 'monospace', fontWeight: 700, lineHeight: 1.2 }}>{PHP(totals.grandTotal)}</Typography>
+        </Box>
+      </Box>
 
       {/* Saved-version history */}
       <DuplicateQuotationDialog

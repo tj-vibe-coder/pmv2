@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   Divider, FormControlLabel, IconButton, LinearProgress, MenuItem, Paper, Stack, Switch, Table,
-  TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
+  TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery, useTheme,
 } from '@mui/material';
 import { nanoid } from 'nanoid';
 import AddIcon from '@mui/icons-material/Add';
@@ -98,6 +98,9 @@ export default function ProjectDetail() {
   const [fbLoading, setFbLoading] = useState(false);
   const [fbErr, setFbErr] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Quotation | null>(null);
+  // Portrait phones: quotations become cards and the dense dialogs go full-screen.
+  const theme = useTheme();
+  const isPhone = useMediaQuery(theme.breakpoints.down('sm'));
   const [duplicateTarget, setDuplicateTarget] = useState<Quotation | null>(null);
   // Non-error info message shown next to the OneDrive buttons. Used to tell the
   // user when auto-detect matched an existing historical folder (instead of
@@ -1116,14 +1119,18 @@ export default function ProjectDetail() {
         </Box>
       )}
     <Stack spacing={3}>
-      <Stack direction="row" alignItems="flex-start" justifyContent="space-between">
-        <Stack direction="row" alignItems="flex-start" spacing={1}>
-          <Stack spacing={0.5}>
+      <Stack direction="row" alignItems="flex-start" justifyContent="space-between" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2}>
+        <Stack direction="row" alignItems="flex-start" spacing={1} sx={{ minWidth: 0, flex: '1 1 260px' }}>
+          <Stack spacing={0.5} sx={{ minWidth: 0 }}>
             <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary', ...(project.code ? {} : { fontStyle: 'italic' }) }}>
               {project.code || 'No code yet — assign a client to generate one'}
             </Typography>
-            <Typography variant="h5" sx={{ fontWeight: 600 }}>{project.name}</Typography>
-            {project.location && <Typography color="text.secondary">{project.location}</Typography>}
+            <Typography variant="h5" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{project.name}</Typography>
+            {project.location && (
+              <Typography color="text.secondary" sx={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: { xs: 2, sm: 'unset' }, overflow: 'hidden' }} title={project.location}>
+                {project.location}
+              </Typography>
+            )}
           </Stack>
           <IconButton size="small" onClick={openEdit} title="Edit project details" sx={{ mt: 0.5 }}>
             <EditIcon fontSize="small" />
@@ -1133,7 +1140,10 @@ export default function ProjectDetail() {
       </Stack>
 
       <Paper sx={{ p: 2 }}>
-        <Stack direction="row" spacing={4} flexWrap="wrap" alignItems="center">
+        <Box sx={{
+          display: { xs: 'grid', sm: 'flex' }, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          flexWrap: 'wrap', alignItems: { sm: 'center' }, columnGap: { xs: 2, sm: 4 }, rowGap: 1.5,
+        }}>
           <Box>
             <Typography variant="caption" color="text.secondary">Customer</Typography>
             <Typography variant="body2">{customer?.name ?? '—'}</Typography>
@@ -1218,7 +1228,7 @@ export default function ProjectDetail() {
               />
             </Box>
           </Box>
-        </Stack>
+        </Box>
       </Paper>
 
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ rowGap: 1 }}>
@@ -1802,6 +1812,54 @@ export default function ProjectDetail() {
         </Stack>
       </Stack>
 
+      {isPhone ? (
+        <Stack spacing={1}>
+          {quotations.map((q) => {
+            const t = computeTotals(q);
+            const recipient = clients.find((c) => c.id === q.recipientId);
+            return (
+              <Paper key={q.id} variant="outlined" sx={{ p: 1.5 }}>
+                <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                  <Chip size="small" label={q.kind} color={q.kind === 'IOCT' ? 'primary' : 'secondary'} />
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>rev {q.revision}</Typography>
+                  {q.formulaVersion === 'legacy' && (
+                    <Chip size="small" icon={<HistoryIcon />} label="Legacy" color="warning" variant="outlined" sx={{ height: 20 }} />
+                  )}
+                </Stack>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                  {recipient?.name ?? 'No recipient'}
+                </Typography>
+                <Stack direction="row" justifyContent="space-between" alignItems="flex-end" spacing={1} sx={{ mt: 1 }}>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'monospace' }}>
+                      Subtotal {PHP(t.subtotal)}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'monospace' }}>
+                      VAT {PHP(t.vat)}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'right' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Grand total</Typography>
+                    <Typography variant="body1" sx={{ fontWeight: 700, fontFamily: 'monospace' }}>{PHP(t.grandTotal)}</Typography>
+                  </Box>
+                </Stack>
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
+                  <Button size="small" variant="contained" component={Link} to={`/sales/calcsheet/quotations/${q.id}`} startIcon={<OpenInNewIcon />} sx={{ flex: 1 }}>
+                    Open
+                  </Button>
+                  <IconButton onClick={() => setDuplicateTarget(q)} aria-label="Duplicate quotation"><ContentCopyIcon fontSize="small" /></IconButton>
+                  <IconButton onClick={() => setDeleteTarget(q)} aria-label="Delete quotation"><DeleteIcon fontSize="small" /></IconButton>
+                </Stack>
+              </Paper>
+            );
+          })}
+          {quotations.length === 0 && (
+            <Paper variant="outlined" sx={{ p: 3, textAlign: 'center', color: 'text.secondary' }}>
+              <Typography variant="body2">No quotations yet. Create an IOCT or ACTI quotation to begin.</Typography>
+            </Paper>
+          )}
+        </Stack>
+      ) : (
       <Paper>
         <Box sx={{ overflowX: 'auto' }}>
         <Table size="small">
@@ -1825,7 +1883,7 @@ export default function ProjectDetail() {
                   <TableCell>
                     <Chip size="small" label={q.kind} color={q.kind === 'IOCT' ? 'primary' : 'secondary'} />
                   </TableCell>
-                  <TableCell sx={{ fontFamily: 'monospace' }}>
+                  <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                     <Stack direction="row" spacing={0.75} alignItems="center">
                       <span>rev {q.revision}</span>
                       {q.formulaVersion === 'legacy' && (
@@ -1862,10 +1920,10 @@ export default function ProjectDetail() {
                     </Stack>
                   </TableCell>
                   <TableCell>{recipient?.name ?? '—'}</TableCell>
-                  <TableCell align="right">{PHP(t.subtotal)}</TableCell>
-                  <TableCell align="right">{PHP(t.vat)}</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 600 }}>{PHP(t.grandTotal)}</TableCell>
-                  <TableCell align="right">
+                  <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{PHP(t.subtotal)}</TableCell>
+                  <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{PHP(t.vat)}</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{PHP(t.grandTotal)}</TableCell>
+                  <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                     <IconButton size="small" component={Link} to={`/sales/calcsheet/quotations/${q.id}`}><OpenInNewIcon fontSize="small" /></IconButton>
                     <IconButton size="small" onClick={() => setDuplicateTarget(q)} title="Duplicate quotation"><ContentCopyIcon fontSize="small" /></IconButton>
                     <IconButton size="small" onClick={() => setDeleteTarget(q)}><DeleteIcon fontSize="small" /></IconButton>
@@ -1884,8 +1942,9 @@ export default function ProjectDetail() {
         </Table>
         </Box>
       </Paper>
+      )}
 
-      <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>Edit project details</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
@@ -1947,7 +2006,7 @@ export default function ProjectDetail() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={legacyOpen} onClose={closeLegacyDialog} maxWidth="sm" fullWidth>
+      <Dialog open={legacyOpen} onClose={closeLegacyDialog} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>
           <Stack direction="row" spacing={1} alignItems="center">
             <HistoryIcon color="warning" />
@@ -2121,7 +2180,7 @@ export default function ProjectDetail() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={pdfOpen} onClose={closePdfDialog} maxWidth="sm" fullWidth>
+      <Dialog open={pdfOpen} onClose={closePdfDialog} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>
           <Stack direction="row" spacing={1} alignItems="center">
             <HistoryIcon color="warning" />
@@ -2478,7 +2537,7 @@ export default function ProjectDetail() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={linkExistingOpen} onClose={() => { if (!linkExistingBusy) setLinkExistingOpen(false); }} maxWidth="sm" fullWidth>
+      <Dialog open={linkExistingOpen} onClose={() => { if (!linkExistingBusy) setLinkExistingOpen(false); }} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>
           {linkExistingWon ? 'Mark Won — Link to Existing Project' : 'Link to Existing Project List Record'}
         </DialogTitle>
@@ -2576,7 +2635,7 @@ export default function ProjectDetail() {
       </Dialog>
 
       {/* Link existing OneDrive folder dialog */}
-      <Dialog open={!!linkDialogOpen} onClose={() => !linkBusy && setLinkDialogOpen(null)} maxWidth="sm" fullWidth>
+      <Dialog open={!!linkDialogOpen} onClose={() => !linkBusy && setLinkDialogOpen(null)} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>
           Link existing {linkDialogOpen} folder
         </DialogTitle>
