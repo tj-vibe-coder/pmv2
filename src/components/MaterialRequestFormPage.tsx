@@ -27,7 +27,11 @@ import {
   FormControl,
   InputLabel,
   Select,
+  Collapse,
+  useMediaQuery,
 } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { Add as AddIcon, Delete as DeleteIcon, Send as SendIcon, Visibility as VisibilityIcon, FileDownload as FileDownloadIcon, PictureAsPdf as PictureAsPdfIcon, Upload as UploadIcon, Edit as EditIcon } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -142,7 +146,74 @@ const parseMRFNumber = (requestNo: string): number => {
   return match ? parseInt(match[1], 10) : 0;
 };
 
+interface MrfItemCardProps {
+  row: MaterialRequestItem;
+  index: number;
+  suppliers: Supplier[];
+  onChange: (id: string, field: keyof MaterialRequestItem, value: string | number) => void;
+  onSupplier: (id: string, supplierId: string, supplierName: string) => void;
+  onRemove: (id: string) => void;
+}
+
+// Portrait-phone version of one item line: summary card that expands into labelled fields.
+function MrfItemCard({ row, index, suppliers, onChange, onSupplier, onRemove }: MrfItemCardProps) {
+  // A new, still-empty line opens ready to type in.
+  const [open, setOpen] = useState(() => !row.description && !row.quantity);
+  const meta = [row.quantity ? `${row.quantity} ${row.unit || ''}`.trim() : '', row.brand, row.partNo].filter(Boolean).join(' · ');
+  return (
+    <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, p: 1, pr: 0.5 }}>
+        <Box onClick={() => setOpen((o) => !o)} sx={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
+          <Typography variant="caption" color="text.secondary">#{index + 1}</Typography>
+          <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+            {row.description || <Box component="span" sx={{ fontStyle: 'italic', color: 'text.disabled', fontWeight: 400 }}>No description</Box>}
+          </Typography>
+          {meta && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{meta}</Typography>}
+        </Box>
+        <IconButton size="small" onClick={() => setOpen((o) => !o)} aria-label={open ? 'Collapse' : 'Expand to edit'}>
+          {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+        </IconButton>
+      </Box>
+      <Collapse in={open} unmountOnExit>
+        <Divider />
+        <Box sx={{ p: 1.5, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.5 }}>
+          <TextField
+            size="small" label="Item / Description" value={row.description} multiline minRows={1} sx={{ gridColumn: '1 / -1' }}
+            onChange={(e) => onChange(row.id, 'description', e.target.value)}
+          />
+          <TextField size="small" label="Part #" value={row.partNo} onChange={(e) => onChange(row.id, 'partNo', e.target.value)} />
+          <TextField size="small" label="Brand" value={row.brand} onChange={(e) => onChange(row.id, 'brand', e.target.value)} />
+          <TextField
+            size="small" type="number" label="Qty" value={row.quantity || ''} inputProps={{ min: 0, inputMode: 'decimal' }}
+            onChange={(e) => onChange(row.id, 'quantity', Number(e.target.value) || 0)}
+          />
+          <TextField select size="small" label="Unit" value={row.unit} onChange={(e) => onChange(row.id, 'unit', e.target.value)}>
+            {units.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
+          </TextField>
+          <TextField
+            select size="small" label="Supplier (for PO)" value={row.supplierId ?? ''} sx={{ gridColumn: '1 / -1' }}
+            onChange={(e) => {
+              const sup = suppliers.find((x) => x.id === e.target.value);
+              onSupplier(row.id, e.target.value, sup?.name ?? '');
+            }}
+            SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}
+          >
+            <MenuItem value="">Any</MenuItem>
+            {suppliers.map((sup) => <MenuItem key={sup.id} value={sup.id}>{sup.name}</MenuItem>)}
+          </TextField>
+          <TextField size="small" label="Notes" value={row.notes} sx={{ gridColumn: '1 / -1' }} onChange={(e) => onChange(row.id, 'notes', e.target.value)} />
+        </Box>
+        <Box sx={{ px: 1.5, pb: 1.5 }}>
+          <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={() => onRemove(row.id)}>Delete line</Button>
+        </Box>
+      </Collapse>
+    </Paper>
+  );
+}
+
 const MaterialRequestFormPage: React.FC = () => {
+  // Portrait phones (< 600 px): item lines and request history show as cards.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [projects, setProjects] = useState<Project[]>([]);
   const [requests, setRequests] = useState<MaterialRequest[]>([]);
   const [projectId, setProjectId] = useState<string | ''>('');
@@ -885,6 +956,13 @@ const MaterialRequestFormPage: React.FC = () => {
             </Button>
           </Box>
         </Box>
+        {isPhone ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {items.map((row, index) => (
+              <MrfItemCard key={row.id} row={row} index={index} suppliers={suppliers} onChange={updateItem} onSupplier={setItemSupplier} onRemove={removeItem} />
+            ))}
+          </Box>
+        ) : (
         <TableContainer>
           <Table size="small">
             <TableHead>
@@ -991,6 +1069,7 @@ const MaterialRequestFormPage: React.FC = () => {
             </TableBody>
           </Table>
         </TableContainer>
+        )}
         <Button startIcon={<AddIcon />} onClick={addItem} sx={{ mt: 1 }}>
           Add line
         </Button>
@@ -1044,6 +1123,43 @@ const MaterialRequestFormPage: React.FC = () => {
             </Button>
           </Box>
         </Box>
+        {isPhone ? (
+          <Box sx={{ p: 1, pt: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {requests.length === 0 && (
+              <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>No material requests yet. Submit one above.</Typography>
+            )}
+            {requests.map((r) => {
+              const rItems = r.items || [];
+              const inPoCount = rItems.filter((item) => {
+                const compositeId = `${r.id}-${item.id || ''}`;
+                return pos.some((p) => p.items.some((i) => i.id === compositeId));
+              }).length;
+              return (
+                <Paper key={r.id} variant="outlined" sx={{ p: 1.25 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{r.requestNo}</Typography>
+                    <Chip label={r.status} size="small" color={r.status === 'Submitted' ? 'success' : 'default'} variant="outlined" />
+                  </Box>
+                  <Typography variant="body2" sx={{ mt: 0.5, overflowWrap: 'anywhere' }}>{r.projectName || '—'}</Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    {[r.requestDate, r.requestedBy, r.deliveryLocation].filter(Boolean).join(' · ')}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    PO'd: {rItems.length > 0 ? `${inPoCount}/${rItems.length}` : '—'}
+                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.25, mt: 0.5, mx: -0.5 }}>
+                    <IconButton onClick={() => handleLoadForEdit(r)} title="Load for edit"><EditIcon fontSize="small" /></IconButton>
+                    <IconButton onClick={() => setViewRequest(r)} title="View details"><VisibilityIcon fontSize="small" /></IconButton>
+                    <IconButton onClick={() => handlePreviewMRF(r)} title="Preview PDF"><PictureAsPdfIcon fontSize="small" /></IconButton>
+                    <IconButton onClick={() => exportViewRequestToPDF(r).catch(console.error)} title="Export to PDF"><FileDownloadIcon fontSize="small" /></IconButton>
+                    <Box sx={{ flex: 1 }} />
+                    <IconButton onClick={() => handleDeleteRequest(r.id)} title="Delete request" color="error"><DeleteIcon fontSize="small" /></IconButton>
+                  </Box>
+                </Paper>
+              );
+            })}
+          </Box>
+        ) : (
         <TableContainer sx={{ maxHeight: 400 }}>
           <Table size="small" stickyHeader>
             <TableHead>
@@ -1135,9 +1251,10 @@ const MaterialRequestFormPage: React.FC = () => {
             </TableBody>
           </Table>
         </TableContainer>
+        )}
       </Paper>
 
-      <Dialog open={!!viewRequest} onClose={() => setViewRequest(null)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 2 } }}>
+      <Dialog open={!!viewRequest} onClose={() => setViewRequest(null)} maxWidth="sm" fullWidth fullScreen={isPhone} PaperProps={{ sx: { borderRadius: isPhone ? 0 : 2 } }}>
         <DialogTitle sx={{ borderBottom: '1px solid #e2e8f0', pb: 1 }}>
           Request details
         </DialogTitle>
@@ -1194,6 +1311,29 @@ const MaterialRequestFormPage: React.FC = () => {
               <Typography variant="subtitle2" sx={{ mt: 1, mb: 1, fontWeight: 600 }}>
                 Items
               </Typography>
+              {isPhone ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                  {viewRequest.items && viewRequest.items.length > 0 ? (() => {
+                    const itemPoStatus = getItemPoStatus(viewRequest.id, viewRequest.items, pos);
+                    return viewRequest.items.map((item, idx) => (
+                      <Paper key={item.id || idx} variant="outlined" sx={{ p: 1.25 }}>
+                        <Typography variant="caption" color="text.secondary">#{idx + 1}</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{item.description || '—'}</Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
+                          {[`${item.quantity ?? ''} ${item.unit || ''}`.trim(), item.brand, item.partNo].filter(Boolean).join(' · ')}
+                        </Typography>
+                        {item.supplierName && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Supplier: {item.supplierName}</Typography>}
+                        {item.notes && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Notes: {item.notes}</Typography>}
+                        {itemPoStatus.get(item.id) && (
+                          <Chip size="small" label={`In PO: ${itemPoStatus.get(item.id)}`} color="success" variant="outlined" sx={{ mt: 0.5 }} />
+                        )}
+                      </Paper>
+                    ));
+                  })() : (
+                    <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>No items</Typography>
+                  )}
+                </Box>
+              ) : (
               <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1 }}>
                 <Table size="small">
                   <TableHead>
@@ -1243,6 +1383,7 @@ const MaterialRequestFormPage: React.FC = () => {
                   </TableBody>
                 </Table>
               </TableContainer>
+              )}
             </Box>
           )}
         </DialogContent>
