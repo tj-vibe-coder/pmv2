@@ -33,6 +33,7 @@ import {
   Card,
   CardContent,
   Grid,
+  useMediaQuery,
 } from '@mui/material';
 import { Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, PhotoCamera as PhotoCameraIcon, AccountBalanceWallet as WalletIcon } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -209,6 +210,8 @@ export default function CAFormPage() {
   // investor/linked-investment state with the wrong data.
   const fundingEditGenRef = useRef(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Portrait phones (< 600 px) show the three tables on this page as cards.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
   const [pdfPreviewBlob, setPdfPreviewBlob] = useState<Blob | null>(null);
   const [pdfPreviewTitle, setPdfPreviewTitle] = useState('');
@@ -1007,6 +1010,47 @@ export default function CAFormPage() {
         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: NET_PACIFIC_COLORS.primary }}>
           Breakdown by category (add child lines under Materials for item breakdown; amount is auto-computed)
         </Typography>
+        {isPhone ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 2 }}>
+            {breakdown.map((row, idx) => (
+              <Paper key={row._uid} variant="outlined" sx={{ p: 1.25 }}>
+                <FormControl size="small" fullWidth sx={{ mb: 1 }}>
+                  <InputLabel>Category</InputLabel>
+                  <Select
+                    value={row.category || 'Materials'}
+                    label="Category"
+                    onChange={(e) => updateBreakdown(idx, 'category', e.target.value)}
+                  >
+                    {CA_CATEGORIES.map((c) => (
+                      <MenuItem key={c} value={c}>{c}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <TextField
+                  size="small" fullWidth label="Details" sx={{ mb: 1 }}
+                  placeholder={row.category === 'Materials' ? 'e.g. Cement, steel (child items)' : 'Optional'}
+                  value={row.description}
+                  onChange={(e) => updateBreakdown(idx, 'description', e.target.value)}
+                />
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <TextField
+                    size="small" type="number" label="Amount" sx={{ flex: 1 }}
+                    inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }}
+                    placeholder="0"
+                    value={row.amount}
+                    onChange={(e) => updateBreakdown(idx, 'amount', e.target.value)}
+                  />
+                  <IconButton color="primary" onClick={() => triggerScan(row._uid)} disabled={scanningRowId === row._uid} title="Scan receipt with AI">
+                    {scanningRowId === row._uid ? <CircularProgress size={18} /> : <PhotoCameraIcon fontSize="small" />}
+                  </IconButton>
+                  <IconButton color="error" onClick={() => removeBreakdownRow(idx)} disabled={breakdown.length <= 1} title="Remove line">
+                    <RemoveIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+              </Paper>
+            ))}
+          </Box>
+        ) : (
         <TableContainer component={Box} sx={{ border: '1px solid #e0e0e0', borderRadius: 1, mb: 2, maxWidth: 640 }}>
           <Table size="small">
             <TableHead>
@@ -1073,6 +1117,7 @@ export default function CAFormPage() {
             </TableBody>
           </Table>
         </TableContainer>
+        )}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
           <Button size="small" startIcon={<AddIcon />} onClick={addBreakdownRow} sx={{ color: NET_PACIFIC_COLORS.primary }}>
             Add line
@@ -1134,6 +1179,40 @@ export default function CAFormPage() {
                   </Typography>
                 )}
               </Box>
+              {isPhone ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {visibleEmployeeBalances.map((b) => {
+                    const fmt = (n: number) => n.toLocaleString('en-PH', { minimumFractionDigits: 2 });
+                    return (
+                      <Paper key={b.userId} variant="outlined" sx={{ p: 1.25 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.75 }}>{b.name}</Typography>
+                        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1 }}>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Approved CAs</Typography>
+                            <Typography variant="body2">{b.approvedCount}</Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Total approved</Typography>
+                            <Typography variant="body2">{fmt(b.totalApproved)}</Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Holds unliquidated</Typography>
+                            <Typography variant="body2" sx={{ fontWeight: b.heldPositive > 0 ? 600 : undefined, color: b.heldPositive > 0 ? 'warning.main' : 'text.disabled' }}>
+                              {b.heldPositive > 0 ? fmt(b.heldPositive) : '—'}
+                            </Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Company owes</Typography>
+                            <Typography variant="body2" sx={{ fontWeight: b.owedNegative > 0 ? 600 : undefined, color: b.owedNegative > 0 ? 'error.main' : 'text.disabled' }}>
+                              {b.owedNegative > 0 ? fmt(b.owedNegative) : '—'}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </Paper>
+                    );
+                  })}
+                </Box>
+              ) : (
               <TableContainer>
                 <Table size="small" stickyHeader>
                   <TableHead>
@@ -1162,6 +1241,7 @@ export default function CAFormPage() {
                   </TableBody>
                 </Table>
               </TableContainer>
+              )}
             </Box>
           </Paper>
         ) : (
@@ -1223,6 +1303,158 @@ export default function CAFormPage() {
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
           <CircularProgress />
+        </Box>
+      ) : isPhone ? (
+        <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {list.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>No cash advance requests yet.</Typography>
+          )}
+          {list.map((ca) => {
+            const linkedLiqs = liquidations.filter((l) => l.ca_id === ca.id && l.status === 'submitted');
+            const liquidatedTotal = linkedLiqs.reduce((s, l) => s + (Number(l.total_amount) || 0), 0);
+            const expanded = expandedId === ca.id;
+            const origin = cashAdvanceOrigin(ca);
+            const rowToken = financeFocusToken(origin);
+            const focused = financeFocus.isFocused(origin);
+            const fmt = (n: number) => Number(n).toLocaleString('en-PH', { minimumFractionDigits: 2 });
+            const pct = Number(ca.amount) > 0 ? Math.min(100, Math.max(0, ((Number(ca.amount) - Number(ca.balance_remaining)) / Number(ca.amount)) * 100)) : 0;
+            const breakdownRows = parseBreakdown(ca.breakdown);
+            const requestedOn = ca.requested_at
+              ? new Date(ca.requested_at * 1000).toLocaleDateString()
+              : ca.created_at ? new Date(ca.created_at * 1000).toLocaleDateString() : '—';
+            return (
+              <Paper
+                key={ca.id}
+                variant="outlined"
+                ref={(element: HTMLDivElement | null) => {
+                  if (element) financeRowRefs.current.set(rowToken, element as unknown as HTMLTableRowElement);
+                  else financeRowRefs.current.delete(rowToken);
+                }}
+                aria-current={focused ? 'true' : undefined}
+                sx={{ p: 1.25, ...(focused ? { bgcolor: 'rgba(44,90,160,0.14)', outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px' } : {}) }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>
+                    {ca.ca_no || `${ca.id.slice(0, 8)}…`}
+                  </Typography>
+                  <Chip
+                    size="small"
+                    label={ca.status}
+                    color={ca.status === 'approved' ? 'success' : ca.status === 'rejected' ? 'error' : 'default'}
+                    sx={{ textTransform: 'capitalize' }}
+                  />
+                </Box>
+                {isAdmin && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    {ca.full_name || ca.username || '—'}{ca.full_name && ca.username ? ` (${ca.username})` : ''}
+                  </Typography>
+                )}
+                <Typography variant="body2" sx={{ mt: 0.5, overflowWrap: 'anywhere' }}>
+                  {ca.project_name
+                    || (ca.purpose ? <em style={{ color: '#666' }}>{ca.purpose}</em> : ca.project_id ? `#${ca.project_id}` : '—')}
+                </Typography>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1, mt: 1 }}>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Amount</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>₱{fmt(ca.amount)}</Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Balance</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600, ...(Number(ca.balance_remaining) < 0 ? { color: 'error.main' } : {}) }}>
+                      ₱{fmt(ca.balance_remaining)}
+                    </Typography>
+                  </Box>
+                </Box>
+                {Number(ca.amount) > 0 && <LinearProgress variant="determinate" value={pct} sx={{ mt: 0.75, height: 5, borderRadius: 3 }} />}
+                {breakdownRows.length > 0 && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75, whiteSpace: 'pre-wrap' }}>
+                    {breakdownRows.map((r) => {
+                      const cat = (r.category || '').trim();
+                      const desc = (r.description || '').trim();
+                      const part = cat && desc ? `${cat} – ${desc}` : cat || desc || '—';
+                      return `${part}: ${fmt(Number(r.amount || 0))}`;
+                    }).join('\n')}
+                  </Typography>
+                )}
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>Requested {requestedOn}</Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5, mt: 1 }}>
+                  {isAdmin && ca.status === 'pending' && (
+                    <>
+                      <Button size="small" startIcon={<CheckIcon />} color="success" variant="outlined" onClick={() => handleApproveReject(ca.id, 'approved')} disabled={actionId === ca.id}>Approve</Button>
+                      <Button size="small" startIcon={<CloseIcon />} color="error" variant="outlined" onClick={() => handleApproveReject(ca.id, 'rejected')} disabled={actionId === ca.id}>Reject</Button>
+                    </>
+                  )}
+                  {ca.status === 'approved' && Number(ca.balance_remaining) > 0 && (
+                    <Button
+                      size="small" variant="outlined" startIcon={<ReceiptLongIcon />}
+                      onClick={() => navigate(`${location.pathname.replace(/\/ca-form\/?$/, '/liquidation-form')}?ca_id=${ca.id}`)}
+                      sx={{ color: NET_PACIFIC_COLORS.primary }}
+                    >
+                      Liquidate
+                    </Button>
+                  )}
+                  {isAdmin && ca.status === 'approved' && Number(ca.balance_remaining) > 0 && (
+                    <Button size="small" variant="outlined" startIcon={<WalletIcon />} onClick={() => setCloseTarget(ca)} sx={{ color: NET_PACIFIC_COLORS.primary }}>
+                      Close &amp; Settle
+                    </Button>
+                  )}
+                  <IconButton onClick={() => exportCARowToPDF(ca)} title="Export to PDF (for signing)" sx={{ color: NET_PACIFIC_COLORS.primary }}>
+                    <PictureAsPdfIcon fontSize="small" />
+                  </IconButton>
+                  {isAdmin && ca.status !== 'rejected' && (
+                    <IconButton
+                      onClick={() => openFundingEdit(ca)}
+                      title="Edit funding source / link to Investment Tracker"
+                      sx={{ color: ca.fundingSource?.type === 'investor_outofpocket' ? 'info.main' : NET_PACIFIC_COLORS.primary }}
+                    >
+                      <WalletIcon fontSize="small" />
+                    </IconButton>
+                  )}
+                  <MoneyTrailButton origin={origin} compact onResolved={() => { void fetchList(); }} />
+                  <Box sx={{ flex: 1 }} />
+                  {(isAdmin || (ca.status === 'pending' && String(ca.user_id) === String(user?.id))) && (
+                    <Button size="small" startIcon={<DeleteIcon />} color="error" onClick={() => setConfirmDelete(ca)} disabled={actionId === ca.id}>
+                      Delete
+                    </Button>
+                  )}
+                </Box>
+                <Button
+                  size="small" fullWidth
+                  endIcon={expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                  onClick={() => setExpandedId(expanded ? null : ca.id)}
+                  sx={{ mt: 0.5, justifyContent: 'space-between' }}
+                >
+                  Liquidations ({linkedLiqs.length})
+                </Button>
+                <Collapse in={expanded} timeout="auto" unmountOnExit>
+                  <Box sx={{ pt: 0.5 }}>
+                    {linkedLiqs.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">No liquidations linked to this CA yet.</Typography>
+                    ) : (
+                      <>
+                        <Typography variant="caption" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, display: 'block', mb: 0.5 }}>
+                          Liquidated {fmt(liquidatedTotal)} of {fmt(ca.amount)}
+                        </Typography>
+                        {linkedLiqs.map((l) => (
+                          <Chip
+                            key={l.id}
+                            variant="outlined"
+                            color="warning"
+                            label={`${l.form_no || l.id} · ${l.date_of_submission || (l.created_at ? new Date(l.created_at * 1000).toLocaleDateString() : '—')} · ₱${fmt(Number(l.total_amount || 0))}`}
+                            onClick={() => navigate(financeFocusUrl(
+                              { type: 'liquidation', id: l.id, rowId: '__form__' },
+                              `${location.pathname}${location.search}`,
+                            ))}
+                            sx={{ mr: 1, mb: 0.5, cursor: 'pointer', fontFamily: 'monospace', height: 'auto', '& .MuiChip-label': { whiteSpace: 'normal', py: 0.5 } }}
+                          />
+                        ))}
+                      </>
+                    )}
+                  </Box>
+                </Collapse>
+              </Paper>
+            );
+          })}
         </Box>
       ) : (
         <TableContainer sx={{ maxHeight: 'calc(100vh - 480px)', minHeight: 300 }}>
