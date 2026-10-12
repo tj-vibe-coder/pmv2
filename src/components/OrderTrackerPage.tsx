@@ -26,6 +26,7 @@ import {
   IconButton,
   Collapse,
   Checkbox,
+  useMediaQuery,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, ReceiptLong as CreateDRIcon, ExpandMore as ExpandMoreIcon, ExpandLess as ExpandLessIcon } from '@mui/icons-material';
 import dataService from '../services/dataService';
@@ -105,6 +106,8 @@ const OrderTrackerPage: React.FC = () => {
   const [status, setStatus] = useState<OrderStatus>('Draft');
   const [itemsDialogOrder, setItemsDialogOrder] = useState<OrderRecord | null>(null);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  // Portrait phones (< 600 px): orders and their items show as cards; the items dialog is full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   // orderId -> Set of item ids to include when creating DR
   const [selectedForDR, setSelectedForDR] = useState<Record<string, Set<string>>>({});
 
@@ -254,6 +257,103 @@ const OrderTrackerPage: React.FC = () => {
         </Button>
       </Box>
 
+      {isPhone ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {filteredOrders.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+              {orders.length === 0 ? 'No orders yet. Add an order to track.' : `No orders with status "${statusFilter}".`}
+            </Typography>
+          )}
+          {filteredOrders.map((o) => (
+            <Paper key={o.id} variant="outlined" sx={{ p: 1.25 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', minWidth: 0 }}>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{o.orderNo}</Typography>
+                  {o.materialRequestId && <Chip size="small" label="From MRF" color="primary" variant="outlined" />}
+                </Box>
+                <Chip label={o.status} size="small" color={statusColors[o.status]} variant="outlined" />
+              </Box>
+              <Typography variant="body2" sx={{ mt: 0.5, fontWeight: 600, overflowWrap: 'anywhere' }}>{o.supplier || '—'}</Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
+                {[o.projectName, o.poNumber && `PO ${o.poNumber}`].filter(Boolean).join(' · ') || '—'}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                Ordered {o.orderDate || '—'} · Expected {o.expectedDelivery || '—'}
+              </Typography>
+              {o.itemsSummary && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', mt: 0.25 }}>
+                  {o.itemsSummary}
+                </Typography>
+              )}
+              <Select
+                size="small" fullWidth value={o.status} sx={{ mt: 1 }}
+                onChange={(e) => handleStatusChange(o.id, e.target.value as OrderStatus)}
+              >
+                <MenuItem value="Draft">Draft</MenuItem>
+                <MenuItem value="Submitted">Submitted</MenuItem>
+                <MenuItem value="Ordered">Ordered</MenuItem>
+                <MenuItem value="In Transit">In Transit</MenuItem>
+                <MenuItem value="Delivered">Delivered</MenuItem>
+              </Select>
+              <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
+                <Button
+                  size="small" variant="outlined" startIcon={<CreateDRIcon />}
+                  onClick={() => navigate(getDRUrlWithSelected(o.id))}
+                  sx={{ color: '#2c5aa0', borderColor: '#2c5aa0' }}
+                >
+                  {selectedCount(o.id) > 0 ? `Create DR (${selectedCount(o.id)})` : 'Create DR'}
+                </Button>
+                {o.items && o.items.length > 0 && (
+                  <Button size="small" variant="outlined" onClick={() => setItemsDialogOrder(o)}>Edit item details</Button>
+                )}
+                <Box sx={{ flex: 1 }} />
+                <IconButton onClick={() => handleDeleteOrder(o.id)} title="Delete order" color="error"><DeleteIcon fontSize="small" /></IconButton>
+              </Box>
+              {o.items && o.items.length > 0 && (
+                <>
+                  <Button
+                    size="small" fullWidth onClick={() => toggleExpand(o.id)}
+                    endIcon={expandedOrderId === o.id ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                    sx={{ justifyContent: 'space-between' }}
+                  >
+                    Items ({o.items.length})
+                  </Button>
+                  <Collapse in={expandedOrderId === o.id} timeout="auto" unmountOnExit>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, pt: 0.5 }}>
+                      {o.items.map((item, idx) => (
+                        <Paper key={item.id} variant="outlined" sx={{ p: 1, display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+                          <Checkbox
+                            size="small" sx={{ p: 0.5 }}
+                            checked={(selectedForDR[o.id] ?? new Set()).has(item.id)}
+                            onChange={() => toggleItemForDR(o.id, item.id)}
+                            title="Include in next Delivery Receipt"
+                          />
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{idx + 1}. {item.description || '—'}</Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                              {[item.partNo, `${item.quantity} ${item.unit || ''}`.trim()].filter(Boolean).join(' · ')}
+                            </Typography>
+                            <Select
+                              size="small" fullWidth value={item.status} sx={{ mt: 0.5 }}
+                              onChange={(e) => handleItemStatusChange(o.id, item.id, e.target.value as OrderStatus)}
+                            >
+                              <MenuItem value="Draft">Draft</MenuItem>
+                              <MenuItem value="Submitted">Submitted</MenuItem>
+                              <MenuItem value="Ordered">Ordered</MenuItem>
+                              <MenuItem value="In Transit">In Transit</MenuItem>
+                              <MenuItem value="Delivered">Delivered</MenuItem>
+                            </Select>
+                          </Box>
+                        </Paper>
+                      ))}
+                    </Box>
+                  </Collapse>
+                </>
+              )}
+            </Paper>
+          ))}
+        </Box>
+      ) : (
       <Paper sx={{ borderRadius: 2, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <TableContainer sx={{ maxHeight: 520 }}>
           <Table size="small" stickyHeader>
@@ -438,6 +538,7 @@ const OrderTrackerPage: React.FC = () => {
           </Table>
         </TableContainer>
       </Paper>
+      )}
 
       {/* Add Order Dialog */}
       <Paper
@@ -525,14 +626,46 @@ const OrderTrackerPage: React.FC = () => {
         />
       )}
 
-      <Dialog open={!!itemsDialogOrder} onClose={() => setItemsDialogOrder(null)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 2 } }}>
+      <Dialog open={!!itemsDialogOrder} onClose={() => setItemsDialogOrder(null)} maxWidth="md" fullWidth fullScreen={isPhone} PaperProps={{ sx: { borderRadius: isPhone ? 0 : 2 } }}>
         <DialogTitle sx={{ borderBottom: '1px solid #e2e8f0', pb: 1 }}>
           Order items – {itemsDialogOrder?.orderNo}
         </DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           {itemsDialogOrder && (
             <Box>
-              {itemsDialogOrder.items && itemsDialogOrder.items.length > 0 ? (
+              {itemsDialogOrder.items && itemsDialogOrder.items.length > 0 && isPhone ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {itemsDialogOrder.items.map((item, idx) => (
+                    <Paper key={item.id} variant="outlined" sx={{ p: 1.25 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{idx + 1}. {item.description || '—'}</Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        {[item.partNo, `${item.quantity} ${item.unit || ''}`.trim()].filter(Boolean).join(' · ')}
+                      </Typography>
+                      {item.notes && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Notes: {item.notes}</Typography>}
+                      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.25, mt: 1 }}>
+                        <TextField
+                          size="small" label="Supplier" value={item.supplier ?? ''}
+                          onChange={(e) => handleItemFieldChange(itemsDialogOrder.id, item.id, 'supplier', e.target.value)}
+                        />
+                        <TextField
+                          size="small" label="PO Number" value={item.poNumber ?? ''}
+                          onChange={(e) => handleItemFieldChange(itemsDialogOrder.id, item.id, 'poNumber', e.target.value)}
+                        />
+                        <TextField
+                          select size="small" label="Status" value={item.status} sx={{ gridColumn: '1 / -1' }}
+                          onChange={(e) => handleItemStatusChange(itemsDialogOrder.id, item.id, e.target.value as OrderStatus)}
+                        >
+                          <MenuItem value="Draft">Draft</MenuItem>
+                          <MenuItem value="Submitted">Submitted</MenuItem>
+                          <MenuItem value="Ordered">Ordered</MenuItem>
+                          <MenuItem value="In Transit">In Transit</MenuItem>
+                          <MenuItem value="Delivered">Delivered</MenuItem>
+                        </TextField>
+                      </Box>
+                    </Paper>
+                  ))}
+                </Box>
+              ) : itemsDialogOrder.items && itemsDialogOrder.items.length > 0 ? (
                 <TableContainer>
                   <Table size="small">
                     <TableHead>

@@ -13,6 +13,7 @@ import {
   Chip,
   CircularProgress,
   Alert,
+  useMediaQuery,
 } from '@mui/material';
 import { ArrowBack as BackIcon } from '@mui/icons-material';
 import type { Payslip } from '../../types/Payroll';
@@ -37,6 +38,8 @@ const EmployeePayslipPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedPayslip, setSelectedPayslip] = useState<Payslip | null>(null);
+  // Portrait phones (< 600 px): payslips show as tap-to-open cards instead of a sideways-scrolling table.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
 
   const fetchPayslips = useCallback(async () => {
     setLoading(true);
@@ -95,6 +98,49 @@ const EmployeePayslipPage: React.FC = () => {
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <Typography color="text.secondary">No payslips found.</Typography>
         </Paper>
+      ) : isPhone ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {payslips.map((slip, i) => {
+            const payDate = slip.payDate ? new Date(slip.payDate).toLocaleDateString('en-US', { dateStyle: 'medium' }) : '—';
+            const period = slip.periodStart && slip.periodEnd
+              ? `${new Date(slip.periodStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${new Date(slip.periodEnd).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+              : '—';
+            const statusColor = slip.runStatus === 'PAID' ? 'success' : slip.runStatus === 'APPROVED' ? 'info' : 'default';
+            return (
+              <Paper
+                key={`${slip.payrollRunId}-${i}`}
+                variant="outlined"
+                onClick={() => setSelectedPayslip(slip)}
+                sx={{ p: 1.5, cursor: 'pointer', '&:active': { bgcolor: 'action.hover' } }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>Paid {payDate}</Typography>
+                    <Typography variant="caption" color="text.secondary">{period}</Typography>
+                  </Box>
+                  <Chip label={slip.runStatus || 'DRAFT'} size="small" color={statusColor as 'success' | 'info' | 'default'} variant="outlined" />
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 1, mt: 1 }}>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                      Gross {formatCurrency(slip.grossPay)}
+                    </Typography>
+                    <Typography variant="caption" sx={{ display: 'block', color: 'error.main' }}>
+                      Deductions −{formatCurrency(slip.totalDeductions)}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'right' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Net pay</Typography>
+                    <Typography variant="h6" sx={{ fontFamily: 'monospace', fontWeight: 700, lineHeight: 1.2 }}>{formatCurrency(slip.netPay)}</Typography>
+                  </Box>
+                </Box>
+                <Button size="small" fullWidth sx={{ mt: 0.5, textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}>
+                  View payslip
+                </Button>
+              </Paper>
+            );
+          })}
+        </Box>
       ) : (
         <TableContainer component={Paper} sx={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <Table size="small" sx={{ minWidth: 500 }}>

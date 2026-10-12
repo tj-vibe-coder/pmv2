@@ -816,3 +816,12 @@ Goal: every page fits the phone screen, with no sideways-sliding page and no zoo
 - **`ReimbursementDashboard.tsx`:** claims (with Select all) and outstanding CAs → cards; Pay lines dialog full-screen with list rows.
 - **`MaterialRequestFormPage.tsx`:** item entry → `MrfItemCard` (expand-to-edit), request history → cards, request-details dialog full-screen with item cards.
 - **Verified:** `tsc` clean; checked by hand on iPhone Safari with look-only passes (no saves — the dev server points at production Firestore; no emulator yet). Not done in Group 1: Purchase Orders, Order Tracker (also embedded as a tab in Material Request), Delivery, Payslip.
+
+## 2026-10-12 — Mobile card views for procurement screens + payslips
+- **Why:** finish Group 1 of the phone pass (see the 2026-10-09 entry). Interface-only; portrait phones (< 600 px) get cards and full-screen dialogs, landscape/tablet/desktop keep the tables. Local `useMediaQuery('(max-width:599.95px)')` per screen, existing handlers reused.
+- **`PurchaseOrderPage.tsx`:** PO list → cards (status, supplier, project, MRF ref/date, View/Edit/PDF/Delete, expandable line items + Export PDF / Add to Order Tracker). Create / Edit / View PO dialogs full-screen. Create dialog: MRF items become a checkbox list with an inline unit-price field; manual and edit line items use the new `PoLineFields` card; view dialog uses read-only item cards.
+- **`OrderTrackerPage.tsx`:** orders → cards (status select on the card, Create DR, delete, expandable items with "Deliver now" checkbox + per-item status). New **Edit item details** button on cards opens the (full-screen) items dialog, since the old double-click-a-row way to edit per-item supplier/PO isn't possible on touch. The page is also embedded in Material Request, so that tab gets it too.
+- **`DeliveryPage.tsx`:** item-details table (640 px min-width) → one card per line (Item #, Description, QTY, UOM); saved delivery receipts → cards.
+- **`SuppliersPage.tsx`:** suppliers → cards (tap-to-email/call), expandable product cards, supplier/product dialogs full-screen, search full-width.
+- **`EmployeePayslipPage.tsx` / `PayslipCard.tsx`:** payslip list → tap-to-open cards (net pay prominent); Back/Print buttons can wrap.
+- **Verified:** `tsc` clean; look-only checks on iPhone Safari (dev server points at production Firestore, no saves). Not done: Dashboard, Project Details, Collections, Clients, Pricelists, remaining Calcsheet pages (Compare, Presets, Gantt, Legacy Import, configurators beyond what existed).
