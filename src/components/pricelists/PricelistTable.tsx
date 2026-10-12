@@ -1,8 +1,11 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Button,
-  Checkbox, Chip, TablePagination, Skeleton, Typography, Box, TableSortLabel, IconButton, Tooltip,
+  Checkbox, Chip, TablePagination, Skeleton, Typography, Box, TableSortLabel, IconButton, Tooltip, Paper, TextField, MenuItem,
+  useMediaQuery,
 } from '@mui/material';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import HistoryIcon from '@mui/icons-material/History';
@@ -37,6 +40,8 @@ export default function PricelistTable({
   items, loading, selectable = false, selectedIds, onToggleItem, onTogglePage,
   manageable = false, onEdit, onDelete, onHistory, hasActiveFilters = false, onClearFilters,
 }: Props) {
+  // Portrait phones (< 600 px): items show as cards instead of a wide table.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [sortKey, setSortKey] = useState<SortKey>('catalogNo');
@@ -107,6 +112,74 @@ export default function PricelistTable({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      {isPhone ? (
+        <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {selectable && (
+              <Tooltip title={allPageSelected ? 'Deselect this page' : 'Select this page'}>
+                <Checkbox
+                  indeterminate={pageSelectedCount > 0 && !allPageSelected}
+                  checked={allPageSelected}
+                  onChange={() => onTogglePage?.(paged, !allPageSelected)}
+                  size="small"
+                />
+              </Tooltip>
+            )}
+            <TextField
+              select size="small" label="Sort by" value={sortKey} sx={{ flex: 1 }}
+              onChange={(e) => { setSortKey(e.target.value as SortKey); setPage(0); }}
+            >
+              <MenuItem value="catalogNo">Catalog No.</MenuItem>
+              <MenuItem value="description">Description</MenuItem>
+              <MenuItem value="category">Category</MenuItem>
+              <MenuItem value="brand">Brand</MenuItem>
+              {showSupplier && <MenuItem value="supplier">Supplier</MenuItem>}
+              <MenuItem value="sellingPrice">Price</MenuItem>
+            </TextField>
+            <IconButton onClick={() => { setSortDir((d) => (d === 'asc' ? 'desc' : 'asc')); setPage(0); }} aria-label={sortDir === 'asc' ? 'Ascending' : 'Descending'}>
+              {sortDir === 'asc' ? <ArrowUpwardIcon fontSize="small" /> : <ArrowDownwardIcon fontSize="small" />}
+            </IconButton>
+          </Box>
+          {paged.map((item) => {
+            const selected = selectedIds?.has(item.id) ?? false;
+            const specs = [showPoles && item.poles ? `${item.poles}P` : '', showAmps && item.ampRating != null ? `${item.ampRating}A` : '', item.uom].filter(Boolean).join(' · ');
+            return (
+              <Paper key={item.id} variant="outlined" sx={{ p: 1, display: 'flex', alignItems: 'flex-start', gap: 0.5, ...(selected ? { bgcolor: 'action.selected' } : {}) }}>
+                {selectable && (
+                  <Checkbox size="small" sx={{ p: 0.5 }} checked={selected} onChange={() => onToggleItem?.(item)} />
+                )}
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 1 }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700, fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{item.catalogNo}</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700, whiteSpace: 'nowrap' }}>{PHP(item.sellingPrice)}</Typography>
+                  </Box>
+                  <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{item.description}</Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mt: 0.5 }}>
+                    <Chip label={item.category} size="small" variant="outlined" />
+                    {item.brand && <Typography variant="caption" color="text.secondary">{item.brand}</Typography>}
+                    {showSupplier && item.supplier && <Typography variant="caption" color="text.secondary">· {item.supplier}</Typography>}
+                  </Box>
+                  {(specs || (showSep && item.sepEquivalent)) && (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                      {specs}{showSep && item.sepEquivalent ? `${specs ? ' · ' : ''}SEP: ${item.sepEquivalent}` : ''}
+                    </Typography>
+                  )}
+                  {manageable && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, mt: 0.25, mx: -0.5 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ pl: 0.5, flex: 1 }}>
+                        {fmtDate(item.updatedAt)}{item.updatedBy ? ` · ${item.updatedBy}` : ''}
+                      </Typography>
+                      <IconButton onClick={() => onHistory?.(item)} aria-label="History"><HistoryIcon fontSize="small" /></IconButton>
+                      <IconButton onClick={() => onEdit?.(item)} aria-label="Edit"><EditIcon fontSize="small" /></IconButton>
+                      <IconButton color="error" onClick={() => onDelete?.(item)} aria-label="Delete"><DeleteIcon fontSize="small" /></IconButton>
+                    </Box>
+                  )}
+                </Box>
+              </Paper>
+            );
+          })}
+        </Box>
+      ) : (
       <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         <Table stickyHeader size="small">
           <TableHead>
@@ -184,6 +257,7 @@ export default function PricelistTable({
           </TableBody>
         </Table>
       </TableContainer>
+      )}
       <TablePagination
         component="div"
         count={items.length}

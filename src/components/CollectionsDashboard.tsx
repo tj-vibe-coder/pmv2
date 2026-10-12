@@ -4,7 +4,7 @@ import {
   IconButton, TextField, Dialog, DialogActions, DialogContent, DialogTitle,
   MenuItem, Chip, Table, TableHead, TableRow, TableCell, TableBody,
   TableContainer, Tooltip, Alert, CircularProgress, Stack, Autocomplete,
-  FormControl, InputLabel, Select, Divider, Tabs, Tab,
+  FormControl, InputLabel, Select, Divider, Tabs, Tab, useMediaQuery,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -139,6 +139,8 @@ interface CollectForm {
 export default function CollectionsDashboard() {
   const { user } = useAuth();
   const isTaxFiler = user?.role === 'tax_filer';
+  // Portrait phones (< 600 px): the three tables show as cards and the invoice form is full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const preselectedProjectId = searchParams.get('project_id');
@@ -781,7 +783,64 @@ export default function CollectionsDashboard() {
     document.body.removeChild(link);
   };
 
-  const renderActiExpectedTable = (rows: ActiExpectedRow[]) => (
+  const renderActiExpectedTable = (rows: ActiExpectedRow[]) => isPhone ? (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {rows.map((row) => {
+        const p = row.project;
+        const trail = p.commercial_trail;
+        return (
+          <Paper key={String(p.id)} variant="outlined" sx={{ p: 1.25 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography
+                  variant="body2"
+                  sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, cursor: 'pointer', overflowWrap: 'anywhere' }}
+                  onClick={() => navigate(`/projects/${p.id}`)}
+                >
+                  {[p.project_no, p.project_name].filter(Boolean).join(' · ')}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">{p.account_name}</Typography>
+              </Box>
+              <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700, whiteSpace: 'nowrap' }}>{PHP.format(row.expectedAmount)}</Typography>
+            </Box>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.75, mt: 0.75 }}>
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Project completed</Typography>
+                <Typography variant="body2">{fmtEpochDate(p.updated_completion_date ?? p.completion_date)}</Typography>
+              </Box>
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Expected collection</Typography>
+                <Typography variant="body2">{row.expectedCollectionDate || '—'}</Typography>
+              </Box>
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Customer PO (to ACTI)</Typography>
+                <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{p.po_number || '—'}</Typography>
+              </Box>
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>ACTI PO (to IOCT)</Typography>
+                <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{actiToIoctPoLabel(trail)}</Typography>
+              </Box>
+              <Box sx={{ gridColumn: '1 / -1' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>ACTI SI to customer</Typography>
+                <Typography variant="body2">
+                  {trail?.partner_si_no ? `${trail.partner_si_no}${trail.partner_si_date ? ` · ${trail.partner_si_date}` : ''}` : '—'}
+                </Typography>
+              </Box>
+            </Box>
+            <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.75 }}>
+              <Chip size="small" label={actiExpectedStageLabel(row.stage)} variant="outlined" />
+              <Chip
+                size="small"
+                label={actiExpectedTimingLabel(row.timing)}
+                color={row.timing === 'past_expected' ? 'warning' : row.timing === 'due_soon' ? 'info' : 'default'}
+                variant={row.timing === 'date_missing' ? 'outlined' : 'filled'}
+              />
+            </Stack>
+          </Paper>
+        );
+      })}
+    </Box>
+  ) : (
     <TableContainer sx={{ maxHeight: 280 }}>
       <Table size="small" stickyHeader>
         <TableHead>
@@ -1242,6 +1301,90 @@ export default function CollectionsDashboard() {
               </Button>
             </Box>
 
+            {isPhone ? (
+              <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {filteredReceivables.length === 0 && (
+                  <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+                    {enriched.length === 0 ? 'No invoices yet. Tap "Add Invoice" to get started.' : 'No invoices match the current filters.'}
+                  </Typography>
+                )}
+                {filteredReceivables.map(inv => {
+                  const isOverdue = inv._status === 'overdue';
+                  const handleProjectClick = () => {
+                    sessionStorage.setItem('selectedProjectId', String(inv.project_id));
+                    navigate(`/projects/${inv.project_id}`);
+                  };
+                  const proj = projectsById[String(inv.project_id)];
+                  const poRef = isActiInvoice(inv) ? actiToIoctPoLabel(proj?.commercial_trail) : (proj?.po_number || '');
+                  return (
+                    <Paper key={inv.id} variant="outlined" sx={{ p: 1.25 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{inv.invoice_no}</Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 500, color: NET_PACIFIC_COLORS.primary, cursor: 'pointer', overflowWrap: 'anywhere' }} onClick={handleProjectClick}>
+                            {inv.project_name || '—'}{inv.project_no ? ` · ${inv.project_no}` : ''}
+                          </Typography>
+                        </Box>
+                        <Chip label={STATUS_LABELS[inv._status]} color={STATUS_COLORS[inv._status]} size="small" variant="outlined" />
+                      </Box>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mt: 0.5 }}>
+                        {inv.pb_number && <Chip label={inv.pb_number} size="small" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />}
+                        {inv.bill_to === 'acti'
+                          ? <Chip label="ACTI" size="small" color="primary" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
+                          : <Typography variant="caption" color="text.secondary">Customer</Typography>}
+                        {poRef && poRef !== 'Pending' && poRef !== '—' && (
+                          <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>PO {poRef}</Typography>
+                        )}
+                      </Box>
+                      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.75, mt: 0.75 }}>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Amount</Typography>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{PHP.format(inv.amount)}</Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Outstanding</Typography>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600, color: inv._outstanding > 0 ? (isOverdue ? 'error.main' : 'warning.dark') : 'text.disabled' }}>
+                            {inv._outstanding > 0 ? PHP.format(inv._outstanding) : '—'}
+                          </Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Cash collected</Typography>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', color: inv._cash > 0 ? 'success.main' : 'text.secondary', fontWeight: inv._cash > 0 ? 600 : 400 }}>{PHP.format(inv._cash)}</Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>EWT</Typography>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', color: inv._wht > 0 ? NET_PACIFIC_COLORS.accent2 : 'text.disabled' }}>{inv._wht > 0 ? PHP.format(inv._wht) : '—'}</Typography>
+                        </Box>
+                      </Box>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                        Issued {inv.invoice_date} · Terms {formatPaymentTerms(inv.payment_terms_days)} ·{' '}
+                        <Box component="span" sx={{ color: isOverdue ? 'error.main' : 'inherit', fontWeight: isOverdue ? 600 : 400 }}>
+                          Due {inv.due_date}{isOverdue ? ' (past due)' : ''}
+                        </Box>
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.25, mt: 0.5, mx: -0.5 }}>
+                        {inv._status !== 'paid' && (
+                          <Button size="small" variant="outlined" color="success" startIcon={<PaymentIcon />} onClick={() => openCollect(inv)} sx={{ mx: 0.5 }}>
+                            Record collection
+                          </Button>
+                        )}
+                        {inv.scan_file?.onedrive_web_url ? (
+                          <IconButton color="info" onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')} aria-label="View scan"><VisibilityIcon fontSize="small" /></IconButton>
+                        ) : (
+                          <IconButton color="primary" disabled={uploadingScanId === inv.id} component="label" aria-label="Upload invoice scan">
+                            {uploadingScanId === inv.id ? <CircularProgress size={16} /> : <CloudUploadIcon fontSize="small" />}
+                            <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
+                          </IconButton>
+                        )}
+                        <Box sx={{ flex: 1 }} />
+                        <IconButton onClick={() => openEdit(inv)} aria-label="Edit"><EditIcon fontSize="small" /></IconButton>
+                        <IconButton color="error" onClick={() => { setDeleteTarget(inv); setDeleteConfirm(true); }} aria-label="Delete"><DeleteIcon fontSize="small" /></IconButton>
+                      </Box>
+                    </Paper>
+                  );
+                })}
+              </Box>
+            ) : (
             <TableContainer sx={{ maxHeight: 'calc(100vh - 460px)', minHeight: 300 }}>
               <Table stickyHeader size="small">
                 <TableHead>
@@ -1404,6 +1547,7 @@ export default function CollectionsDashboard() {
                 </TableBody>
               </Table>
             </TableContainer>
+            )}
           </Paper>
         </Box>
       )}
@@ -1553,6 +1697,114 @@ export default function CollectionsDashboard() {
               </Typography>
             </Box>
 
+            {isPhone ? (
+              <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {filteredSettled.length === 0 && (
+                  <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+                    {collectedInvoices.length === 0
+                      ? 'No collections recorded yet. Use the Receivables tab to record your first payment.'
+                      : 'No collected records match the active filter.'}
+                  </Typography>
+                )}
+                {filteredSettled.map(inv => {
+                  const p = projectsById[String(inv.project_id)];
+                  const matchingSoas = findSoasForInvoice(inv);
+                  const turnaround = calculateTurnaround(inv.invoice_date, inv.collection_date);
+                  const handleProjectClick = () => {
+                    sessionStorage.setItem('selectedProjectId', String(inv.project_id));
+                    navigate(`/projects/${inv.project_id}`);
+                  };
+                  return (
+                    <Paper key={inv.id} variant="outlined" sx={{ p: 1.25 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
+                        <Box>
+                          <Typography variant="body2" sx={{ fontWeight: 700 }}>{inv.collection_date || '—'}</Typography>
+                          <Typography variant="caption" color="text.secondary">Issued {inv.invoice_date} · {turnaround}</Typography>
+                        </Box>
+                        <Box sx={{ textAlign: 'right' }}>
+                          <Chip label={STATUS_LABELS[inv._status]} color={STATUS_COLORS[inv._status]} size="small" variant="filled" sx={{ fontWeight: 600 }} />
+                          {inv._status === 'partial' && (
+                            <Typography variant="caption" color="warning.dark" display="block">Due: {PHP.format(inv._outstanding)}</Typography>
+                          )}
+                        </Box>
+                      </Box>
+                      <Typography
+                        variant="body2"
+                        sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, cursor: 'pointer', mt: 0.5, overflowWrap: 'anywhere' }}
+                        onClick={handleProjectClick}
+                      >
+                        {[inv.project_no, inv.project_name].filter(Boolean).join(' · ') || `Project ${inv.project_id}`}
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                        <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{inv.invoice_no}</Typography>
+                        {inv.pb_number && <Chip label={inv.pb_number} size="small" color="primary" variant="outlined" sx={{ fontSize: '0.675rem', height: 18 }} />}
+                        {inv.bill_to === 'acti'
+                          ? <Chip label="ACTI" size="small" color="primary" variant="outlined" sx={{ fontSize: '0.7rem', height: 20 }} />
+                          : <Typography variant="caption" color="text.secondary">Customer</Typography>}
+                        {p?.account_name && <Typography variant="caption" color="text.secondary">{p.account_name}</Typography>}
+                      </Box>
+                      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.75, mt: 0.75 }}>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Gross billed</Typography>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{PHP.format(inv.amount)}</Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Cash collected</Typography>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700, color: 'success.main' }}>{PHP.format(inv._cash)}</Typography>
+                        </Box>
+                        {inv._wht > 0 && (
+                          <Box sx={{ gridColumn: '1 / -1' }}>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>EWT (2307)</Typography>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                              <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600, color: NET_PACIFIC_COLORS.accent2 }}>{PHP.format(inv._wht)}</Typography>
+                              <Chip
+                                size="small"
+                                label={inv.wht_2307_status === 'received' ? '2307 on file' : '2307 expected'}
+                                color={inv.wht_2307_status === 'received' ? 'success' : 'warning'}
+                                variant="outlined"
+                                onClick={() => navigate('/finance/ewt-2307')}
+                                sx={{ fontSize: '0.65rem', height: 18, cursor: 'pointer' }}
+                              />
+                            </Box>
+                          </Box>
+                        )}
+                      </Box>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
+                        {matchingSoas.length > 0 ? matchingSoas.map(soa => (
+                          <Chip
+                            key={soa.id} label={soa.soaNo} size="small" color="secondary" variant="outlined"
+                            onClick={() => navigate(`/finance/soa/${soa.id}`)}
+                            sx={{ fontSize: '0.7rem', height: 20, cursor: 'pointer' }}
+                          />
+                        )) : <Typography variant="caption" color="text.disabled">Direct invoice</Typography>}
+                      </Box>
+                      <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.25, mt: 0.5, mx: -0.5 }}>
+                        <IconButton color="success" onClick={() => openCollect(inv)} aria-label="Update collection amount"><PaymentIcon fontSize="small" /></IconButton>
+                        {inv.scan_file?.onedrive_web_url ? (
+                          <IconButton color="info" onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')} aria-label="View scan"><VisibilityIcon fontSize="small" /></IconButton>
+                        ) : (
+                          <IconButton color="primary" disabled={uploadingScanId === inv.id} component="label" aria-label="Upload scan">
+                            <CloudUploadIcon fontSize="small" />
+                            <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
+                          </IconButton>
+                        )}
+                        {inv.pb_number && (
+                          <IconButton
+                            onClick={() => navigate(`/reports/progress?projectId=${encodeURIComponent(String(inv.project_id))}&pb=${encodeURIComponent(inv.pb_number || '')}`)}
+                            sx={{ color: NET_PACIFIC_COLORS.accent1 }} aria-label="Open progress report"
+                          >
+                            <DescriptionIcon fontSize="small" />
+                          </IconButton>
+                        )}
+                        <Box sx={{ flex: 1 }} />
+                        <IconButton onClick={() => openEdit(inv)} aria-label="Edit invoice details"><EditIcon fontSize="small" /></IconButton>
+                        <IconButton color="error" onClick={() => { setDeleteTarget(inv); setDeleteConfirm(true); }} aria-label="Delete"><DeleteIcon fontSize="small" /></IconButton>
+                      </Box>
+                    </Paper>
+                  );
+                })}
+              </Box>
+            ) : (
             <TableContainer sx={{ maxHeight: 'calc(100vh - 460px)', minHeight: 320 }}>
               <Table stickyHeader size="small">
                 <TableHead>
@@ -1771,6 +2023,7 @@ export default function CollectionsDashboard() {
                 </TableBody>
               </Table>
             </TableContainer>
+            )}
           </Paper>
         </Box>
       )}
@@ -1835,7 +2088,7 @@ export default function CollectionsDashboard() {
       )}
 
       {/* ── Add / Edit Invoice Dialog ─────────────────────────────────────── */}
-      <Dialog open={invoiceDialog !== null} onClose={() => setInvoiceDialog(null)} maxWidth="sm" fullWidth>
+      <Dialog open={invoiceDialog !== null} onClose={() => setInvoiceDialog(null)} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>{invoiceDialog === 'add' ? 'Add Invoice' : 'Edit Invoice'}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>

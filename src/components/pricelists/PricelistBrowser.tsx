@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, Button, Dialog, DialogTitle, DialogContent, DialogActions,
   FormControl, InputLabel, Select, MenuItem, Snackbar, Alert, Stack, Chip,
-  Autocomplete, TextField, IconButton, Tooltip, Divider,
+  Autocomplete, TextField, IconButton, Tooltip, Divider, useMediaQuery,
 } from '@mui/material';
 import AddShoppingCartIcon from '@mui/icons-material/AddShoppingCart';
 import AddIcon from '@mui/icons-material/Add';
@@ -50,6 +50,8 @@ function toComponentLines(picks: { item: PricelistItem; qty: number }[], existin
 }
 
 export default function PricelistBrowser() {
+  // Portrait phones (< 600 px): dialogs go full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const navigate = useNavigate();
   const items = usePricelistStore((s) => s.items);
   const loading = usePricelistStore((s) => s.loading);
@@ -229,9 +231,13 @@ export default function PricelistBrowser() {
         <Paper
           elevation={8}
           sx={{
-            position: 'absolute', bottom: 20, left: '50%', transform: 'translateX(-50%)',
-            zIndex: 10, borderRadius: 99, py: 1, px: 2,
-            display: 'flex', alignItems: 'center', gap: 1.5, whiteSpace: 'nowrap',
+            position: 'absolute', bottom: 20, zIndex: 10, py: 1, px: 2,
+            // Phones: span the width and wrap instead of overflowing the screen
+            left: { xs: 12, sm: '50%' }, right: { xs: 12, sm: 'auto' },
+            transform: { xs: 'none', sm: 'translateX(-50%)' },
+            borderRadius: { xs: 3, sm: 99 },
+            display: 'flex', alignItems: 'center', justifyContent: { xs: 'space-between', sm: 'flex-start' },
+            flexWrap: { xs: 'wrap', sm: 'nowrap' }, gap: 1.5, whiteSpace: { xs: 'normal', sm: 'nowrap' },
           }}
         >
           <Chip label={`${selected.size} item${selected.size > 1 ? 's' : ''} selected`} color="primary" />
@@ -248,7 +254,7 @@ export default function PricelistBrowser() {
       )}
 
       {/* Target quotation picker + selection review dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>Add {selected.size} item{selected.size === 1 ? '' : 's'} to quotation</DialogTitle>
         <DialogContent>
           <Autocomplete
