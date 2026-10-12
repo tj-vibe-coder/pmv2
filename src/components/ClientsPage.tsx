@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Paper, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Grid, Alert,
-  Collapse, Tooltip, Radio,
+  Collapse, Tooltip, Radio, MenuItem, useMediaQuery,
 } from '@mui/material';
 import {
   Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon,
@@ -37,6 +37,8 @@ const emptyForm: FormData = {
 };
 
 const ClientsPage: React.FC = () => {
+  // Portrait phones (< 600 px): clients show as cards; the add/edit dialog is full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -243,6 +245,75 @@ const ClientsPage: React.FC = () => {
         <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert>
       )}
 
+      {isPhone ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {loading && <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>Loading...</Typography>}
+          {!loading && clients.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>No clients yet. Tap &quot;Add Client&quot; to add one.</Typography>
+          )}
+          {!loading && clients.length > 0 && filteredClients.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>No clients match &quot;{search}&quot;.</Typography>
+          )}
+          {!loading && filteredClients.map((client) => {
+            const primary = primaryContact(client);
+            const extraCount = (client.contacts?.length ?? 0) - 1;
+            const open = !!expanded[client.id];
+            return (
+              <Paper key={client.id} variant="outlined" sx={{ p: 1.25 }}>
+                <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
+                  <Box sx={{ minWidth: 0 }}>
+                    {client.code && <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary', display: 'block' }}>{client.code}</Typography>}
+                    <Typography variant="body2" sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{client.name}</Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', flexShrink: 0, mt: -0.5, mr: -0.5 }}>
+                    <IconButton onClick={() => handleOpenEdit(client)} title="Edit"><EditIcon fontSize="small" /></IconButton>
+                    <IconButton onClick={() => handleDeleteClick(client)} color="error" title="Delete"><DeleteIcon fontSize="small" /></IconButton>
+                  </Box>
+                </Box>
+                {client.plant && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Plant / Site: {client.plant}</Typography>}
+                {client.address && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'pre-line', overflowWrap: 'anywhere' }}>{client.address}</Typography>}
+                {(client.paymentTerms || client.am) && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    {[client.paymentTerms && `Terms: ${client.paymentTerms}`, client.am && `AM: ${client.am}`].filter(Boolean).join(' · ')}
+                  </Typography>
+                )}
+                {primary && (
+                  <Box sx={{ mt: 0.75, p: 1, bgcolor: 'grey.50', borderRadius: 1 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{primary.name}{primary.position ? ` · ${primary.position}` : ''}</Typography>
+                    {primary.email && <Typography variant="caption" sx={{ display: 'block', overflowWrap: 'anywhere' }}><a href={`mailto:${primary.email}`}>{primary.email}</a></Typography>}
+                    {primary.phone && <Typography variant="caption" sx={{ display: 'block' }}><a href={`tel:${primary.phone}`}>{primary.phone}</a></Typography>}
+                  </Box>
+                )}
+                {extraCount > 0 && (
+                  <>
+                    <Button
+                      size="small" fullWidth onClick={() => toggleExpand(client.id)}
+                      endIcon={open ? <KeyboardArrowDown fontSize="small" /> : <KeyboardArrowRight fontSize="small" />}
+                      sx={{ justifyContent: 'space-between', mt: 0.5 }}
+                    >
+                      All contacts ({client.contacts.length})
+                    </Button>
+                    <Collapse in={open} unmountOnExit>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, pt: 0.5 }}>
+                        {client.contacts.map((c) => (
+                          <Paper key={c.id} variant="outlined" sx={{ p: 1 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                              {c.isPrimary && <Star fontSize="inherit" color="warning" sx={{ mr: 0.5, verticalAlign: '-2px' }} />}
+                              {c.name}{c.position ? ` · ${c.position}` : ''}
+                            </Typography>
+                            {c.email && <Typography variant="caption" sx={{ display: 'block', overflowWrap: 'anywhere' }}><a href={`mailto:${c.email}`}>{c.email}</a></Typography>}
+                            {c.phone && <Typography variant="caption" sx={{ display: 'block' }}><a href={`tel:${c.phone}`}>{c.phone}</a></Typography>}
+                          </Paper>
+                        ))}
+                      </Box>
+                    </Collapse>
+                  </>
+                )}
+              </Paper>
+            );
+          })}
+        </Box>
+      ) : (
       <Paper sx={{ overflow: 'hidden' }}>
         <TableContainer>
           <Table size="small">
@@ -340,8 +411,9 @@ const ClientsPage: React.FC = () => {
           </Table>
         </TableContainer>
       </Paper>
+      )}
 
-      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="md" fullWidth>
+      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="md" fullWidth fullScreen={isPhone}>
         <DialogTitle>{editingClient ? 'Edit Client' : 'Add Client'}</DialogTitle>
         <DialogContent>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -379,6 +451,41 @@ const ClientsPage: React.FC = () => {
                 <Typography variant="subtitle2" sx={{ flex: 1, fontWeight: 600 }}>Contacts</Typography>
                 <Button size="small" startIcon={<AddIcon />} onClick={addContact}>Add contact</Button>
               </Box>
+              {isPhone ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {formData.contacts.map((c, idx) => (
+                    <Paper key={c.id} variant="outlined" sx={{ p: 1.25, backgroundColor: '#fafafa' }}>
+                      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.25 }}>
+                        <TextField size="small" label="Name *" value={c.name} sx={{ gridColumn: '1 / -1' }} onChange={(e) => updateContact(idx, { name: e.target.value })} />
+                        <TextField size="small" label="Designation" value={c.position ?? ''} sx={{ gridColumn: '1 / -1' }} onChange={(e) => updateContact(idx, { position: e.target.value })} />
+                        <TextField size="small" label="Email" type="email" value={c.email ?? ''} sx={{ gridColumn: '1 / -1' }} onChange={(e) => updateContact(idx, { email: e.target.value })} />
+                        <TextField size="small" label="Phone" type="tel" value={c.phone ?? ''} onChange={(e) => updateContact(idx, { phone: e.target.value })} />
+                        <TextField
+                          select size="small" label="Gender" value={c.gender ?? ''}
+                          onChange={(e) => updateContact(idx, { gender: e.target.value as 'M' | 'F' | '' })}
+                          SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}
+                        >
+                          <MenuItem value="">—</MenuItem>
+                          <MenuItem value="M">M</MenuItem>
+                          <MenuItem value="F">F</MenuItem>
+                        </TextField>
+                      </Box>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.5 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center' }} onClick={() => setPrimary(idx)}>
+                          <Radio
+                            size="small" checked={!!c.isPrimary} onChange={() => setPrimary(idx)}
+                            icon={<StarBorder fontSize="small" />} checkedIcon={<Star fontSize="small" color="warning" />}
+                          />
+                          <Typography variant="body2">Primary contact</Typography>
+                        </Box>
+                        <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={() => removeContact(idx)} disabled={formData.contacts.length === 1}>
+                          Remove
+                        </Button>
+                      </Box>
+                    </Paper>
+                  ))}
+                </Box>
+              ) : (
               <Paper variant="outlined" sx={{ p: 1.5, backgroundColor: '#fafafa' }}>
                 <Table size="small">
                   <TableHead>
@@ -443,6 +550,7 @@ const ClientsPage: React.FC = () => {
                   </TableBody>
                 </Table>
               </Paper>
+              )}
             </Grid>
           </Grid>
         </DialogContent>

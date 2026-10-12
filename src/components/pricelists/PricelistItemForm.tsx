@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack, Box, Autocomplete,
+  Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack, Box, Autocomplete, useMediaQuery,
 } from '@mui/material';
 import type { PricelistItem } from '../../types/Pricelist';
 
@@ -28,6 +28,8 @@ interface Props {
 }
 
 export default function PricelistItemForm({ open, item, categoryOptions, brandOptions, supplierOptions = [], onClose, onSave }: Props) {
+  // Portrait phones (< 600 px): dialogs go full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +73,7 @@ export default function PricelistItemForm({ open, item, categoryOptions, brandOp
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth fullScreen={isPhone}>
       <DialogTitle>{item ? 'Edit item' : 'Add pricelist item'}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>

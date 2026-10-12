@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, Typography, Chip,
-  CircularProgress, Divider, Stack,
+  CircularProgress, Divider, Stack, useMediaQuery,
 } from '@mui/material';
 import type { PricelistItem, PricelistAuditEntry } from '../../types/Pricelist';
 import { usePricelistStore } from '../../store/pricelistStore';
@@ -14,6 +14,8 @@ const actionColor: Record<string, 'success' | 'info' | 'error'> = {
 const val = (v: unknown) => (v === null || v === undefined || v === '' ? '—' : String(v));
 
 export default function PricelistHistoryDialog({ item, onClose }: { item: PricelistItem | null; onClose: () => void }) {
+  // Portrait phones (< 600 px): dialogs go full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const fetchHistory = usePricelistStore((s) => s.fetchHistory);
   const [entries, setEntries] = useState<PricelistAuditEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -25,7 +27,7 @@ export default function PricelistHistoryDialog({ item, onClose }: { item: Pricel
   }, [item, fetchHistory]);
 
   return (
-    <Dialog open={!!item} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open={!!item} onClose={onClose} maxWidth="sm" fullWidth fullScreen={isPhone}>
       <DialogTitle>
         History — {item?.description}
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{item?.catalogNo}</Typography>

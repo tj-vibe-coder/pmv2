@@ -10,6 +10,7 @@ import {
   Stack,
   Tab,
   Tabs,
+  useMediaQuery,
 } from '@mui/material';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import ProductHistoryTab from '../calcsheet/ProductHistoryTab';
@@ -39,6 +40,8 @@ export default function ProductPickerDialog({
   expectedPurchaseDate,
   defaultContingencyPct,
 }: Props) {
+  // Portrait phones (< 600 px): dialogs go full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const items = usePricelistStore((state) => state.items);
   const loading = usePricelistStore((state) => state.loading);
   const filters = usePricelistStore((state) => state.filters);
@@ -105,7 +108,8 @@ export default function ProductPickerDialog({
       onClose={onClose}
       maxWidth="lg"
       fullWidth
-      PaperProps={{ sx: { height: '85vh' } }}
+      fullScreen={isPhone}
+      PaperProps={{ sx: { height: isPhone ? '100%' : '85vh' } }}
     >
       <DialogTitle>
         <Stack direction="row" spacing={1} alignItems="center">
