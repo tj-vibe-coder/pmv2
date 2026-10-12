@@ -67,7 +67,7 @@ const PayslipCard: React.FC<Props> = ({ payslip: s, onBack, canSeeRate = true })
       }} />
 
       {/* Controls — hidden on print */}
-      <Box className="no-print" sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
+      <Box className="no-print" sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, mb: 3 }}>
         {onBack && (
           <Button startIcon={<ArrowBackIcon />} onClick={onBack}>Back</Button>
         )}

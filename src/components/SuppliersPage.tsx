@@ -20,6 +20,7 @@ import {
   DialogActions,
   Collapse,
   InputAdornment,
+  useMediaQuery,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, ExpandLess as ExpandLessIcon, Edit as EditIcon, Sync as SyncIcon, FileDownload as FileDownloadIcon, Upload as UploadIcon, Search as SearchIcon } from '@mui/icons-material';
 
@@ -123,6 +124,8 @@ const emptyProduct = (): SupplierProduct => ({
 });
 
 const SuppliersPage: React.FC = () => {
+  // Portrait phones (< 600 px): suppliers and their products show as cards; dialogs go full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [supplierDialogOpen, setSupplierDialogOpen] = useState(false);
@@ -837,7 +840,7 @@ const SuppliersPage: React.FC = () => {
         placeholder="Search supplier, part number, product name, brand..."
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        sx={{ mb: 2, maxWidth: 400 }}
+        sx={{ mb: 2, maxWidth: { sm: 400 } }}
         InputProps={{
           startAdornment: (
             <InputAdornment position="start">
@@ -847,6 +850,74 @@ const SuppliersPage: React.FC = () => {
         }}
       />
 
+      {isPhone ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {filteredSuppliers.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+              {suppliers.length === 0 ? 'No suppliers yet. Tap "Add supplier" to get started.' : 'No suppliers or products match your search.'}
+            </Typography>
+          )}
+          {filteredSuppliers.map((s) => (
+            <Paper key={s.id} variant="outlined" sx={{ p: 1.25 }}>
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
+                <Typography variant="body2" sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{s.name}</Typography>
+                <Box sx={{ display: 'flex', flexShrink: 0, mt: -0.5, mr: -0.5 }}>
+                  <IconButton onClick={() => openEditSupplier(s)} title="Edit supplier"><EditIcon fontSize="small" /></IconButton>
+                  <IconButton onClick={() => handleDeleteSupplier(s.id)} color="error" title="Delete supplier"><DeleteIcon fontSize="small" /></IconButton>
+                </Box>
+              </Box>
+              {s.contactName && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{s.contactName}</Typography>}
+              {s.email && (
+                <Typography variant="caption" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
+                  <a href={`mailto:${s.email}`}>{s.email}</a>
+                </Typography>
+              )}
+              {s.phone && (
+                <Typography variant="caption" sx={{ display: 'block' }}>
+                  <a href={`tel:${s.phone}`}>{s.phone}</a>
+                </Typography>
+              )}
+              <Button
+                size="small" fullWidth onClick={() => toggleExpand(s.id)}
+                endIcon={expandedId === s.id ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                sx={{ justifyContent: 'space-between', mt: 0.5 }}
+              >
+                Products ({s.products.length})
+              </Button>
+              <Collapse in={expandedId === s.id} timeout="auto" unmountOnExit>
+                <Box sx={{ pt: 0.5 }}>
+                  <Button size="small" startIcon={<AddIcon />} onClick={() => openAddProduct(s.id)} sx={{ mb: 0.5 }}>Add product</Button>
+                  {s.products.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">No products. Add products to build a catalog for this supplier.</Typography>
+                  ) : (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                      {s.products.map((p) => (
+                        <Paper key={p.id} variant="outlined" sx={{ p: 1 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{p.name}</Typography>
+                            <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                              {p.unitPrice != null ? `PHP ${p.unitPrice.toFixed(2)}` : '—'}
+                            </Typography>
+                          </Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
+                            {[p.partNo, p.brand, p.unit].filter(Boolean).join(' · ') || '—'}
+                          </Typography>
+                          {p.description && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{p.description}</Typography>}
+                          {p.priceDate && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Price date {p.priceDate}</Typography>}
+                          <Box sx={{ display: 'flex', mt: 0.25, mx: -0.5 }}>
+                            <IconButton onClick={() => openEditProduct(s, p)} title="Edit product"><EditIcon fontSize="small" /></IconButton>
+                            <IconButton onClick={() => handleDeleteProduct(s.id, p.id)} color="error" title="Remove product"><DeleteIcon fontSize="small" /></IconButton>
+                          </Box>
+                        </Paper>
+                      ))}
+                    </Box>
+                  )}
+                </Box>
+              </Collapse>
+            </Paper>
+          ))}
+        </Box>
+      ) : (
       <Paper sx={{ borderRadius: 2, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <TableContainer>
           <Table size="small">
@@ -961,9 +1032,10 @@ const SuppliersPage: React.FC = () => {
           </Table>
         </TableContainer>
       </Paper>
+      )}
 
       {/* Add/Edit Supplier Dialog */}
-      <Dialog open={supplierDialogOpen} onClose={() => setSupplierDialogOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 2 } }}>
+      <Dialog open={supplierDialogOpen} onClose={() => setSupplierDialogOpen(false)} maxWidth="sm" fullWidth fullScreen={isPhone} PaperProps={{ sx: { borderRadius: isPhone ? 0 : 2 } }}>
         <DialogTitle>{editingSupplier ? 'Edit supplier' : 'Add supplier'}</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
@@ -984,7 +1056,7 @@ const SuppliersPage: React.FC = () => {
       </Dialog>
 
       {/* Add/Edit Product Dialog */}
-      <Dialog open={productDialogOpen} onClose={() => setProductDialogOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 2 } }}>
+      <Dialog open={productDialogOpen} onClose={() => setProductDialogOpen(false)} maxWidth="sm" fullWidth fullScreen={isPhone} PaperProps={{ sx: { borderRadius: isPhone ? 0 : 2 } }}>
         <DialogTitle>
           {editingProduct ? 'Edit product' : 'Add product'}
           {supplierForProductDialog && (

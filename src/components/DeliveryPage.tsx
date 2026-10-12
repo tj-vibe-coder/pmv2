@@ -16,6 +16,7 @@ import {
   Select,
   MenuItem,
   IconButton,
+  useMediaQuery,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, PictureAsPdf as PictureAsPdfIcon, Save as SaveIcon, History as HistoryIcon } from '@mui/icons-material';
 import jsPDF from 'jspdf';
@@ -150,6 +151,8 @@ const DeliveryPage: React.FC = () => {
   const [invoiceName, setInvoiceName] = useState('');
   const [invoiceAddress, setInvoiceAddress] = useState('');
   const [items, setItems] = useState<DeliveryLineItem[]>(() => [emptyItem()]);
+  // Portrait phones (< 600 px): item lines and saved receipts show as cards.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [dispatchedByName, setDispatchedByName] = useState('');
   const [dispatchedByDate, setDispatchedByDate] = useState('');
   const [receivedByName, setReceivedByName] = useState('');
@@ -750,6 +753,46 @@ const DeliveryPage: React.FC = () => {
             <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
               Item Details
             </Typography>
+            {isPhone ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {items.map((it, idx) => (
+                  <Paper key={it.id} variant="outlined" sx={{ p: 1.25 }}>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.25 }}>
+                      <TextField
+                        size="small" type="number" label="Item #" value={it.itemNo || ''}
+                        onChange={(e) => updateItem(it.id, 'itemNo', parseInt(e.target.value, 10) || 0)}
+                        inputProps={{ min: 0, inputMode: 'numeric' }}
+                      />
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ mr: 'auto' }}>Line {idx + 1}</Typography>
+                        <IconButton onClick={() => removeItem(it.id)} color="error" disabled={items.length <= 1} aria-label="Remove item">
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
+                      <TextField
+                        size="small" label="Description" value={it.description} multiline minRows={1} sx={{ gridColumn: '1 / -1' }}
+                        onChange={(e) => updateItem(it.id, 'description', e.target.value)}
+                      />
+                      <TextField
+                        size="small" type="number" label="QTY" value={it.delivered || ''}
+                        onChange={(e) => updateItem(it.id, 'delivered', parseInt(e.target.value, 10) || 0)}
+                        inputProps={{ min: 0, inputMode: 'numeric' }}
+                      />
+                      <TextField
+                        select size="small" label="UOM" value={it.unit || ''}
+                        onChange={(e) => updateItem(it.id, 'unit', e.target.value)}
+                        SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}
+                      >
+                        <MenuItem value="">—</MenuItem>
+                        {UOM_OPTIONS.filter((u) => u !== '').map((u) => (
+                          <MenuItem key={u} value={u}>{u}</MenuItem>
+                        ))}
+                      </TextField>
+                    </Box>
+                  </Paper>
+                ))}
+              </Box>
+            ) : (
             <TableContainer component={Paper} variant="outlined" sx={{ overflowX: 'auto' }}>
               <Table
                 size="small"
@@ -840,6 +883,7 @@ const DeliveryPage: React.FC = () => {
                 </TableBody>
               </Table>
             </TableContainer>
+            )}
             <Button startIcon={<AddIcon />} onClick={addItem} size="small" sx={{ mt: 1 }}>
               Add item
             </Button>
@@ -925,6 +969,28 @@ const DeliveryPage: React.FC = () => {
               <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
                 <HistoryIcon /> Saved delivery receipts{projectId !== '' ? ' (this project)' : ' (all)'}
               </Typography>
+              {isPhone ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {filteredSavedList.map((dr) => (
+                    <Paper key={dr.id} variant="outlined" sx={{ p: 1.25 }}>
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{dr.deliveryNoteNo || '—'}</Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        {[dr.poNumber && `PO ${dr.poNumber}`, dr.despatchDate && `Dispatch ${dr.despatchDate}`].filter(Boolean).join(' · ') || '—'}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Saved {new Date(dr.savedAt).toLocaleString()}</Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                        <Button size="small" variant="outlined" onClick={() => handleLoadDR(dr)}>Load</Button>
+                        <Box sx={{ flex: 1 }} />
+                        {isAdmin && (
+                          <IconButton onClick={() => handleDeleteSavedDR(dr)} color="error" title="Delete (admin only)">
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        )}
+                      </Box>
+                    </Paper>
+                  ))}
+                </Box>
+              ) : (
               <TableContainer component={Paper} variant="outlined">
                 <Table size="small">
                   <TableHead>
@@ -963,6 +1029,7 @@ const DeliveryPage: React.FC = () => {
                   </TableBody>
                 </Table>
               </TableContainer>
+              )}
             </Box>
           )}
         </Box>
