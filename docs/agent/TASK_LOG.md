@@ -1,5 +1,35 @@
 # Task Log
 
+## 2026-10-15 — Resolve PR #137 project-history conflict
+
+- Merged current `origin/main` into `rj/dev` in an isolated worktree, preserving unrelated dirty finance/project changes in the original workspace.
+- Resolved the sole textual conflict in `docs/PROJECT_HISTORY.md` by retaining the October 7 ACTI-fronting entry and all October 8–12 mobile-interface entries in chronological order. Verified every nonempty line from both source versions is retained and no conflict markers/unmerged index entries remain.
+- Backend ACTI-fronting/cash-advance editing suite: 19 tests passed. TypeScript and focused CA lint passed. UI regression suites: 10 tests passed when run without a simultaneous build; initial parallel runs timed out finding the owner Edit button. No source/test change was needed.
+- `NODE_OPTIONS=--max-old-space-size=6144 npm run build` — passed using main's documented memory setting; existing build warnings remain. Default-heap build was stopped while still compiling before this successful run. `git diff --check` and staged diff checks passed.
+- No deployment or production data changes. Main's existing mobile changes merge normally; no manual application-code edits were made for this resolution.
+
+## 2026-10-06 — Cash Advance request editing
+
+### Completed
+
+- Added Edit, Save changes, and Cancel edit to the shared CA request form. Owners can edit their own pending requests; superadmins can edit approved requests too.
+- Added transactional detail-edit handlers in both local and Cloud Functions APIs. The server derives the total from valid breakdown lines and checks ownership/status before writing.
+- Approved amount edits adjust the remaining balance by the amount difference, retaining liquidation deductions and approval metadata. Approved investment funding entries are refreshed through the existing sync helper.
+- Approval now uses a transaction so a concurrent owner edit cannot overwrite an approval with stale request data. Closed issued amounts remain fixed to protect existing settlements.
+- Updated product requirements, project state, and known issues. Preserved unrelated existing workspace edits.
+
+### Verification
+
+- `node --test server/cashAdvanceEditing.test.js` — passed (14 tests across both API copies).
+- `CI=true npm test -- --watch=false --runInBand src/components/CAFormPage.editing.test.tsx` — passed (3 UI tests: owner save, superadmin approved edit/cancel, ordinary admin restriction).
+- `npx tsc --noEmit` — passed.
+- `npx eslint src/components/CAFormPage.tsx src/components/CAFormPage.editing.test.tsx` — passed.
+- `node --check server.js` and `node --check functions/server.js` — passed.
+- `npm run build` — passed; existing Browserslist, Node deprecation, and large-bundle notices remain.
+- `git diff --check` — passed.
+- No dedicated lint/typecheck package scripts exist; used direct commands. Browser/manual review with actual records was not performed; no deployment or live database writes.
+
+
 ## 2026-09-21 — Client-supplied materials Sales scope and heading layout repair
 
 ### Completed

@@ -4,6 +4,9 @@ Updated: 2026-09-21
 
 ## Current status
 
+- **CA request editing (implemented 2026-10-06):** Request owners can edit pending cash advances; superadmins can edit approved requests using the existing form. Both local and Cloud Functions APIs enforce ownership/status in transactions, preserve approval metadata and spent funds, and refresh approved investor-funding entries. Closed CA amounts remain fixed.
+
+
 - **Quotation inline subheaders (implemented 2026-09-21):** Calcsheet component and service lines can now be labeled with calculation-neutral inline subheaders (for example, PLC, SCADA, or Computer Components). Headings display in the editable calcsheet and in customer PDF/XLSX exports without changing quantities, prices, totals, or the existing LOT-grouping behavior.
 - **Quotation PDF part-number privacy toggle (implemented 2026-09-21):** Component sections now offer **Hide part numbers in PDF**. It suppresses only customer-PDF part numbers while retaining the part number in the calcsheet record and Excel export for internal procurement use.
 - **Client-supplied materials Sales scope & calcsheet heading layout (implemented 2026-09-21):** Quotations can now declare **Client supplies materials — Sales counts services only**. Sales list values and Project List contract sync then use Engineering Services after the quotation’s discount and VAT; the full quotation remains intact. Also corrected inline-subheader layout so heading metadata no longer collapses item description fields into single-character rows.

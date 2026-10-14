@@ -1,5 +1,10 @@
 # Known Issues
 
+## Closed cash advance edit amounts
+
+CA detail edits preserve closed issued amounts because returned/write-off settlements already exist. Superadmins can correct closed request details only when the breakdown total stays unchanged. Approved edits adjust remaining balance by the amount difference; investor funding sync follows the existing best-effort convention outside the Firestore transaction.
+
+
 ## AI Assist project citations now use `/projects/:id`
 
 Hands-free P1 added a real `/projects/:id` route that loads `ProjectMonitoringApp`. Opportunity and quotation citation routes were already real. Collections/progress still use the `sessionStorage.selectedProjectId` bridge onto `/dashboard` as a fallback.
