@@ -5,6 +5,7 @@ import {
   Checkbox, CircularProgress, Snackbar, Chip, Dialog, DialogTitle, DialogContent,
   DialogContentText, DialogActions, TextField, MenuItem,
 } from '@mui/material';
+import { WORKFLOW_LABELS, reimbursementCashDue } from '../types/LiquidationWorkflow';
 import { API_BASE } from '../config/api';
 import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress';
 import { convertHeicToJpeg } from '../utils/receipts/imageUtils';
@@ -49,6 +50,7 @@ interface Reimbursement {
   origin: 'ca_excess' | 'no_ca';
   amount: number;
   caId: string | null;
+  workflowStatus?: string;
   status: 'pending' | 'paid';
   fundingSource: FundingSource | null;
   paidAt: number | null;
@@ -79,6 +81,7 @@ interface ClaimLine {
 }
 interface ClaimPayment {
   id: string; kind: 'lines' | 'remaining'; amount: number; paidAt: number;
+  paymentException?: { reason: string; beforeRjReview: boolean } | null;
   reference?: string; overrideReason?: string | null; rowIds?: string[] | null;
   proofRef?: ProofRef | null;
 }
@@ -105,7 +108,7 @@ async function uploadPaymentProof(file: File, formNo: string | null, authToken: 
   return { oneDriveId: data.id, webUrl: data.webUrl, filename };
 }
 
-const remainingOf = (r: Reimbursement) => Math.max(0, (Number(r.amount) || 0) - (Number(r.paidAmount) || 0));
+const remainingOf = reimbursementCashDue;
 
 type PayDialogContext =
   | { kind: 'single-reimb'; reimb: Reimbursement }
@@ -114,6 +117,9 @@ type PayDialogContext =
 const ReimbursementDashboard: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const [ledgerScope, setLedgerScope] = useState('open');
+  const [payUrgentReason, setPayUrgentReason] = useState('');
+  const [lineUrgentReason, setLineUrgentReason] = useState('');
   const [reimbursements, setReimbursements] = useState<Reimbursement[]>([]);
   const [cashAdvances, setCashAdvances] = useState<CashAdvanceRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -158,7 +164,7 @@ const ReimbursementDashboard: React.FC = () => {
   const fetchData = () => {
     setLoading(true);
     Promise.all([
-      fetch(`${API}/reimbursements`, { headers: authHeaders() }).then(r => r.json()).catch(() => ({ success: false })),
+      fetch(`${API}/reimbursements?scope=${ledgerScope}`, { headers: authHeaders() }).then(r => r.json()).catch(() => ({ success: false })),
       fetch(`${API}/cash-advances`, { headers: authHeaders() }).then(r => r.json()).catch(() => ({ success: false })),
     ])
       .then(([reimbData, caData]) => {
@@ -170,7 +176,7 @@ const ReimbursementDashboard: React.FC = () => {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchData(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setSelectedIds([]); fetchData(); }, [ledgerScope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rawFinanceFocus = new URLSearchParams(location.search).get('focus') || '';
   const focusedOrigin = parseFinanceFocus(rawFinanceFocus);
@@ -253,15 +259,16 @@ const ReimbursementDashboard: React.FC = () => {
     [reimbursements, selectedIds]
   );
 
-  const allSelected = reimbursements.length > 0 && selectedIds.length === reimbursements.length;
-  const someSelected = selectedIds.length > 0 && selectedIds.length < reimbursements.length;
+  const payableClaims = reimbursements.filter(r => r.status === 'pending');
+  const allSelected = payableClaims.length > 0 && selectedIds.length === payableClaims.length;
+  const someSelected = selectedIds.length > 0 && selectedIds.length < payableClaims.length;
 
-  const toggleAll = () => setSelectedIds(allSelected ? [] : reimbursements.map(r => r.id));
+  const toggleAll = () => setSelectedIds(allSelected ? [] : payableClaims.map(r => r.id));
   const toggleOne = (id: string) =>
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
   const openPayDialog = (ctx: PayDialogContext) => {
-    setPayDialog(ctx);
+    setPayDialog(ctx); setPayUrgentReason('');
     setPayFundingType('corporate_bank');
     setPayInvestor('');
     setError('');
@@ -294,12 +301,12 @@ const ReimbursementDashboard: React.FC = () => {
       ? fetch(`${API}/reimbursements/batch-mark`, {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ ids: payDialog.ids, ...(fundingSource ? { fundingSource } : {}) }),
+          body: JSON.stringify({ urgentPaymentReason: payUrgentReason, ids: payDialog.ids, ...(fundingSource ? { fundingSource } : {}) }),
         })
       : fetch(`${API}/reimbursements/${payDialog.reimb.id}/pay`, {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ ...(fundingSource ? { fundingSource } : {}), ...(proofRef ? { proofRef } : {}) }),
+          body: JSON.stringify({ urgentPaymentReason: payUrgentReason, ...(fundingSource ? { fundingSource } : {}), ...(proofRef ? { proofRef } : {}) }),
         });
     request
       .then(r => r.json())
@@ -319,7 +326,7 @@ const ReimbursementDashboard: React.FC = () => {
 
   const lineKey = (claimId: string, rowId: string) => `${claimId}::${rowId}`;
   const openLinesDialog = (targets: Reimbursement[]) => {
-    setLinesTargets(targets);
+    setLinesTargets(targets); setLineUrgentReason('');
     setClaimLines({});
     setLinePayments([]);
     setLineSelected([]);
@@ -342,7 +349,7 @@ const ReimbursementDashboard: React.FC = () => {
           const loaded: ClaimLine[] = data.lines || [];
           byClaim[targets[i].id] = loaded;
           // Default: pay only what is supported by a receipt.
-          loaded.filter(l => l.hasReceipt && !l.paid).forEach(l => selected.push(lineKey(targets[i].id, l.rowId)));
+          loaded.filter(l => targets[i].status !== 'paid' && l.hasReceipt && !l.paid).forEach(l => selected.push(lineKey(targets[i].id, l.rowId)));
         });
         setClaimLines(byClaim);
         setLineSelected(selected);
@@ -354,6 +361,7 @@ const ReimbursementDashboard: React.FC = () => {
   const closeLinesDialog = () => { if (!lineSubmitting) setLinesTargets([]); };
   const toggleLine = (key: string) =>
     setLineSelected(prev => prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key]);
+  const historyOnly = linesTargets.length > 0 && linesTargets.every(t => t.status === 'paid');
   const selectedLineEntries = linesTargets.flatMap(t =>
     (claimLines[t.id] || []).filter(l => lineSelected.includes(lineKey(t.id, l.rowId))).map(l => ({ claim: t, line: l })),
   );
@@ -378,6 +386,7 @@ const ReimbursementDashboard: React.FC = () => {
       ? { type: 'investor_outofpocket' as const, investor: lineInvestor }
       : undefined;
     const common = {
+      urgentPaymentReason: lineUrgentReason,
       reference: lineReference,
       ...(proofRef ? { proofRef } : {}),
       ...(selectedNoReceipt.length > 0 ? { overrideReason: lineOverride } : {}),
@@ -465,7 +474,7 @@ const ReimbursementDashboard: React.FC = () => {
             <CardContent sx={{ p: 2 }}>
               <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Company Owes Employees</Typography>
               <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{formatPHP(totalOwed)}</Typography>
-              <Typography variant="caption" sx={{ opacity: 0.8 }}>{reimbursements.length} claim{reimbursements.length === 1 ? '' : 's'}</Typography>
+              <Typography variant="caption" sx={{ opacity: 0.8 }}>{payableClaims.length} unpaid claim{payableClaims.length === 1 ? '' : 's'}</Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -481,8 +490,8 @@ const ReimbursementDashboard: React.FC = () => {
         <Grid size={{ xs: 6, sm: 3 }}>
           <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
             <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Pending Claims</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{reimbursements.length}</Typography>
+              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Unpaid Claims</Typography>
+              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>{payableClaims.length}</Typography>
               <Typography variant="caption" sx={{ opacity: 0.8 }}>Awaiting payout</Typography>
             </CardContent>
           </Card>
@@ -505,6 +514,7 @@ const ReimbursementDashboard: React.FC = () => {
               Reimbursement Claims ({displayedReimbursements.length})
             </Typography>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            <TextField select size="small" label="Receipt workflow" value={ledgerScope} onChange={e => setLedgerScope(e.target.value)} sx={{ minWidth: 160 }}>{['open', 'closed', 'all'].map(scope => <MenuItem key={scope} value={scope}>{scope}</MenuItem>)}</TextField>
             <Button
               variant="contained"
               size="small"
@@ -534,7 +544,7 @@ const ReimbursementDashboard: React.FC = () => {
                       indeterminate={someSelected}
                       checked={allSelected}
                       onChange={toggleAll}
-                      disabled={reimbursements.length === 0}
+                      disabled={payableClaims.length === 0}
                     />
                   </TableCell>
                   <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Form No.</TableCell>
@@ -549,7 +559,7 @@ const ReimbursementDashboard: React.FC = () => {
                 {loading ? (
                   <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4 }}><CircularProgress size={28} /></TableCell></TableRow>
                 ) : displayedReimbursements.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>No pending reimbursement claims.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>No reimbursement claims in this view.</TableCell></TableRow>
                 ) : displayedReimbursements.map(r => {
                   const origin = reimbursementOrigin(r);
                   const rowToken = financeFocusToken(origin);
@@ -592,7 +602,7 @@ const ReimbursementDashboard: React.FC = () => {
                     <TableCell sx={{ fontSize: '0.8rem' }}>
                       <Chip
                         size="small"
-                        label={historical ? 'Paid · historical' : r.origin === 'ca_excess' ? 'CA Excess' : 'Out-of-pocket'}
+                        label={historical ? 'Paid' : r.origin === 'ca_excess' ? 'CA Excess' : 'Out-of-pocket'}
                         color={historical ? 'success' : r.origin === 'ca_excess' ? 'warning' : 'info'}
                       />
                       {r.caId && (
@@ -608,9 +618,10 @@ const ReimbursementDashboard: React.FC = () => {
                         />
                       )}
                     </TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem' }}>{formatDate(r.createdAt)}</TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem' }}>{formatDate(r.createdAt)}<Chip size="small" variant="outlined" label={WORKFLOW_LABELS[r.workflowStatus || 'source_review_required']} color={r.workflowStatus === 'closed' ? 'success' : 'warning'} /></TableCell>
                     <TableCell sx={{ fontSize: '0.8rem' }} align="right">
-                      {historical ? formatPHP(Number(r.amount) || 0) : formatPHP(remainingOf(r))}
+                      {formatPHP(remainingOf(r))}
+                      {historical && <Typography variant="caption" display="block">Paid {formatPHP(Number(r.amount) || 0)}</Typography>}
                       {!historical && (Number(r.paidAmount) || 0) > 0 && (
                         <Typography variant="caption" component="div" color="text.secondary">
                           Partial · {formatPHP(Number(r.paidAmount))} of {formatPHP(Number(r.amount) || 0)} paid
@@ -628,6 +639,7 @@ const ReimbursementDashboard: React.FC = () => {
                           Pay
                         </Button>
                       )}
+                      {historical && <Button size="small" onClick={() => openLinesDialog([r])}>Payment history</Button>}
                       <MoneyTrailButton origin={origin} compact onResolved={fetchData} />
                     </TableCell>
                   </TableRow>
@@ -691,6 +703,7 @@ const ReimbursementDashboard: React.FC = () => {
                 ? `Mark the reimbursement claim for ${payDialog.reimb.employeeName || payDialog.reimb.full_name || payDialog.reimb.username || 'this employee'} (${formatPHP(remainingOf(payDialog.reimb))}${(Number(payDialog.reimb.paidAmount) || 0) > 0 ? ' remaining' : ''}) as paid.`
                 : ''}
           </DialogContentText>
+          <TextField fullWidth multiline size="small" label="Urgent payment reason (only when paying before RJ review)" value={payUrgentReason} onChange={e => setPayUrgentReason(e.target.value)} helperText="Leave blank for normal reviewed payments. Earlier urgent payment stays open until RJ review." sx={{ mb: 2 }} inputProps={{ maxLength: 2000 }} />
           <TextField
             select
             size="small"
@@ -745,7 +758,7 @@ const ReimbursementDashboard: React.FC = () => {
 
       <Dialog open={linesTargets.length > 0} onClose={closeLinesDialog} maxWidth="md" fullWidth>
         <DialogTitle sx={{ fontWeight: 600 }}>
-          {linesTargets.length > 1
+          {historyOnly ? 'Payment history' : linesTargets.length > 1
             ? `Pay lines — one transfer, ${linesTargets.length} forms`
             : `Pay lines — ${linesTargets[0]?.formNo || ''} ${linesTargets[0]?.employeeName ? `· ${linesTargets[0].employeeName}` : ''}`}
         </DialogTitle>
@@ -781,7 +794,7 @@ const ReimbursementDashboard: React.FC = () => {
                     ...(claimLines[t.id] || []).map(l => (
                     <TableRow key={`${t.id}-${l.rowId}`} hover sx={l.paid ? { opacity: 0.55 } : undefined}>
                       <TableCell padding="checkbox">
-                        <Checkbox checked={lineSelected.includes(lineKey(t.id, l.rowId))} disabled={l.paid} onChange={() => toggleLine(lineKey(t.id, l.rowId))} />
+                        <Checkbox checked={lineSelected.includes(lineKey(t.id, l.rowId))} disabled={l.paid || historyOnly} onChange={() => toggleLine(lineKey(t.id, l.rowId))} />
                       </TableCell>
                       <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{l.date}</TableCell>
                       <TableCell sx={{ fontSize: '0.8rem' }}>{l.particulars || l.category}</TableCell>
@@ -810,6 +823,7 @@ const ReimbursementDashboard: React.FC = () => {
               onChange={(e) => setLineOverride(e.target.value)}
             />
           )}
+          <TextField fullWidth multiline size="small" label="Urgent payment reason (only when paying before RJ review)" value={lineUrgentReason} onChange={e => setLineUrgentReason(e.target.value)} helperText="The reason is recorded on each payment; physical receipts and RJ review remain required for closure." sx={{ mb: 2 }} inputProps={{ maxLength: 2000 }} />
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mb: 2 }}>
             <TextField
               size="small" label="Payment reference (InstaPay / GCash ref)" value={lineReference}
@@ -847,7 +861,7 @@ const ReimbursementDashboard: React.FC = () => {
               {linePayments.map(pm => (
                 <Typography key={pm.id} variant="body2" color="text.secondary">
                   {formatDate(pm.paidAt)} · {formatPHP(pm.amount)} · {pm.kind === 'lines' ? `${pm.rowIds?.length || 0} line(s)` : 'remaining balance'}
-                  {pm.reference ? ` · ref ${pm.reference}` : ''}{pm.overrideReason ? ` · override: ${pm.overrideReason}` : ''}
+                  {pm.paymentException ? ` · urgent early payment: ${pm.paymentException.reason}` : ''}{pm.reference ? ` · ref ${pm.reference}` : ''}{pm.overrideReason ? ` · override: ${pm.overrideReason}` : ''}
                   {pm.proofRef?.webUrl && (
                     <> · <a href={pm.proofRef.webUrl} target="_blank" rel="noreferrer">proof</a></>
                   )}
@@ -862,7 +876,7 @@ const ReimbursementDashboard: React.FC = () => {
             variant="contained"
             onClick={confirmPayLines}
             disabled={
-              lineSubmitting || linesLoading || selectedLineEntries.length === 0
+              historyOnly || lineSubmitting || linesLoading || selectedLineEntries.length === 0
               || (selectedNoReceipt.length > 0 && !lineOverride.trim())
               || (lineFundingType === 'investor_outofpocket' && !lineInvestor)
             }

@@ -1,5 +1,127 @@
 # Task Log
 
+## 2026-10-15 — Finance release prepared for PR
+
+- RJ authorized commit/push after independent F1–F3 and W1/W2 closure. Prepared an isolated feature branch from rj/dev, excluding unrelated workspace edits and private tmp artifacts.
+- Verified the exact staged tree in an isolated directory: 96 Node +22 React/WHT tests, TypeScript, focused lint, both API syntax checks, production build and staged diff check passed. Prior independent Chrome fixture checks remain attributed to the reviewer. Real-service gates remain pending; no deployment or production writes.
+
+## 2026-10-15 — Independent W1/W2 fix recheck
+
+- Reviewed builder corrections and restarted only isolated preview. Original public-router unknown-settlement reproduction now returns source_review_required without source changes. Independent settlement matrix covers unknown/invalid/zero/CA-covered/pending/historical paid controls.
+- Actual Chrome STAFF handover with nonempty note → RJR return confirms prominent return reason/authenticated actor/actual time and separate original handover. Fixture payment statuses/amounts unchanged; history retained. Screenshot and logs under `/tmp/ioct-workflow-recheck-*`.
+- Independently passed 96 Node +22 React/WHT tests, TypeScript, focused review component/test lint, both API syntax checks and diff check. No repeated build during focused recheck; corrected static build exercised in Chrome, build success remains attributed to builder.
+- Appended independent closure to review report and updated known issues/state. No application changes, production/OneDrive mutations or deployment; real-service release gates remain.
+
+## 2026-10-14 — Independent workflow findings W1/W2 corrected (Tab 4)
+
+- Verified the independent report against current code; preserved unrelated workspace changes and original review findings.
+- W1: no reimbursement document no longer implies settlement. Closure requires explicit paid history or valid zero-due accounting provenance (zero total or matching recorded CA coverage). Missing/null/blank/non-numeric/negative/inconsistent settlement stays open as source_review_required; known pending/positive liability remains awaiting payment. Added original public-router handover/review reproduction and a settlement matrix in both API variants, asserting unchanged financial source records.
+- W2: main summary displays RJ return reason, authenticated name/ID and actual return timestamp prominently, with original staff handover date/actor/note separately labeled. Return API captures a name snapshot; older events use the recorded actor ID without borrowing staff identity. Added nonempty-note/return-reason and old-ID-only UI regressions, plus API return metadata assertions.
+- Updated ADR-0004, schema/migration-003 policy docs, review follow-up, known issues and current status. No historical backfill, production/OneDrive mutation or deployment.
+- Checks: 96 Node +22 React/WHT tests passed, TypeScript/focused ESLint and both API syntax/diff checks passed. `npm run build` passed with existing Browserslist/fs.F_OK/bundle-size notices; focused Tab 3 correction recheck queued, delivery/independent result pending.
+
+
+## 2026-10-14 — Hands-on physical receipts/RJ review/payment workflow
+
+- Read workflow/ADRs/migrations and current code/memory; restarted the isolated preview only. Actual Chrome exercised STAFF handover, OTHER restrictions, RJR review and closure, normal blocked payout, urgent paid-open/zero due/history, withdrawal/return, fresh reviewed-unpaid normal payout, and Open/Closed/All views. Visually confirmed top-aligned itemized controls beside multiline Particulars.
+- Independently passed 92 Node tests, 20 React/WHT tests, TypeScript, focused lint, both API syntax checks, production build and diff check. Additional simultaneous line/remaining/batch probes in both API copies produced exactly one payment and funding sync.
+- Wrote `docs/agent/LIQUIDATION_WORKFLOW_REVIEW_2026-10-14.md` with two reproduced P2 findings: premature closure when settlement metadata is unknown; returned-copy summary hiding RJ's reason/showing original handover details. Updated known issues/state; Tab 4 remains implementation owner.
+- All write tests used isolated fixtures; reset fixture state between urgent and normal browser scenarios. No production/OneDrive writes or deployment. Real service integration gates remain open; no release approval implied.
+
+## 2026-10-14 — Physical receipt handover, RJ review and conditional closure
+
+- Implemented RJ's clarified answers: staff may record physical handover; urgently needed earlier reimbursement is allowed with a recorded reason. Normal payment follows current RJ review; earlier urgent payout does not close documentary follow-up.
+- Added versioned physical submission (date/actor/notes), RJ-only possession confirmation/review/return/withdrawal and immutable history. Current form/submission versions and global revision guard against stale/concurrent actions. Prior generic admin reviews are retained without implying RJ confirmation.
+- Derived liquidation/reimbursement workflow status independently of payment: awaiting physical, awaiting RJ, changed/review required, pending edit, awaiting payment or closed. Paid historical records stay paid; paid-but-open claims are visible at zero due, cannot be selected again, and expose payment history/urgent reasons. Added open/closed/all reimbursement views while preserving default pending-only API compatibility.
+- Enforced normal/urgent rules on line/shared-transfer, whole-form, batch and legacy status-toggle APIs in both copies. Whole/remaining/batch payments now plan reads before transaction writes to prevent duplicate settlement/races with per-line payments. Preserved proofRef, transferId, funding mirror IDs and unpaid-only CA-excess restoration. Legacy toggles retain actor/time/exception history.
+- Added ADR-0004, migration 003 (offline empty-write manifest/no inferred historical submission/review), product/schema/state/issues updates and an expanded in-memory fixture using actual reimbursement handlers. No production/OneDrive mutation or deployment; unrelated edits preserved.
+- Verification: 92 Node API/migration/regression tests and 20 React/WHT tests passed. Initial test-only TypeScript/lint problems were corrected; final TypeScript, focused ESLint, syntax and diff checks passed. Isolated HTTP fixture smoke passed staff→RJ→closed and urgent paid-but-open paths. Final `npm run build` passed with existing Browserslist/fs.F_OK/bundle-size notices. Consulted local Graphify map (Liquidation mapped; Reimbursement absent), verified against actual code. Expanded Tab 3 hands-on brief queued after checks.
+
+
+## 2026-10-14 — Physical receipts/RJ review closure extension requested
+
+- Held the requested Tab 3 testing handoff when RJ added physical receipt submission and RJ review as conditions of liquidation/reimbursement closure.
+- Inspected existing manual-review, liquidation and reimbursement/payment paths. Current reimbursement GET is pending-only; paid-but-not-documentarily-closed claims must remain visible without resetting cash due/payment history. CA Close & Settle moves cash/write-offs and must not be reused for documentary closure.
+- Captured confirmed scope, proposed workflow, affected paths and acceptance cases in `docs/product/LIQUIDATION_RECEIPT_WORKFLOW.md`. Asked whether payment can precede RJ review and who records physical submission; dependent policy implementation awaits answers. No business-rule/app changes, production mutation or deployment in this extension-planning step.
+
+
+## 2026-10-14 — Manual liquidation receipt review and top-aligned rows
+
+- Implemented RJ's request for an in-app record of checking original/scanned receipts one by one against liquidation rows. Chose **Manual receipt review / Receipts reviewed**, with authenticated **Reviewed by**, actual **Review date** (including earlier paper checks), server recording timestamp, optional notes and explicit completeness/date/amount/particulars confirmation.
+- Added a separate review collection/history, active admin/superadmin write guards, own-form operational read guards, review/content revision preconditions, idempotent retries and reasoned withdrawal. Saved form/receipt-link changes show review required while preserving previous history; payment changes are independent. No liquidation, CA, reimbursement or investment writes occur in review actions.
+- Integrated into loaded submitted forms, disabled while editing/pending approval, and bound attestation to the content fingerprint returned with the displayed liquidation. Existing malformed legacy JSON remains loadable but cannot be attested.
+- Applied RJ's screenshot correction: all expense row cells now align at the top beside multiline Particulars. Preserved existing spacing and unrelated workspace edits.
+- Consulted local Graphify liquidation map and verified code/role/edit flows. Added ADR-0003 and migration 002 (offline empty-write manifest; no historical attestations synthesized), updated PRD/data model/state/issues and safe in-memory preview fixture.
+- Verification: 82 Node API/migration/regression tests (both API variants) and 17 React/WHT tests passed. TypeScript, focused ESLint, both API syntax checks and diff check passed. `npm run build` passed, with existing Browserslist/fs.F_OK/bundle-size notices.
+- No production/OneDrive mutation or deployment. Actual-browser review of this new UI remains pending; the CUI fixture-origin restriction and real-emulator environment limitations remain as documented. Existing signed paper forms remain external originals.
+
+
+## 2026-10-14 — Independent recheck of F1–F3 corrections
+
+- Reviewed Tab 4's targeted fixes and new regressions. Reran original isolated rollback/allocation probes: shared document retained with invoice B GET 200; removed allocation can now be matched; financial invoices unchanged.
+- Actual Chrome fixture recheck covered reference and certificate conflict→Refresh and discard drafts→reopen latest values→save. Both succeeded; fixture amounts, WHT, received history, collection date and original pack stayed unchanged.
+- Independently reran seven Node suites (74 passed), panel/WHT React suites (12 passed), TypeScript, focused ESLint, both API syntax checks and diff check. No new build run during this targeted recheck; prior independent build preceded corrections, corrected build reported passing by Tab 4.
+- Appended independent closure evidence to review report and updated known issues/state. No application fixes, production/OneDrive writes or deployment; real integration gates remain open.
+
+## 2026-10-14 — Finance review corrections F1–F3 (Tab 4)
+
+- Verified Tab 3's independent findings against the current code and review report; preserved unrelated workspace edits.
+- F1: migration rollback reads shared-document references inside its transaction and retains metadata used by links outside the removable manifest set (including inactive history markers). CLI reports retained IDs. Added runtime-link and overlapping-batch regressions; financial source records remain unchanged.
+- F2: retained zero allocations no longer constrain matched booked-WHT/counterparty checks. Positive allocations retain those checks; omitted historical allocation IDs still fail, old evidence remains in history and previously unlinked zero allocations stay inactive. Regression exercised in both API variants.
+- F3: Refresh explicitly offers to discard drafts, closes reference/certificate editors only after successful reload and tells the reviewer to reopen from current evidence. Added conflict/refresh/reopen/save regressions for both editors, asserting the latest revision and other reviewer's values.
+- Updated ADR, migration/API docs, review follow-up, known issues and current status. Independent correction recheck and real emulator/OneDrive/deployed gates remain; no production data mutation or deployment.
+- Checks: 74 Node tests and 12 React/WHT tests passed; `npx tsc --noEmit`, focused panel/test ESLint, both API syntax checks and `git diff --check` passed. `npm run build` passed (existing Browserslist/fs.F_OK/bundle-size notices).
+
+
+## 2026-10-14 — Independent review of Tab 4 finance evidence
+
+- Read release plan/ADR/API/migration docs and current code; independently reran the seven Node suites (68 passed), panel/WHT React suites (10 passed), TypeScript, focused ESLint and production build. All passed; existing build notices remain.
+- Used actual Chrome at isolated port 3300, after RJ enabled/authorized Mac browser actions. Verified legacy pack preservation, 2307 link/printed evidence, metadata correction/history, conflict rejection and allocated unlink guard. Only fixture sign-in/financial data used; CUI's own browser remains origin-blocked.
+- Reproduced three P2 defects with isolated migration/HTTP/browser probes; wrote `docs/agent/FINANCE_EVIDENCE_REVIEW_2026-10-14.md` with severity, steps, expected behavior and suggested regressions. Updated known issues/state; Tab 4 retains implementation ownership.
+- `git diff --check` — passed. No application fixes, production/OneDrive mutations or deployment. Real service integration gates remain open; automated suite success does not resolve the additional reproduced defects.
+
+## 2026-10-14 — Tab 4 finance evidence first release (Phases 0–2)
+
+### Completed
+
+- Took RJ’s build handoff; read AGENTS, project state/issues, PRD/architecture, plan and dated audit sources. Consulted local Graphify output (invoice coverage incomplete) and verified current code. Preserved unrelated uncommitted changes.
+- Corrected only reimbursement route/funding helper sections in the checked-in Functions API: line payments, shared transfer/proof semantics, partial/remaining payments and paid history now match the local API. No broad server overwrite or deployment.
+- Added shared invoice Documents with typed multiple links, stable file identity, deterministic concurrent/retry-safe appends, HTTPS/MIME/size validation, role enforcement, revisioned metadata/unlink reasons and immutable history. Retained legacy scan/pack views and source notes; replaced the scan-overwrite upload action. Unique upload names and retained upload metadata permit retry after link failure.
+- Added EWT document/review access: printed certificate base/WHT/period/ATC/description, observed calculation, review flags/states/notes and shared certificate evidence allocations. Kept cash, booked WHT and historical expected/received flags unchanged.
+- Added ADR-0002, schema/API/PRD documentation and migration 001: offline snapshot/manifest/totals/fingerprints, dry-run default, preconditions, idempotent emulator-only apply and compensating metadata rollback. Added isolated in-memory browser preview and excluded test-support utilities from deployment packaging.
+
+### Checked
+
+- `npm ls --depth=0` — passed; no dependency changes/install needed.
+- `node --test server/financeEvidence.test.js server/financeEvidenceUpload.test.js server/reimbursementParity.test.js server/cashAdvanceEditing.test.js server/financeTrace.test.js server/financeTraceRouter.test.js server/financeTracePackaging.test.js` — 68 passed. Both API copies/runtime bundles, authorization, upload validation, retries/concurrent additions, old paid history, shared slip, all four audited printed bases, expected 3,611.58 WHT, migration dry-run/apply/rerun/rollback/preconditions and accounting regressions covered.
+- `CI=true npm test -- --watchAll=false --runInBand src/components/finance/InvoiceDocumentsPanel.test.tsx src/types/Invoice.wht.test.ts` — 10 passed, including legacy availability, read/write roles, upload/link recovery and independent printed certificate amounts.
+- `npx tsc --noEmit` and focused ESLint on new/changed frontend files/tests — passed. `node --check server.js` and `node --check functions/server.js` — passed.
+- `npm run build` — passed on final frontend implementation; existing stale Browserslist, fs.F_OK and large-bundle warnings remain.
+- `git diff --check` — passed.
+
+### Remaining release gates / scope
+
+- Real Firestore emulator unavailable (no working Java runtime/Firebase CLI); transaction/migration fixtures and CLI dry run passed. Authenticated browser/real OneDrive validation pending: existing app redirects to login; isolated fixture navigation on localhost:3300 was blocked by CUI’s origin allowlist. No request for credentials or production mutation.
+- Live deployed endpoint capability inventory and fresh authorized production snapshot reconciliation remain pending before release. No production data, deployment or tax treatment changed.
+- Phases 3–5 remain separate reviewable changes: incoming-payment ledger and received/deposit/clearance dates, outgoing/payroll evidence, missing-support dashboard. First release shares payment slips as evidence only.
+
+
+## 2026-10-14 — Finance supporting-document implementation scope
+
+### Completed
+
+- Read the Finance handoff's full audit report, missing-support CSV sample and audit log; reviewed current project memory, PRD, architecture, Money Trail design and earlier liquidation/reimbursement plan.
+- Verified invoice scan replacement, EWT plain-text reference, cumulative collections updates, existing local reimbursement proof/payment ledger and finance focus-link behavior against current code. Consulted available Graphify map; Collections coverage is incomplete.
+- Created `docs/product/FINANCE_SUPPORT_PLAN.md` with six phases, proposed document/payment models, acceptance examples, migration/rollout safeguards and decisions for RJ. Recommend document handling and EWT first, followed by shared collections payments and broader support review.
+- Documented the checked-in local/Functions reimbursement API disparity as Phase 0 work and a known issue. Audit totals remain attributed dated snapshots; no live reconciliation was performed.
+
+### Verification
+
+- Reviewed the plan against source report and actual UI/API/types in both server copies.
+- `git diff --check` — passed.
+- Documentation-only task: no application tests/build repeated; no app code, schema, database records or deployment changed. Existing unrelated edits preserved. Proposed architecture is not an approved ADR or implemented feature.
+
+
 ## 2026-10-06 — Cash Advance request editing
 
 ### Completed
@@ -20,6 +142,7 @@
 - `npm run build` — passed; existing Browserslist, Node deprecation, and large-bundle notices remain.
 - `git diff --check` — passed.
 - No dedicated lint/typecheck package scripts exist; used direct commands. Browser/manual review with actual records was not performed; no deployment or live database writes.
+
 
 
 ## 2026-09-21 — Client-supplied materials Sales scope and heading layout repair

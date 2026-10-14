@@ -1,0 +1,19 @@
+# ADR-0004: Physical receipt submission, RJ review and closure
+
+Date: 2026-10-14. Status: accepted from RJ's clarified instructions; local implementation, no production rollout.
+
+Staff may record handover of the printed liquidation and physical receipt copies to RJ, with actual date, actor and note. RJ confirms possession while reviewing. Only approved admin/superadmin account username `RJR` performs RJ review, withdrawal of review or return of physical copies. An owner can record submission for their form; admins can record on behalf of staff. Other staff cannot edit another person's handover.
+
+Use `liquidation_receipt_reviews` for physical submission and review metadata/history, with global revision checks. Submission records a saved-content fingerprint and a submission version. RJ review must acknowledge that current submission version and confirm physical possession. Generic earlier admin reviews and historical paid statuses never imply handover or RJ confirmation. Returned/replaced physical submissions and changed saved forms require another current review. Preserve every previous actor/date/reason in history.
+
+Payment and documentary workflow remain distinct. Normal reimbursement payment requires current physical submission and RJ review. RJ permits urgently needed earlier payments: an approved admin/superadmin supplies an explicit `urgentPaymentReason`, stored on the actual payment ledger entry with the normal payment actor/time. An urgent payment does not complete submission/review or close the claim. Existing paid history is never reset. Payment handlers check this rule server-side, including selected lines, shared transfers, whole-form and batch payments and the legacy reimbursement toggle.
+
+Closure is a derived state, not a new cash movement or a rewritten financial status. A submitted liquidation without an outstanding reimbursement closes after current physical/RJ review. If it has a reimbursement, both paid/fully-settled financial state and current physical/RJ review are required. Pending edits suspend closure; later changes/withdrawals reopen the documentary workflow. A positive unused CA balance is resolved by the existing CA Close & Settle process separately; no automatic CA return/write-off/closure is introduced. Missing source/settlement information remains an open review case.
+
+Reimbursement queries preserve default pending-only compatibility and add `scope=open|closed|all` for the UI. Paid-but-open claims remain visible and show zero cash due; payment selection excludes paid records. Pagination bounds new review queries; no historical records are backfilled as reviewed or closed. Migration 003 emits a dry-run-first empty-write manifest defining additive metadata only. Existing financial schemas/IDs/proofRef/transferId and funding-sync behavior remain intact.
+
+## Closure and return clarification after independent review (W1/W2)
+
+Without a reimbursement document, closure requires explicit historical reimbursed status or affirmative zero-due provenance: valid zero reimbursable amount with zero total, or a linked CA whose recorded covered amount matches the saved total in centavos. Missing/null/blank/non-numeric/negative amounts, unknown status or incomplete/inconsistent zero-due funding stay `source_review_required`. Known positive reimbursable amount or pending status stays `awaiting_payment`. No financial source values are rewritten to achieve closure. Existing paid reimbursement documents remain valid paid history.
+
+Returns store the authenticated returner's name snapshot alongside ID/time/reason. The main summary prominently shows the return event and keeps original handover date/actor/note under a separate label. Older returns without a name snapshot show their recorded actor ID, never the staff handover identity. No historical name backfill or inferred dates.
