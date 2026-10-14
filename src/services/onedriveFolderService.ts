@@ -22,6 +22,7 @@ import { onedriveConfig } from '../config/onedriveConfig';
 import { API_BASE } from '../config/api';
 
 export interface DriveItemRef {
+  driveId?: string;
   id: string;
   webUrl: string;
   name?: string;
@@ -395,6 +396,7 @@ export async function uploadFileToFolder(
   folderPath: string,
   filename: string,
   blob: Blob,
+  financeEvidenceType?: string,
 ): Promise<DriveItemRef> {
   if (!filename || /[\\/]/.test(filename)) {
     throw new Error(`Invalid filename: "${filename}"`);
@@ -404,14 +406,14 @@ export async function uploadFileToFolder(
   const res = await fetch(`${API_BASE}/api/onedrive/upload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ folderPath, filename, contentBase64 }),
+    body: JSON.stringify({ folderPath, filename, contentBase64, financeEvidenceType }),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Upload failed (${res.status}) for "${itemPath}": ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
-  return { id: data.id, webUrl: data.webUrl || '', name: filename };
+  return { id: data.id, webUrl: data.webUrl || '', name: filename, driveId: data.driveId };
 }
 
 // ---------------------------------------------------------------------------

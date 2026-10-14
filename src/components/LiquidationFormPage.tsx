@@ -56,6 +56,7 @@ import ScanToPhoneDialog, { type DeliveredReceipt } from './ScanToPhoneDialog';
 import ScanBatch, { type LiquidationScanItem, type BatchItemFields } from './ScanBatch';
 import ReceiptCropper from './ReceiptCropper';
 import ReceiptViewer from './ReceiptViewer';
+import LiquidationReceiptReview from './LiquidationReceiptReview';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 import { LIQUIDATION_CATEGORIES } from '../data/financeCategories';
 import { blobToBase64 } from '../utils/receipts/imageCompress';
@@ -476,6 +477,7 @@ export default function LiquidationFormPage() {
   const [revisionMode, setRevisionMode] = useState(false);
   const [pendingRevision, setPendingRevision] = useState<PendingRevisionInfo | null>(null);
   const [loadedOptionValue, setLoadedOptionValue] = useState<string>('');
+  const [reviewContentHash, setReviewContentHash] = useState('');
   const [cashAdvances, setCashAdvances] = useState<CaOption[]>([]);
   // Reimbursement tracking of the currently loaded submitted no-CA liquidation.
   const [loadedReimb, setLoadedReimb] = useState<{ id: string; status: string | null; at: number | null; caId: string | null } | null>(null);
@@ -1086,6 +1088,7 @@ export default function LiquidationFormPage() {
     const data = await res.json().catch(() => ({}));
     if (!data.success || !data.liquidation) return null;
     const l = data.liquidation;
+    setReviewContentHash(l.receipt_review_content_hash || '');
     const serverStatus = String(l.status ?? '').toLowerCase().trim();
     const submitted =
       isSubmitted ||
@@ -2258,7 +2261,7 @@ export default function LiquidationFormPage() {
                   color={loadedReimb.status === 'reimbursed' ? 'warning' : 'success'}
                   onClick={() => updateReimbursement(loadedReimb.status === 'reimbursed' ? 'pending' : 'reimbursed')}
                 >
-                  {loadedReimb.status === 'reimbursed' ? 'Revert to pending' : 'Mark reimbursed'}
+                  {loadedReimb.status === 'reimbursed' ? 'Revert to pending' : 'Mark reimbursed after RJ review'}
                 </Button>
               )}
               {loadedReimb && isAdmin && loadedReimb.caId && loadedReimb.status !== 'reimbursed' && (
@@ -2292,6 +2295,11 @@ export default function LiquidationFormPage() {
               </Button>
             </Box>
           </Box>
+        )}
+
+        {loadedLiquidationId && loadedOptionValue.startsWith('submitted:') && (
+          <LiquidationReceiptReview key={`${loadedLiquidationId}:${reviewContentHash}`} liquidationId={loadedLiquidationId} contentHash={reviewContentHash}
+            readOnly={revisionMode || !!pendingRevision} onReload={() => loadDraft(loadedLiquidationId, true)} />
         )}
 
         {revisionMode && (
@@ -2532,6 +2540,7 @@ export default function LiquidationFormPage() {
                     aria-current={focused ? 'true' : undefined}
                     sx={{
                       '&:hover .delete-btn': { opacity: 1 },
+                      '& > .MuiTableCell-root': { verticalAlign: 'top' },
                       ...(focused ? {
                         bgcolor: 'rgba(44,90,160,0.14)',
                         outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px',

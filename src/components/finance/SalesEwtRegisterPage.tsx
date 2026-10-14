@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import type { ProjectInvoice } from '../../types/Invoice';
 import { invoiceCash, invoiceWht } from '../../types/Invoice';
+import InvoiceDocumentsPanel from './InvoiceDocumentsPanel';
 import { API_BASE } from '../../config/api';
 
 const NET_PACIFIC_COLORS = {
@@ -27,6 +28,7 @@ export default function SalesEwtRegisterPage() {
   const [invoices, setInvoices] = useState<ProjectInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [documentsInvoice, setDocumentsInvoice] = useState<ProjectInvoice | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -78,7 +80,7 @@ export default function SalesEwtRegisterPage() {
       {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
       <Alert severity="info" sx={{ mb: 1.5 }}>
         Customer withholding is a tax credit, not cash and not a sales discount.
-        Certificates stay <strong>expected</strong> until the 2307 is on file.
+        Received/expected history is independent from direct document availability and evidence review.
         The 3% percentage-tax filing basis is not automated here.
       </Alert>
 
@@ -180,6 +182,7 @@ export default function SalesEwtRegisterPage() {
                   </TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{PHP.format(invoiceCash(inv))}</TableCell>
                   <TableCell>
+                    <Button size="small" onClick={() => setDocumentsInvoice(inv)}>2307 documents</Button>
                     <Chip
                       size="small"
                       variant="outlined"
@@ -196,6 +199,7 @@ export default function SalesEwtRegisterPage() {
           </Table>
         </TableContainer>
       </Paper>
+      {documentsInvoice && <InvoiceDocumentsPanel key={documentsInvoice.id} invoice={documentsInvoice} initialType="bir2307" onClose={() => setDocumentsInvoice(null)} />}
     </Box>
   );
 }

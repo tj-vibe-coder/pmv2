@@ -10,7 +10,6 @@ import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PaymentIcon from '@mui/icons-material/Payment';
-import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
@@ -45,10 +44,8 @@ import {
   type ActiExpectedRow,
 } from '../utils/commercialTrail';
 import { API_BASE } from '../config/api';
-import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
-import { resolveCorporateDriveId, uploadFileToFolder, projectFolderName } from '../services/onedriveFolderService';
-import { onedriveConfig } from '../config/onedriveConfig';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import InvoiceDocumentsPanel from './finance/InvoiceDocumentsPanel';
 import { useAuth } from '../contexts/AuthContext';
 
 const API = `${API_BASE}/api`;
@@ -184,10 +181,7 @@ export default function CollectionsDashboard() {
   const [deleteTarget, setDeleteTarget] = useState<ProjectInvoice | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
 
-  // OneDrive upload
-  const { isAuthenticated: oneDriveSignedIn, login: oneDriveLogin, getAccessToken: getOneDriveToken } = useOneDriveAuth();
-  const [uploadingScanId, setUploadingScanId] = useState<string | null>(null);
-  const [uploadScanErr, setUploadScanErr] = useState('');
+  const [documentsInvoice, setDocumentsInvoice] = useState<ProjectInvoice | null>(null);
 
   // ─── tab navigation helper ───────────────────────────────────────────────
   const handleTabChange = (_: React.SyntheticEvent, newTab: string) => {
@@ -624,82 +618,6 @@ export default function CollectionsDashboard() {
     }
   };
 
-  // ─── upload scan ────────────────────────────────────────────────────────
-  const handleScanUpload = async (inv: ProjectInvoice, file: File) => {
-    if (!/(\.pdf|\.png|\.jpe?g|\.tiff?|\.bmp)$/i.test(file.name)) {
-      setUploadScanErr('Please upload a PDF or image file (PDF, PNG, JPG, TIFF, BMP).');
-      return;
-    }
-    if (file.size > 25 * 1024 * 1024) {
-      setUploadScanErr('File is too large. Maximum size is 25 MB.');
-      return;
-    }
-
-    if (!oneDriveSignedIn) {
-      oneDriveLogin();
-      return;
-    }
-
-    setUploadingScanId(inv.id);
-    setUploadScanErr('');
-
-    try {
-      const token = await getOneDriveToken();
-      if (!token) {
-        setUploadScanErr('Could not obtain OneDrive access token. Please sign in again.');
-        setUploadingScanId(null);
-        return;
-      }
-      const driveId = await resolveCorporateDriveId(token);
-
-      const code = inv.project_no || String(inv.project_id);
-      const name = inv.project_name || '';
-      const folderName = projectFolderName({ code, name });
-      const sanitizedInvoice = inv.invoice_no.replace(/[<>:"/\\|?*]/g, '_');
-      const filename = `${sanitizedInvoice}_${file.name}`;
-      const execRoot = onedriveConfig.executionRoot || '01 Execution';
-      const year = String(new Date().getFullYear());
-      // Try year-aware path first (new structure), fall back to flat (historical projects)
-      const yearPath = `${execRoot}/${year}/${folderName}/Sales Invoice`;
-      const flatPath = `${execRoot}/${folderName}/Sales Invoice`;
-      let result;
-      try {
-        result = await uploadFileToFolder(token, driveId, yearPath, filename, file);
-      } catch {
-        result = await uploadFileToFolder(token, driveId, flatPath, filename, file);
-      }
-
-      const scanFile = {
-        onedrive_item_id: result.id,
-        onedrive_web_url: result.webUrl,
-        filename: result.name || filename,
-        uploaded_at: new Date().toISOString(),
-      };
-
-      const authToken = localStorage.getItem('netpacific_token');
-      await fetch(`${API}/invoices/${inv.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-        },
-        body: JSON.stringify({ scan_file: scanFile }),
-      });
-
-      await fetchInvoices();
-    } catch (e) {
-      setUploadScanErr(e instanceof Error ? e.message : 'Upload failed.');
-    } finally {
-      setUploadingScanId(null);
-    }
-  };
-
-  const handleScanPick = (inv: ProjectInvoice, e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleScanUpload(inv, file);
-    e.target.value = '';
-  };
-
   const calculateTurnaround = (invoiceDate?: string, collectionDate?: string): string => {
     if (!invoiceDate || !collectionDate) return '—';
     const invD = new Date(invoiceDate).getTime();
@@ -953,7 +871,6 @@ export default function CollectionsDashboard() {
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError('')}>{error}</Alert>}
-      {uploadScanErr && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setUploadScanErr('')}>{uploadScanErr}</Alert>}
 
       {/* Global KPI Cards (Clickable Quick Tabs/Filters) */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
@@ -1317,7 +1234,7 @@ export default function CollectionsDashboard() {
                   const proj = projectsById[String(inv.project_id)];
                   const poRef = isActiInvoice(inv) ? actiToIoctPoLabel(proj?.commercial_trail) : (proj?.po_number || '');
                   return (
-                    <Paper key={inv.id} variant="outlined" sx={{ p: 1.25 }}>
+                    <Paper key={inv.id} role="group" aria-label={`Invoice ${inv.invoice_no}`} variant="outlined" sx={{ p: 1.25 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
                         <Box sx={{ minWidth: 0 }}>
                           <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{inv.invoice_no}</Typography>
@@ -1368,13 +1285,9 @@ export default function CollectionsDashboard() {
                             Record collection
                           </Button>
                         )}
-                        {inv.scan_file?.onedrive_web_url ? (
+                        <Button size="small" onClick={() => setDocumentsInvoice(inv)}>Documents</Button>
+                        {inv.scan_file?.onedrive_web_url && (
                           <IconButton color="info" onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')} aria-label="View scan"><VisibilityIcon fontSize="small" /></IconButton>
-                        ) : (
-                          <IconButton color="primary" disabled={uploadingScanId === inv.id} component="label" aria-label="Upload invoice scan">
-                            {uploadingScanId === inv.id ? <CircularProgress size={16} /> : <CloudUploadIcon fontSize="small" />}
-                            <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
-                          </IconButton>
                         )}
                         <Box sx={{ flex: 1 }} />
                         <IconButton onClick={() => openEdit(inv)} aria-label="Edit"><EditIcon fontSize="small" /></IconButton>
@@ -1509,6 +1422,7 @@ export default function CollectionsDashboard() {
                           />
                         </TableCell>
                         <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                          <Button size="small" onClick={() => setDocumentsInvoice(inv)}>Documents</Button>
                           {inv._status !== 'paid' && (
                             <Tooltip title="Record collection">
                               <IconButton size="small" color="success" onClick={() => openCollect(inv)}>
@@ -1522,14 +1436,7 @@ export default function CollectionsDashboard() {
                                 <VisibilityIcon fontSize="small" />
                               </IconButton>
                             </Tooltip>
-                          ) : (
-                            <Tooltip title={uploadingScanId === inv.id ? 'Uploading…' : 'Upload invoice scan'}>
-                              <IconButton size="small" color="primary" disabled={uploadingScanId === inv.id} component="label">
-                                {uploadingScanId === inv.id ? <CircularProgress size={16} /> : <CloudUploadIcon fontSize="small" />}
-                                <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
-                              </IconButton>
-                            </Tooltip>
-                          )}
+                          ): null}
                           <Tooltip title="Edit">
                             <IconButton size="small" onClick={() => openEdit(inv)}>
                               <EditIcon fontSize="small" />
@@ -1715,7 +1622,7 @@ export default function CollectionsDashboard() {
                     navigate(`/projects/${inv.project_id}`);
                   };
                   return (
-                    <Paper key={inv.id} variant="outlined" sx={{ p: 1.25 }}>
+                    <Paper key={inv.id} role="group" aria-label={`Invoice ${inv.invoice_no}`} variant="outlined" sx={{ p: 1.25 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
                         <Box>
                           <Typography variant="body2" sx={{ fontWeight: 700 }}>{inv.collection_date || '—'}</Typography>
@@ -1780,13 +1687,9 @@ export default function CollectionsDashboard() {
                       </Box>
                       <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.25, mt: 0.5, mx: -0.5 }}>
                         <IconButton color="success" onClick={() => openCollect(inv)} aria-label="Update collection amount"><PaymentIcon fontSize="small" /></IconButton>
-                        {inv.scan_file?.onedrive_web_url ? (
+                        <Button size="small" onClick={() => setDocumentsInvoice(inv)}>Documents</Button>
+                        {inv.scan_file?.onedrive_web_url && (
                           <IconButton color="info" onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')} aria-label="View scan"><VisibilityIcon fontSize="small" /></IconButton>
-                        ) : (
-                          <IconButton color="primary" disabled={uploadingScanId === inv.id} component="label" aria-label="Upload scan">
-                            <CloudUploadIcon fontSize="small" />
-                            <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
-                          </IconButton>
                         )}
                         {inv.pb_number && (
                           <IconButton
@@ -1976,6 +1879,7 @@ export default function CollectionsDashboard() {
                           </Stack>
                         </TableCell>
                         <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                          <Button size="small" onClick={() => setDocumentsInvoice(inv)}>Documents</Button>
                           <Tooltip title="Update / Adjust collection amount">
                             <IconButton size="small" color="success" onClick={() => openCollect(inv)}>
                               <PaymentIcon fontSize="small" />
@@ -1987,14 +1891,7 @@ export default function CollectionsDashboard() {
                                 <VisibilityIcon fontSize="small" />
                               </IconButton>
                             </Tooltip>
-                          ) : (
-                            <Tooltip title="Upload scan">
-                              <IconButton size="small" color="primary" disabled={uploadingScanId === inv.id} component="label">
-                                <CloudUploadIcon fontSize="small" />
-                                <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
-                              </IconButton>
-                            </Tooltip>
-                          )}
+                          ): null}
                           {inv.pb_number && (
                             <Tooltip title={`Open Progress Report for ${inv.pb_number}`}>
                               <IconButton
@@ -2305,6 +2202,8 @@ export default function CollectionsDashboard() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {documentsInvoice && <InvoiceDocumentsPanel key={documentsInvoice.id} invoice={documentsInvoice} onClose={() => setDocumentsInvoice(null)} />}
 
       {/* ── Delete Confirm ────────────────────────────────────────────────── */}
       <Dialog open={deleteConfirm} onClose={() => setDeleteConfirm(false)} maxWidth="xs" fullWidth>

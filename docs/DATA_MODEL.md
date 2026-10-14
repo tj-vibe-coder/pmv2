@@ -723,3 +723,36 @@ SQLite (database/projects.db)    ← Original, Node.js `better-sqlite3`
 - `validate-data-accuracy.js` — Post-migration data verification
 
 The Express server hits **Firestore** directly now. The SQLite layer is legacy and only used by the standalone scripts.
+
+
+### Finance evidence (ADR-0002, local implementation 2026-10-14)
+
+- `finance_documents/{sha256(identity)}`: immutable file identity (`onedrive:driveId:itemId` when known, otherwise normalized HTTPS URL), `driveId`, `itemId`, `webUrl`, `filename`, optional MIME/size, explicit provenance, uploader/time, revision and optional certificate evidence. New uploads return the real drive ID from the existing app-only OneDrive proxy; the client service's `server` sentinel is never stored as a drive.
+- `finance_document_links/{sha256(invoice:invoiceId:documentId:type)}`: invoice-only allowlisted relationship, evidence type, reference, document date, source, active state, revision and actor/time. Independent records avoid stale-array replacement. Unlink is a reasoned soft removal; files are never deleted.
+- Each document/link has append-only `history` events containing actor, timestamp, before/after and reason. Metadata edits require expected revision; repeated active link creation is a no-op. History reads are bounded to 50; invoice evidence reads to 200 relationships.
+- Certificate evidence: certificate number, period, printed income/WHT in integer centavos, printed ATC/description, observed calculation, review flags/state/note and explicit invoice WHT evidence allocations. Full allocation lists retain previous invoice identities (zero removes allocated evidence). Sum cannot exceed printed WHT; matched requires printed and booked reconciliation with no open flags. Resolved requires a note and preserves previous evidence in history.
+- No evidence write modifies `invoices`, `reimbursement_payments`, CA balances or investments. Historical `scan_file` is a read-through supporting-pack adapter; received/expected history is unchanged. Invoice cash and collection dates remain legacy fields until Phase 3.
+- Schema migration: `scripts/migrations/001-invoice-evidence.js`, snapshot/manifest dry run by default, preconditioned/idempotent emulator-only apply and compensating rollback. Deployment and production backfill remain pending.
+
+
+### Liquidation manual receipt review (ADR-0003, local implementation 2026-10-14)
+
+`liquidation_receipt_reviews/{liquidationId}` stores `active`, `revision`, versioned `contentHash`, `reviewedBy` (authenticated ID), `reviewedByName` (name snapshot), `reviewDate` (actual Philippine calendar date), server `recordedAt`, optional `note`, and withdrawal actor/time/reason when withdrawn. Append-only `history` events record actor/name/time/action and before/after.
+
+`GET /api/liquidations/:id` exposes a computed `receipt_review_content_hash` for the displayed saved form. Review endpoints at `/api/liquidations/:id/receipt-review` validate that hash and the expected review revision transactionally. Absent review means not reviewed; matching active review means reviewed; changed saved form/receipt references mean review required; withdrawal retains old review history. Payment state changes do not invalidate it. Original paper receipts can be reviewed without digital links.
+
+Only approved admin/superadmin accounts attest as themselves. Other operational users read their own forms; tax-filer and scanner scopes are excluded. POST writes only review metadata/history, never liquidation/CA/reimbursement/investment records. Drafts and pending edits cannot receive new attestations. Migration 002 is an offline empty-write manifest: no historic reviews are inferred, and apply/rollback are no-ops.
+
+
+### Physical receipt workflow and urgent reimbursement exceptions (ADR-0004)
+
+`liquidation_receipt_reviews` adds `physicalSubmission` (active, version, contentHash, submittedDate, submittedBy/name, recordedAt, recipient RJ, note, and optional return actor/time/reason). Current RJ review stores server-owned `reviewedByUsername: RJR` and `rjConfirmedSubmissionVersion`. Global revision/immutable history covers staff submission, RJ review, return and withdrawal. Missing history never implies physical submission.
+
+`workflowStatus` is derived: awaiting_physical, awaiting_rj_review, review_required, awaiting_payment, pending_edit, closed, draft, source_review_required. Current physical submission/RJ review plus paid settlement where due are required for closed. This never rewrites paid amounts or triggers CA settlement.
+
+Reimbursement GET retains pending-only default and adds `scope=open|closed|all`, bounded at 500 rows. Paid-but-open rows stay visible at zero cash due, excluded from payment selection. Payment ledgers add optional `paymentException: {reason, beforeRjReview:true}` with normal paidBy/paidAt provenance. Whole/remaining/batch payment plans are transactional and retain existing funding mirror IDs. Legacy reimbursement status toggles append `liquidations/{id}/payment_status_history` with before/after, actor/time and exception. Migration 003 is an offline empty-write manifest: no historical physical/RJ data is synthesized.
+
+
+Physical return metadata additionally includes optional `returnedByName`, captured from the authenticated RJ account at return time. Older records retain `returnedBy` as the identity fallback. Return reason/actor/time are displayed separately from `submittedDate`/submitter/note. Schema migration 003 remains additive with no historical writes.
+
+When no reimbursement document exists, workflow closure requires explicit reimbursed status or valid zero-due accounting provenance (zero total or matching recorded CA coverage). Unknown/inconsistent settlement stays `source_review_required`; it is never coerced to zero. Existing paid claims remain paid.

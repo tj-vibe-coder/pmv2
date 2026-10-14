@@ -27,6 +27,7 @@ function copyJsRecursive(srcDir, destDir, copied) {
     const srcPath = path.join(srcDir, entry.name);
     const destPath = path.join(destDir, entry.name);
     if (entry.isDirectory()) {
+      if (entry.name === 'test-support') continue;
       copyJsRecursive(srcPath, destPath, copied);
       continue;
     }
