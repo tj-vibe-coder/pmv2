@@ -25,6 +25,7 @@ import {
   Grid,
   Checkbox,
   FormControlLabel,
+  useMediaQuery,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ExpandMore as ExpandMoreIcon, ExpandLess as ExpandLessIcon, Visibility as VisibilityIcon, PictureAsPdf as PictureAsPdfIcon } from '@mui/icons-material';
 import jsPDF from 'jspdf';
@@ -801,6 +802,38 @@ async function exportPOToPDF(po: PurchaseOrder) {
   doc.save(`PO_${po.poNumber.replace(/\s/g, '_')}.pdf`);
 }
 
+type PoLineItem = PurchaseOrder['items'][number];
+
+// Phone version of an editable PO line: labelled fields in a card (used by the create and edit dialogs).
+function PoLineFields({ item, total, showNotes, onChange, onRemove }: {
+  item: PoLineItem;
+  total: number;
+  showNotes?: boolean;
+  onChange: (patch: Partial<PoLineItem>) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <Paper variant="outlined" sx={{ p: 1.25 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.25 }}>
+        <TextField size="small" label="Description" value={item.description} multiline minRows={1} sx={{ gridColumn: '1 / -1' }} onChange={(e) => onChange({ description: e.target.value })} />
+        <TextField size="small" label="Part #" value={item.partNo} onChange={(e) => onChange({ partNo: e.target.value })} />
+        <TextField size="small" label="Brand" value={item.brand} onChange={(e) => onChange({ brand: e.target.value })} />
+        <TextField size="small" type="number" label="Qty" value={item.quantity} inputProps={{ min: 0, inputMode: 'numeric' }} onChange={(e) => onChange({ quantity: parseInt(e.target.value, 10) || 0 })} />
+        <TextField size="small" label="Unit" value={item.unit} placeholder="pcs" onChange={(e) => onChange({ unit: e.target.value })} />
+        <TextField size="small" type="number" label="Unit price" value={item.unitPrice ?? ''} inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }} onChange={(e) => onChange({ unitPrice: parseFloat(e.target.value) || 0 })} />
+        <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <Typography variant="caption" color="text.secondary">Line total</Typography>
+          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{total.toFixed(2)}</Typography>
+        </Box>
+        {showNotes && <TextField size="small" label="Notes" value={item.notes} sx={{ gridColumn: '1 / -1' }} onChange={(e) => onChange({ notes: e.target.value })} />}
+      </Box>
+      <Box sx={{ mt: 0.5 }}>
+        <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={onRemove}>Remove line</Button>
+      </Box>
+    </Paper>
+  );
+}
+
 const PurchaseOrderPage: React.FC = () => {
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [mrfs, setMrfs] = useState<MaterialRequest[]>([]);
@@ -810,6 +843,8 @@ const PurchaseOrderPage: React.FC = () => {
   const [viewPO, setViewPO] = useState<PurchaseOrder | null>(null);
   const [editingPO, setEditingPO] = useState<PurchaseOrder | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Portrait phones (< 600 px): the PO list, line items and dialogs use cards / full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
 
   // Create form state
   const [selectedMrfIds, setSelectedMrfIds] = useState<string[]>([]);
@@ -1163,6 +1198,27 @@ const PurchaseOrderPage: React.FC = () => {
 
   const toggleExpand = (id: string) => setExpandedId((prev) => (prev === id ? null : id));
 
+  // Read-only PO line items as cards (phones).
+  const poItemCards = (items: PoLineItem[]) => (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+      {items.map((i) => (
+        <Paper key={i.id} variant="outlined" sx={{ p: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{i.description || '—'}</Typography>
+          {(i.partNo || i.brand) && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{[i.partNo, i.brand].filter(Boolean).join(' · ')}</Typography>
+          )}
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, mt: 0.25 }}>
+            <Typography variant="caption" color="text.secondary">
+              {i.quantity} {i.unit || ''} × {Number(i.unitPrice ?? 0).toFixed(2)}
+            </Typography>
+            <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{lineTotal(i).toFixed(2)}</Typography>
+          </Box>
+          {i.notes && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Notes: {i.notes}</Typography>}
+        </Paper>
+      ))}
+    </Box>
+  );
+
   return (
     <Box>
       <Typography variant="h5" sx={{ fontWeight: 600, color: '#2c5aa0', mb: 2 }}>
@@ -1181,6 +1237,55 @@ const PurchaseOrderPage: React.FC = () => {
         Create PO from MRF
       </Button>
 
+      {isPhone ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {orders.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+              No purchase orders yet. Tap &quot;Create PO from MRF&quot; to create one.
+            </Typography>
+          )}
+          {orders.map((po) => (
+            <Paper key={po.id} variant="outlined" sx={{ p: 1.25 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{po.poNumber}</Typography>
+                <Chip label={po.status} size="small" color={statusColor[po.status]} variant="outlined" />
+              </Box>
+              <Typography variant="body2" sx={{ mt: 0.5, fontWeight: 600, overflowWrap: 'anywhere' }}>{po.supplierName}</Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{po.projectName || '—'}</Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                {[po.mrfRequestNos && po.mrfRequestNos.length > 1 ? po.mrfRequestNos.join(', ') : po.mrfRequestNo, po.orderDate].filter(Boolean).join(' · ')}
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.25, mt: 0.5, mx: -0.5 }}>
+                <IconButton onClick={() => setViewPO(po)} title="View details"><VisibilityIcon fontSize="small" /></IconButton>
+                <IconButton onClick={() => handleOpenEdit(po)} title="Edit PO"><EditIcon fontSize="small" /></IconButton>
+                <IconButton onClick={() => exportPOToPDF(po)} title="Export to PDF" sx={{ color: '#c62828' }}><PictureAsPdfIcon fontSize="small" /></IconButton>
+                <Box sx={{ flex: 1 }} />
+                <IconButton onClick={() => handleDeletePO(po.id)} color="error" title="Delete PO"><DeleteIcon fontSize="small" /></IconButton>
+              </Box>
+              <Button
+                size="small" fullWidth onClick={() => toggleExpand(po.id)}
+                endIcon={expandedId === po.id ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                sx={{ justifyContent: 'space-between' }}
+              >
+                Line items ({po.items.length})
+              </Button>
+              <Collapse in={expandedId === po.id} timeout="auto" unmountOnExit>
+                <Box sx={{ pt: 0.5 }}>
+                  {poItemCards(po.items)}
+                  <Box sx={{ mt: 1, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    <Button size="small" variant="outlined" startIcon={<PictureAsPdfIcon />} onClick={() => exportPOToPDF(po)} sx={{ color: '#c62828', borderColor: '#c62828' }}>
+                      Export to PDF
+                    </Button>
+                    <Button size="small" variant="outlined" onClick={() => handleAddToOrderTracker(po)}>
+                      Add to Order Tracker
+                    </Button>
+                  </Box>
+                </Box>
+              </Collapse>
+            </Paper>
+          ))}
+        </Box>
+      ) : (
       <Paper sx={{ borderRadius: 2, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <TableContainer>
           <Table size="small">
@@ -1292,9 +1397,10 @@ const PurchaseOrderPage: React.FC = () => {
           </Table>
         </TableContainer>
       </Paper>
+      )}
 
       {/* Create PO Dialog */}
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 2 } }}>
+      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="md" fullWidth fullScreen={isPhone} PaperProps={{ sx: { borderRadius: isPhone ? 0 : 2 } }}>
         <DialogTitle>Create Purchase Order from MRF</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
@@ -1404,6 +1510,35 @@ const PurchaseOrderPage: React.FC = () => {
                     ? `Items from MRF(s) for ${selectedSupplier?.name ?? 'this supplier'} — select which to include, then enter unit price`
                     : 'Items from MRF(s) — select a supplier above to filter by supplier, then include and enter unit price'}
                 </Typography>
+                {isPhone ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                    {combinedItems.map(({ mrfId, mrfRequestNo, mrfItem, compositeId }) => {
+                      const poItem = createDialogItems.find((i) => i.id === compositeId);
+                      const included = !!poItem;
+                      return (
+                        <Paper key={compositeId} variant="outlined" sx={{ p: 1, display: 'flex', alignItems: 'flex-start', gap: 0.5, ...(included ? { borderColor: 'primary.main' } : {}) }}>
+                          <Checkbox size="small" sx={{ p: 0.5 }} checked={included} onChange={() => toggleCreateDialogItem(mrfItem, mrfId)} />
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{mrfItem.description || mrfItem.partNo || '—'}</Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                              {`${mrfItem.quantity} ${mrfItem.unit || ''}`.trim()} · {mrfRequestNo} · {mrfItem.supplierName || 'Any supplier'}
+                            </Typography>
+                            {included && poItem && (
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.75 }}>
+                                <TextField
+                                  type="number" size="small" label="Unit price" value={poItem.unitPrice ?? ''}
+                                  onChange={(e) => updateCreateItemUnitPrice(compositeId, parseFloat(e.target.value) || 0)}
+                                  inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }} sx={{ flex: 1 }}
+                                />
+                                <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{lineTotal(poItem).toFixed(2)}</Typography>
+                              </Box>
+                            )}
+                          </Box>
+                        </Paper>
+                      );
+                    })}
+                  </Box>
+                ) : (
                 <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
                   <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.75rem' } }}>
                     <TableHead>
@@ -1446,12 +1581,22 @@ const PurchaseOrderPage: React.FC = () => {
                     </TableBody>
                   </Table>
                 </TableContainer>
+                )}
               </Box>
             )}
             {/* Manual items (not from MRF) */}
             {createDialogItems.filter((i) => !selectedMrfIds.some((mid) => i.id.startsWith(`${mid}-`))).length > 0 && (
               <Box sx={{ mt: 2 }}>
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>Manual line items</Typography>
+                {isPhone ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                    {createDialogItems
+                      .filter((i) => !selectedMrfIds.some((mid) => i.id.startsWith(`${mid}-`)))
+                      .map((i) => (
+                        <PoLineFields key={i.id} item={i} total={lineTotal(i)} onChange={(patch) => updateCreateItem(i.id, patch)} onRemove={() => removeCreateItem(i.id)} />
+                      ))}
+                  </Box>
+                ) : (
                 <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
                   <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.75rem' } }}>
                     <TableHead>
@@ -1484,6 +1629,7 @@ const PurchaseOrderPage: React.FC = () => {
                     </TableBody>
                   </Table>
                 </TableContainer>
+                )}
               </Box>
             )}
             <Button size="small" startIcon={<AddIcon />} onClick={addCreateItem} sx={{ mt: 1 }}>
@@ -1520,7 +1666,7 @@ const PurchaseOrderPage: React.FC = () => {
       </Dialog>
 
       {/* Edit PO Dialog */}
-      <Dialog open={!!editingPO} onClose={() => setEditingPO(null)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 2 } }}>
+      <Dialog open={!!editingPO} onClose={() => setEditingPO(null)} maxWidth="md" fullWidth fullScreen={isPhone} PaperProps={{ sx: { borderRadius: isPhone ? 0 : 2 } }}>
         {editingPO && (
           <>
             <DialogTitle sx={{ borderBottom: '1px solid #e2e8f0' }}>Edit Purchase Order — {editingPO.poNumber}</DialogTitle>
@@ -1600,6 +1746,13 @@ const PurchaseOrderPage: React.FC = () => {
                 </Grid>
               </Grid>
               <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>Line items</Typography>
+              {isPhone ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                  {editingPO.items.map((i) => (
+                    <PoLineFields key={i.id} item={i} total={lineTotal(i)} showNotes onChange={(patch) => updateEditItem(i.id, patch)} onRemove={() => removeEditItem(i.id)} />
+                  ))}
+                </Box>
+              ) : (
               <TableContainer>
                 <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.75rem' } }}>
                   <TableHead>
@@ -1630,6 +1783,7 @@ const PurchaseOrderPage: React.FC = () => {
                   </TableBody>
                 </Table>
               </TableContainer>
+              )}
               <Button size="small" startIcon={<AddIcon />} onClick={addEditItem} sx={{ mt: 1 }}>Add line</Button>
               <Box sx={{ textAlign: 'right', mt: 1 }}>
                 {(() => { const { grandTotal } = poAmounts(editingPO); return <Typography variant="body2" fontWeight={600}>Total: {grandTotal.toFixed(2)}</Typography>; })()}
@@ -1644,7 +1798,7 @@ const PurchaseOrderPage: React.FC = () => {
       </Dialog>
 
       {/* View PO Dialog */}
-      <Dialog open={!!viewPO} onClose={() => setViewPO(null)} maxWidth="md" fullWidth PaperProps={{ sx: { borderRadius: 2 } }}>
+      <Dialog open={!!viewPO} onClose={() => setViewPO(null)} maxWidth="md" fullWidth fullScreen={isPhone} PaperProps={{ sx: { borderRadius: isPhone ? 0 : 2 } }}>
         {viewPO && (
           <>
             <DialogTitle sx={{ borderBottom: '1px solid #e2e8f0' }}>
@@ -1691,6 +1845,7 @@ const PurchaseOrderPage: React.FC = () => {
                 </Grid>
               </Grid>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>Line items</Typography>
+              {isPhone ? poItemCards(viewPO.items) : (
               <TableContainer>
                 <Table size="small" sx={{ '& .MuiTableCell-root': { fontSize: '0.75rem' } }}>
                   <TableHead>
@@ -1721,6 +1876,7 @@ const PurchaseOrderPage: React.FC = () => {
                   </TableBody>
                 </Table>
               </TableContainer>
+              )}
               <Box sx={{ textAlign: 'right', mt: 1 }}>
                 {(() => {
                   const { subtotal, discount, discountPercent, amountVatEx, vatAmount, grandTotal } = poAmounts(viewPO);

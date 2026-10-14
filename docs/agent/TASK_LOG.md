@@ -1,5 +1,13 @@
 # Task Log
 
+## 2026-10-15 — Resolve PR #137 project-history conflict
+
+- Merged current `origin/main` into `rj/dev` in an isolated worktree, preserving unrelated dirty finance/project changes in the original workspace.
+- Resolved the sole textual conflict in `docs/PROJECT_HISTORY.md` by retaining the October 7 ACTI-fronting entry and all October 8–12 mobile-interface entries in chronological order. Verified every nonempty line from both source versions is retained and no conflict markers/unmerged index entries remain.
+- Backend ACTI-fronting/cash-advance editing suite: 19 tests passed. TypeScript and focused CA lint passed. UI regression suites: 10 tests passed when run without a simultaneous build; initial parallel runs timed out finding the owner Edit button. No source/test change was needed.
+- `NODE_OPTIONS=--max-old-space-size=6144 npm run build` — passed using main's documented memory setting; existing build warnings remain. Default-heap build was stopped while still compiling before this successful run. `git diff --check` and staged diff checks passed.
+- No deployment or production data changes. Main's existing mobile changes merge normally; no manual application-code edits were made for this resolution.
+
 ## 2026-10-06 — Cash Advance request editing
 
 ### Completed

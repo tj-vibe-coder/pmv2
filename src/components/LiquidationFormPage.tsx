@@ -27,7 +27,12 @@ import {
   Snackbar,
   Tooltip,
   Checkbox,
+  Collapse,
+  Divider,
+  useMediaQuery,
 } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Add as AddIcon, AttachFile as AttachFileIcon, CloudDone as CloudDoneIcon, CloudOff as CloudOffIcon, Delete as DeleteIcon, Edit as EditIcon, ErrorOutline as ErrorOutlineIcon, FileDownload as ExportIcon, FileUpload as ImportIcon, OpenInNew as OpenInNewIcon, Save as SaveIcon, Send as SendIcon, PictureAsPdf as PictureAsPdfIcon, PhotoCamera as PhotoCameraIcon, PhotoLibrary as PhotoLibraryIcon, UploadFile as UploadFileIcon, WarningAmber as WarningAmberIcon } from '@mui/icons-material';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
@@ -303,6 +308,154 @@ async function addLiquidationRowsToProjectExpenses(
   }
 }
 
+interface LiquidationRowCardProps {
+  row: LiquidationRow;
+  index: number;
+  projects: Project[];
+  lockedRow: boolean;
+  receiptCount: number;
+  focused: boolean;
+  primary: string;
+  rowRef?: (el: HTMLDivElement | null) => void;
+  onChange: (id: string, field: keyof LiquidationRow, value: string | number | boolean) => void;
+  onProject: (id: string, projectId: string | '') => void;
+  onScan: (id: string) => void;
+  onAttach: (id: string) => void;
+  onRemove: (id: string) => void;
+  moneyTrail?: React.ReactNode;
+}
+
+const peso = (n: number) => `₱${(Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`;
+
+// Portrait-phone version of one expense line: a compact card (date, category,
+// particulars, amount, receipt buttons) that expands into labelled fields.
+function LiquidationRowCard({
+  row, index, projects, lockedRow, receiptCount, focused, primary, rowRef,
+  onChange, onProject, onScan, onAttach, onRemove, moneyTrail,
+}: LiquidationRowCardProps) {
+  // New, still-empty rows open ready to type in.
+  const [open, setOpen] = useState(() => !row.particulars && !row.amount);
+  const projectName = projects.find((p) => String(p.id) === String(row.projectId))?.project_name || row.projectName;
+  const dateLabel = (() => {
+    if (!row.date) return 'No date';
+    const d = new Date(`${row.date}T00:00:00`);
+    return Number.isNaN(d.getTime()) ? row.date : d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+  })();
+  const warnings = [...(row.duplicateWarnings ?? []), ...(row.customerInfoIssues ?? [])];
+  return (
+    <Paper
+      ref={rowRef} variant="outlined"
+      sx={{
+        overflow: 'hidden', flexShrink: 0,
+        ...(focused ? { bgcolor: 'rgba(44,90,160,0.14)', outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px' } : {}),
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, p: 1, pr: 0.5 }}>
+        <Box onClick={() => setOpen((o) => !o)} sx={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+            <Typography variant="caption" color="text.secondary">#{index + 1}</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 600 }}>{dateLabel}</Typography>
+            {row.category && <Chip size="small" label={row.category} variant="outlined" sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }} />}
+            {warnings.length > 0 && (
+              <Tooltip title={warnings.join(' ')}><WarningAmberIcon fontSize="small" color="warning" /></Tooltip>
+            )}
+          </Box>
+          <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.25, overflowWrap: 'anywhere' }}>
+            {row.particulars || <Box component="span" sx={{ fontStyle: 'italic', color: 'text.disabled', fontWeight: 400 }}>No particulars</Box>}
+          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 1, mt: 0.25 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+              {projectName || 'No project'}{row.supplier ? ` · ${row.supplier}` : ''}
+            </Typography>
+            <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700, whiteSpace: 'nowrap', color: primary }}>{peso(row.amount)}</Typography>
+          </Box>
+        </Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <IconButton size="small" onClick={() => onAttach(row.id)} disabled={lockedRow} sx={{ color: primary }} aria-label="Attach receipt">
+            <Badge badgeContent={receiptCount} color="primary" overlap="circular"><AttachFileIcon fontSize="small" /></Badge>
+          </IconButton>
+          <IconButton size="small" onClick={() => setOpen((o) => !o)} aria-label={open ? 'Collapse' : 'Expand to edit'}>
+            {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+          </IconButton>
+        </Box>
+      </Box>
+      <Collapse in={open} unmountOnExit>
+        <Divider />
+        <Box sx={{ p: 1.5, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.5 }}>
+          <TextField
+            size="small" type="date" label="Date" value={row.date} disabled={lockedRow} InputLabelProps={{ shrink: true }}
+            onChange={(e) => onChange(row.id, 'date', e.target.value)}
+          />
+          <TextField
+            size="small" type="number" label="Amount" value={row.amount || ''} inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }}
+            onChange={(e) => onChange(row.id, 'amount', parseFloat(e.target.value) || 0)}
+          />
+          <TextField
+            select size="small" label="Category" value={row.category} disabled={lockedRow} sx={{ gridColumn: '1 / -1' }}
+            onChange={(e) => onChange(row.id, 'category', e.target.value)}
+            SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}
+          >
+            <MenuItem value=""><em>Select</em></MenuItem>
+            {LIQUIDATION_CATEGORIES.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+          </TextField>
+          <TextField
+            select size="small" label="Project" value={row.projectId === '' ? '' : String(row.projectId)} disabled={lockedRow}
+            sx={{ gridColumn: '1 / -1' }}
+            onChange={(e) => onProject(row.id, e.target.value === '' ? '' : String(e.target.value))}
+            SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}
+          >
+            <MenuItem value=""><em>Select project</em></MenuItem>
+            {projects.map((p) => (
+              <MenuItem key={p.id} value={String(p.id)}>
+                {p.project_name || `Project ${p.id}`}{(p.po_number || p.project_no) ? ` (${p.po_number || p.project_no})` : ''}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            size="small" label="PO #" value={row.projectNo}
+            onChange={(e) => onChange(row.id, 'projectNo', e.target.value)}
+          />
+          <TextField
+            size="small" label="Invoice No." value={row.invoiceNo || ''}
+            onChange={(e) => onChange(row.id, 'invoiceNo', e.target.value)}
+          />
+          <TextField
+            size="small" label="Particulars" value={row.particulars} multiline minRows={1} sx={{ gridColumn: '1 / -1' }}
+            onChange={(e) => onChange(row.id, 'particulars', e.target.value)}
+          />
+          <TextField
+            size="small" label="Supplier" value={row.supplier || ''} sx={{ gridColumn: '1 / -1' }}
+            onChange={(e) => onChange(row.id, 'supplier', e.target.value)}
+          />
+          <TextField
+            size="small" label="Remarks" value={row.remarks} sx={{ gridColumn: '1 / -1' }}
+            onChange={(e) => onChange(row.id, 'remarks', e.target.value)}
+          />
+          <Box sx={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center' }}>
+            <Checkbox
+              size="small" checked={!!row.deductible} disabled={lockedRow} sx={{ p: 0.5, mr: 0.5 }}
+              onChange={(e) => onChange(row.id, 'deductible', e.target.checked)}
+              inputProps={{ 'aria-label': 'Deductible' }}
+            />
+            <Typography variant="body2">Deductible (allowable business expense with a valid BIR receipt)</Typography>
+          </Box>
+        </Box>
+        <Box sx={{ px: 1.5, pb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          {receiptCount === 0 && (
+            <Button size="small" variant="outlined" startIcon={<PhotoCameraIcon />} disabled={lockedRow} onClick={() => onScan(row.id)}>Scan receipt</Button>
+          )}
+          <Button size="small" variant="outlined" startIcon={<AttachFileIcon />} disabled={lockedRow} onClick={() => onAttach(row.id)}>
+            Attach{receiptCount ? ` (${receiptCount})` : ''}
+          </Button>
+          {moneyTrail}
+          <Box sx={{ flex: 1 }} />
+          <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={() => onRemove(row.id)}>Delete</Button>
+        </Box>
+      </Collapse>
+    </Paper>
+  );
+}
+
 export default function LiquidationFormPage() {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -328,6 +481,8 @@ export default function LiquidationFormPage() {
   const [loadedReimb, setLoadedReimb] = useState<{ id: string; status: string | null; at: number | null; caId: string | null } | null>(null);
   // Receipt scans/photos attached per expense row.
   const [receipts, setReceipts] = useState<ReceiptAttachment[]>([]);
+  // Portrait phones (< 600 px) show expense lines as cards instead of the wide table.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [receiptViewer, setReceiptViewer] = useState<{ receipt: ReceiptAttachment; url: string | null } | null>(null);
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const receiptRowIdRef = useRef<string | null>(null);
@@ -2242,6 +2397,60 @@ export default function LiquidationFormPage() {
             Receiving receipts from phone… {activeScanJob.received} received. Scan more on your phone — rows are added automatically.
           </Alert>
         )}
+        {isPhone ? (
+          <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {rows.length > 1 && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="caption" color="text.secondary">Sort</Typography>
+                {(['date', 'amount'] as const).map((k) => (
+                  <Button key={k} size="small" variant={sortConfig?.key === k ? 'contained' : 'outlined'} onClick={() => handleSort(k)}
+                    sx={{ textTransform: 'capitalize', minWidth: 0 }}>
+                    {k}{sortConfig?.key === k ? (sortConfig.direction === 'asc' ? ' ↑' : ' ↓') : ''}
+                  </Button>
+                ))}
+              </Box>
+            )}
+            {rows.length === 0 ? (
+              <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+                Tap "Add row" to add expense lines. Select a project per row from the list.
+              </Typography>
+            ) : (
+              sortedRows.map((row, index) => {
+                const origin = loadedLiquidationId ? liquidationRowOrigin(loadedLiquidationId, row) : null;
+                const rowToken = origin ? financeFocusToken(origin) : '';
+                const focused = Boolean(
+                  origin
+                  && focusedFinanceOrigin?.type === 'liquidation'
+                  && focusedFinanceOrigin.id === loadedLiquidationId
+                  && focusedFinanceOrigin.rowId === row.id,
+                );
+                return (
+                  <LiquidationRowCard
+                    key={row.id}
+                    row={row}
+                    index={index}
+                    projects={projects}
+                    lockedRow={isViewingSubmitted}
+                    receiptCount={receipts.filter((r) => r.rowId === row.id).length}
+                    focused={focused}
+                    primary={theme.primary}
+                    rowRef={(element) => {
+                      if (!rowToken) return;
+                      if (element) financeRowRefs.current.set(rowToken, element as unknown as HTMLTableRowElement);
+                      else financeRowRefs.current.delete(rowToken);
+                    }}
+                    onChange={updateRow}
+                    onProject={setRowProject}
+                    onScan={(id) => setScanDialog({ open: true, rowId: id })}
+                    onAttach={(id) => { receiptRowIdRef.current = id; receiptInputRef.current?.click(); }}
+                    onRemove={removeRow}
+                    moneyTrail={origin ? <MoneyTrailButton origin={origin} compact /> : undefined}
+                  />
+                );
+              })
+            )}
+          </Box>
+        ) : (
         <TableContainer sx={{ border: `1px solid ${theme.border}`, borderRadius: 1, flex: 1, minHeight: 0, overflow: 'auto' }}>
           <Table size="small" stickyHeader>
             <TableHead>
@@ -2538,6 +2747,7 @@ export default function LiquidationFormPage() {
             </TableBody>
           </Table>
         </TableContainer>
+        )}
 
         <input
           type="file"

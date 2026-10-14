@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, FormControl,
+  Alert, Badge, Box, Button, Checkbox, Chip, Collapse, Dialog, DialogActions, DialogContent, DialogTitle, FormControl,
   IconButton, InputAdornment, InputLabel, LinearProgress, ListItemText, MenuItem, OutlinedInput, Paper,
   Select, Snackbar, Stack, Switch, FormControlLabel,
   Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, TextField, Typography, Tooltip,
+  useMediaQuery, useTheme,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import FilterListIcon from '@mui/icons-material/FilterList';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import HistoryIcon from '@mui/icons-material/History';
 import CloudSyncIcon from '@mui/icons-material/CloudSync';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
@@ -151,6 +156,10 @@ export default function Projects() {
   const [exportingList, setExportingList] = useState(false);
   const oneDriveRequired = isCorporateOneDriveConfigured();
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  // Portrait phones (< 600 px) get tap-to-open cards; landscape phones, tablets and desktop keep the table.
+  const theme = useTheme();
+  const isCards = useMediaQuery(theme.breakpoints.down('sm'));
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Projects that don't yet have a proposal folder linked. (We don't try to
   // auto-link execution folders here — those are derived from proposal folders
@@ -412,6 +421,10 @@ export default function Projects() {
   const anyFilterActive = search || statusFilter.length > 0 || customerFilter !== 'all'
     || yearFilter !== 'all' || legacyFilter !== 'all' || ongoingOnly;
 
+  // Filters tucked behind the filter button on cards (search stays visible, so it doesn't count).
+  const hasHiddenFilters = statusFilter.length > 0 || customerFilter !== 'all' || yearFilter !== 'all'
+    || legacyFilter !== 'all' || ongoingOnly;
+
   const SortHeader = ({ k, label, align = 'left' }: { k: SortKey; label: string; align?: 'left' | 'right' }) => (
     <TableCell align={align} sortDirection={sortKey === k ? sortDir : false}>
       <TableSortLabel
@@ -422,6 +435,70 @@ export default function Projects() {
         {label}
       </TableSortLabel>
     </TableCell>
+  );
+
+  const filterControls = (
+    <>
+          <FormControl size="small" sx={{ minWidth: 170 }}>
+            <InputLabel>Status</InputLabel>
+            <Select
+              multiple
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as ProjectStatus[])}
+              input={<OutlinedInput label="Status" />}
+              renderValue={(selected) =>
+                selected.length === STATUS_OPTIONS.length
+                  ? 'All'
+                  : selected.map(statusLabel).join(', ')
+              }
+            >
+              {STATUS_OPTIONS.map((status) => (
+                <MenuItem key={status} value={status}>
+                  <Checkbox size="small" checked={statusFilter.includes(status)} />
+                  <ListItemText primary={statusLabel(status)} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <TextField
+            select size="small" label="Customer" value={customerFilter}
+            onChange={(e) => setCustomerFilter(e.target.value)}
+            sx={{ minWidth: 180 }}
+          >
+            <MenuItem value="all">All</MenuItem>
+            {clients
+              .filter((c) => enriched.some((e) => e.p.customerId === c.id))
+              .sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name))
+              .map((c) => (
+                <MenuItem key={c.id} value={c.id}>{c.code ? `${c.code} — ${c.name}` : c.name}</MenuItem>
+              ))}
+          </TextField>
+          <TextField
+            select size="small" label="Year" value={yearFilter}
+            onChange={(e) => setYearFilter(e.target.value)}
+            sx={{ minWidth: 100 }}
+          >
+            <MenuItem value="all">All</MenuItem>
+            {yearOptions.map((y) => <MenuItem key={y} value={String(y)}>{y}</MenuItem>)}
+          </TextField>
+          <TextField
+            select size="small" label="Formula" value={legacyFilter}
+            onChange={(e) => setLegacyFilter(e.target.value as 'all' | 'legacy' | 'current')}
+            sx={{ minWidth: 120 }}
+          >
+            <MenuItem value="all">All</MenuItem>
+            <MenuItem value="legacy">Legacy only</MenuItem>
+            <MenuItem value="current">Current only</MenuItem>
+          </TextField>
+          <FormControlLabel
+            control={<Switch size="small" checked={ongoingOnly} onChange={(e) => setOngoingOnly(e.target.checked)} />}
+            label={<Typography variant="caption">Active proposals only</Typography>}
+          />
+          <FormControlLabel
+            control={<Switch size="small" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} />}
+            label={<Typography variant="caption">Hide lost &amp; inactive</Typography>}
+          />
+    </>
   );
 
   return (
@@ -568,6 +645,64 @@ export default function Projects() {
       </Snackbar>
 
       {/* Filter bar */}
+      {isCards ? (
+        <Paper sx={{ p: 1.5 }} variant="outlined">
+          <Stack spacing={1}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <TextField
+                size="small" fullWidth placeholder="Search code, name, customer…"
+                value={search} onChange={(e) => setSearch(e.target.value)}
+                InputProps={{
+                  startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>,
+                  endAdornment: search ? (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => setSearch('')} aria-label="Clear search"><ClearIcon fontSize="small" /></IconButton>
+                    </InputAdornment>
+                  ) : null,
+                }}
+              />
+              <IconButton onClick={() => setFiltersOpen((v) => !v)} aria-label="Filters and sort" color={filtersOpen ? 'primary' : 'default'}>
+                <Badge color="primary" variant="dot" invisible={!hasHiddenFilters}>
+                  <FilterListIcon />
+                </Badge>
+              </IconButton>
+            </Stack>
+            <Collapse in={filtersOpen} unmountOnExit>
+              <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap sx={{ pt: 0.5 }}>
+                <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: '100%' }}>
+                  <TextField
+                    select size="small" label="Sort by" value={sortKey} sx={{ flex: 1 }}
+                    onChange={(e) => {
+                      const k = e.target.value as SortKey;
+                      setSortKey(k);
+                      setSortDir(k === 'date' || k === 'updatedAt' || k === 'grandTotal' || k === 'margin' ? 'desc' : 'asc');
+                    }}
+                  >
+                    <MenuItem value="updatedAt">Last edited</MenuItem>
+                    <MenuItem value="date">Date</MenuItem>
+                    <MenuItem value="code">Code</MenuItem>
+                    <MenuItem value="name">Project</MenuItem>
+                    <MenuItem value="customer">Customer</MenuItem>
+                    <MenuItem value="status">Status</MenuItem>
+                    <MenuItem value="grandTotal">Sales</MenuItem>
+                    <MenuItem value="margin">IOCT Margin</MenuItem>
+                  </TextField>
+                  <IconButton onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))} aria-label={sortDir === 'asc' ? 'Ascending' : 'Descending'}>
+                    {sortDir === 'asc' ? <ArrowUpwardIcon fontSize="small" /> : <ArrowDownwardIcon fontSize="small" />}
+                  </IconButton>
+                </Stack>
+                {filterControls}
+              </Stack>
+            </Collapse>
+            <Stack direction="row" alignItems="center" justifyContent="space-between">
+              <Typography variant="caption" color="text.secondary">{sorted.length} of {projects.length}</Typography>
+              {anyFilterActive && (
+                <Button size="small" onClick={clearFilters} startIcon={<ClearIcon />}>Clear</Button>
+              )}
+            </Stack>
+          </Stack>
+        </Paper>
+      ) : (
       <Paper sx={{ p: 1.5 }} variant="outlined">
         <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
           <TextField
@@ -585,65 +720,7 @@ export default function Projects() {
               ) : null,
             }}
           />
-          <FormControl size="small" sx={{ minWidth: 170 }}>
-            <InputLabel>Status</InputLabel>
-            <Select
-              multiple
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as ProjectStatus[])}
-              input={<OutlinedInput label="Status" />}
-              renderValue={(selected) =>
-                selected.length === STATUS_OPTIONS.length
-                  ? 'All'
-                  : selected.map(statusLabel).join(', ')
-              }
-            >
-              {STATUS_OPTIONS.map((status) => (
-                <MenuItem key={status} value={status}>
-                  <Checkbox size="small" checked={statusFilter.includes(status)} />
-                  <ListItemText primary={statusLabel(status)} />
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <TextField
-            select size="small" label="Customer" value={customerFilter}
-            onChange={(e) => setCustomerFilter(e.target.value)}
-            sx={{ minWidth: 180 }}
-          >
-            <MenuItem value="all">All</MenuItem>
-            {clients
-              .filter((c) => enriched.some((e) => e.p.customerId === c.id))
-              .sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name))
-              .map((c) => (
-                <MenuItem key={c.id} value={c.id}>{c.code ? `${c.code} — ${c.name}` : c.name}</MenuItem>
-              ))}
-          </TextField>
-          <TextField
-            select size="small" label="Year" value={yearFilter}
-            onChange={(e) => setYearFilter(e.target.value)}
-            sx={{ minWidth: 100 }}
-          >
-            <MenuItem value="all">All</MenuItem>
-            {yearOptions.map((y) => <MenuItem key={y} value={String(y)}>{y}</MenuItem>)}
-          </TextField>
-          <TextField
-            select size="small" label="Formula" value={legacyFilter}
-            onChange={(e) => setLegacyFilter(e.target.value as 'all' | 'legacy' | 'current')}
-            sx={{ minWidth: 120 }}
-          >
-            <MenuItem value="all">All</MenuItem>
-            <MenuItem value="legacy">Legacy only</MenuItem>
-            <MenuItem value="current">Current only</MenuItem>
-          </TextField>
-          <FormControlLabel
-            control={<Switch size="small" checked={ongoingOnly} onChange={(e) => setOngoingOnly(e.target.checked)} />}
-            label={<Typography variant="caption">Active proposals only</Typography>}
-          />
-          <FormControlLabel
-            control={<Switch size="small" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} />}
-            label={<Typography variant="caption">Hide lost &amp; inactive</Typography>}
-          />
+          {filterControls}
           <Box sx={{ flex: 1 }} />
           <Typography variant="caption" color="text.secondary">
             {sorted.length} of {projects.length}
@@ -653,7 +730,75 @@ export default function Projects() {
           )}
         </Stack>
       </Paper>
+      )}
 
+      {isCards ? (
+        <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: 'minmax(0, 1fr)' }}>
+          {sorted.map(({ p, customer, totals, hasLegacy, margin }) => {
+            const isLast = p.id === lastClickedId;
+            return (
+              <Paper
+                key={p.id} variant="outlined" component={Link} to={`/sales/calcsheet/projects/${p.id}`}
+                onClick={() => { setLastClickedId(p.id); saveScroll(p.id); }}
+                sx={{
+                  display: 'flex', flexDirection: 'column', justifyContent: 'space-between', p: 1.5, textDecoration: 'none', color: 'inherit',
+                  '&:active': { bgcolor: 'action.hover' },
+                  ...(isLast ? { bgcolor: 'rgba(25, 118, 210, 0.08)', borderLeft: '3px solid', borderLeftColor: 'primary.main' } : {}),
+                }}
+              >
+                <Stack direction="row" spacing={1} alignItems="flex-start">
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                      <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
+                        {p.code || 'No code yet'}
+                      </Typography>
+                      {hasLegacy && <HistoryIcon color="warning" sx={{ fontSize: '0.85rem' }} />}
+                      {isLast && <Chip size="small" label="Last" color="primary" variant="outlined" sx={{ height: 16, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
+                    </Stack>
+                    <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.25 }}>{p.name}</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                      {customer?.name ?? '—'}{p.location ? ` · ${p.location}` : ''}
+                    </Typography>
+                  </Box>
+                  <Chip size="small" label={statusLabel(p.status)} color={statusColors[p.status]} sx={{ flexShrink: 0 }} />
+                  <ChevronRightIcon fontSize="small" sx={{ color: 'text.disabled', mt: 0.25, flexShrink: 0 }} />
+                </Stack>
+                <Stack direction="row" justifyContent="space-between" alignItems="flex-end" spacing={1} sx={{ mt: 1 }}>
+                  <Stack spacing={0.25}>
+                    {totals.map((t, i) => (
+                      <Typography key={i} variant="caption" sx={{ fontFamily: 'monospace' }}>
+                        <strong>{t.kind}:</strong> {PHP(t.total)}{t.servicesOnly ? ' · services only' : ''}
+                      </Typography>
+                    ))}
+                    {totals.length === 0 && <Typography variant="caption" color="text.secondary">No quotation yet</Typography>}
+                  </Stack>
+                  <Box sx={{ textAlign: 'right' }}>
+                    {margin ? (
+                      <>
+                        <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace', fontWeight: 600, color: margin.value >= 0 ? 'success.main' : 'error.main' }}>
+                          {PHP(margin.value)}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                          {margin.pct.toFixed(1)}% margin
+                        </Typography>
+                      </>
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">Margin —</Typography>
+                    )}
+                  </Box>
+                </Stack>
+              </Paper>
+            );
+          })}
+          {sorted.length === 0 && (
+            <Paper variant="outlined" sx={{ p: 3, textAlign: 'center', color: 'text.secondary', gridColumn: '1 / -1' }}>
+              <Typography variant="body2">
+                {projects.length === 0 ? 'No projects yet — tap "New project" to start' : 'No projects match the current filters'}
+              </Typography>
+            </Paper>
+          )}
+        </Box>
+      ) : (
       <Paper>
         <Box sx={{ overflowX: 'auto' }}>
         <Table size="small">
@@ -869,6 +1014,7 @@ export default function Projects() {
         </Table>
         </Box>
       </Paper>
+      )}
 
       <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Delete project?</DialogTitle>

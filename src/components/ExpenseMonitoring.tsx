@@ -39,6 +39,7 @@ import {
   Link,
   Tooltip as MuiTooltip,
   Stack,
+  useMediaQuery,
 } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import {
@@ -232,6 +233,8 @@ const ExpenseMonitoring: React.FC = () => {
   const [sortKey, setSortKey] = useState<'date' | 'project' | 'category' | 'description' | 'amount'>('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(0);
+  // Portrait phones (< 600 px): expenses show as cards and the form dialogs go full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [rowsPerPage, setRowsPerPage] = useState(50);
   const [loading, setLoading] = useState(true);
   const [addExpenseOpen, setAddExpenseOpen] = useState(false);
@@ -1699,7 +1702,8 @@ const ExpenseMonitoring: React.FC = () => {
             <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
               Expense Distribution by Project
             </Typography>
-            <ResponsiveContainer width="100%" height={300}>
+            {/* Phones: taller chart + auto-height legend, so many project names wrap inside the card instead of spilling out */}
+            <ResponsiveContainer width="100%" height={isPhone ? 440 : 300}>
               <PieChart>
                 <Pie
                   data={pieChartData.map((item, index) => ({
@@ -1741,7 +1745,7 @@ const ExpenseMonitoring: React.FC = () => {
                 />
                 <Legend 
                   verticalAlign="bottom" 
-                  height={24}
+                  height={isPhone ? undefined : 24}
                   iconType="circle"
                   wrapperStyle={{
                     paddingTop: '10px',
@@ -1868,6 +1872,171 @@ const ExpenseMonitoring: React.FC = () => {
       <Card>
         <CardContent>
           <Typography variant="h6" gutterBottom>Recent Expenses</Typography>
+          {isPhone ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                <Typography variant="caption" color="text.secondary">Sort</Typography>
+                {([['date', 'Date'], ['amount', 'Amount'], ['project', 'Project'], ['category', 'Category']] as const).map(([k, label]) => (
+                  <Button key={k} size="small" variant={sortKey === k ? 'contained' : 'outlined'} onClick={() => handleSort(k)} sx={{ minWidth: 0 }}>
+                    {label}{sortKey === k ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                  </Button>
+                ))}
+              </Box>
+              {tableRows.length === 0 && (
+                <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+                  {selectedYear === 0
+                    ? 'No expenses yet. Use the Add Expense button to add an expense.'
+                    : `No expenses in ${selectedYear}. Use the Add Expense button to add an expense.`}
+                </Typography>
+              )}
+              {tableRows
+                .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+                .map((expense) => {
+                  const project = expense.scope === 'project' ? allProjects.find((p) => String(p.id) === String(expense.projectId)) : undefined;
+                  const projectNo = project?.project_no || String(project?.item_no ?? project?.id ?? '');
+                  const poNumber = project?.po_number
+                    ? (project.with_acti ? `${project.po_number} (to ACTI)` : project.po_number)
+                    : '';
+                  const origin = expenseOrigin(expense);
+                  const rowToken = financeFocusToken(origin);
+                  const linkedOrigins = linkedOriginsForExpense(expense);
+                  const focused = financeFocus.isFocused(origin);
+                  return (
+                    <Paper
+                      key={`${expense.scope}-${expense.id}`}
+                      variant="outlined"
+                      ref={(element: HTMLDivElement | null) => {
+                        if (element) financeRowRefs.current.set(rowToken, element as unknown as HTMLTableRowElement);
+                        else financeRowRefs.current.delete(rowToken);
+                      }}
+                      aria-current={focused ? 'true' : undefined}
+                      sx={{ p: 1.25, ...(focused ? { bgcolor: 'rgba(44,90,160,0.14)', outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px' } : {}) }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                        <Typography variant="caption" sx={{ fontWeight: 600 }}>{expense.date}</Typography>
+                        <Chip
+                          size="small"
+                          label={
+                            expense.sourceType === 'po_sync' ? 'PO' :
+                            expense.sourceType === 'liquidation_sync' ? 'Liquidation' :
+                            expense.sourceType === 'migrated' ? 'Migrated' :
+                            expense.sourceType === 'receipt_scan' ? 'Scan' : 'Manual'
+                          }
+                          color={
+                            expense.sourceType === 'po_sync' ? 'primary' :
+                            expense.sourceType === 'liquidation_sync' ? 'warning' : 'default'
+                          }
+                        />
+                      </Box>
+                      <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.5, overflowWrap: 'anywhere' }}>{expense.description || '—'}</Typography>
+                      {expense.sourceType === 'liquidation_sync' && (expense.liquidationFiledBy || expense.liquidationFiledAt) && (
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          Filed by {expense.liquidationFiledBy || 'unknown'}{expense.liquidationFiledAt ? ` on ${expense.liquidationFiledAt}` : ''}
+                        </Typography>
+                      )}
+                      <Box sx={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 1, mt: 0.5 }}>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                            {expense.scope === 'overhead'
+                              ? <Chip size="small" label="Overhead" variant="outlined" color="secondary" />
+                              : <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{expense.projectName}</Typography>}
+                            {expense.category && <Chip size="small" label={expense.category} variant="outlined" sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }} />}
+                          </Box>
+                          {expense.scope !== 'overhead' && (projectNo || poNumber) && (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                              {[projectNo && `Project ${projectNo}`, poNumber && `PO ${poNumber}`].filter(Boolean).join(' · ')}
+                            </Typography>
+                          )}
+                          {expense.remarks && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{expense.remarks}</Typography>}
+                        </Box>
+                        <Typography variant="body1" sx={{ fontFamily: 'monospace', fontWeight: 700, whiteSpace: 'nowrap' }}>{formatCurrency(expense.amount)}</Typography>
+                      </Box>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mt: 0.75 }}>
+                        <Select
+                          size="small"
+                          variant="standard"
+                          disableUnderline
+                          value={expense.deductible === true ? 'yes' : expense.deductible === false ? 'no' : 'unmarked'}
+                          disabled={savingDeductibleId === expense.id}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setExpenseDeductibleFlag(expense, v === 'yes' ? true : v === 'no' ? false : null);
+                          }}
+                          sx={{
+                            fontSize: '0.8rem',
+                            color: expense.deductible === true ? 'success.main' : expense.deductible === false ? 'error.main' : 'text.secondary',
+                          }}
+                        >
+                          <MenuItem value="unmarked">Unmarked</MenuItem>
+                          <MenuItem value="yes">Deductible</MenuItem>
+                          <MenuItem value="no">Non-deductible</MenuItem>
+                        </Select>
+                        {expense.receiptRef?.oneDriveId && thumbs[expense.receiptRef.oneDriveId] ? (
+                          <Box
+                            component="img"
+                            src={thumbs[expense.receiptRef.oneDriveId]}
+                            alt="receipt"
+                            onClick={() => openReceiptViewer(expense)}
+                            onError={() => setThumbs((prev) => { const next = { ...prev }; delete next[expense.receiptRef!.oneDriveId]; return next; })}
+                            sx={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 1, border: '1px solid', borderColor: 'divider', cursor: 'pointer' }}
+                          />
+                        ) : expense.receiptRef?.webUrl ? (
+                          <Link component="button" type="button" onClick={() => openReceiptViewer(expense)} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, whiteSpace: 'nowrap' }}>
+                            <OpenInNewIcon fontSize="inherit" /> Receipt
+                          </Link>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">No receipt</Typography>
+                        )}
+                      </Box>
+                      {(expense.fundingSource?.type === 'investor_outofpocket' && expense.fundingSource.investor?.trim()) || linkedOrigins.some((l) => l.type !== 'investment') ? (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
+                          {expense.fundingSource?.type === 'investor_outofpocket' && expense.fundingSource.investor?.trim() && (
+                            <Chip
+                              size="small" variant="outlined" color="info" icon={<InvestorLinkIcon fontSize="small" />}
+                              label={expense.fundingSource.investor}
+                              onClick={() => {
+                                const investmentOrigin = linkedOrigins.find((linked) => linked.type === 'investment');
+                                if (investmentOrigin) navigate(financeFocusUrl(investmentOrigin, `${location.pathname}${location.search}`));
+                              }}
+                              sx={{ cursor: 'pointer' }}
+                            />
+                          )}
+                          {linkedOrigins.filter((linked) => linked.type !== 'investment').map((linked) => (
+                            <Chip
+                              key={financeFocusToken(linked)}
+                              size="small" variant="outlined"
+                              color={linked.type === 'liquidation' ? 'warning' : 'primary'}
+                              label={linked.type === 'liquidation' ? 'Open liquidation' : 'Open cash advance'}
+                              onClick={() => navigate(financeFocusUrl(linked, `${location.pathname}${location.search}`))}
+                              sx={{ cursor: 'pointer' }}
+                            />
+                          ))}
+                        </Box>
+                      ) : null}
+                      <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.25, mt: 0.5, mx: -0.5 }}>
+                        {!expense.receiptRef?.webUrl && (
+                          <IconButton onClick={() => openAttachReceipt(expense)} title="Attach receipt photo" color="primary" disabled={attachingReceiptId === expense.id}>
+                            {attachingReceiptId === expense.id ? <CircularProgress size={16} /> : <AddAPhotoIcon fontSize="small" />}
+                          </IconButton>
+                        )}
+                        {isUserManagedRow(expense) && (
+                          <IconButton onClick={() => openEditDialog(expense)} title="Edit expense" color="primary"><EditIcon fontSize="small" /></IconButton>
+                        )}
+                        {isUserManagedRow(expense) && (
+                          <IconButton onClick={() => openMoveDialog(expense)} title={expense.scope === 'overhead' ? 'Move to a project' : 'Move to overhead'} color="primary"><MoveIcon fontSize="small" /></IconButton>
+                        )}
+                        {user?.role === 'superadmin' && (expense.sourceType === 'manual' || expense.sourceType === 'receipt_scan') && (
+                          <IconButton onClick={() => openPromoteDialog(expense)} title="Promote to employee liquidation" color="primary"><PromoteIcon fontSize="small" /></IconButton>
+                        )}
+                        <MoneyTrailButton origin={origin} compact onResolved={() => { void fetchExpenses(); }} />
+                        <Box sx={{ flex: 1 }} />
+                        <IconButton onClick={() => handleDeleteExpense(expense)} title="Delete expense" color="error"><DeleteIcon fontSize="small" /></IconButton>
+                      </Box>
+                    </Paper>
+                  );
+                })}
+            </Box>
+          ) : (
           <TableContainer>
             <Table size="small">
               <TableHead>
@@ -2069,6 +2238,7 @@ const ExpenseMonitoring: React.FC = () => {
               </TableBody>
             </Table>
           </TableContainer>
+          )}
           <TablePagination
             component="div"
             count={tableRows.length}
@@ -2082,7 +2252,7 @@ const ExpenseMonitoring: React.FC = () => {
       </Card>
 
       {/* Add Expense Dialog */}
-      <Dialog open={addExpenseOpen} onClose={() => setAddExpenseOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={addExpenseOpen} onClose={() => setAddExpenseOpen(false)} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>Add New Expense</DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 2 }}>
@@ -2324,7 +2494,7 @@ const ExpenseMonitoring: React.FC = () => {
           Each receipt gets its own Project picker in review, so one batch can mix
           receipts from different projects — it defaults to whatever project (if any)
           is already selected in the Add Expense dialog above. */}
-      <Dialog open={scanBatchOpen} onClose={() => setScanBatchOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={scanBatchOpen} onClose={() => setScanBatchOpen(false)} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>Scan Multiple Receipts</DialogTitle>
         <DialogContent>
           {scanBatchOpen && (() => {
@@ -2422,7 +2592,7 @@ const ExpenseMonitoring: React.FC = () => {
       </Dialog>
 
       {/* View expenses per project dialog */}
-      <Dialog open={!!expensesDialogProject} onClose={() => setExpensesDialogProject(null)} maxWidth="sm" fullWidth>
+      <Dialog open={!!expensesDialogProject} onClose={() => setExpensesDialogProject(null)} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle sx={{ borderBottom: '1px solid #e2e8f0', pb: 1 }}>
           Expenses – {expensesDialogProject?.project_name}
         </DialogTitle>
@@ -2490,7 +2660,7 @@ const ExpenseMonitoring: React.FC = () => {
       </Dialog>
 
       {/* Edit an existing expense row (scope-aware PATCH) */}
-      <Dialog open={!!editExpense} onClose={() => !savingEdit && setEditExpense(null)} maxWidth="sm" fullWidth>
+      <Dialog open={!!editExpense} onClose={() => !savingEdit && setEditExpense(null)} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>
           Edit {editExpense?.scope === 'overhead' ? 'Overhead' : 'Project'} Expense
         </DialogTitle>

@@ -280,7 +280,7 @@ const RootRedirect: React.FC = () => {
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', '@supports (height: 100dvh)': { minHeight: '100dvh' } }}>
       <Header onMenuClick={() => setMobileNavOpen((o) => !o)} />
       <Box sx={{ display: 'flex', flexGrow: 1 }}>
         <Sidebar mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
@@ -289,7 +289,12 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           minWidth: 0,
           backgroundColor: '#f5f5f5',
           minHeight: 'calc(100vh - 80px)',
-          p: { xs: 1, md: 2 }
+          '@supports (height: 100dvh)': { minHeight: 'calc(100dvh - 80px)' },
+          '@media (max-height: 600px)': { minHeight: 'calc(100vh - 56px)' },
+          p: { xs: 1, md: 2 },
+          pl: { xs: 'calc(8px + env(safe-area-inset-left))', md: 2 },
+          pr: { xs: 'calc(8px + env(safe-area-inset-right))', md: 'calc(16px + env(safe-area-inset-right))' },
+          pb: { xs: 'calc(8px + env(safe-area-inset-bottom))', md: 2 }
         }}>
           {children}
         </Box>

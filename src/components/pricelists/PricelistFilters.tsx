@@ -26,7 +26,7 @@ export default function PricelistFilters() {
     filters.brands.length || filters.poles != null || filters.minPrice != null || filters.maxPrice != null;
 
   const multiSelect = (key: 'suppliers' | 'categories' | 'brands', label: string, options: string[], minWidth: number) => (
-    <FormControl size="small" sx={{ minWidth }}>
+    <FormControl size="small" sx={{ minWidth: { xs: '100%', sm: minWidth } }}>
       <InputLabel>{label}</InputLabel>
       <Select
         multiple
@@ -71,7 +71,7 @@ export default function PricelistFilters() {
         {multiSelect('categories', 'Category', filterOptions.categories, 200)}
         {multiSelect('brands', 'Brand', filterOptions.brands, 180)}
 
-        <FormControl size="small" sx={{ minWidth: 100 }}>
+        <FormControl size="small" sx={{ minWidth: 100, flex: { xs: '1 1 100%', sm: 'none' } }}>
           <InputLabel>Poles</InputLabel>
           <Select value={filters.poles != null ? String(filters.poles) : ''} onChange={handlePolesChange} label="Poles">
             <MenuItem value="">All</MenuItem>
@@ -85,7 +85,7 @@ export default function PricelistFilters() {
           size="small"
           label="Min Price"
           type="number"
-          sx={{ width: 130 }}
+          sx={{ width: { xs: 'calc(50% - 6px)', sm: 130 } }}
           value={filters.minPrice ?? ''}
           onChange={(e) => setFilters({ minPrice: e.target.value ? Number(e.target.value) : null })}
           slotProps={{ input: { startAdornment: <InputAdornment position="start">₱</InputAdornment> } }}
@@ -94,7 +94,7 @@ export default function PricelistFilters() {
           size="small"
           label="Max Price"
           type="number"
-          sx={{ width: 130 }}
+          sx={{ width: { xs: 'calc(50% - 6px)', sm: 130 } }}
           value={filters.maxPrice ?? ''}
           onChange={(e) => setFilters({ maxPrice: e.target.value ? Number(e.target.value) : null })}
           slotProps={{ input: { startAdornment: <InputAdornment position="start">₱</InputAdornment> } }}

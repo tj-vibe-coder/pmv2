@@ -3,7 +3,7 @@ import {
   Box, Typography, Grid, Card, CardContent, Paper, Button, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Checkbox, CircularProgress, Snackbar, Chip, Dialog, DialogTitle, DialogContent,
-  DialogContentText, DialogActions, TextField, MenuItem,
+  DialogContentText, DialogActions, TextField, MenuItem, useMediaQuery,
 } from '@mui/material';
 import { API_BASE } from '../config/api';
 import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress';
@@ -118,6 +118,8 @@ const ReimbursementDashboard: React.FC = () => {
   const [cashAdvances, setCashAdvances] = useState<CashAdvanceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Portrait phones (< 600 px): claims, advances and payable lines show as cards.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
   const [focusedHistorical, setFocusedHistorical] = useState<Reimbursement | null>(null);
@@ -525,6 +527,107 @@ const ReimbursementDashboard: React.FC = () => {
             </Button>
             </Box>
           </Box>
+          {isPhone ? (
+            <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {loading ? (
+                <Box sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>
+              ) : displayedReimbursements.length === 0 ? (
+                <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>No pending reimbursement claims.</Typography>
+              ) : (
+                <>
+                  <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                    <Checkbox size="small" indeterminate={someSelected} checked={allSelected} onChange={toggleAll} disabled={reimbursements.length === 0} />
+                    <Typography variant="body2" color="text.secondary">Select all</Typography>
+                  </Box>
+                  {displayedReimbursements.map(r => {
+                    const origin = reimbursementOrigin(r);
+                    const rowToken = financeFocusToken(origin);
+                    const focused = financeFocus.isFocused(origin);
+                    const historical = r.status !== 'pending';
+                    const selected = selectedIds.includes(r.id);
+                    return (
+                      <Paper
+                        key={r.id}
+                        variant="outlined"
+                        ref={(element: HTMLDivElement | null) => {
+                          if (element) financeRowRefs.current.set(rowToken, element as unknown as HTMLTableRowElement);
+                          else financeRowRefs.current.delete(rowToken);
+                        }}
+                        aria-current={focused ? 'true' : undefined}
+                        sx={{
+                          p: 1.25,
+                          ...(selected ? { bgcolor: 'action.selected' } : {}),
+                          ...(focused ? { bgcolor: 'rgba(44,90,160,0.14)', outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '-2px' } : {}),
+                        }}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+                          <Checkbox size="small" checked={selected} onChange={() => toggleOne(r.id)} disabled={historical} sx={{ p: 0.5, mt: -0.25 }} />
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                              {r.employeeName || r.full_name || r.username || '—'}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">{formatDate(r.createdAt)}</Typography>
+                          </Box>
+                          <Box sx={{ textAlign: 'right' }}>
+                            <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>
+                              {historical ? formatPHP(Number(r.amount) || 0) : formatPHP(remainingOf(r))}
+                            </Typography>
+                          </Box>
+                        </Box>
+                        {!historical && (Number(r.paidAmount) || 0) > 0 && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'right' }}>
+                            Partial · {formatPHP(Number(r.paidAmount))} of {formatPHP(Number(r.amount) || 0)} paid
+                          </Typography>
+                        )}
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
+                          <Chip
+                            size="small"
+                            label={historical ? 'Paid · historical' : r.origin === 'ca_excess' ? 'CA Excess' : 'Out-of-pocket'}
+                            color={historical ? 'success' : r.origin === 'ca_excess' ? 'warning' : 'info'}
+                          />
+                          {r.liquidationId && (
+                            <Chip
+                              size="small" variant="outlined" color="warning"
+                              label={r.formNo || 'Open liquidation'}
+                              onClick={() => navigate(financeFocusUrl(
+                                { type: 'liquidation', id: r.liquidationId, rowId: '__form__' },
+                                `${location.pathname}${location.search}`,
+                              ))}
+                              sx={{ cursor: 'pointer' }}
+                            />
+                          )}
+                          {r.caId && (
+                            <Chip
+                              size="small" variant="outlined" label="Open CA"
+                              onClick={() => navigate(financeFocusUrl(
+                                cashAdvanceOrigin({ id: r.caId as string }),
+                                `${location.pathname}${location.search}`,
+                              ))}
+                              sx={{ cursor: 'pointer' }}
+                            />
+                          )}
+                        </Box>
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5, mt: 0.5 }}>
+                          {!historical && r.origin === 'no_ca' && (
+                            <Button size="small" variant="outlined" onClick={() => openLinesDialog([r])} sx={{ color: NET_PACIFIC_COLORS.primary }}>
+                              Pay lines
+                            </Button>
+                          )}
+                          {!historical && (
+                            <Button size="small" variant="contained" onClick={() => openPayDialog({ kind: 'single-reimb', reimb: r })}
+                              sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}>
+                              Pay
+                            </Button>
+                          )}
+                          <MoneyTrailButton origin={origin} compact onResolved={fetchData} />
+                        </Box>
+                      </Paper>
+                    );
+                  })}
+                </>
+              )}
+            </Box>
+          ) : (
           <TableContainer sx={{ maxHeight: 'calc(50vh - 240px)', minHeight: 200 }}>
             <Table stickyHeader size="small">
               <TableHead>
@@ -635,6 +738,7 @@ const ReimbursementDashboard: React.FC = () => {
               </TableBody>
             </Table>
           </TableContainer>
+          )}
         </Paper>
 
         <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2 }}>
@@ -643,6 +747,40 @@ const ReimbursementDashboard: React.FC = () => {
               Outstanding Cash Advances ({held.length})
             </Typography>
           </Box>
+          {isPhone ? (
+            <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {loading ? (
+                <Box sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>
+              ) : held.length === 0 ? (
+                <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>No outstanding cash advances.</Typography>
+              ) : held.map(ca => (
+                <Paper key={ca.id} variant="outlined" sx={{ p: 1.25 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 1 }}>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{ca.ca_no || ca.id}</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right' }}>{ca.full_name || ca.username || '—'}</Typography>
+                  </Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
+                    {ca.project_name || ca.purpose || '—'}
+                  </Typography>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1, mt: 0.75 }}>
+                    <Box>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Advanced</Typography>
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{formatPHP(Number(ca.amount) || 0)}</Typography>
+                    </Box>
+                    <Box>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Balance remaining</Typography>
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace', color: 'warning.main', fontWeight: 600 }}>{formatPHP(Number(ca.balance_remaining) || 0)}</Typography>
+                    </Box>
+                  </Box>
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.5 }}>
+                    <Button size="small" variant="outlined" onClick={() => setCloseTarget(ca)} sx={{ color: NET_PACIFIC_COLORS.primary }}>
+                      Close &amp; Settle
+                    </Button>
+                  </Box>
+                </Paper>
+              ))}
+            </Box>
+          ) : (
           <TableContainer sx={{ maxHeight: 'calc(50vh - 240px)', minHeight: 200 }}>
             <Table stickyHeader size="small">
               <TableHead>
@@ -677,6 +815,7 @@ const ReimbursementDashboard: React.FC = () => {
               </TableBody>
             </Table>
           </TableContainer>
+          )}
         </Paper>
       </Box>
 
@@ -743,7 +882,7 @@ const ReimbursementDashboard: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={linesTargets.length > 0} onClose={closeLinesDialog} maxWidth="md" fullWidth>
+      <Dialog open={linesTargets.length > 0} onClose={closeLinesDialog} maxWidth="md" fullWidth fullScreen={isPhone}>
         <DialogTitle sx={{ fontWeight: 600 }}>
           {linesTargets.length > 1
             ? `Pay lines — one transfer, ${linesTargets.length} forms`
@@ -757,6 +896,33 @@ const ReimbursementDashboard: React.FC = () => {
           </DialogContentText>
           {linesLoading ? (
             <Box sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>
+          ) : isPhone ? (
+            <Box sx={{ mb: 2, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              {linesTargets.map(t => (
+                <Box key={t.id}>
+                  {linesTargets.length > 1 && (
+                    <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, bgcolor: 'action.hover', px: 1, py: 0.5, borderRadius: 1, mb: 0.5 }}>
+                      {t.formNo || t.id} · {t.employeeName || ''}
+                    </Typography>
+                  )}
+                  {(claimLines[t.id] || []).map(l => (
+                    <Paper key={`${t.id}-${l.rowId}`} variant="outlined" sx={{ p: 1, mb: 0.5, display: 'flex', alignItems: 'flex-start', gap: 0.5, ...(l.paid ? { opacity: 0.55 } : {}) }}>
+                      <Checkbox size="small" sx={{ p: 0.5 }} checked={lineSelected.includes(lineKey(t.id, l.rowId))} disabled={l.paid} onChange={() => toggleLine(lineKey(t.id, l.rowId))} />
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{l.particulars || l.category}</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.25 }}>
+                          <Typography variant="caption" color="text.secondary">{l.date}</Typography>
+                          {l.paid
+                            ? <Chip size="small" color="success" label="Paid" />
+                            : <Chip size="small" color={l.hasReceipt ? 'success' : 'warning'} variant="outlined" label={l.hasReceipt ? 'Receipt attached' : 'No receipt'} />}
+                        </Box>
+                      </Box>
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600, whiteSpace: 'nowrap' }}>{formatPHP(l.amount)}</Typography>
+                    </Paper>
+                  ))}
+                </Box>
+              ))}
+            </Box>
           ) : (
             <TableContainer sx={{ maxHeight: 320, mb: 2 }}>
               <Table stickyHeader size="small">

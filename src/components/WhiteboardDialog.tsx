@@ -202,7 +202,7 @@ function ItemList({
   );
   return (
     <>
-      <Box sx={{ overflowY: 'auto', pr: 0.5, ...(maxHeight ? { maxHeight: { xs: 'none', sm: maxHeight } } : { flex: { sm: 1 }, minHeight: 0 }) }}>
+      <Box sx={{ overflowY: 'auto', pr: 0.5, ...(maxHeight ? { maxHeight: { xs: 'none', sm: maxHeight } } : { flex: { sm: 1 }, minHeight: 0, '@media (max-height: 600px)': { flex: 'none', maxHeight: 180, minHeight: 56 } }) }}>
         {pending.length === 0 && (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', py: 0.5 }}>{emptyText}</Typography>
         )}
@@ -403,6 +403,9 @@ export default function WhiteboardDialog({ open, onClose }: WhiteboardDialogProp
               display: 'grid', gap: 1.5, flex: { sm: 1 }, minHeight: { sm: 0 },
               gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' },
               gridAutoRows: { sm: 'minmax(0, 1fr)' },
+              // Short screens (phone landscape): don't squeeze the lists into the leftover
+              // height — let each take its natural size and the dialog scroll.
+              '@media (max-height: 600px)': { flex: 'none', gridAutoRows: 'auto' },
             }}>
               {WHITEBOARD_CATEGORIES.map((c) => {
                 const list = byCategory[c.key];

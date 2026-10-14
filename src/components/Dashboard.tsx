@@ -1350,7 +1350,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           </Box>
         )}
         
-        <TableContainer sx={{ maxHeight: 'calc(100vh - 480px)', minHeight: 300 }}>
+        <TableContainer sx={{ maxHeight: { xs: 'none', md: 'calc(100vh - 480px)' }, minHeight: 300 }}>
           <Table stickyHeader size="small">
             <TableHead>
               <TableRow>
