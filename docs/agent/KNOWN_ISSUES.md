@@ -1,5 +1,9 @@
 # Known Issues
 
+## Finance feature integration with mobile layouts (2026-10-15)
+
+The finance feature branch predates main's mobile cards. A clean textual application leaves mobile Collections referencing removed scan-upload handlers and mobile Reimbursements without the new workflow labels/payment history, with paid amounts presented as due. Release integration corrects both paths and adds phone-card regression coverage. Preserve both mobile and desktop behavior when changing invoice document actions or reimbursement workflow presentation. Production remains unchanged until the release is merged/deployed and verified.
+
 ## Physical receipt workflow W1/W2 — corrected locally (2026-10-14)
 
 Independent Chrome/fixture review found two P2 issues, now corrected locally with public-router/UI regressions: unknown/inconsistent settlement stays open until explicit paid/zero-due provenance exists; returned copies prominently show RJ's reason, returner and time separately from original handover details. New return events capture the authenticated name; older events fall back to the recorded actor ID. Independent fix recheck passed 2026-10-15: original public-router probe, settlement controls, actual Chrome return summary, 96 Node +22 React/WHT tests, TypeScript and focused lint. W1/W2 are closed for local fixture behavior; real-service gates remain. Reproduction/recheck scope: `docs/agent/LIQUIDATION_WORKFLOW_REVIEW_2026-10-14.md`. No production changes or deployment.

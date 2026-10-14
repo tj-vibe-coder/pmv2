@@ -1234,7 +1234,7 @@ export default function CollectionsDashboard() {
                   const proj = projectsById[String(inv.project_id)];
                   const poRef = isActiInvoice(inv) ? actiToIoctPoLabel(proj?.commercial_trail) : (proj?.po_number || '');
                   return (
-                    <Paper key={inv.id} variant="outlined" sx={{ p: 1.25 }}>
+                    <Paper key={inv.id} role="group" aria-label={`Invoice ${inv.invoice_no}`} variant="outlined" sx={{ p: 1.25 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
                         <Box sx={{ minWidth: 0 }}>
                           <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{inv.invoice_no}</Typography>
@@ -1285,13 +1285,9 @@ export default function CollectionsDashboard() {
                             Record collection
                           </Button>
                         )}
-                        {inv.scan_file?.onedrive_web_url ? (
+                        <Button size="small" onClick={() => setDocumentsInvoice(inv)}>Documents</Button>
+                        {inv.scan_file?.onedrive_web_url && (
                           <IconButton color="info" onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')} aria-label="View scan"><VisibilityIcon fontSize="small" /></IconButton>
-                        ) : (
-                          <IconButton color="primary" disabled={uploadingScanId === inv.id} component="label" aria-label="Upload invoice scan">
-                            {uploadingScanId === inv.id ? <CircularProgress size={16} /> : <CloudUploadIcon fontSize="small" />}
-                            <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
-                          </IconButton>
                         )}
                         <Box sx={{ flex: 1 }} />
                         <IconButton onClick={() => openEdit(inv)} aria-label="Edit"><EditIcon fontSize="small" /></IconButton>
@@ -1626,7 +1622,7 @@ export default function CollectionsDashboard() {
                     navigate(`/projects/${inv.project_id}`);
                   };
                   return (
-                    <Paper key={inv.id} variant="outlined" sx={{ p: 1.25 }}>
+                    <Paper key={inv.id} role="group" aria-label={`Invoice ${inv.invoice_no}`} variant="outlined" sx={{ p: 1.25 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
                         <Box>
                           <Typography variant="body2" sx={{ fontWeight: 700 }}>{inv.collection_date || '—'}</Typography>
@@ -1691,13 +1687,9 @@ export default function CollectionsDashboard() {
                       </Box>
                       <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.25, mt: 0.5, mx: -0.5 }}>
                         <IconButton color="success" onClick={() => openCollect(inv)} aria-label="Update collection amount"><PaymentIcon fontSize="small" /></IconButton>
-                        {inv.scan_file?.onedrive_web_url ? (
+                        <Button size="small" onClick={() => setDocumentsInvoice(inv)}>Documents</Button>
+                        {inv.scan_file?.onedrive_web_url && (
                           <IconButton color="info" onClick={() => window.open(inv.scan_file!.onedrive_web_url, '_blank')} aria-label="View scan"><VisibilityIcon fontSize="small" /></IconButton>
-                        ) : (
-                          <IconButton color="primary" disabled={uploadingScanId === inv.id} component="label" aria-label="Upload scan">
-                            <CloudUploadIcon fontSize="small" />
-                            <input type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" onChange={e => handleScanPick(inv, e)} />
-                          </IconButton>
                         )}
                         {inv.pb_number && (
                           <IconButton

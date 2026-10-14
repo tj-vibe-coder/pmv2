@@ -546,7 +546,7 @@ const ReimbursementDashboard: React.FC = () => {
               ) : (
                 <>
                   <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                    <Checkbox size="small" indeterminate={someSelected} checked={allSelected} onChange={toggleAll} disabled={reimbursements.length === 0} />
+                    <Checkbox size="small" indeterminate={someSelected} checked={allSelected} onChange={toggleAll} disabled={payableClaims.length === 0} />
                     <Typography variant="body2" color="text.secondary">Select all</Typography>
                   </Box>
                   {displayedReimbursements.map(r => {
@@ -558,6 +558,8 @@ const ReimbursementDashboard: React.FC = () => {
                     return (
                       <Paper
                         key={r.id}
+                        role="group"
+                        aria-label={`Reimbursement for ${r.employeeName || r.full_name || r.username || 'employee'}`}
                         variant="outlined"
                         ref={(element: HTMLDivElement | null) => {
                           if (element) financeRowRefs.current.set(rowToken, element as unknown as HTMLTableRowElement);
@@ -580,10 +582,11 @@ const ReimbursementDashboard: React.FC = () => {
                           </Box>
                           <Box sx={{ textAlign: 'right' }}>
                             <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>
-                              {historical ? formatPHP(Number(r.amount) || 0) : formatPHP(remainingOf(r))}
+                              {formatPHP(remainingOf(r))}
                             </Typography>
                           </Box>
                         </Box>
+                        {historical && <Typography variant="caption" display="block" sx={{ textAlign: 'right' }}>Paid {formatPHP(Number(r.amount) || 0)}</Typography>}
                         {!historical && (Number(r.paidAmount) || 0) > 0 && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'right' }}>
                             Partial · {formatPHP(Number(r.paidAmount))} of {formatPHP(Number(r.amount) || 0)} paid
@@ -592,9 +595,10 @@ const ReimbursementDashboard: React.FC = () => {
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
                           <Chip
                             size="small"
-                            label={historical ? 'Paid · historical' : r.origin === 'ca_excess' ? 'CA Excess' : 'Out-of-pocket'}
+                            label={historical ? 'Paid' : r.origin === 'ca_excess' ? 'CA Excess' : 'Out-of-pocket'}
                             color={historical ? 'success' : r.origin === 'ca_excess' ? 'warning' : 'info'}
                           />
+                          <Chip size="small" variant="outlined" label={WORKFLOW_LABELS[r.workflowStatus || 'source_review_required']} color={r.workflowStatus === 'closed' ? 'success' : 'warning'} />
                           {r.liquidationId && (
                             <Chip
                               size="small" variant="outlined" color="warning"
@@ -629,6 +633,7 @@ const ReimbursementDashboard: React.FC = () => {
                               Pay
                             </Button>
                           )}
+                          {historical && <Button size="small" onClick={() => openLinesDialog([r])}>Payment history</Button>}
                           <MoneyTrailButton origin={origin} compact onResolved={fetchData} />
                         </Box>
                       </Paper>

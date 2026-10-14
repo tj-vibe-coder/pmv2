@@ -1,10 +1,15 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import CollectionsDashboard from './CollectionsDashboard';
 import type { ProjectInvoice } from '../types/Invoice';
 import type { Project } from '../types/Project';
 import type { StatementOfAccount } from '../types/StatementOfAccount';
+
+jest.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: { role: 'admin' } }) }));
+let mockPhone = false;
+jest.mock('@mui/material', () => ({ ...jest.requireActual('@mui/material'), useMediaQuery: () => mockPhone }));
+jest.mock('./finance/InvoiceDocumentsPanel', () => ({ __esModule: true, default: ({ invoice }: { invoice: ProjectInvoice }) => <div>Documents for {invoice.invoice_no}</div> }));
 
 const mockProjects: Project[] = [
   {
@@ -101,6 +106,7 @@ const mockSoas: StatementOfAccount[] = [
 ];
 
 beforeEach(() => {
+  mockPhone = false;
   jest.spyOn(global, 'fetch').mockImplementation(async (url: any) => {
     const urlStr = String(url);
     if (urlStr.includes('/api/projects')) {
@@ -168,4 +174,15 @@ test('switching tabs via click switches from Receivables to Collected Ledger', a
   expect(await screen.findByText(/Collected & Settlement History/i)).toBeInTheDocument();
   expect(screen.getByText('SI-2026-001')).toBeInTheDocument();
   expect(screen.getByText('SOA2607001-ACT-00')).toBeInTheDocument();
+});
+
+// The release must expose the new panel in both mobile invoice lists.
+test.each(['', '?tab=settled'])('phone invoice cards open Documents (%s)', async (query) => {
+  mockPhone = true;
+  render(<MemoryRouter initialEntries={[`/finance/collections${query}`]}><CollectionsDashboard /></MemoryRouter>);
+  const invoiceNo = query ? 'SI-2026-001' : 'SI-2026-002';
+  await screen.findByText(invoiceNo);
+  fireEvent.click(within(screen.getByRole('group', { name: `Invoice ${invoiceNo}` })).getByRole('button', { name: 'Documents' }));
+  expect(screen.getByText(`Documents for ${invoiceNo}`)).toBeInTheDocument();
+  expect(screen.queryByLabelText(/Upload.*scan/i)).not.toBeInTheDocument();
 });

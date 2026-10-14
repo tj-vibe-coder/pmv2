@@ -4,6 +4,8 @@ Updated: 2026-09-21
 
 ## Current status
 
+- **Finance release integration (2026-10-15):** Integrated feature `5f961ad` onto current main `90a2def` in isolated `release/finance-evidence-2307`. Preserved current mobile layouts and both task-log histories. Corrected mobile Collections cards to open invoice Documents (including dedicated BIR 2307 attachments) instead of removed scan handlers; mobile reimbursements now show workflow status, zero due for paid claims, and payment history. Validation/review pending; no merge to main, deployment or production writes. PR #137's direct development parent is `2f194e4`, whose first parent is `26fdd51`.
+
 - **Physical workflow W1/W2 independently rechecked (2026-10-15):** Original missing-settlement router reproduction now stays open; valid zero/CA-covered/historical paid controls pass. Actual Chrome return summary clearly separates RJ reason/actor/time from original staff handover. 96 Node +22 React/WHT tests, TypeScript, focused lint, syntax and diff checks pass independently. W1/W2 closed locally; real-service integration/deployed/baseline gates remain. No production/OneDrive writes or deployment. Details appended to `docs/agent/LIQUIDATION_WORKFLOW_REVIEW_2026-10-14.md`.
 
 - **Workflow review fixes W1/W2 (locally corrected 2026-10-14):** Unknown/inconsistent settlement metadata now remains open, with closure requiring explicit paid/zero-due provenance. Returned-copy summary shows return reason, RJ actor/time and original handover context distinctly; new events capture the authenticated returner name. Both API variants and UI regressions pass (96 Node +22 React/WHT tests). Independent focused recheck is next; no production changes/deployment.
