@@ -27,11 +27,15 @@ test('prepare-functions includes finance trace runtime modules and excludes test
       fs.copyFileSync(path.join(root, 'server', name), path.join(fixture, 'server', name));
     }
 
+    fs.mkdirSync(path.join(fixture, 'server', 'test-support'));
+    fs.writeFileSync(path.join(fixture, 'server', 'test-support', 'fixture.js'), 'module.exports = {};');
+
     execFileSync(process.execPath, ['scripts/prepare-functions.js'], {
       cwd: fixture,
       stdio: 'pipe',
     });
 
+    assert.equal(fs.existsSync(path.join(fixture, 'functions', 'server', 'test-support')), false);
     const runtimeDir = path.join(fixture, 'functions', 'server');
     assert.equal(fs.existsSync(path.join(runtimeDir, 'financeTrace.js')), true);
     assert.equal(fs.existsSync(path.join(runtimeDir, 'financeTraceRouter.js')), true);

@@ -70,6 +70,9 @@ Acceptance Criteria:
 - Submitting a liquidation deducts from the CA balance
 - Deleting a liquidation restores the CA balance
 - Liquidations can be saved as drafts and submitted later
+- Submitted liquidations expose **Receipts reviewed**, **Reviewed by** and **Review date** for a manual receipt-by-receipt check against original/scanned receipts. RJ records authenticated identity and actual review date after physical handover, with optional notes and explicit possession/check confirmation; prior paper reviews can be recorded with their actual date.
+- Receipt review is separate from payment/approval status. Saved form or receipt-link changes require a new review while preserving previous reviewer/date/history. Draft/pending edits block new attestations. Review withdrawal requires a reason.
+- Liquidation row controls align at the top beside multiline Particulars.
 - Auto-generated form numbers (LQ-XXXX)
 
 ### Feature 3: Procurement Suite
@@ -175,3 +178,19 @@ Current production records for `TJC` and `RJR` are approved superadmins.
 - Is there a need for project cost allocation to track profitability per project?
 - Should payroll be expanded to include 13th month and annualization?
 - What is the complete IOCT-to-ACTI statement-of-account and invoice-reconciliation workflow, including the source evidence, approval, matching, and exception handling for invoices not originally captured in PMV2?
+
+
+### Invoice supporting documents and 2307 evidence (first release)
+
+Collections and the Sales EWT register expose multiple typed invoice documents: Service Invoice, IOCT Collection Receipt, customer Counter Receipt, BIR2307, payment proof, deposit slip and supporting pack. Existing scans/packs remain available. One stored file may be linked to several invoices, with source/reference/date, revision checks and reasoned link history. Evidence attachments never record cash or recognize WHT.
+
+2307 review records printed base, withholding, period, ATC/description, observed calculation, flags and evidence allocations independently from actual booked WHT. Received/expected history and direct standalone-document availability are shown separately. Review supports unreviewed/matched/discrepancy/resolved; resolved requires a retained note. Admins/superadmins manage invoice evidence; tax filers manage 2307 evidence only; ordinary users/viewers have read-only evidence access. See ADR-0002 and FINANCE_SUPPORT_PLAN for scope and rollout.
+
+First-release implementation is local; production release checks remain pending. Incoming-payment accounting/dates, outgoing/payroll evidence and missing-support review follow as separate releases.
+
+
+### Physical liquidation receipts, RJ review and closure
+
+Staff can record handover of the printed form and physical receipt copies to RJ. RJ confirms receipt while reviewing the current saved form version. Liquidation/reimbursement closure requires current physical submission and RJ review, plus paid reimbursement where due. Returned copies, changed forms, withdrawn reviews or pending edits keep the workflow open and preserve previous history.
+
+Normal reimbursement payment requires review. An approved admin can record an urgently needed earlier payout with an explicit reason; payment remains separate from documentary closure. Paid claims awaiting physical/RJ follow-up remain visible, show zero remaining cash due and cannot be selected for payment again. Existing financial history and CA settlement are preserved. Only the approved RJR admin/superadmin account performs RJ review.

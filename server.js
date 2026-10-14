@@ -2220,6 +2220,7 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
 });
 
 // ========== LIQUIDATIONS ==========
+app.use('/api/liquidations', require('./server/liquidationReceiptReviewRouter').createLiquidationReceiptReviewRouter({ db, requireActiveUser }));
 app.get('/api/liquidations', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -2264,6 +2265,8 @@ app.get('/api/liquidations/:id', async (req, res) => {
     if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
     const liq = { id: doc.id, ...doc.data() };
     if (user.role !== 'superadmin' && user.role !== 'admin' && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
+    try { liq.receipt_review_content_hash = require('./server/liquidationReceiptReview').receiptReviewHash(liq); }
+    catch (_) { liq.receipt_review_content_hash = null; } // Legacy malformed content stays loadable; it cannot be attested.
     res.json({ success: true, liquidation: liq });
   } catch (err) {
     console.error('Error fetching liquidation:', err);
@@ -2407,38 +2410,32 @@ app.put('/api/liquidations/:id', async (req, res) => {
 // CA balance instead, so reimbursement tracking does not apply to them.
 app.patch('/api/liquidations/:id', async (req, res) => {
   const user = await getCurrentUser(req);
-  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (!user || user.scannerScope || (user.role !== 'superadmin' && user.approved !== 1 && user.approved !== true)) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  const { reimbursement_status } = req.body;
-  if (reimbursement_status !== 'pending' && reimbursement_status !== 'reimbursed') return res.status(400).json({ success: false, error: 'reimbursement_status must be pending or reimbursed' });
+  const { reimbursement_status } = req.body || {};
+  if (!['pending', 'reimbursed'].includes(reimbursement_status)) return res.status(400).json({ success: false, error: 'Invalid reimbursement status' });
   try {
-    const ref = db.collection('liquidations').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ success: false, error: 'Liquidation not found' });
-    const liq = doc.data();
-    if (liq.status !== 'submitted' || liq.ca_id) return res.status(400).json({ success: false, error: 'Reimbursement status only applies to submitted liquidations without a CA' });
-    const now = Math.floor(Date.now() / 1000);
-    await ref.update({
-      reimbursement_status,
-      reimbursed_at: reimbursement_status === 'reimbursed' ? now : null,
-      reimbursed_by: reimbursement_status === 'reimbursed' ? user.id : null,
-      updated_at: now,
-    });
-    // Keep the first-class reimbursements doc (source of truth for GET /api/reimbursements)
-    // in sync with this legacy toggle — reimbursement docs are keyed by liquidation id.
-    const reimbursementRef = db.collection('reimbursements').doc(req.params.id);
-    const reimbursementSnap = await reimbursementRef.get();
-    if (reimbursementSnap.exists) {
-      if (reimbursement_status === 'reimbursed') {
-        await reimbursementRef.update({ status: 'paid', paidAt: now, paidBy: user.id, updatedAt: now });
-      } else if (reimbursementSnap.data().status === 'paid') {
-        await reimbursementRef.update({ status: 'pending', paidAt: null, paidBy: null, fundingSource: null, updatedAt: now });
+    await db.runTransaction(async tx => {
+      const ref = db.collection('liquidations').doc(req.params.id); const snap = await tx.get(ref);
+      if (!snap.exists) throw Object.assign(new Error('Liquidation not found'), { status: 404 });
+      const liq = snap.data();
+      if (liq.status !== 'submitted' || liq.ca_id) throw Object.assign(new Error('Reimbursement status only applies to submitted liquidations without a CA'), { status: 400 });
+      const reimbursementRef = db.collection('reimbursements').doc(req.params.id); const reimbursement = await tx.get(reimbursementRef);
+      const review = await tx.get(db.collection('liquidation_receipt_reviews').doc(req.params.id));
+      if (liq.reimbursement_status === reimbursement_status) return;
+      const paymentException = reimbursement_status === 'reimbursed' ? require('./server/liquidationWorkflow').paymentAuthorization(liq, review.exists ? review.data() : null, req.body.urgentPaymentReason) : null;
+      const now = Math.floor(Date.now() / 1000);
+      tx.update(ref, { reimbursement_status, paymentException, reimbursed_at: reimbursement_status === 'reimbursed' ? now : null, reimbursed_by: reimbursement_status === 'reimbursed' ? user.id : null, updated_at: now });
+      if (reimbursement.exists) {
+        if (reimbursement_status === 'reimbursed') tx.update(reimbursementRef, { status: 'paid', paidAt: now, paidBy: user.id, updatedAt: now });
+        else if (reimbursement.data().status === 'paid') tx.update(reimbursementRef, { status: 'pending', paidAt: null, paidBy: null, fundingSource: null, updatedAt: now });
       }
-    }
-    res.json({ success: true, message: reimbursement_status === 'reimbursed' ? 'Marked as reimbursed' : 'Reverted to pending reimbursement' });
+      tx.set(ref.collection('payment_status_history').doc(), { actor: user.id, at: now, before: liq.reimbursement_status || null, after: reimbursement_status, paymentException });
+    });
+    res.json({ success: true, message: reimbursement_status === 'reimbursed' ? 'Marked as reimbursed; receipt workflow tracked separately' : 'Reverted to pending reimbursement' });
   } catch (err) {
-    console.error('Error updating liquidation reimbursement status:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
+    if (err.status) return res.status(err.status).json({ success: false, error: err.message });
+    console.error('Error updating liquidation reimbursement status:', err); res.status(500).json({ success: false, error: 'Database error' });
   }
 });
 
@@ -2446,20 +2443,24 @@ app.patch('/api/liquidations/:id', async (req, res) => {
 // and the slice of any liquidation that exceeded its CA's balance).
 app.get('/api/reimbursements', async (req, res) => {
   const user = await getCurrentUser(req);
-  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (!user || user.scannerScope || (user.role !== 'superadmin' && user.approved !== 1 && user.approved !== true)) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
   try {
-    const snap = await db.collection('reimbursements').where('status', '==', 'pending').get();
+    const scope = req.query.scope || 'pending';
+    if (!['pending', 'open', 'closed', 'all'].includes(scope)) return res.status(400).json({ error: 'Invalid reimbursement scope' });
+    const snap = scope === 'pending' ? await db.collection('reimbursements').where('status', '==', 'pending').get() : await db.collection('reimbursements').limit(501).get();
+    if (snap.docs.length > 500) return res.status(409).json({ error: 'Reimbursement review limit reached; narrow the ledger before loading' });
     const rows = await Promise.all(snap.docs.map(async doc => {
       const r = { id: doc.id, ...doc.data() };
       if (r.employeeId) {
         const uDoc = await db.collection('users').doc(r.employeeId).get();
         if (uDoc.exists) { r.username = uDoc.data().username; r.full_name = uDoc.data().full_name; }
       }
+      if (scope !== 'pending') r.workflowStatus = await require('./server/liquidationWorkflow').reimbursementWorkflow(db, r);
       return r;
     }));
     rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    res.json({ success: true, reimbursements: rows });
+    res.json({ success: true, reimbursements: rows.filter(r => scope === 'open' ? r.workflowStatus !== 'closed' : scope === 'closed' ? r.workflowStatus === 'closed' : true) });
   } catch (err) {
     console.error('Error fetching reimbursements:', err);
     res.status(500).json({ success: false, error: 'Database error' });
@@ -2482,25 +2483,11 @@ function normalizeProofRef(p) {
 function parseJsonArray(raw) {
   try { const v = typeof raw === 'string' ? JSON.parse(raw) : raw; return Array.isArray(v) ? v : []; } catch (e) { return []; }
 }
-// Ledger entry for a whole-form pay (settles whatever is left). Returns the new payment id.
-async function recordRemainingPayment(reimbursementId, r, remaining, fundingSource, reference, userId, now, proofRef) {
-  const payRef = db.collection('reimbursement_payments').doc();
-  await payRef.set({
-    reimbursementId, liquidationId: r.liquidationId || null, formNo: r.formNo || null,
-    employeeId: r.employeeId || null, employeeName: r.employeeName || null,
-    kind: 'remaining', rowIds: null, amount: remaining,
-    fundingSource: fundingSource || null,
-    reference: typeof reference === 'string' ? reference.trim() : '',
-    overrideReason: null, proofRef: normalizeProofRef(proofRef), paidAt: now, paidBy: userId, createdAt: now,
-  });
-  return payRef.id;
-}
-
 // Admin-only: the lines of a pending out-of-pocket claim with receipt + paid status,
 // plus its payment ledger. Drives the "Pay lines" dialog.
 app.get('/api/reimbursements/:id/lines', async (req, res) => {
   const user = await getCurrentUser(req);
-  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (!user || user.scannerScope || (user.role !== 'superadmin' && user.approved !== 1 && user.approved !== true)) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
   try {
     const { id } = req.params;
@@ -2517,13 +2504,13 @@ app.get('/api/reimbursements/:id/lines', async (req, res) => {
       .map(row => ({
         rowId: row.id, date: row.date || '', category: row.category || '',
         particulars: row.particulars || '', amount: parseFloat(row.amount) || 0,
-        hasReceipt: receiptRowIds.has(row.id), paid: paid.has(row.id),
+        hasReceipt: receiptRowIds.has(row.id), paid: r.status === 'paid' || paid.has(row.id),
       }));
     const paySnap = await db.collection('reimbursement_payments').where('reimbursementId', '==', id).get();
     const payments = paySnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.paidAt || 0) - (a.paidAt || 0));
     res.json({
       success: true, lines, payments,
-      amount: Number(r.amount) || 0, paidAmount: Number(r.paidAmount) || 0, origin: r.origin, status: r.status,
+      amount: Number(r.amount) || 0, paidAmount: r.status === 'paid' ? Number(r.amount) || 0 : Number(r.paidAmount) || 0, origin: r.origin, status: r.status,
     });
   } catch (err) {
     console.error('Error fetching reimbursement lines:', err);
@@ -2545,6 +2532,8 @@ async function planClaimLinePayment(txn, id, rowIds, ctx) {
   const liqSnap = await txn.get(liqRef);
   if (!liqSnap.exists) throw Object.assign(new Error('Liquidation not found'), { status: 404 });
   const liq = liqSnap.data();
+  const reviewSnap = await txn.get(db.collection('liquidation_receipt_reviews').doc(r.liquidationId));
+  const paymentException = require('./server/liquidationWorkflow').paymentAuthorization(liq, reviewSnap.exists ? reviewSnap.data() : null, ctx.urgentPaymentReason);
   const rows = parseJsonArray(liq.rows_json);
   const receiptRowIds = new Set(parseJsonArray(liq.receipts_json).map(x => x && x.rowId).filter(Boolean));
   const alreadyPaid = new Set(r.paidRowIds || []);
@@ -2578,7 +2567,7 @@ async function planClaimLinePayment(txn, id, rowIds, ctx) {
         reference: ctx.reference,
         overrideReason: noReceipt.length > 0 ? ctx.overrideReason : null,
         noReceiptRowIds: noReceipt.map(row => row.id),
-        proofRef: ctx.proofRef,
+        proofRef: ctx.proofRef, paymentException,
         transferId: ctx.transferId || null,
         paidAt: now, paidBy: user.id, createdAt: now,
       });
@@ -2626,6 +2615,7 @@ function claimPaymentContext(req, user) {
     reference: typeof body.reference === 'string' ? body.reference.trim() : '',
     overrideReason: typeof body.overrideReason === 'string' ? body.overrideReason.trim() : '',
     proofRef: normalizeProofRef(body.proofRef),
+    urgentPaymentReason: body.urgentPaymentReason,
   };
 }
 
@@ -2634,7 +2624,7 @@ function claimPaymentContext(req, user) {
 // to 'paid' only once every peso is paid.
 app.post('/api/reimbursements/:id/pay-lines', async (req, res) => {
   const user = await getCurrentUser(req);
-  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (!user || user.scannerScope || (user.role !== 'superadmin' && user.approved !== 1 && user.approved !== true)) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
   const { id } = req.params;
   const { rowIds } = req.body || {};
@@ -2660,7 +2650,7 @@ app.post('/api/reimbursements/:id/pay-lines', async (req, res) => {
 // each claim still gets its own ledger entry, linked by a shared transferId.
 app.post('/api/reimbursements/pay-lines-batch', async (req, res) => {
   const user = await getCurrentUser(req);
-  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (!user || user.scannerScope || (user.role !== 'superadmin' && user.approved !== 1 && user.approved !== true)) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
   const { claims } = req.body || {};
   if (!Array.isArray(claims) || claims.length === 0 || claims.length > 50
@@ -2690,92 +2680,39 @@ app.post('/api/reimbursements/pay-lines-batch', async (req, res) => {
 // out-of-pocket funding source so it syncs into the Investment Tracker.
 app.post('/api/reimbursements/:id/pay', async (req, res) => {
   const user = await getCurrentUser(req);
-  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (!user || user.scannerScope || (user.role !== 'superadmin' && user.approved !== 1 && user.approved !== true)) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  const { id } = req.params;
   try {
-    const ref = db.collection('reimbursements').doc(id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ success: false, error: 'Reimbursement not found' });
-    const reimbursement = doc.data();
-    if (reimbursement.status !== 'pending') return res.status(400).json({ success: false, error: 'Reimbursement is not pending' });
-    const fs = normalizeFundingSource(req.body.fundingSource);
-    const now = Math.floor(Date.now() / 1000);
-    // Earlier line-by-line payments (POST /:id/pay-lines) already settled part of this
-    // claim — whole-form pay settles only what is left.
-    const remaining = reimbursementRemaining(reimbursement);
-    const payRef = await recordRemainingPayment(id, reimbursement, remaining, fs, req.body.reference, user.id, now, req.body.proofRef);
-    await ref.update({ status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, paidAmount: Number(reimbursement.amount) || 0, updatedAt: now });
-    await db.collection('liquidations').doc(reimbursement.liquidationId).update({ reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
-    // Paying a ca_excess reimbursement is the company actually handing the employee
-    // the amount their over-liquidation put the CA into the negative for — restore
-    // that CA's balance_remaining toward zero by the same amount.
-    if (reimbursement.origin === 'ca_excess' && reimbursement.caId) {
-      await db.collection('cash_advances').doc(reimbursement.caId).update({ balance_remaining: FieldValue.increment(remaining), updated_at: now });
-    }
-    // Re-read after our own write, same defensive pattern as the CA /funding endpoint,
-    // so the sync sees the just-written fundingSource rather than a stale pre-write copy.
-    const fresh = (await ref.get()).data();
-    const syncOk = await syncExpenseFundingInvestment(id, 'reimbursements', {
-      date: new Date(now * 1000).toISOString().slice(0, 10),
-      amount: remaining,
-      fundingSource: fresh.fundingSource,
-      description: `Reimbursement ${fresh.formNo || id}: ${fresh.employeeName || ''}`.trim(),
-    });
-    res.json({ success: true, message: 'Reimbursement marked paid', syncWarning: !syncOk });
+    const ctx = claimPaymentContext(req, user);
+    const { plans } = await require('./server/reimbursementSettlement').settleRemaining(db, [req.params.id], ctx, n => FieldValue.increment(n), true);
+    const p = plans[0];
+    const syncOk = await syncExpenseFundingInvestment(p.id, 'reimbursements', { date: new Date(ctx.now * 1000).toISOString().slice(0, 10), amount: p.amount, fundingSource: ctx.fs, description: `Reimbursement ${p.r.formNo || p.id}: ${p.r.employeeName || ''}`.trim() });
+    res.json({ success: true, message: 'Reimbursement marked paid; receipt workflow tracked separately', syncWarning: !syncOk });
   } catch (err) {
-    console.error('Error paying reimbursement:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
+    if (err.status) return res.status(err.status).json({ success: false, error: err.message });
+    console.error('Error paying reimbursement:', err); res.status(500).json({ success: false, error: 'Database error' });
   }
 });
 
 // Admin-only: batch-mark pending reimbursements as paid, optionally from a shared funding source.
 app.post('/api/reimbursements/batch-mark', async (req, res) => {
   const user = await getCurrentUser(req);
-  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (!user || user.scannerScope || (user.role !== 'superadmin' && user.approved !== 1 && user.approved !== true)) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
-  const { ids } = req.body;
-  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ success: false, error: 'ids must be a non-empty array' });
-  if (ids.some(id => typeof id !== 'string' || !id.trim())) return res.status(400).json({ success: false, error: 'Each id must be a non-empty string' });
-  if (ids.length > 500) return res.status(400).json({ success: false, error: 'Maximum 500 ids per request' });
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || !ids.length || ids.length > 50 || ids.some(id => typeof id !== 'string' || !id.trim() || id.includes('/')) || new Set(ids).size !== ids.length) return res.status(400).json({ success: false, error: 'Supply 1–50 unique reimbursement IDs' });
   try {
-    const now = Math.floor(Date.now() / 1000);
-    const fs = normalizeFundingSource(req.body.fundingSource);
-    const batch = db.batch();
-    const skipped = [];
-    const toSync = [];
-    for (const id of ids) {
-      const ref = db.collection('reimbursements').doc(id);
-      const doc = await ref.get();
-      if (!doc.exists) { skipped.push({ id, reason: 'not found' }); continue; }
-      const r = doc.data();
-      if (r.status !== 'pending') { skipped.push({ id, reason: 'not pending' }); continue; }
-      const remaining = reimbursementRemaining(r);
-      await recordRemainingPayment(id, r, remaining, fs, req.body.reference, user.id, now);
-      batch.update(ref, { status: 'paid', fundingSource: fs, paidAt: now, paidBy: user.id, paidAmount: Number(r.amount) || 0, updatedAt: now });
-      if (r.liquidationId) {
-        batch.update(db.collection('liquidations').doc(r.liquidationId), { reimbursement_status: 'reimbursed', reimbursed_at: now, reimbursed_by: user.id });
-      }
-      // Same CA-balance restoration as the single-pay endpoint, batched.
-      if (r.origin === 'ca_excess' && r.caId) {
-        batch.update(db.collection('cash_advances').doc(r.caId), { balance_remaining: FieldValue.increment(remaining), updated_at: now });
-      }
-      toSync.push({ id, amount: remaining, formNo: r.formNo, employeeName: r.employeeName });
+    const ctx = claimPaymentContext(req, user);
+    const { plans, skipped } = await require('./server/reimbursementSettlement').settleRemaining(db, ids, ctx, n => FieldValue.increment(n));
+    let syncWarning = false;
+    for (const p of plans) {
+      const ok = await syncExpenseFundingInvestment(p.id, 'reimbursements', { date: new Date(ctx.now * 1000).toISOString().slice(0, 10), amount: p.amount, fundingSource: ctx.fs, description: `Reimbursement ${p.r.formNo || p.id}: ${p.r.employeeName || ''}`.trim() });
+      if (!ok) syncWarning = true;
     }
-    if (toSync.length > 0) await batch.commit();
-    for (const r of toSync) {
-      await syncExpenseFundingInvestment(r.id, 'reimbursements', {
-        date: new Date(now * 1000).toISOString().slice(0, 10),
-        amount: r.amount,
-        fundingSource: fs,
-        description: `Reimbursement ${r.formNo || r.id}: ${r.employeeName || ''}`.trim(),
-      });
-    }
-    const updated = toSync.length;
-    res.json({ success: true, updated, skipped, message: `Marked ${updated} as reimbursed` });
+    res.json({ success: true, updated: plans.length, skipped, syncWarning, message: `Marked ${plans.length} as reimbursed; receipt workflow tracked separately` });
   } catch (err) {
-    console.error('Error batch-marking reimbursements:', err);
-    res.status(500).json({ success: false, error: 'Database error' });
+    if (err.status) return res.status(err.status).json({ success: false, error: err.message });
+    console.error('Error batch-marking reimbursements:', err); res.status(500).json({ success: false, error: 'Database error' });
   }
 });
 
@@ -5479,6 +5416,8 @@ app.get('/api/health', (req, res) => {
 
 // ========== STATIC FILES & SPA ROUTING ==========
 // ========== INVOICE / COLLECTIONS ROUTES ==========
+app.use('/api/finance-evidence', require('./server/financeEvidenceRouter').createFinanceEvidenceRouter({ db, requireActiveUser }));
+
 
 app.get('/api/invoices', async (req, res) => {
   const { project_id } = req.query;
@@ -6324,6 +6263,13 @@ app.post('/api/onedrive/upload', async (req, res) => {
     return res.status(400).json({ error: 'folderPath, filename, and contentBase64 are required' });
   }
   try {
+    if (req.body.financeEvidenceType) {
+      const { TYPES } = require('./server/financeEvidence');
+      if (!isActiveUser(user) || (!['superadmin', 'admin'].includes(user.role) && !(user.role === 'tax_filer' && req.body.financeEvidenceType === 'bir2307'))) return res.status(403).json({ error: 'Forbidden' });
+      if (!TYPES.includes(req.body.financeEvidenceType) || !/\.(pdf|png|jpe?g|tiff?|bmp)$/i.test(filename) || /[\\/]/.test(filename)) return res.status(400).json({ error: 'Unsupported evidence file' });
+      const evidenceBytes = Buffer.from(contentBase64, 'base64');
+      if (!evidenceBytes.length || evidenceBytes.length > 25 * 1024 * 1024) return res.status(400).json({ error: 'Maximum evidence file size is 25 MB' });
+    }
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
     const folder = await ensureFolderByPath(token, driveId, folderPath);
@@ -6337,7 +6283,7 @@ app.post('/api/onedrive/upload', async (req, res) => {
       throw new Error(`Upload failed (${r.status}): ${t.slice(0, 300)}`);
     }
     const data = await r.json();
-    res.json({ ok: true, id: data.id, webUrl: data.webUrl });
+    res.json({ ok: true, id: data.id, webUrl: data.webUrl, driveId });
   } catch (err) {
     res.status(502).json({ error: 'OneDrive operation failed', detail: err.message });
   }
