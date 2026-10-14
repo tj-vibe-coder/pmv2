@@ -1,5 +1,11 @@
 # Task Log
 
+## 2026-10-15 — PR144 marked ready at RJ request
+
+- Confirmed isolated release worktree clean and local/remote release heads synchronized at `7f7a50f`; GitHub reported mergeable draft targeting main.
+- Marked PR144 ready for review and updated PR/project memory. Committed/pushed readiness documentation on release branch only; preserved unrelated original-workspace changes. Prior 137 backend/28 UI/type/lint/build and independent actual-data read/UI checks remain attributed to their recorded runs; no application changes requiring rerun.
+- Known inherited mobile CA Edit and real-service persistence/upload limitations retained. No merge, deployment or production business-data changes.
+
 ## 2026-10-15 — Record Tab 2 actual-production-data local review
 
 - Read the independent report and verified inherited CA mobile Edit omission against actual source/main diff. Recorded successful desktop/phone Documents/2307 entry, review API, reimbursement scope/paid-open and unchanged baseline checks, attributed to Tab 2.
