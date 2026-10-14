@@ -1,5 +1,9 @@
 # Known Issues
 
+## Mobile CA request Edit missing — inherited main gap (2026-10-15)
+
+Tab 2 actual-data review found 10 Edit controls at desktop1280px and none at phone360px for actual RJR on `/finance/expense-monitoring/ca-form`. Phone cards omit the existing desktop `superadmin || own pending` condition and `openRequestEdit` action. Source verification confirms CAFormPage is unchanged between main and PR144. No fix included in this review update; report in Finance memory `2026-10-15-pm-local-real-data-check.md`.
+
 ## Finance feature integration with mobile layouts (2026-10-15)
 
 The finance feature branch predates main's mobile cards. A clean textual application leaves mobile Collections referencing removed scan-upload handlers and mobile Reimbursements without the new workflow labels/payment history, with paid amounts presented as due. Release integration corrects both paths and adds phone-card regression coverage. Preserve both mobile and desktop behavior when changing invoice document actions or reimbursement workflow presentation. Production remains unchanged until the release is merged/deployed and verified.
