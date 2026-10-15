@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Button, Typography, CircularProgress } from '@mui/material';
+import { FULL_PHOTO_QUAD } from '../utils/receipts/cropGeometry';
 import type { Pt, Quad } from '../utils/receipts/perspectiveCrop';
 
 interface ReceiptCropperProps {
   imageUrl: string;                 // object URL of the photo to crop/preview
   initialQuad: Quad;                // starting corners in fraction coords [TL,TR,BR,BL]
+  busyLabel?: string;
+  retakeLabel?: string;
   busy?: boolean;                   // when true: disable both buttons; show a spinner inside "Use photo"
   onConfirm: (quad: Quad) => void;  // called with the CURRENT quad when the user taps "Use photo"
   onRetake: () => void;             // called when the user taps "Retake"
@@ -23,7 +26,7 @@ type DragState =
   | { kind: 'edge'; a: number; b: number; startQuad: Quad; startPt: Pt };
 
 export default function ReceiptCropper(props: ReceiptCropperProps): React.ReactElement {
-  const { imageUrl, initialQuad, busy, onConfirm, onRetake } = props;
+  const { imageUrl, initialQuad, busy, busyLabel, retakeLabel, onConfirm, onRetake } = props;
 
   const [quad, setQuad] = useState<Quad>(() => clampQuad(initialQuad));
   const [imgReady, setImgReady] = useState<boolean>(false);
@@ -207,12 +210,15 @@ export default function ReceiptCropper(props: ReceiptCropperProps): React.ReactE
       </Box>
 
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-        Drag the corners or the edges onto the receipt, then tap Use photo.
+        Check the suggested crop includes the whole receipt. Drag corners or edges to adjust, then tap Use photo.
       </Typography>
 
+      <Button size="small" disabled={!!busy} onClick={() => setQuad(FULL_PHOTO_QUAD)} sx={{ mt: 1 }}>
+        Full photo
+      </Button>
       <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
         <Button variant="outlined" fullWidth disabled={!!busy} onClick={onRetake}>
-          Retake
+          {retakeLabel || 'Retake'}
         </Button>
         <Button
           variant="contained"
@@ -222,7 +228,7 @@ export default function ReceiptCropper(props: ReceiptCropperProps): React.ReactE
           startIcon={busy ? <CircularProgress size={18} color="inherit" /> : undefined}
           onClick={() => onConfirm(quad)}
         >
-          {busy ? 'Flattening…' : 'Use photo'}
+          {busy ? (busyLabel || 'Flattening…') : 'Use photo'}
         </Button>
       </Box>
     </Box>

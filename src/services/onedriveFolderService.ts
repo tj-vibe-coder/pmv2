@@ -385,7 +385,9 @@ export async function getDriveItemThumbnailUrl(
 }
 
 /**
- * Upload a single file to `folderPath` under the drive root. The file is created
+ * With financeInvoiceId, folderPath is the execution root to search; the server
+ * resolves the existing project and addresses its Sales Invoice child by ID.
+ * Otherwise upload a single file to `folderPath` under the drive root. The file is created
  * (or overwritten) at `${folderPath}/${filename}`.
  */
 export async function uploadFileToFolder(
@@ -397,6 +399,7 @@ export async function uploadFileToFolder(
   filename: string,
   blob: Blob,
   financeEvidenceType?: string,
+  financeInvoiceId?: string,
 ): Promise<DriveItemRef> {
   if (!filename || /[\\/]/.test(filename)) {
     throw new Error(`Invalid filename: "${filename}"`);
@@ -406,7 +409,7 @@ export async function uploadFileToFolder(
   const res = await fetch(`${API_BASE}/api/onedrive/upload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ folderPath, filename, contentBase64, financeEvidenceType }),
+    body: JSON.stringify({ folderPath, filename, contentBase64, financeEvidenceType, financeInvoiceId }),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');

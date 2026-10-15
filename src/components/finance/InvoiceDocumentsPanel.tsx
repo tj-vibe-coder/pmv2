@@ -4,7 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import type { ProjectInvoice } from '../../types/Invoice';
 import { EVIDENCE_TYPES, CertificateEvidence, DocumentFile, EvidenceLink, EvidenceType, InvoiceDocuments } from '../../types/FinanceEvidence';
 import { evidenceRequest } from '../../services/financeEvidenceService';
-import { projectFolderName, uploadFileToFolder } from '../../services/onedriveFolderService';
+import { uploadFileToFolder } from '../../services/onedriveFolderService';
 import { onedriveConfig } from '../../config/onedriveConfig';
 
 interface EvidenceHistoryEvent { id: string; actor: string; at: string; reason: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null }
@@ -101,11 +101,11 @@ export default function InvoiceDocumentsPanel({ invoice, onClose, initialType = 
   const upload = (file: File) => run(async () => {
     if (!source.trim()) throw new Error('Enter the evidence source before uploading');
     if (!/\.(pdf|png|jpe?g|tiff?|bmp)$/i.test(file.name) || file.size === 0 || file.size > 25 * 1024 * 1024) throw new Error('Choose a PDF/image up to 25 MB');
-    const folder = projectFolderName({ code: invoice.project_no || invoice.project_id, name: invoice.project_name || '' });
     const extension = file.name.slice(file.name.lastIndexOf('.'));
-    const unique = `${invoice.invoice_no.slice(0, 40)}_${Date.now()}_${Math.random().toString(36).slice(2)}_${file.name.slice(0, 130)}${extension}`.replace(/[<>:"/\\|?*]/g, '_');
+    const stem = file.name.slice(0, -extension.length).replace(new RegExp(`(?:\\${extension})+$`, 'i'), '');
+    const unique = `${invoice.invoice_no.slice(0, 40)}_${Date.now()}_${Math.random().toString(36).slice(2)}_${stem.slice(0, 130)}${extension}`.replace(/[<>:"/\\|?*]/g, '_');
     const root = onedriveConfig.executionRoot || '01 Execution';
-    const result = await uploadFileToFolder('server', 'server', `${root}/${new Date().getFullYear()}/${folder}/Sales Invoice`, unique, file, type);
+    const result = await uploadFileToFolder('server', 'server', root, unique, file, type, invoice.id);
     const saved: DocumentFile = { webUrl: result.webUrl, itemId: result.id, driveId: result.driveId, filename: result.name || unique, size: file.size,
       mimeType: file.type && ['application/pdf', 'image/png', 'image/jpeg', 'image/tiff', 'image/bmp'].includes(file.type) ? file.type : '' };
     // Persist upload recovery before linking; retry never uploads a second copy.

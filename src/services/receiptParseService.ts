@@ -21,15 +21,21 @@ export async function parseReceipt(imageBase64: string, mimeType: string): Promi
 
 export async function detectCropFromServer(imageBase64: string, mimeType: string): Promise<Quad | null> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('netpacific_token') : null;
-  const res = await fetch(`${API_BASE}/api/receipts/detect-crop`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ imageBase64, mimeType }),
-  });
-  const data = await res.json().catch(() => ({ ok: false })) as { ok: boolean; quad?: Quad };
-  if (!res.ok || !data.ok || !data.quad) return null;
-  return data.quad;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const res = await fetch(`${API_BASE}/api/receipts/detect-crop`, {
+      method: 'POST', signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ imageBase64, mimeType }),
+    });
+    const data = await res.json().catch(() => ({ ok: false })) as { ok: boolean; quad?: Quad };
+    if (!res.ok || !data.ok || !data.quad) return null;
+    return data.quad;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

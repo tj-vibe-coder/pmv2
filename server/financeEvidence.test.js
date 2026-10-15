@@ -11,9 +11,12 @@ const packaged = fs.mkdtempSync(path.join(process.cwd(), '.finance-evidence-pack
 fs.mkdirSync(path.join(packaged, 'server')); fs.mkdirSync(path.join(packaged, 'scripts'));
 fs.copyFileSync('scripts/prepare-functions.js', path.join(packaged, 'scripts/prepare-functions.js'));
 fs.copyFileSync('functions/server.js', path.join(packaged, 'server.js'));
-for (const name of ['financeEvidence.js', 'financeEvidenceRouter.js']) fs.copyFileSync(`server/${name}`, path.join(packaged, 'server', name));
+for (const name of ['financeEvidence.js', 'financeEvidenceRouter.js', 'financeEvidenceFolder.js']) fs.copyFileSync(`server/${name}`, path.join(packaged, 'server', name));
 execFileSync(process.execPath, ['scripts/prepare-functions.js'], { cwd: packaged });
 after(() => fs.rmSync(packaged, { recursive: true, force: true }));
+test('Functions packaging includes invoice upload folder resolver', () => {
+  assert.equal(typeof require(path.join(packaged, 'functions/server/financeEvidenceFolder')).resolveInvoiceEvidenceFolder, 'function');
+});
 const { FinanceFirestore } = require('./test-support/financeFirestore');
 const { documentInput } = require('./financeEvidence');
 const { plan, apply, fingerprint } = require('../scripts/migrations/001-invoice-evidence');
@@ -200,5 +203,5 @@ test('migration CLI dry-run requires no credentials and refuses production apply
   assert.throws(() => execFileSync(process.execPath, [...args, '--apply'], { env: { ...process.env, FIRESTORE_EMULATOR_HOST: '' }, stdio: 'pipe' }), /local-emulator-only/);
 });
 test('Functions runtime evidence modules stay byte-identical', () => {
-  for (const name of ['financeEvidence.js', 'financeEvidenceRouter.js']) assert.equal(fs.readFileSync(`server/${name}`, 'utf8'), fs.readFileSync(path.join(packaged, 'functions/server', name), 'utf8'));
+  for (const name of ['financeEvidence.js', 'financeEvidenceRouter.js', 'financeEvidenceFolder.js']) assert.equal(fs.readFileSync(`server/${name}`, 'utf8'), fs.readFileSync(path.join(packaged, 'functions/server', name), 'utf8'));
 });

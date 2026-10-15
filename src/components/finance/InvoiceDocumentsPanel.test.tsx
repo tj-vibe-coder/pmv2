@@ -7,7 +7,7 @@ import type { ProjectInvoice } from '../../types/Invoice';
 let mockRole = 'admin';
 jest.mock('../../contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'reviewer', role: mockRole } }) }));
 jest.mock('../../services/financeEvidenceService', () => ({ evidenceRequest: jest.fn() }));
-jest.mock('../../services/onedriveFolderService', () => ({ projectFolderName: () => 'IOCT project', uploadFileToFolder: jest.fn() }));
+jest.mock('../../services/onedriveFolderService', () => ({ uploadFileToFolder: jest.fn() }));
 const request = evidenceRequest as jest.Mock;
 const upload = uploadFileToFolder as jest.Mock;
 const invoice = { id: 'si008', project_id: 'adi', invoice_no: 'SI008', amount: 193414.05, amount_collected: 185677.49, wht_amount: 7736.56, collection_date: '2026-09-10', wht_2307_status: 'received' } as ProjectInvoice;
@@ -34,7 +34,7 @@ test('linking existing file posts only evidence metadata and preserves invoice a
 test('successful upload followed by failed link retains retry metadata without uploading again', async () => {
   upload.mockResolvedValue({ id: 'uploaded1', driveId: 'drive1', webUrl: 'https://example.com/proof1', name: 'proof1.pdf' });
   request.mockImplementation((path, method) => method === 'POST' ? Promise.reject(new Error('Link unavailable; retry')) : Promise.resolve(empty));
-  render(<InvoiceDocumentsPanel invoice={invoice} onClose={() => {}} />);
+  const view = render(<InvoiceDocumentsPanel invoice={invoice} onClose={() => {}} />);
   await screen.findByText('original-pack.pdf');
   fireEvent.change(screen.getByLabelText('Evidence source'), { target: { value: 'Original scan' } });
   fireEvent.change(screen.getByLabelText('Upload invoice evidence'), { target: { files: [new File(['%PDF-1.4'], 'proof.pdf', { type: 'application/pdf' })] } });
@@ -42,6 +42,11 @@ test('successful upload followed by failed link retains retry metadata without u
   fireEvent.click(screen.getByRole('button', { name: 'Link document' }));
   await screen.findByText('Link unavailable; retry');
   expect(JSON.parse(sessionStorage.getItem('finance-evidence-upload:si008') || '{}').itemId).toBe('uploaded1');
+  view.unmount();
+  render(<InvoiceDocumentsPanel invoice={invoice} onClose={() => {}} />);
+  await screen.findByText(/Ready to link/);
+  expect(screen.queryByLabelText('Upload invoice evidence')).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Evidence source'), { target: { value: 'Original scan' } });
   request.mockImplementation(() => Promise.resolve(empty));
   fireEvent.click(screen.getByRole('button', { name: 'Link document' }));
   await waitFor(() => expect(sessionStorage.getItem('finance-evidence-upload:si008')).toBeNull());
@@ -113,4 +118,33 @@ test('Refresh discards a conflicted certificate draft and reopening uses fresh p
   request.mockImplementation(() => Promise.resolve({ ...empty, links: [current] }));
   fireEvent.click(screen.getByRole('button', { name: 'Save certificate evidence' }));
   await waitFor(() => expect(request).toHaveBeenCalledWith('/documents/doc1/certificate', 'PUT', expect.objectContaining({ revision: 3, certificateNumber: 'newer original' })));
+});
+
+
+test.each(['certificate.pdf', 'certificate.pdf.pdf', `${'long'.repeat(80)}.PDF`, 'scan.JpEg', 'scan.tiff'])('upload keeps one extension and unique names for %s, and requests server project resolution', async original => {
+  upload.mockImplementation((_token, _drive, _root, name) => Promise.resolve({ id: 'uploaded', driveId: 'drive', webUrl: 'https://example.com/proof', name }));
+  render(<InvoiceDocumentsPanel invoice={{ ...invoice, project_no: 'stale-project-number', project_name: 'stale project name' }} onClose={() => {}} initialType="bir2307" />);
+  await screen.findByText('original-pack.pdf');
+  fireEvent.change(screen.getByLabelText('Evidence source'), { target: { value: 'Original scan' } });
+  const file = new File(['fixture'], original, { type: 'application/pdf' });
+  fireEvent.change(screen.getByLabelText('Upload invoice evidence'), { target: { files: [file] } });
+  await screen.findByText(/Ready to link/);
+  const [token, drive, root, name, uploaded, type, invoiceId] = upload.mock.calls[0];
+  expect([token, drive, root, uploaded, type, invoiceId]).toEqual(['server', 'server', '01 Execution', file, 'bir2307', invoice.id]);
+  const extension = original.slice(original.lastIndexOf('.'));
+  expect(name.endsWith(extension)).toBe(true);
+  expect(name.toLowerCase().split(extension.toLowerCase())).toHaveLength(2);
+  expect(name).toMatch(/^SI008_\d+_[a-z0-9]+_/);
+  expect(name.length).toBeLessThan(220);
+});
+
+test('unresolved project folder leaves upload recovery and evidence links untouched', async () => {
+  upload.mockRejectedValue(new Error('Project execution folder missing or ambiguous'));
+  render(<InvoiceDocumentsPanel invoice={invoice} onClose={() => {}} />);
+  await screen.findByText('original-pack.pdf');
+  fireEvent.change(screen.getByLabelText('Evidence source'), { target: { value: 'Original scan' } });
+  fireEvent.change(screen.getByLabelText('Upload invoice evidence'), { target: { files: [new File(['fixture'], 'proof.pdf')] } });
+  await screen.findByText('Project execution folder missing or ambiguous');
+  expect(sessionStorage.getItem('finance-evidence-upload:si008')).toBeNull();
+  expect(request.mock.calls.every(call => !call[1])).toBe(true);
 });

@@ -54,15 +54,17 @@ import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
 import ScanToPhoneDialog, { type DeliveredReceipt } from './ScanToPhoneDialog';
 import ScanBatch, { type LiquidationScanItem, type BatchItemFields } from './ScanBatch';
+import { DEFAULT_ROW_SORT, withPhysicalItemNumbers, sortLiquidationRows, receiptRowLabel, makeLiquidationReceiptFilename, type RowSort } from '../utils/liquidation/receiptRows';
 import ReceiptCropper from './ReceiptCropper';
+import ReceiptUploadCropDialog from './ReceiptUploadCropDialog';
 import ReceiptViewer from './ReceiptViewer';
 import LiquidationReceiptReview from './LiquidationReceiptReview';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 import { LIQUIDATION_CATEGORIES } from '../data/financeCategories';
 import { blobToBase64 } from '../utils/receipts/imageCompress';
-import { detectReceiptQuad } from '../utils/receipts/autoCrop';
+import { suggestReceiptCrop } from '../services/receiptCropService';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
-import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
+import { parseReceipt } from '../services/receiptParseService';
 import {
   getReceiptParseMimeType,
   isPdfReceipt,
@@ -81,6 +83,7 @@ import {
 } from '../services/receiptDuplicateService';
 
 interface LiquidationRow {
+  physicalItemNo?: number;
   id: string;
   date: string;
   category: string;
@@ -354,7 +357,7 @@ function LiquidationRowCard({
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, p: 1, pr: 0.5 }}>
         <Box onClick={() => setOpen((o) => !o)} sx={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
-            <Typography variant="caption" color="text.secondary">#{index + 1}</Typography>
+            <Typography variant="caption" color="text.secondary">Item {row.physicalItemNo ?? '—'}</Typography>
             <Typography variant="caption" sx={{ fontWeight: 600 }}>{dateLabel}</Typography>
             {row.category && <Chip size="small" label={row.category} variant="outlined" sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }} />}
             {warnings.length > 0 && (
@@ -421,7 +424,7 @@ function LiquidationRowCard({
             onChange={(e) => onChange(row.id, 'invoiceNo', e.target.value)}
           />
           <TextField
-            size="small" label="Particulars" value={row.particulars} multiline minRows={1} sx={{ gridColumn: '1 / -1' }}
+            size="small" label="Particulars" value={row.particulars} multiline minRows={3} sx={{ gridColumn: '1 / -1' }}
             onChange={(e) => onChange(row.id, 'particulars', e.target.value)}
           />
           <TextField
@@ -466,6 +469,10 @@ export default function LiquidationFormPage() {
     new Date().toISOString().slice(0, 10)
   );
   const [formNo, setFormNo] = useState('');
+  const nextPhysicalItemNoRef = useRef(1);
+  const newPhysicalRow = (projectName = '', projectNo = ''): LiquidationRow => ({
+    ...newRow(projectName, projectNo), physicalItemNo: nextPhysicalItemNoRef.current++,
+  });
   const [rows, setRows] = useState<LiquidationRow[]>([]);
   const [draftId, setDraftId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<LoadedLiquidationOption[]>([]);
@@ -483,6 +490,7 @@ export default function LiquidationFormPage() {
   const [loadedReimb, setLoadedReimb] = useState<{ id: string; status: string | null; at: number | null; caId: string | null } | null>(null);
   // Receipt scans/photos attached per expense row.
   const [receipts, setReceipts] = useState<ReceiptAttachment[]>([]);
+  const [receiptCropQueue, setReceiptCropQueue] = useState<{ rowId: string; files: File[] } | null>(null);
   // Portrait phones (< 600 px) show expense lines as cards instead of the wide table.
   const isPhone = useMediaQuery('(max-width:599.95px)');
   const [receiptViewer, setReceiptViewer] = useState<{ receipt: ReceiptAttachment; url: string | null } | null>(null);
@@ -505,7 +513,7 @@ export default function LiquidationFormPage() {
   const [saving, setSaving] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [caId, setCaId] = useState<string | ''>('');
-  const [sortConfig, setSortConfig] = useState<{ key: 'date' | 'amount'; direction: 'asc' | 'desc' } | null>(null);
+  const [sortConfig, setSortConfig] = useState<RowSort>(DEFAULT_ROW_SORT);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -531,18 +539,7 @@ export default function LiquidationFormPage() {
     });
   };
 
-  const sortedRows = React.useMemo(() => {
-    if (!sortConfig) return rows;
-    return [...rows].sort((a, b) => {
-      if (sortConfig.key === 'date') {
-        const cmp = (a.date || '').localeCompare(b.date || '');
-        return sortConfig.direction === 'asc' ? cmp : -cmp;
-      }
-      const aVal = Number(a.amount) || 0;
-      const bVal = Number(b.amount) || 0;
-      return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
-    });
-  }, [rows, sortConfig]);
+  const sortedRows = React.useMemo(() => sortLiquidationRows(rows, sortConfig), [rows, sortConfig]);
 
   // Default the Name field to the logged-in user only when it's still empty
   // (fresh form). Must NOT depend on `employeeName` itself — a preparer typing
@@ -686,6 +683,10 @@ export default function LiquidationFormPage() {
 
   const attachReceiptFile = async (rowId: string, raw: File, precomputedHash?: string, targetRowOverride?: LiquidationRow) => {
     const file = await convertHeicToJpeg(raw);
+    const targetRow = targetRowOverride || rowsRef.current.find((r) => r.id === rowId);
+    const receiptId = `rcpt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const filename = makeLiquidationReceiptFilename({ formNo, date: targetRow?.date,
+      particulars: targetRow?.particulars || targetRow?.supplier, physicalItemNo: targetRow?.physicalItemNo, file, uniqueId: receiptId });
     const thumbnailDataUrl = file.type.startsWith('image/') ? await generateThumbnail(file) : '';
     let imageHash = precomputedHash;
     if (!imageHash && file.type.startsWith('image/')) {
@@ -694,25 +695,21 @@ export default function LiquidationFormPage() {
       } catch { /* best-effort */ }
     }
     const rec: ReceiptAttachment = {
-      id: `rcpt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id: receiptId,
       rowId,
-      filename: file.name,
+      filename,
       thumbnailDataUrl: thumbnailDataUrl || undefined,
       uploadStatus: 'uploading',
       file,
       imageHash: imageHash || undefined,
     };
     setReceipts((prev) => [...prev, rec]);
-    const targetRow = targetRowOverride || rowsRef.current.find((r) => r.id === rowId);
     if (targetRow) void checkRowForDuplicates(targetRow, imageHash);
     try {
       const folder = await ensureReceiptsFolder();
       const odToken = folder ? await getOneDriveToken() : null;
       if (!folder || !odToken) throw new Error('OneDrive not connected');
-      // Short unique prefix avoids two same-named phone photos overwriting
-      // each other (Graph default conflict behavior is replace).
-      const uploadName = `${rec.id.slice(-6)}_${sanitizeForOneDrive(file.name)}`;
-      const item = await uploadFileToFolderById(odToken, folder.driveId, folder.folderId, uploadName, file);
+      const item = await uploadFileToFolderById(odToken, folder.driveId, folder.folderId, rec.filename, file);
       setReceipts((prev) => prev.map((r) => r.id === rec.id
         ? { ...r, uploadStatus: 'done', oneDriveId: item.id, webUrl: item.webUrl, uploadedAt: new Date().toISOString() }
         : r));
@@ -724,10 +721,13 @@ export default function LiquidationFormPage() {
 
   const attachReceipts = async (rowId: string, files: FileList | null) => {
     if (!rowId || !files || files.length === 0) return;
-    for (const raw of Array.from(files)) {
-      await attachReceiptFile(rowId, raw);
-    }
+    const selected = Array.from(files);
+    const images = selected.filter(file => !isPdfReceipt(file));
+    if (images.length) setReceiptCropQueue({ rowId, files: images });
+    for (const pdf of selected.filter(isPdfReceipt)) await attachReceiptFile(rowId, pdf);
   };
+  const advanceReceiptCrop = () => setReceiptCropQueue(current => current && current.files.length > 1
+    ? { ...current, files: current.files.slice(1) } : null);
 
   // Each receipt scanned via the desktop multi-upload batch becomes its own new
   // row (pre-filled from the AI parse) plus an attached receipt — mirroring how
@@ -735,7 +735,7 @@ export default function LiquidationFormPage() {
   const handleScanBatchItem = async (item: LiquidationScanItem): Promise<boolean> => {
     const f = item.fields;
     const nr: LiquidationRow = {
-      ...newRow('', ''),
+      ...newPhysicalRow('', ''),
       date: f.date || new Date().toISOString().slice(0, 10),
       category: f.category || '',
       amount: Number(f.amount) > 0 ? Number(f.amount) : 0,
@@ -819,16 +819,7 @@ export default function LiquidationFormPage() {
         return;
       }
       const safeFile = await convertHeicToJpeg(file);
-      let detected = await detectReceiptQuad(safeFile);
-      if (!detected) {
-        try {
-          const imageBase64 = await blobToBase64(safeFile);
-          detected = await detectCropFromServer(imageBase64, safeFile.type || 'image/jpeg');
-        } catch { /* best-effort — fall through to the default quad */ }
-      }
-      const quad: Quad = detected ?? [
-        { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 }, { x: 0.88, y: 0.86 }, { x: 0.12, y: 0.86 },
-      ];
+      const quad = await suggestReceiptCrop(safeFile);
       if (gen !== scanOneGenRef.current) return;
       setScanOneEdit(safeFile, quad);
     } catch (err) {
@@ -938,11 +929,11 @@ export default function LiquidationFormPage() {
       targetId = t.rowId;
       t.consumed = true;
       const nextRows = rowsRef.current.map((row) => (row.id === targetId ? applyParsed(row) : row));
-      targetRow = nextRows.find((row) => row.id === targetId) || applyParsed(newRow('', ''));
+      targetRow = nextRows.find((row) => row.id === targetId) || applyParsed(newPhysicalRow('', ''));
       rowsRef.current = nextRows;
       setRows(nextRows);
     } else {
-      const nr = applyParsed(newRow('', ''));
+      const nr = applyParsed(newPhysicalRow('', ''));
       targetId = nr.id;
       targetRow = nr;
       const nextRows = [...rowsRef.current, nr];
@@ -1021,6 +1012,7 @@ export default function LiquidationFormPage() {
     employee_number: employeeNumber,
     rows_json: rows.map((r) => ({
       id: r.id,
+      physicalItemNo: r.physicalItemNo,
       date: r.date,
       category: r.category,
       projectId: r.projectId,
@@ -1088,6 +1080,7 @@ export default function LiquidationFormPage() {
     const data = await res.json().catch(() => ({}));
     if (!data.success || !data.liquidation) return null;
     const l = data.liquidation;
+    if (l.physical_item_numbering_error) { setSubmitSuccess(l.physical_item_numbering_error); return null; }
     setReviewContentHash(l.receipt_review_content_hash || '');
     const serverStatus = String(l.status ?? '').toLowerCase().trim();
     const submitted =
@@ -1110,9 +1103,10 @@ export default function LiquidationFormPage() {
       raw = [];
     }
     if (!Array.isArray(raw)) raw = [];
+    nextPhysicalItemNoRef.current = 1;
     const loadedRows: LiquidationRow[] =
       raw.length === 0
-        ? [newRow('', '')]
+        ? [newPhysicalRow('', '')]
         : raw.map((r: Record<string, unknown>) => {
             const base = newRow(String(r.projectName ?? ''), String(r.projectNo ?? ''));
             const pidValue = r.projectId;
@@ -1120,6 +1114,7 @@ export default function LiquidationFormPage() {
             const projectId: string | '' = pidValue !== undefined && pidValue !== null && pidValue !== '' ? String(pidValue) : '';
             return {
               id: typeof r.id === 'string' && r.id ? String(r.id) : base.id,
+              physicalItemNo: typeof r.physicalItemNo === 'number' ? r.physicalItemNo : undefined,
               date: String(r.date ?? new Date().toISOString().slice(0, 10)),
               category: String(r.category ?? ''),
               projectId,
@@ -1136,7 +1131,11 @@ export default function LiquidationFormPage() {
               customerInfoIssues: Array.isArray(r.customerInfoIssues) ? (r.customerInfoIssues as string[]) : undefined,
             };
           });
-    setRows(loadedRows);
+    const physicalRows = withPhysicalItemNumbers(loadedRows);
+    nextPhysicalItemNoRef.current = Math.max(l.physical_item_numbering?.nextItemNo || 1,
+      ...physicalRows.map(row => (row.physicalItemNo || 0) + 1));
+    setSortConfig(DEFAULT_ROW_SORT);
+    setRows(physicalRows);
     let loadedReceipts: ReceiptAttachment[] = [];
     try {
       const rawReceipts = Array.isArray(l.receipts_json)
@@ -1179,6 +1178,7 @@ export default function LiquidationFormPage() {
           prRows = rawPr.map((r: Record<string, unknown>) => ({
             ...newRow(String(r.projectName ?? ''), String(r.projectNo ?? '')),
             id: typeof r.id === 'string' && r.id ? r.id : `row-${Math.random().toString(36).slice(2)}`,
+            physicalItemNo: typeof r.physicalItemNo === 'number' ? r.physicalItemNo : physicalRows.find(row => row.id === r.id)?.physicalItemNo,
             date: String(r.date ?? ''),
             category: String(r.category ?? ''),
             projectId: r.projectId != null && r.projectId !== '' ? String(r.projectId) : '',
@@ -1202,7 +1202,7 @@ export default function LiquidationFormPage() {
       setPendingRevision(null);
     }
     setSubmitSuccess(null);
-    return loadedRows;
+    return physicalRows;
   };
 
   useEffect(() => {
@@ -1419,7 +1419,9 @@ export default function LiquidationFormPage() {
         setIsViewingSubmitted(false);
         setRevisionMode(false);
         setPendingRevision(null);
-        setRows([newRow('', '')]);
+        setSortConfig(DEFAULT_ROW_SORT);
+        nextPhysicalItemNoRef.current = 1;
+        setRows([newPhysicalRow('', '')]);
         setFormNo('');
         setEmployeeName(user?.full_name?.trim() || user?.username || '');
         setEmployeeNumber('');
@@ -1445,7 +1447,9 @@ export default function LiquidationFormPage() {
         setIsViewingSubmitted(false);
         setRevisionMode(false);
         setPendingRevision(null);
-        setRows([newRow('', '')]);
+        setSortConfig(DEFAULT_ROW_SORT);
+        nextPhysicalItemNoRef.current = 1;
+        setRows([newPhysicalRow('', '')]);
         setFormNo('');
         setEmployeeName(user?.full_name?.trim() || user?.username || '');
         setEmployeeNumber('');
@@ -1503,7 +1507,9 @@ export default function LiquidationFormPage() {
         setDraftId(null);
         setLoadedOptionValue('');
         setIsViewingSubmitted(false);
-        setRows([newRow('', '')]);
+        setSortConfig(DEFAULT_ROW_SORT);
+        nextPhysicalItemNoRef.current = 1;
+        setRows([newPhysicalRow('', '')]);
         setFormNo('');
         setSubmitSuccess(caId
           ? 'Liquidation submitted. Amount applied to CA has been deducted; expenses added to project expense.'
@@ -1543,7 +1549,8 @@ export default function LiquidationFormPage() {
   };
 
   const addRow = () => {
-    setRows((prev) => [...prev, newRow('', '')]);
+    const row = newPhysicalRow('', '');
+    setRows((prev) => [...prev, row]);
   };
 
   const removeRow = (id: string) => {
@@ -1652,10 +1659,10 @@ export default function LiquidationFormPage() {
     doc.setFontSize(10);
     doc.text(`Name: ${(employeeName || '—').trim()}`, margin, y);
     y += 10;
-    const exportRows = [...rows].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const exportRows = sortLiquidationRows(rows);
     const body = exportRows.length > 0
       ? exportRows.map((r, i) => [
-          String(i + 1),
+          String(r.physicalItemNo ?? '—'),
           r.date || '—',
           r.category || '—',
           (r.projectName || '—').slice(0, 25),
@@ -1669,7 +1676,7 @@ export default function LiquidationFormPage() {
     const tableStartY = y;
     const rowsPerPage = 25;
     const bottomReserve = 60;
-    const tableHead = [['No.', 'Date', 'Category', 'Project', 'PO #', 'Particulars', 'Amount', 'Remarks']];
+    const tableHead = [['Item #', 'Date', 'Category', 'Project', 'PO #', 'Particulars', 'Amount', 'Remarks']];
     const tableOpts = {
       margin: { left: margin, right: margin, bottom: bottomReserve },
       tableWidth: pageWidth - margin * 2,
@@ -1732,8 +1739,7 @@ export default function LiquidationFormPage() {
       }
       const entries: { caption: string; dataUrl: string | null }[] = [];
       for (const r of receipts) {
-        const rowIdx = rows.findIndex((x) => x.id === r.rowId);
-        const caption = `Row ${rowIdx >= 0 ? rowIdx + 1 : '—'} · ${r.filename}`;
+        const caption = `${receiptRowLabel(exportRows, r.rowId)} · ${r.filename}`;
         if (!isImageReceipt(r)) {
           entries.push({ caption: `${caption} (file — see OneDrive)`, dataUrl: null });
           continue;
@@ -1824,10 +1830,10 @@ export default function LiquidationFormPage() {
     const wb = XLSX.utils.book_new();
     const headerRow1 = ['Employee Name', employeeName, 'Employee Number', employeeNumber];
     const headerRow2 = ['Date of Submission', dateOfSubmission, 'Form No.', formNo];
-    const tableHeaders = ['No.', 'Date', 'Category', 'Project Name', 'PO #', 'Particulars', 'Amount', 'Remarks'];
-    const exportRows = [...rows].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const tableHeaders = ['Item #', 'Date', 'Category', 'Project Name', 'PO #', 'Particulars', 'Amount', 'Remarks'];
+    const exportRows = sortLiquidationRows(rows);
     const dataRows = exportRows.map((r, i) => [
-      i + 1,
+      r.physicalItemNo ?? '—',
       r.date,
       r.category,
       r.projectName,
@@ -1867,14 +1873,16 @@ export default function LiquidationFormPage() {
         if (r1[1] != null) setDateOfSubmission(String(r1[1]).slice(0, 10));
         if (r1[3] != null) setFormNo(String(r1[3]));
         const headerRow = raw[3] as unknown[];
-        if (!headerRow || (headerRow[0] !== 'No.' && headerRow[0] !== 1)) return;
+        if (!headerRow || (headerRow[0] !== 'No.' && headerRow[0] !== 'Item #' && headerRow[0] !== 1)) return;
         const imported: LiquidationRow[] = [];
         for (let i = 4; i < raw.length; i++) {
           const row = raw[i] as unknown[];
           if (!row || row.length < 6) continue;
           const date = row[1] != null ? String(row[1]).slice(0, 10) : new Date().toISOString().slice(0, 10);
           const amount = typeof row[6] === 'number' ? row[6] : parseFloat(String(row[6] || 0)) || 0;
-          imported.push(newRow(String(row[3] ?? ''), String(row[4] ?? '')));
+          const fromSameForm = String((raw[1] as unknown[])?.[3] || '') === formNo;
+          const existing = fromSameForm ? rows.find(existingRow => existingRow.physicalItemNo === Number(row[0])) : undefined;
+          imported.push(existing ? { ...existing } : newPhysicalRow(String(row[3] ?? ''), String(row[4] ?? '')));
           const last = imported[imported.length - 1];
           last.projectId = '';
           last.date = date;
@@ -1946,7 +1954,9 @@ export default function LiquidationFormPage() {
                   setPendingRevision(null);
                   setDraftId(null);
                   setLoadedOptionValue('');
-                  setRows([newRow('', '')]);
+                  setSortConfig(DEFAULT_ROW_SORT);
+                  nextPhysicalItemNoRef.current = 1;
+                  setRows([newPhysicalRow('', '')]);
                   setFormNo('');
                   setEmployeeName('');
                   setEmployeeNumber('');
@@ -2459,11 +2469,11 @@ export default function LiquidationFormPage() {
             )}
           </Box>
         ) : (
-        <TableContainer sx={{ border: `1px solid ${theme.border}`, borderRadius: 1, flex: 1, minHeight: 0, overflow: 'auto' }}>
+        <TableContainer sx={{ border: `1px solid ${theme.border}`, borderRadius: 1, flex: 1, minHeight: 0, overflow: 'auto', overscrollBehaviorY: 'auto' }}>
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow sx={{ bgcolor: theme.primary + '12' }}>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary, width: 48 }}>No.</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary, width: 48 }}>Item #</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 110 }} sortDirection={sortConfig?.key === 'date' ? sortConfig.direction : false}>
                   <TableSortLabel
                     active={sortConfig?.key === 'date'}
@@ -2482,7 +2492,7 @@ export default function LiquidationFormPage() {
                 <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 120 }}>
                   PO #
                 </TableCell>
-                <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 160 }}>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 360 }}>
                   Particulars
                 </TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary, minWidth: 100 }} sortDirection={sortConfig?.key === 'amount' ? sortConfig.direction : false}>
@@ -2547,7 +2557,7 @@ export default function LiquidationFormPage() {
                       } : {}),
                     }}
                   >
-                    <TableCell sx={{ color: 'text.secondary' }}>{index + 1}</TableCell>
+                    <TableCell sx={{ color: 'text.secondary' }}>{row.physicalItemNo ?? '—'}</TableCell>
                     <TableCell>
                       <TextField
                         size="small"
@@ -2624,8 +2634,15 @@ export default function LiquidationFormPage() {
                         value={row.particulars}
                         onChange={(e) => updateRow(row.id, 'particulars', e.target.value)}
                         placeholder="Particulars"
+                        multiline
+                        minRows={3}
                         fullWidth
-                        sx={{ '& .MuiInputBase-input': { py: 0.75 } }}
+                        sx={{
+                          minWidth: 360,
+                          '& .MuiInputBase-root': { py: 1 },
+                          '& textarea': { overflowWrap: 'anywhere', lineHeight: 1.5 },
+                        }}
+                        inputProps={{ 'aria-label': `Particulars for item ${row.physicalItemNo ?? '—'}` }}
                         InputProps={row.duplicateWarnings && row.duplicateWarnings.length ? {
                           endAdornment: (
                             <Tooltip title={`Possible duplicate receipt: ${row.duplicateWarnings.join(' ')}`}>
@@ -2784,7 +2801,7 @@ export default function LiquidationFormPage() {
             )}
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
               {receipts.map((r) => {
-                const rowIdx = rows.findIndex((x) => x.id === r.rowId);
+                const rowLabel = receiptRowLabel(sortedRows, r.rowId);
                 return (
                   <Box
                     key={r.id}
@@ -2805,8 +2822,8 @@ export default function LiquidationFormPage() {
                       />
                     )}
                     <Box sx={{ minWidth: 0 }}>
-                      <Typography variant="caption" sx={{ display: 'block', fontWeight: 600 }}>
-                        Row {rowIdx >= 0 ? rowIdx + 1 : '—'}
+                      <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, overflowWrap: 'anywhere' }}>
+                        {rowLabel}
                       </Typography>
                       <Typography variant="caption" sx={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 150 }} title={r.filename}>
                         {r.filename}
@@ -2884,7 +2901,7 @@ export default function LiquidationFormPage() {
                 folderPath: scanFolderPath,
                 rowId: scanDialog.rowId || '',
                 label: scanDialog.rowId
-                  ? `Form ${formNo || 'draft'} — Row ${rows.findIndex((x) => x.id === scanDialog.rowId) + 1}`
+                  ? `Form ${formNo || 'draft'} — ${receiptRowLabel(sortedRows, scanDialog.rowId)}`
                   : `Form ${formNo || 'draft'}`,
               }
             : null
@@ -2894,6 +2911,9 @@ export default function LiquidationFormPage() {
           setActiveScanJob({ pairingToken, received: 0 });
         }}
       />
+      {receiptCropQueue && <ReceiptUploadCropDialog file={receiptCropQueue.files[0]}
+        onAttach={async file => { await attachReceiptFile(receiptCropQueue.rowId, file); advanceReceiptCrop(); }}
+        onSkip={advanceReceiptCrop} onCancel={() => setReceiptCropQueue(null)} />}
       {/* Crop step between photo pick and AI parse for Scan One (auto-detected corners,
           adjustable). PDFs never reach this dialog — they parse directly. */}
       <Dialog open={!!scanOneEditUrl} onClose={() => {}} maxWidth="xs" fullWidth>

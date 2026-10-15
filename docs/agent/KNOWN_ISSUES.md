@@ -1,5 +1,35 @@
 # Known Issues
 
+## Physical item references versus chronological row positions — LQ016 fixed and verified; hosted release pending (2026-10-15)
+
+Date/amount sorting previously renumbered printed references. LQ016 physicalItem7 is stored position4; correcting its date must retain7, not become1. ADR-0005 introduces an immutable row-ID ledger initialized from verified saved chronology, with metadata-only hash/mapping guards and non-reused numbers. Local API/UI/tests and actual Chrome/XLSX/PDF numbering checks pass. Tab3 verified the one-form production ledger initialization, then the authorized LQ016 date correction; Item7 remains fixed and all27 references/readback match. The old hosted code does not enforce this contract until this release deploys. No broad backfill. Source includes pending/reserved references; abandoned edits may leave intentional gaps. This supersedes mutable sorted-position receipt-label behavior below.
+
+## LQ009 missing source and overlapping LQ016 rows (2026-10-15)
+
+Direct Firestore read confirms migrated liquidation `0UQNejKRDq4LDS92fZGt`/LQ26-009-KKS is absent. Finance's verified backups show presentAug27/absentSep29, with four filed expenses totaling2100 later matching LQ016 under new row IDs. Original project/overhead expense references survive; deletion actor/reason and actual duplication are unproven. Restore/reconciliation is separate authorized work; no duplicate payable should be synthesized from the unapproved4934 revision. Report in Finance memory `2026-10-15-kim-lq009-missing-record.md`.
+
+
+## Sorted liquidation receipt labels/captions — corrected locally (2026-10-15)
+
+The table/PDF could sort by date while thumbnail/QR/PDF receipt captions used raw-array positions, showing the wrong row number. Labels now resolve stable receipt rowId against current displayed rows or PDF export rows. New forms default oldest-first, with stable equal dates/undated rows last. Actual9-row/9-receipt Chrome check passes both date directions; filenames for new uploads capture form/date/details plus uniqueness. Sorting does not rename existing cloud files or change saved links/review hashes. Fix is local in isolated release, not deployed.
+
+
+## Liquidation table wheel scroll trap — fixed locally (2026-10-15)
+
+Global `.MuiTableContainer-root { overscroll-behavior: contain }` also traps vertical wheel scroll over a horizontal-only table. LiquidationFormPage now overrides only the vertical axis to auto. Native Chrome wheel test confirms page movement and retained table horizontal scroll. Avoid applying scroll containment to an axis that should chain to page scrolling; dialogs/drawers retain their existing isolation. Fix is local in isolated release, not deployed.
+
+## SI008 historical execution folder needs explicit mapping (2026-10-15)
+
+Tab 2 real read-only review found SI008/project_3 has no executionFolderId or linked Calcsheet mapping and no IOCT2602001-prefix folder in 2026. Existing legacy `ACTI2512-02-RPP Additional Temperature & RH Integration -B1 PH2` folder exists (item `01DAS753QJOWGSVVFOJVDYYAQGJSQ5O7WS`). The corrected fail-closed upload resolver needs an explicit confirmed folder mapping; it does not infer identity from this unrelated legacy name. No SI008 upload/mapping write attempted. This remains follow-up; alternate-year/pagination/ambiguous-stale/child-creation live cases also lack fixtures.
+
+
+## BIR2307 upload folder/extension defects — corrected locally (2026-10-15)
+
+Tab 2's real SI013 upload confirmed a parallel unsuffixed execution tree and `.pdf.pdf` filename. Fix is local in `/tmp/ioct-finance-evidence-release`: invoice/project identity replaces cached title/current-year composition; saved IDs take precedence, then canonical customer-suffix mapping across flat/all years; unresolved/ambiguous/stale mapping blocks upload. Only Sales Invoice child creation is allowed under resolved item ID. Filename extension is appended once after stem truncation. Regression checks pass. Tab 2 passed actual SI013 upload/hash/folder/filename and typed-link retry/panel-refresh/reopen persistence checks; saved business snapshots were independently compared by Tab 3. The corrected code is included in the current release candidate. Other-year, pagination, ambiguous/stale mappings and child creation remain untested against live services.
+
+Preserve pending/unlinked test copy `01DAS753RFBFISMRB2HVHKHPL65NNRB2EE` and Chrome sessionStorage metadata. Do not re-upload, move/delete or auto-link it. Port3305 guarded review and existing served build are unchanged. Source report: `/Users/reuelrivera/IOCT CoWork/IOCT Finance/docs/agent/memory/log/2026-10-15-bir2307-onedrive-upload-test.md`. No deployment performed.
+
+
 ## Mobile CA request Edit missing — inherited main gap (2026-10-15)
 
 Tab 2 actual-data review found 10 Edit controls at desktop1280px and none at phone360px for actual RJR on `/finance/expense-monitoring/ca-form`. Phone cards omit the existing desktop `superadmin || own pending` condition and `openRequestEdit` action. Source verification confirms CAFormPage is unchanged between main and PR144. No fix included in this review update; report in Finance memory `2026-10-15-pm-local-real-data-check.md`.

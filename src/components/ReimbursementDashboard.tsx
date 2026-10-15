@@ -76,7 +76,7 @@ interface CashAdvanceRow {
 }
 
 interface ClaimLine {
-  rowId: string; date: string; category: string; particulars: string;
+  rowId: string; physicalItemNo?: number; date: string; category: string; particulars: string;
   amount: number; hasReceipt: boolean; paid: boolean;
 }
 interface ClaimPayment {
@@ -927,7 +927,7 @@ const ReimbursementDashboard: React.FC = () => {
                     <Paper key={`${t.id}-${l.rowId}`} variant="outlined" sx={{ p: 1, mb: 0.5, display: 'flex', alignItems: 'flex-start', gap: 0.5, ...(l.paid ? { opacity: 0.55 } : {}) }}>
                       <Checkbox size="small" sx={{ p: 0.5 }} checked={lineSelected.includes(lineKey(t.id, l.rowId))} disabled={l.paid} onChange={() => toggleLine(lineKey(t.id, l.rowId))} />
                       <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{l.particulars || l.category}</Typography>
+                        <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>Item {l.physicalItemNo ?? '—'} · {l.particulars || l.category}</Typography>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.25 }}>
                           <Typography variant="caption" color="text.secondary">{l.date}</Typography>
                           {l.paid
@@ -968,7 +968,7 @@ const ReimbursementDashboard: React.FC = () => {
                         <Checkbox checked={lineSelected.includes(lineKey(t.id, l.rowId))} disabled={l.paid || historyOnly} onChange={() => toggleLine(lineKey(t.id, l.rowId))} />
                       </TableCell>
                       <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{l.date}</TableCell>
-                      <TableCell sx={{ fontSize: '0.8rem' }}>{l.particulars || l.category}</TableCell>
+                      <TableCell sx={{ fontSize: '0.8rem' }}>Item {l.physicalItemNo ?? '—'} · {l.particulars || l.category}</TableCell>
                       <TableCell>
                         {l.paid
                           ? <Chip size="small" color="success" label="Paid" />
