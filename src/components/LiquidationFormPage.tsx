@@ -1479,21 +1479,9 @@ export default function LiquidationFormPage() {
     setSaving(true);
     setSubmitSuccess(null);
     try {
-      // Get next form number if not set (for new submissions)
-      let finalFormNo = formNo;
-      if (!finalFormNo || finalFormNo.trim() === '') {
-        const res = await fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } });
-        const data = await res.json().catch(() => ({}));
-        if (data.success && data.form_no) {
-          finalFormNo = data.form_no;
-          setFormNo(finalFormNo);
-        } else {
-          const initials = (user?.username || 'NA').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'NA';
-          const yy = String(new Date().getFullYear()).slice(-2);
-          finalFormNo = `LQ${yy}-001-${initials}`;
-        }
-      }
-      const body = { ...payload(), form_no: finalFormNo, status: 'submitted' };
+      // formNo is only a preview; the server assigns the real number on submit
+      // (and moves draft receipts into that number's folder) and returns both.
+      const body = { ...payload(), status: 'submitted' };
       const url = draftId ? `${API_BASE}/api/liquidations/${draftId}` : `${API_BASE}/api/liquidations`;
       const method = draftId ? 'PUT' : 'POST';
       const res = await fetch(url, {
@@ -1503,7 +1491,9 @@ export default function LiquidationFormPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
-        addLiquidationRowsToProjectExpenses(rows, data.id ?? draftId ?? undefined, finalFormNo, caId || undefined, receipts).catch(() => {});
+        const finalFormNo: string = data.form_no || formNo;
+        const finalReceipts: ReceiptAttachment[] = Array.isArray(data.receipts) ? data.receipts : receipts;
+        addLiquidationRowsToProjectExpenses(rows, data.id ?? draftId ?? undefined, finalFormNo, caId || undefined, finalReceipts).catch(() => {});
         setDraftId(null);
         setLoadedOptionValue('');
         setIsViewingSubmitted(false);
@@ -1512,8 +1502,8 @@ export default function LiquidationFormPage() {
         setRows([newPhysicalRow('', '')]);
         setFormNo('');
         setSubmitSuccess(caId
-          ? 'Liquidation submitted. Amount applied to CA has been deducted; expenses added to project expense.'
-          : 'Liquidation submitted as an out-of-pocket reimbursement claim (pending payback); expenses added to project expense.');
+          ? `Liquidation ${finalFormNo} submitted. Amount applied to CA has been deducted; expenses added to project expense.`
+          : `Liquidation ${finalFormNo} submitted as an out-of-pocket reimbursement claim (pending payback); expenses added to project expense.`);
         setCaId('');
         setReceipts([]);
         // Fetch next form number for new form
@@ -2189,10 +2179,10 @@ export default function LiquidationFormPage() {
             <TextField
               fullWidth
               size="small"
-              label="Form No."
+              label={isViewingSubmitted ? 'Form No.' : 'Form No. (preview)'}
               value={formNo}
-              onChange={(e) => setFormNo(e.target.value)}
-              disabled={isViewingSubmitted}
+              disabled
+              helperText={isViewingSubmitted ? undefined : 'Assigned on submit'}
               sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'background.paper' } }}
             />
           </Box>
