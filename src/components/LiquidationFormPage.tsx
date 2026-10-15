@@ -52,6 +52,7 @@ import dataService from '../services/dataService';
 import { Project } from '../types/Project';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
+import { liquidationDocNo } from '../utils/liquidationDocNo';
 import ScanToPhoneDialog, { type DeliveredReceipt } from './ScanToPhoneDialog';
 import ScanBatch, { type LiquidationScanItem, type BatchItemFields } from './ScanBatch';
 import { DEFAULT_ROW_SORT, withPhysicalItemNumbers, sortLiquidationRows, receiptRowLabel, makeLiquidationReceiptFilename, type RowSort } from '../utils/liquidation/receiptRows';
@@ -1619,11 +1620,11 @@ export default function LiquidationFormPage() {
     let logoWidth = 0;
     let logoHeight = 0;
     try {
-      const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
-      const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
+      const { loadLogoTransparentBackground, IOCT_ICON_LOGO_PDF_SIZE } = await import('../utils/logoUtils');
+      const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
       logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-      logoWidth = IOCT_LOGO_PDF_WIDTH;
-      logoHeight = IOCT_LOGO_PDF_HEIGHT;
+      logoWidth = IOCT_ICON_LOGO_PDF_SIZE;
+      logoHeight = IOCT_ICON_LOGO_PDF_SIZE;
     } catch (_) {}
 
     const lineHeight = 5;
@@ -1780,19 +1781,9 @@ export default function LiquidationFormPage() {
       doc.setFontSize(8);
     }
 
-    // Add footer with page number and Doc No. on all pages (Doc No. is LIQ-26-022, not LIQ-LQ26-022-RJR)
+    // Add footer with page number and Doc No. (LQ-YY-NNN-AAA) on all pages
     const totalPages = doc.getNumberOfPages();
-    const yySeqMatch = formNo.match(/^LQ(\d{2})-(\d{3})-/);
-    const legacyMatch = formNo.match(/^LQ-?(\d+)/);
-    const docNo = !formNo
-      ? 'LIQ-001'
-      : formNo.startsWith('LIQ-')
-      ? formNo
-      : yySeqMatch
-      ? `LIQ-${yySeqMatch[1]}-${yySeqMatch[2]}`
-      : legacyMatch
-      ? 'LIQ-' + legacyMatch[1]
-      : 'LIQ-' + formNo;
+    const docNo = liquidationDocNo(formNo);
     doc.setFontSize(8);
     for (let p = 1; p <= totalPages; p++) {
       doc.setPage(p);
