@@ -14,6 +14,11 @@ export function sortLiquidationRows<T extends { id: string; date: string; amount
   });
 }
 
+// Draft forms number their lines by date (undated last), matching the server.
+export function dateOrderItemNumbers(rows: readonly { id: string; date: string; amount: number }[]): Map<string, number> {
+  return new Map(sortLiquidationRows(rows).map((row, index) => [row.id, index + 1]));
+}
+
 export function receiptRowLabel(rows: readonly { id: string; particulars?: string; physicalItemNo?: number }[], rowId: string): string {
   const index = rows.findIndex(row => row.id === rowId);
   if (index < 0) return 'Unlinked receipt';

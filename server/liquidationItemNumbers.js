@@ -54,10 +54,20 @@ function prepareNumberedRows(raw, existing, actor = {}) {
   numbering.initializedAt ||= new Date().toISOString();
   return { rows: cleaned, numbering };
 }
+// Drafts have no paper copy yet, so their item numbers simply follow date order
+// (undated last) and are recomputed on every save; client hints are ignored. The
+// numbers become permanent when the form is submitted — after that a new line
+// (an exception item) takes the next free number and nothing is renumbered.
+function draftNumberedRows(raw, actor = {}, basis = 'draft-date-order') {
+  const rows = rowsArray(raw);
+  const numbers = Object.fromEntries(chronologicalRows(rows).map((row, index) => [row.id, index + 1]));
+  const cleaned = rows.map(({ physicalItemNo, ...content }) => content);
+  return { rows: cleaned, numbering: { version: 1, basis, numbers, nextItemNo: rows.length + 1, initializedBy: actor.id || null, initializedAt: new Date().toISOString() } };
+}
 function mappingHash(numbers) {
   return createHash('sha256').update(JSON.stringify(Object.entries(numbers).sort(([a], [b]) => a.localeCompare(b)))).digest('hex');
 }
-module.exports = { rowsArray, chronologicalRows, physicalNumbering, numberedRows, prepareNumberedRows, mappingHash };
+module.exports = { rowsArray, chronologicalRows, physicalNumbering, numberedRows, prepareNumberedRows, draftNumberedRows, mappingHash };
 
 // Reserve references before any accounting side effects. A later failed or
 // removed edit may leave a gap, but concurrent edits cannot reuse that number.

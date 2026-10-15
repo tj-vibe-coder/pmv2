@@ -2323,7 +2323,7 @@ app.post('/api/liquidations', async (req, res) => {
   const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
   const caId = ca_id ? String(ca_id) : null;
   try {
-    const { rows, numbering } = require('./server/liquidationItemNumbers').prepareNumberedRows(rawRows, null, user);
+    const { rows, numbering } = require('./server/liquidationItemNumbers').draftNumberedRows(rawRows, user, status === 'submitted' ? 'date-order-at-submit' : 'draft-date-order');
     let caCoveredAmount = 0;
     let reimbursableAmount = 0;
     if (liqStatus === 'submitted' && caId) {
@@ -2395,7 +2395,8 @@ app.put('/api/liquidations/:id', async (req, res) => {
     if (existing.status === 'submitted') return res.status(400).json({ success: false, error: 'Cannot edit submitted liquidation' });
     const { date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
     let { form_no } = req.body;
-    const { rows } = require('./server/liquidationItemNumbers').prepareNumberedRows(rows_json || [], existing, user);
+    // Still a draft (submitted forms are rejected above): number by date; frozen if this save submits.
+    const { rows, numbering } = require('./server/liquidationItemNumbers').draftNumberedRows(rows_json || [], user, status === 'submitted' ? 'date-order-at-submit' : 'draft-date-order');
     let receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
     const total = parseFloat(total_amount) || 0;
     const now = Math.floor(Date.now() / 1000);
@@ -2419,8 +2420,7 @@ app.put('/api/liquidations/:id', async (req, res) => {
       receipts = await relabelLiquidationReceipts(receipts, provisionalNo, form_no);
     }
     const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
-    await require('./server/liquidationItemNumbers').reserveNumberedRows(db, ref, rows_json || [], user);
-    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
+    await ref.update({ physical_item_numbering: numbering, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       // Full total, matching POST above — the CA's balance_remaining can go
       // negative, which is the existing "company owes this employee" signal.

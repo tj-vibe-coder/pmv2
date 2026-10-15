@@ -171,30 +171,58 @@ async function getCurrentUser(req) {
   }
 }
 
-// Liquidation form numbers append the submitter's initials, e.g. LQ26-022-RJR.
-// Prefer an explicit `initials` field on the user doc (set for accounts whose
-// username isn't already initials-style, e.g. Renzel/Kim/Nylle); fall back to
-// username for accounts where it already is (TJC, RJR, ...).
-function formSubmitterInitials(user) {
-  const raw = (user && (user.initials || user.username)) ? String(user.initials || user.username) : '';
-  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '') || 'NA';
+// Liquidation form numbers (LQ<YY>-<###>-<INITIALS>) are assigned on submit by
+// server/liquidationFormNo.js; see the header there for why.
+const liqFormNo = require('./server/liquidationFormNo');
+const liqFormYy = () => phYearMonth(new Date()).slice(0, 2);
+const previewLiquidationFormNo = (user) => liqFormNo.previewLiquidationFormNo(db, user, liqFormYy());
+const allocateLiquidationFormNo = (user) => liqFormNo.allocateLiquidationFormNo(db, user, liqFormYy());
+
+// Graph calls relabelReceipts needs to move draft-time receipts into the folder
+// for the number assigned on submit.
+async function liquidationReceiptGraph() {
+  const token = await getGraphAppToken();
+  const driveId = await resolveCorporateDriveId(token);
+  const base = `https://graph.microsoft.com/v1.0/drives/${driveId}/items`;
+  const call = async (url, opts = {}) => {
+    const resp = await fetch(url, { ...opts, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' } });
+    if (resp.status === 204) return null;
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw Object.assign(new Error(JSON.stringify(body)), { status: resp.status });
+    return body;
+  };
+  return {
+    getItem: (id) => call(`${base}/${encodeURIComponent(id)}`),
+    updateItem: (id, patch) => call(`${base}/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    async ensureSiblingFolder(folderId, name) {
+      const folder = await call(`${base}/${encodeURIComponent(folderId)}`);
+      const yearId = folder.parentReference.id;
+      try {
+        return (await call(`${base}/${encodeURIComponent(yearId)}:/${encodeURIComponent(name)}`)).id;
+      } catch (err) {
+        if (err.status !== 404) throw err;
+        return (await call(`${base}/${encodeURIComponent(yearId)}/children`, { method: 'POST', body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) })).id;
+      }
+    },
+    async deleteFolderIfEmpty(folderId) {
+      const folder = await call(`${base}/${encodeURIComponent(folderId)}`);
+      if (folder.folder && folder.folder.childCount === 0) await call(`${base}/${encodeURIComponent(folderId)}`, { method: 'DELETE' });
+    },
+  };
 }
 
-// LQ<YY>-<###>-<INITIALS>, e.g. LQ26-022-RJR — 22nd liquidation submitted in 2026 by RJR.
-// Sequence resets each calendar year (Philippine business date, same convention as
-// nextCaNo/nextIoctProjectNo); only form numbers already carrying that year's prefix count.
-async function nextLiquidationFormNo(user) {
-  const yy = phYearMonth(new Date()).slice(0, 2);
-  const snap = await db.collection('liquidations').where('status', '==', 'submitted').select('form_no').get();
-  const re = new RegExp(`^LQ${yy}-(\\d{3})-`);
-  let maxNum = 0;
-  for (const d of snap.docs) {
-    const fn = d.data().form_no;
-    if (typeof fn !== 'string') continue;
-    const m = fn.match(re);
-    if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > maxNum) maxNum = n; }
+// Best-effort: a Graph failure leaves the receipts where they were (links still work).
+async function relabelLiquidationReceipts(receipts, provisionalNo, formNo) {
+  const oldNo = String(provisionalNo || '').trim() || 'draft';
+  if (!receipts.some(r => r && r.oneDriveId) || oldNo === formNo) return receipts;
+  try {
+    const result = await liqFormNo.relabelReceipts(receipts, oldNo, formNo, await liquidationReceiptGraph());
+    if (result.failed) console.warn(`[liquidation] ${result.failed} receipt(s) not moved from ${oldNo} to ${formNo}`);
+    return result.receipts;
+  } catch (err) {
+    console.warn(`[liquidation] receipt relabel ${oldNo} -> ${formNo} skipped:`, err.message);
+    return receipts;
   }
-  return `LQ${yy}-${String(maxNum + 1).padStart(3, '0')}-${formSubmitterInitials(user)}`;
 }
 
 function isActiveUser(user) {
@@ -1853,7 +1881,7 @@ const promoteExpenseToLiquidation = (collectionName) => async (req, res) => {
         }
       }
       // Same LQ<YY><###>-<INITIALS> numbering scheme as /api/liquidations/next-form-no.
-      formNo = await nextLiquidationFormNo(targetUser);
+      formNo = await allocateLiquidationFormNo(targetUser);
       const liquidationRef = db.collection('liquidations').doc();
       batch.set(liquidationRef, {
         user_id: String(userId),
@@ -2220,6 +2248,7 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
 });
 
 // ========== LIQUIDATIONS ==========
+app.use('/api/liquidations', require('./server/liquidationItemSearchRouter').createLiquidationItemSearchRouter({ db, requireActiveUser }));
 app.use('/api/liquidations', require('./server/liquidationItemNumbersRouter').createLiquidationItemNumbersRouter({ db, requireActiveUser }));
 app.use('/api/liquidations', require('./server/liquidationReceiptReviewRouter').createLiquidationReceiptReviewRouter({ db, requireActiveUser }));
 app.get('/api/liquidations', async (req, res) => {
@@ -2250,8 +2279,9 @@ app.get('/api/liquidations/next-form-no', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   try {
-    const form_no = await nextLiquidationFormNo(user);
-    res.json({ success: true, form_no });
+    // Preview only; the real number is assigned when the form is submitted.
+    const form_no = await previewLiquidationFormNo(user);
+    res.json({ success: true, form_no, provisional: true });
   } catch (err) {
     console.error('Error fetching next form number:', err);
     res.status(500).json({ success: false, error: 'Database error' });
@@ -2284,15 +2314,16 @@ app.get('/api/liquidations/:id', async (req, res) => {
 app.post('/api/liquidations', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
-  const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
+  const { date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
+  let { form_no } = req.body;
   const rawRows = rows_json || [];
-  const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
+  let receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
   const total = parseFloat(total_amount) || 0;
   const now = Math.floor(Date.now() / 1000);
   const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
   const caId = ca_id ? String(ca_id) : null;
   try {
-    const { rows, numbering } = require('./server/liquidationItemNumbers').prepareNumberedRows(rawRows, null, user);
+    const { rows, numbering } = require('./server/liquidationItemNumbers').draftNumberedRows(rawRows, user, status === 'submitted' ? 'date-order-at-submit' : 'draft-date-order');
     let caCoveredAmount = 0;
     let reimbursableAmount = 0;
     if (liqStatus === 'submitted' && caId) {
@@ -2306,9 +2337,11 @@ app.post('/api/liquidations', async (req, res) => {
     } else if (liqStatus === 'submitted' && !caId) {
       reimbursableAmount = total;
     }
-    if (liqStatus === 'submitted' && form_no) {
-      const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
-      if (!dupSnap.empty) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
+    if (liqStatus === 'submitted') {
+      // The browser's number is only a preview; the server assigns the real one.
+      const provisionalNo = form_no;
+      form_no = await allocateLiquidationFormNo(user);
+      receipts = await relabelLiquidationReceipts(receipts, provisionalNo, form_no);
     }
     // Reimbursable amounts — out-of-pocket claims, or the slice of a liquidation
     // that exceeds the CA's balance — are tracked so the requester gets paid
@@ -2341,7 +2374,7 @@ app.post('/api/liquidations', async (req, res) => {
         updatedAt: now,
       });
     }
-    res.status(201).json({ success: true, id: ref.id, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved' });
+    res.status(201).json({ success: true, id: ref.id, form_no: form_no || null, receipts, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved' });
   } catch (err) {
     if (err.status === 400) return res.status(400).json({ success: false, error: err.message });
     console.error('Error creating liquidation:', err);
@@ -2360,9 +2393,11 @@ app.put('/api/liquidations/:id', async (req, res) => {
     const existing = doc.data();
     if (existing.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (existing.status === 'submitted') return res.status(400).json({ success: false, error: 'Cannot edit submitted liquidation' });
-    const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
-    const { rows } = require('./server/liquidationItemNumbers').prepareNumberedRows(rows_json || [], existing, user);
-    const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
+    const { date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
+    let { form_no } = req.body;
+    // Still a draft (submitted forms are rejected above): number by date; frozen if this save submits.
+    const { rows, numbering } = require('./server/liquidationItemNumbers').draftNumberedRows(rows_json || [], user, status === 'submitted' ? 'date-order-at-submit' : 'draft-date-order');
+    let receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
     const total = parseFloat(total_amount) || 0;
     const now = Math.floor(Date.now() / 1000);
     const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
@@ -2378,13 +2413,14 @@ app.put('/api/liquidations/:id', async (req, res) => {
     } else if (liqStatus === 'submitted' && !caId) {
       reimbursableAmount = total;
     }
-    if (liqStatus === 'submitted' && form_no) {
-      const dupSnap = await db.collection('liquidations').where('status', '==', 'submitted').where('form_no', '==', form_no).get();
-      if (dupSnap.docs.some(d => d.id !== id)) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
+    if (liqStatus === 'submitted') {
+      // A draft's number is only a preview (it may be days old); assign the real one now.
+      const provisionalNo = form_no || existing.form_no;
+      form_no = await allocateLiquidationFormNo(user);
+      receipts = await relabelLiquidationReceipts(receipts, provisionalNo, form_no);
     }
     const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
-    await require('./server/liquidationItemNumbers').reserveNumberedRows(db, ref, rows_json || [], user);
-    await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
+    await ref.update({ physical_item_numbering: numbering, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       // Full total, matching POST above — the CA's balance_remaining can go
       // negative, which is the existing "company owes this employee" signal.
@@ -2408,7 +2444,7 @@ app.put('/api/liquidations/:id', async (req, res) => {
         updatedAt: now,
       });
     }
-    res.json({ success: true, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
+    res.json({ success: true, id, form_no: form_no || null, receipts, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
   } catch (err) {
     if (err.status === 400) return res.status(400).json({ success: false, error: err.message });
     console.error('Error updating liquidation:', err);

@@ -6,6 +6,7 @@ const fixture = require('../src/utils/liquidation/__fixtures__/lq016-physical-or
 const { numberedRows } = require('./liquidationItemNumbers');
 const source=ts.createSourceFile('LiquidationFormPage.tsx',fs.readFileSync('src/components/LiquidationFormPage.tsx','utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const helpers={exports:{}};vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/utils/liquidation/receiptRows.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,helpers);
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/utils/liquidationDocNo.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,helpers);
 function actualExport(name,context){
   let initializer;
   function visit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(source)===name)initializer=node.initializer;ts.forEachChild(node,visit);}visit(source);

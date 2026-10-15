@@ -101,9 +101,11 @@ for (const file of ['server.js','functions/server.js']) {
       const res={status(code){status=code;return this;},json(body){result=body;return this;}};
       await handler({params:{id:'liq'},body:{rows_json:changed,receipts_json:JSON.parse(liq.receipts_json),total_amount:13828,status:kind==='draft'?'draft':'submitted'}},res);
       assert.equal(status,200);assert.equal(result.success,true);
-      assert.equal(db.store.liquidations.liq.physical_item_numbering.numbers[fixture.targetRowId],7);
+      if(kind!=='draft')assert.equal(db.store.liquidations.liq.physical_item_numbering.numbers[fixture.targetRowId],7);
       if(kind==='draft'){
-        assert.equal(numberedRows(db.store.liquidations.liq).find(r=>r.id===fixture.targetRowId).physicalItemNo,7);
+        // Drafts have no paper copy yet: numbers follow the corrected dates.
+        const expected=Object.fromEntries(chronologicalRows(changed).map((row,i)=>[row.id,i+1]));
+        assert.deepEqual(db.store.liquidations.liq.physical_item_numbering.numbers,expected);
         assert.equal(JSON.parse(db.store.liquidations.liq.rows_json).find(r=>r.id===fixture.targetRowId).date,'2026-06-29');
       }else{
         assert.equal(JSON.parse(db.store.liquidations.liq.pending_revision.rows_json).find(r=>r.id===fixture.targetRowId).physicalItemNo,7);
@@ -134,4 +136,27 @@ test('Functions predeploy includes the numbering core and initialization router'
     const bundled=require(path.join(dir,'functions/server/liquidationItemNumbers.js'));
     assert.equal(bundled.physicalNumbering(saved()).numbers[fixture.targetRowId],7);
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('draft lines are numbered by date on every save, ignoring client hints', () => {
+  const { draftNumberedRows } = require('./liquidationItemNumbers');
+  // The order RJ added them on LQ26-022: newest first. Hints follow entry order.
+  const raw = [
+    { id: 'oct14', date: '2026-10-14', amount: 3994, physicalItemNo: 1 },
+    { id: 'sep22', date: '2026-09-22', amount: 870, physicalItemNo: 2 },
+    { id: 'sep16', date: '2026-09-16', amount: 2044, physicalItemNo: 3 },
+    { id: 'sep18', date: '2026-09-18', amount: 500, physicalItemNo: 4 },
+    { id: 'nodate', date: '', amount: 1 },
+  ];
+  const { rows, numbering } = draftNumberedRows(raw, { id: 'rj' });
+  assert.deepEqual(numbering.numbers, { sep16: 1, sep18: 2, sep22: 3, oct14: 4, nodate: 5 });
+  assert.equal(numbering.nextItemNo, 6);
+  assert.equal(numbering.basis, 'draft-date-order');
+  assert.ok(rows.every(r => !('physicalItemNo' in r)));
+  assert.deepEqual(rows.map(r => r.id), raw.map(r => r.id));
+  // Once submitted, the ledger is fixed: a later exception line takes the next number.
+  const submitted = { rows_json: JSON.stringify(rows), physical_item_numbering: numbering };
+  const next = prepareNumberedRows([...rows, { id: 'late', date: '2026-09-01', amount: 5 }], submitted);
+  assert.equal(next.numbering.numbers.late, 6);
+  assert.equal(next.numbering.numbers.sep16, 1);
 });
