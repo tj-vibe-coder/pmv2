@@ -2267,6 +2267,20 @@ app.get('/api/liquidations', async (req, res) => {
       }
       return liq;
     }));
+    // Attach each submitted form's workflow stage (paper hand-in → RJ review → payment) for the status chip.
+    const submitted = rows.filter(r => r.status === 'submitted');
+    if (submitted.length) {
+      const { workflowState } = require('./server/liquidationWorkflow');
+      const refs = col => submitted.map(r => db.collection(col).doc(r.id));
+      const [reviews, reimbs] = await Promise.all([db.getAll(...refs('liquidation_receipt_reviews')), db.getAll(...refs('reimbursements'))]);
+      submitted.forEach((r, i) => {
+        const { id, username, full_name, ...data } = r;
+        const rv = reviews[i].exists ? reviews[i].data() : null;
+        try { r.workflow_state = workflowState(data, rv, reimbs[i].exists ? reimbs[i].data() : null); }
+        catch (_) { r.workflow_state = null; }
+        r.workflow_dates = { handed_in: rv?.physicalSubmission?.active ? (rv.physicalSubmission.submittedDate || null) : null, reviewed: rv?.active ? (rv.reviewDate || null) : null, reviewed_by: rv?.active ? (rv.reviewedByName || null) : null, reimbursed: r.reimbursed_at || null, needs_action: rv?.needsAction?.active ? rv.needsAction.note : null };
+      });
+    }
     rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
     res.json({ success: true, liquidations: rows });
   } catch (err) {
@@ -2304,6 +2318,11 @@ app.get('/api/liquidations/:id', async (req, res) => {
       liq.physical_item_numbering = numbers.physicalNumbering(liq);
       liq.rows_json = JSON.stringify(numbers.numberedRows(liq));
     } catch (error) { liq.physical_item_numbering_error = error.message; }
+    // Once RJ/an admin marks the form reviewed, non-admins can no longer propose edits.
+    try {
+      const review = await db.collection('liquidation_receipt_reviews').doc(doc.id).get();
+      liq.receipt_review_locked = review.exists && require('./server/liquidationReceiptReview').reviewStatus(doc.data(), review.data()) === 'reviewed';
+    } catch (_) { liq.receipt_review_locked = false; }
     res.json({ success: true, liquidation: liq });
   } catch (err) {
     console.error('Error fetching liquidation:', err);
@@ -3064,6 +3083,12 @@ app.post('/api/liquidations/:id/propose-edit', async (req, res) => {
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (liq.status !== 'submitted') return res.status(400).json({ success: false, error: 'Only submitted liquidations use the edit-approval flow — edit the draft directly' });
+    if (!isAdmin) {
+      const review = await db.collection('liquidation_receipt_reviews').doc(id).get();
+      let reviewed = false;
+      try { reviewed = review.exists && require('./server/liquidationReceiptReview').reviewStatus(liq, review.data()) === 'reviewed'; } catch (_) {}
+      if (reviewed) return res.status(403).json({ success: false, error: 'This liquidation has been reviewed and is locked. Ask RJ/an admin to make changes.' });
+    }
     const { rows_json, receipts_json, total_amount, employee_name, date_of_submission, note } = req.body;
     if (parseLiqRows(rows_json).length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
     if (liq.pending_revision && liq.pending_revision.proposed_by !== user.id && user.role !== 'superadmin') return res.status(409).json({ success: false, error: 'Another edit is pending approval' });
@@ -6965,6 +6990,12 @@ async function parseReceiptWithGemini(imageBase64, mimeType) {
 Do NOT wrap the output in markdown code blocks. Output ONLY valid, parsable JSON.
 If a value is not found or unreadable, use null.
 Remove all currency symbols (e.g., ', '₱', 'PHP') and commas from numeric values before outputting.
+
+CURRENCY RULES (the company books in Philippine pesos):
+- The peso sign '₱' looks like a 'P' with one or two horizontal strokes. It is NOT a dollar sign '$'. Amounts written with '₱' are PHP.
+- Read EVERY page of a multi-page document before answering.
+- If the document states amounts in a foreign currency (e.g. USD) AND also gives the Philippine peso equivalent anywhere (e.g. a "Tax Information" block with "Total Charges (including VAT) PHP 582.30", or an exchange-rate line), use the PHP figures for subtotal, tax and total and set currency to "PHP". Use the peso total INCLUDING VAT as "total", the peso VAT as "tax", and the peso amount before VAT as "subtotal".
+- Only report a foreign currency when no peso amount appears anywhere in the document.
 
 The JSON MUST exactly match this structure:
 {

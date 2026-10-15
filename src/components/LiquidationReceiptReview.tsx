@@ -8,10 +8,11 @@ interface ReceiptReview {
   physicalSubmission?: { active: boolean; version: number; submittedDate: string; submittedByName: string; note: string; returnReason?: string; returnedBy?: string; returnedByName?: string; returnedAt?: string };
   active: boolean; revision: number; reviewedBy: string; reviewedByName: string; reviewDate: string;
   recordedAt: string; note: string; withdrawalReason?: string;
+  needsAction?: { active: boolean; note: string; flaggedByName: string; flaggedAt: string; response?: string; respondedByName?: string; respondedAt?: string; clearedByName?: string; clearedAt?: string };
 }
 interface ReviewState {
   review: ReceiptReview | null; status: 'not_reviewed' | 'reviewed' | 'review_required' | 'withdrawn';
-  contentHash: string; revision: number; canRecord: boolean; canSubmitPhysical: boolean; isRj: boolean; workflowStatus: string;
+  contentHash: string; revision: number; canRecord: boolean; canSubmitPhysical: boolean; canRespond?: boolean; isRj: boolean; workflowStatus: string;
 }
 interface ReviewEvent { id: string; at: string; actorName: string; action: string; after: ReceiptReview; before: ReceiptReview | null }
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -34,6 +35,7 @@ export default function LiquidationReceiptReview({ liquidationId, contentHash, r
   const [open, setOpen] = useState(false); const [withdraw, setWithdraw] = useState(false);
   const [reviewDate, setReviewDate] = useState(today); const [note, setNote] = useState(''); const [confirmed, setConfirmed] = useState(false);
   const [history, setHistory] = useState<ReviewEvent[] | null>(null);
+  const [actionDialog, setActionDialog] = useState<'needs_action' | 'clear_needs_action' | 'respond' | null>(null);
   const admin = user?.role === 'admin' || user?.role === 'superadmin';
   const load = useCallback(async () => {
     setBusy(true); setError('');
@@ -62,6 +64,16 @@ export default function LiquidationReceiptReview({ liquidationId, contentHash, r
       setPhysicalAction(null); await load();
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not save physical submission'); } finally { setBusy(false); }
   };
+  const saveAction = async () => {
+    if (!data || !actionDialog) return;
+    setBusy(true); setError('');
+    try {
+      if (actionDialog === 'respond') await request(liquidationId, '/respond', { revision: data.revision, response: note });
+      else await request(liquidationId, '', { action: actionDialog, revision: data.revision, note });
+      setActionDialog(null); await load(); if (actionDialog !== 'respond') void onReload();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not save'); } finally { setBusy(false); }
+  };
+  const na = data?.review?.needsAction;
   const labels = { not_reviewed: 'Not reviewed', reviewed: 'Receipts reviewed', review_required: 'Review required — form changed', withdrawn: 'Review withdrawn' };
   return <Paper variant="outlined" sx={{ p: 2, mb: 2 }}><Stack spacing={1}>
     <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -85,6 +97,13 @@ export default function LiquidationReceiptReview({ liquidationId, contentHash, r
       {data.review.note && <Typography variant="body2">Notes: {data.review.note}</Typography>}
       {data.review.withdrawalReason && <Typography variant="body2">Withdrawal reason: {data.review.withdrawalReason}</Typography>}
     </Box>}
+    {na?.active && <Alert severity="warning">
+      <Typography variant="body2" fontWeight={600}>Needs action — flagged by {na.flaggedByName} · {new Date(na.flaggedAt).toLocaleDateString()}</Typography>
+      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{na.note}</Typography>
+      {na.response
+        ? <Typography variant="body2" sx={{ mt: 1, whiteSpace: 'pre-wrap' }}><strong>Reply from {na.respondedByName}</strong> ({na.respondedAt ? new Date(na.respondedAt).toLocaleDateString() : ''}): {na.response}</Typography>
+        : <Typography variant="caption">Waiting for the employee to reply or propose an edit.</Typography>}
+    </Alert>}
     {data?.status === 'review_required' && <Alert severity="warning">The saved form or receipt links changed after the previous review. Check them again before recording a new review.</Alert>}
     {changed && <Alert severity="warning">This form view is outdated. Reload the liquidation and check the current rows before recording a review.</Alert>}
     {readOnly && admin && <Typography variant="body2">Finish or cancel the edit and resolve pending changes before recording a receipt review.</Typography>}
@@ -94,6 +113,9 @@ export default function LiquidationReceiptReview({ liquidationId, contentHash, r
       {data?.isRj && data.review?.physicalSubmission?.active && <Button disabled={busy || changed || readOnly} onClick={() => { setPhysicalAction('return'); setNote(''); }}>Return physical copies</Button>}
       {data?.isRj && <Button disabled={busy || !canRecord} variant="outlined" onClick={() => begin(false)}>{data?.status === 'reviewed' ? 'Record another receipt review' : 'Record receipt review'}</Button>}
       {data?.isRj && data?.review?.active && <Button disabled={busy || !canRecord} onClick={() => begin(true)}>Withdraw review</Button>}
+      {data?.isRj && !na?.active && <Button color="warning" variant="outlined" disabled={busy || readOnly} onClick={() => { setNote(''); setActionDialog('needs_action'); }}>Needs action</Button>}
+      {data?.isRj && na?.active && <Button color="warning" disabled={busy} onClick={() => { setNote(''); setActionDialog('clear_needs_action'); }}>Clear action</Button>}
+      {data?.canRespond && <Button variant="contained" color="warning" disabled={busy} onClick={() => { setNote(na?.response || ''); setActionDialog('respond'); }}>{na?.response ? 'Edit reply' : 'Reply to RJ'}</Button>}
       <Button disabled={busy} onClick={() => { setOpen(false); void load(); }}>Refresh review status</Button>
       {changed && <Button disabled={busy} onClick={() => { void onReload(); }}>Reload liquidation</Button>}
       {data?.review && <Button disabled={busy} onClick={async () => { setBusy(true); try { setHistory(await request<ReviewEvent[]>(liquidationId, '/history')); } catch (e) { setError(e instanceof Error ? e.message : 'Could not load history'); } finally { setBusy(false); } }}>Review history</Button>}
@@ -115,8 +137,18 @@ export default function LiquidationReceiptReview({ liquidationId, contentHash, r
       {physicalAction === 'submit' && <><TextField label="Submission date" type="date" value={submittedDate} onChange={e => setSubmittedDate(e.target.value)} InputLabelProps={{ shrink: true }} inputProps={{ max: today() }} /><FormControlLabel control={<Checkbox checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />} label="I handed the printed liquidation and physical receipt copies to RJ." /></>}
       <TextField label={physicalAction === 'return' ? 'Return reason' : 'Submission notes (optional)'} multiline value={note} onChange={e => setNote(e.target.value)} inputProps={{ maxLength: 2000 }} />{error && <Alert severity="error">{error}</Alert>}
     </Stack></DialogContent><DialogActions><Button disabled={busy} onClick={() => setPhysicalAction(null)}>Cancel</Button><Button variant="contained" disabled={busy || (physicalAction === 'submit' ? !confirmed || !submittedDate : !note.trim())} onClick={savePhysical}>Save physical receipt status</Button></DialogActions></Dialog>
+    <Dialog open={actionDialog !== null} onClose={() => { if (!busy) setActionDialog(null); }} fullWidth maxWidth="sm">
+      <DialogTitle>{actionDialog === 'needs_action' ? 'Needs action from employee' : actionDialog === 'respond' ? 'Reply to RJ' : 'Clear the open action'}</DialogTitle>
+      <DialogContent><Stack spacing={2} sx={{ pt: 1 }}>
+        {actionDialog === 'needs_action' && <Typography variant="body2" color="text.secondary">Payment stays blocked and the form stays open for a proposed edit. Any recorded review is set aside; record the review again once this is resolved.</Typography>}
+        {actionDialog === 'respond' && na && <Alert severity="warning" sx={{ whiteSpace: 'pre-wrap' }}>{na.note}</Alert>}
+        <TextField autoFocus label={actionDialog === 'needs_action' ? 'What needs to be completed or justified' : actionDialog === 'respond' ? 'Your justification / what you did' : 'Note (optional)'} value={note} onChange={e => setNote(e.target.value)} multiline minRows={3} inputProps={{ maxLength: 2000 }} />
+        {error && <Alert severity="error">{error}</Alert>}
+      </Stack></DialogContent>
+      <DialogActions><Button disabled={busy} onClick={() => setActionDialog(null)}>Cancel</Button><Button variant="contained" color="warning" disabled={busy || (actionDialog !== 'clear_needs_action' && !note.trim())} onClick={saveAction}>Save</Button></DialogActions>
+    </Dialog>
     <Dialog open={history !== null} onClose={() => setHistory(null)} fullWidth maxWidth="sm"><DialogTitle>Receipt review history (latest 50)</DialogTitle><DialogContent><Stack spacing={2}>
-      {history?.map(event => <Paper key={event.id} variant="outlined" sx={{ p: 1.5 }}><Typography variant="subtitle2">{event.action === 'review' ? 'RJ reviewed receipts' : event.action === 'physical_submit' ? 'Physical copies submitted' : event.action === 'physical_return' ? 'Physical copies returned' : 'Review withdrawn'} · {event.actorName}</Typography><Typography variant="body2">Date: {event.after.reviewDate || event.after.physicalSubmission?.submittedDate || '—'} · Recorded: {new Date(event.at).toLocaleString()}</Typography><Typography variant="body2">{event.action === 'withdraw' ? event.after.withdrawalReason : event.action.startsWith('physical_') ? event.after.physicalSubmission?.returnReason || event.after.physicalSubmission?.note : event.after.note}</Typography>{event.before?.reviewedBy && <Typography variant="caption">Previous review: {event.before.reviewedByName} · {event.before.reviewDate}</Typography>}</Paper>)}
+      {history?.map(event => <Paper key={event.id} variant="outlined" sx={{ p: 1.5 }}><Typography variant="subtitle2">{event.action === 'review' ? 'RJ reviewed receipts' : event.action === 'physical_submit' ? 'Physical copies submitted' : event.action === 'physical_return' ? 'Physical copies returned' : event.action === 'needs_action' ? 'Flagged: needs action' : event.action === 'clear_needs_action' ? 'Action cleared' : event.action === 'needs_action_response' ? 'Employee replied' : 'Review withdrawn'} · {event.actorName}</Typography><Typography variant="body2">Date: {event.after.reviewDate || event.after.physicalSubmission?.submittedDate || '—'} · Recorded: {new Date(event.at).toLocaleString()}</Typography><Typography variant="body2">{event.action === 'needs_action' ? event.after.needsAction?.note : event.action === 'needs_action_response' ? event.after.needsAction?.response : event.action === 'withdraw' ? event.after.withdrawalReason : event.action.startsWith('physical_') ? event.after.physicalSubmission?.returnReason || event.after.physicalSubmission?.note : event.after.note}</Typography>{event.before?.reviewedBy && <Typography variant="caption">Previous review: {event.before.reviewedByName} · {event.before.reviewDate}</Typography>}</Paper>)}
     </Stack></DialogContent><DialogActions><Button onClick={() => setHistory(null)}>Close history</Button></DialogActions></Dialog>
   </Stack></Paper>;
 }

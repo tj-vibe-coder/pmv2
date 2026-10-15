@@ -13,6 +13,8 @@ function workflowState(liq, review, reimbursement) {
   if (!liq) return 'source_review_required';
   if (liq.status !== 'submitted') return 'draft';
   if (liq.pending_revision) return 'pending_edit';
+  // RJ checked it but the employee still has to complete or justify something.
+  if (review?.needsAction?.active) return 'needs_action';
   if (!currentSubmission(liq, review)) return review?.physicalSubmission?.active ? 'review_required' : 'awaiting_physical';
   if (!rjReviewed(liq, review)) return 'awaiting_rj_review';
   if (reimbursement) return reimbursement.status === 'paid' ? 'closed' : reimbursement.status === 'pending' ? 'awaiting_payment' : 'source_review_required';

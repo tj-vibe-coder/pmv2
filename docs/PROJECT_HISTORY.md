@@ -853,3 +853,9 @@ For "I have an old paper receipt — is it already filed, and did its paper copy
 ## 2026-10-15 — Draft liquidation item numbers follow date order
 
 RJ's new draft LQ26-022 showed items numbered in entry order (newest line first = Item 1) while sorted by date. Drafts have no paper copy yet, so `draftNumberedRows` (`server/liquidationItemNumbers.js`) now numbers draft lines by date (undated last) on every POST/PUT save, ignoring client hints, and the form renumbers drafts live as lines are added or re-dated. Numbers freeze at submit (`basis: 'date-order-at-submit'`); afterwards an added exception line takes the next number and nothing is renumbered (ADR-0005 rules unchanged for submitted forms). Also fixed the PDF export test broken by PR #148 (`liquidationDocNo` missing from the test context) and re-synced `functions/server.js`.
+
+### 2026-10-15 — Liquidation stage chips, review lock, "Needs action", peso OCR
+- Load dropdown shows one stage chip per submitted form from `workflowState()` (`GET /api/liquidations` adds `workflow_state` + `workflow_dates`, batch `db.getAll` of reviews + reimbursements).
+- Reviewed lock: `POST /api/liquidations/:id/propose-edit` returns 403 for non-admins when `reviewStatus === 'reviewed'`; `GET /api/liquidations/:id` returns `receipt_review_locked`; UI hides "Propose edit".
+- New `needs_action` stage: RJ flags via `POST .../receipt-review {action:'needs_action'|'clear_needs_action'}` (stored as `needsAction` on `liquidation_receipt_reviews`; deactivates any review so the form unlocks); employee replies via `POST .../receipt-review/respond`. Recording a new review clears it.
+- Gemini receipt prompt: ₱ ≠ $, read all pages, prefer PHP equivalents (fixes Microsoft USD invoices with a PHP tax block; verified 4/4 runs on gemini-3.1-flash-lite).
