@@ -55,7 +55,7 @@ import { API_BASE } from '../config/api';
 import { liquidationDocNo } from '../utils/liquidationDocNo';
 import ScanToPhoneDialog, { type DeliveredReceipt } from './ScanToPhoneDialog';
 import ScanBatch, { type LiquidationScanItem, type BatchItemFields } from './ScanBatch';
-import { DEFAULT_ROW_SORT, withPhysicalItemNumbers, sortLiquidationRows, receiptRowLabel, makeLiquidationReceiptFilename, type RowSort } from '../utils/liquidation/receiptRows';
+import { DEFAULT_ROW_SORT, dateOrderItemNumbers, withPhysicalItemNumbers, sortLiquidationRows, receiptRowLabel, makeLiquidationReceiptFilename, type RowSort } from '../utils/liquidation/receiptRows';
 import ReceiptCropper from './ReceiptCropper';
 import ReceiptUploadCropDialog from './ReceiptUploadCropDialog';
 import ReceiptViewer from './ReceiptViewer';
@@ -541,6 +541,20 @@ export default function LiquidationFormPage() {
   };
 
   const sortedRows = React.useMemo(() => sortLiquidationRows(rows, sortConfig), [rows, sortConfig]);
+
+  // A draft has no paper copy yet, so its item numbers follow date order and
+  // re-sort as lines are added or re-dated (the server does the same on save).
+  // Submitted forms keep their fixed numbers; a later line takes the next one.
+  useEffect(() => {
+    if (isViewingSubmitted || revisionMode) return;
+    const numbers = dateOrderItemNumbers(rows);
+    if (rows.every((row) => row.physicalItemNo === numbers.get(row.id))) return;
+    setRows((prev) => {
+      const next = dateOrderItemNumbers(prev);
+      return prev.map((row) => ({ ...row, physicalItemNo: next.get(row.id) }));
+    });
+    nextPhysicalItemNoRef.current = rows.length + 1;
+  }, [rows, isViewingSubmitted, revisionMode]);
 
   // Default the Name field to the logged-in user only when it's still empty
   // (fresh form). Must NOT depend on `employeeName` itself — a preparer typing
