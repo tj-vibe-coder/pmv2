@@ -2248,6 +2248,7 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
 });
 
 // ========== LIQUIDATIONS ==========
+app.use('/api/liquidations', require('./server/liquidationItemSearchRouter').createLiquidationItemSearchRouter({ db, requireActiveUser }));
 app.use('/api/liquidations', require('./server/liquidationItemNumbersRouter').createLiquidationItemNumbersRouter({ db, requireActiveUser }));
 app.use('/api/liquidations', require('./server/liquidationReceiptReviewRouter').createLiquidationReceiptReviewRouter({ db, requireActiveUser }));
 app.get('/api/liquidations', async (req, res) => {

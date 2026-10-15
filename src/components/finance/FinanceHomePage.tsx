@@ -27,6 +27,7 @@ import {
   Engineering as LaborIcon,
   RequestQuote as CaIcon,
   ShoppingCart as PoIcon,
+  ManageSearch as ReceiptSearchIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
@@ -230,6 +231,12 @@ const FinanceHomePage: React.FC = () => {
             description: 'Submit, review, and print liquidation reports for advances and project expenses.',
             icon: <LiquidationIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
             path: '/finance/expense-monitoring/liquidation-form',
+          },
+          {
+            title: 'Receipt Search',
+            description: 'Got an old receipt? Check whether it is already on a liquidation and whether its paper copy reached the vault.',
+            icon: <ReceiptSearchIcon sx={{ color: NET_PACIFIC_COLORS.primary }} />,
+            path: '/finance/receipt-search',
           },
           ...(isAdmin
             ? [

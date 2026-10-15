@@ -37,6 +37,7 @@ import PayrollDashboard from './components/payroll/PayrollDashboard';
 import PayrollGuard from './components/payroll/PayrollGuard';
 import FinanceHomePage from './components/finance/FinanceHomePage';
 import ReimbursementDashboard from './components/ReimbursementDashboard';
+import ReceiptSearchPage from './components/finance/ReceiptSearchPage';
 import ProjectExpenseReport from './components/finance/ProjectExpenseReport';
 import OverheadExpensesPage from './components/OverheadExpensesPage';
 import CompanyPnLPage from './components/finance/CompanyPnLPage';
@@ -693,6 +694,20 @@ function App() {
                 element={<DirectLaborPage />}
               />
             </Route>
+            <Route
+              path="/finance/receipt-search"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ReceiptSearchPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/finance/reimbursements"
               element={
