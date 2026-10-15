@@ -65,7 +65,7 @@ import { useQuotationStore } from '../store/quotationStore';
 import { PURCHASE_ORDERS_STORAGE_KEY, type PurchaseOrder, type PurchaseOrderItem } from './PurchaseOrderPage';
 import { API_BASE } from '../config/api';
 import { PROJECT_EXPENSE_CATEGORIES, OVERHEAD_CATEGORIES, INVOICE_TYPES, INVESTORS, type FundingSource } from '../data/financeCategories';
-import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
+import { parseReceipt } from '../services/receiptParseService';
 import {
   checkDuplicates,
   computeImageHash,
@@ -80,7 +80,7 @@ import {
   RECEIPT_FILE_ACCEPT,
   validateReceiptFile,
 } from '../utils/receipts/receiptFile';
-import { detectReceiptQuad } from '../utils/receipts/autoCrop';
+import { suggestReceiptCrop } from '../services/receiptCropService';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import ReceiptCropper from './ReceiptCropper';
 import ReceiptViewer from './ReceiptViewer';
@@ -1263,18 +1263,7 @@ const ExpenseMonitoring: React.FC = () => {
         return;
       }
       const safeFile = await convertHeicToJpeg(file);
-      let detected = await detectReceiptQuad(safeFile);
-      if (!detected) {
-        try {
-          const imageBase64 = await blobToBase64(safeFile);
-          detected = await detectCropFromServer(imageBase64, safeFile.type || 'image/jpeg');
-        } catch {
-          // best-effort — fall through to the default quad
-        }
-      }
-      const quad: Quad = detected ?? [
-        { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 }, { x: 0.88, y: 0.86 }, { x: 0.12, y: 0.86 },
-      ];
+      const quad = await suggestReceiptCrop(safeFile);
       if (selectionGen !== scanGenRef.current) return;
       setEdit(safeFile, quad);
     } catch (err) {

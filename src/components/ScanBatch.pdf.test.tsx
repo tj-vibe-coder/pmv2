@@ -1,13 +1,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import ScanBatch from './ScanBatch';
-import { parseReceipt } from '../services/receiptParseService';
+import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
 import { convertHeicToJpeg } from '../utils/receipts/imageUtils';
-import { blobToBase64 } from '../utils/receipts/imageCompress';
+import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress';
 import { checkDuplicates, computeImageHash, findLocalDuplicates } from '../services/receiptDuplicateService';
 import { perspectiveCropToBlob } from '../utils/receipts/perspectiveCrop';
 
 jest.mock('../services/receiptParseService', () => ({
   parseReceipt: jest.fn(),
+  detectCropFromServer: jest.fn().mockResolvedValue([{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.1 }, { x: 0.9, y: 0.9 }, { x: 0.1, y: 0.9 }]),
 }));
 
 jest.mock('../services/receiptDuplicateService', () => ({
@@ -35,8 +36,8 @@ jest.mock('../utils/receipts/perspectiveCrop', () => ({
   perspectiveCropToBlob: jest.fn(),
 }));
 
-jest.mock('./ReceiptCropper', () => (props: { onConfirm: (quad: []) => void }) => (
-  <button onClick={() => props.onConfirm([])}>Confirm receipt cropper</button>
+jest.mock('./ReceiptCropper', () => (props: { busy: boolean; initialQuad: []; onConfirm: (quad: []) => void }) => (
+  <button disabled={props.busy} onClick={() => props.onConfirm(props.initialQuad)}>Confirm receipt cropper</button>
 ));
 jest.mock('./LiveCameraCapture', () => () => <div>Camera</div>);
 
@@ -56,6 +57,8 @@ describe('ScanBatch PDF selection', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (compressForUpload as jest.Mock).mockImplementation(async blob => blob);
+    (detectCropFromServer as jest.Mock).mockResolvedValue([{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.1 }, { x: 0.9, y: 0.9 }, { x: 0.1, y: 0.9 }]);
     (URL.createObjectURL as jest.Mock).mockReturnValue('blob:test');
     (URL.revokeObjectURL as jest.Mock).mockImplementation(() => undefined);
     convertHeicToJpegMock.mockImplementation(async (file) => file);
@@ -89,7 +92,7 @@ describe('ScanBatch PDF selection', () => {
   });
 
   test('parses a selected PDF directly without opening the image cropper', async () => {
-    const { container } = render(
+    render(
       <ScanBatch
         mode="overhead"
         selectedProject={null}
@@ -99,7 +102,7 @@ describe('ScanBatch PDF selection', () => {
       />,
     );
 
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = screen.getByLabelText('Receipt files');
     const pdf = new File(['single-page receipt'], 'receipt.pdf', { type: 'application/pdf' });
     fireEvent.change(input, { target: { files: [pdf] } });
 
@@ -109,7 +112,7 @@ describe('ScanBatch PDF selection', () => {
   });
 
   test('crops only images in a mixed PDF-image-PDF batch and parses every file in order', async () => {
-    const { container } = render(
+    render(
       <ScanBatch
         mode="overhead"
         selectedProject={null}
@@ -124,9 +127,12 @@ describe('ScanBatch PDF selection', () => {
       new File(['photo'], 'photo.jpg', { type: 'image/jpeg' }),
       new File(['pdf two'], 'two.pdf', { type: 'application/pdf' }),
     ];
-    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files } });
+    fireEvent.change(screen.getByLabelText('Receipt files'), { target: { files } });
 
-    fireEvent.click(await screen.findByText('Confirm receipt cropper'));
+    await waitFor(() => expect(screen.getByText('Confirm receipt cropper')).toBeEnabled());
+    expect(detectCropFromServer).toHaveBeenCalledTimes(1);
+    expect(perspectiveCropToBlobMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Confirm receipt cropper'));
     await waitFor(() => expect(parseReceiptMock).toHaveBeenCalledTimes(3));
     expect(parseReceiptMock.mock.calls.map(([, mimeType]) => mimeType)).toEqual([
       'application/pdf',
@@ -134,10 +140,11 @@ describe('ScanBatch PDF selection', () => {
       'application/pdf',
     ]);
     expect(perspectiveCropToBlobMock).toHaveBeenCalledTimes(1);
+    expect(perspectiveCropToBlobMock).toHaveBeenCalledWith(files[1], [{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.1 }, { x: 0.9, y: 0.9 }, { x: 0.1, y: 0.9 }]);
   });
 
   test('keeps skipped-file feedback visible after valid PDFs reach review', async () => {
-    const { container } = render(
+    render(
       <ScanBatch
         mode="overhead"
         selectedProject={null}
@@ -151,9 +158,31 @@ describe('ScanBatch PDF selection', () => {
       new File(['pdf'], 'receipt.pdf', { type: 'application/pdf' }),
       new File(['text'], 'notes.txt', { type: 'text/plain' }),
     ];
-    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files } });
+    fireEvent.change(screen.getByLabelText('Receipt files'), { target: { files } });
 
     expect(await screen.findByText(/1 file was skipped/i)).toBeInTheDocument();
     expect(parseReceiptMock).toHaveBeenCalledTimes(1);
   });
+
+  test('phone batch uses readable liquidation filename consistently in upload and desktop receipt link', async () => {
+    const previousFetch = global.fetch;
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, id: 'receipt-item', webUrl: 'https://example.com/receipt' }) });
+    global.fetch = fetchMock;
+    try {
+      render(<ScanBatch mode="overhead" selectedProject={null} deliverToDesktop pairingToken="fixture-job"
+        scanContext={{ kind: 'liquidation', formNo: 'LQ26-022-RJR', folderPath: 'fixture/liquidation' }}
+        onCancel={jest.fn()} onComplete={jest.fn()} categories={['Others']} />);
+      fireEvent.change(screen.getByLabelText('Receipt files'), { target: { files: [new File(['pdf'], 'camera.pdf.pdf', { type: 'application/pdf' })] } });
+      await screen.findByDisplayValue('PDF Store');
+      fireEvent.click(screen.getByRole('button', { name: 'Save All (1)' }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      const uploaded = JSON.parse(fetchMock.mock.calls[0][1].body);
+      const delivered = JSON.parse(fetchMock.mock.calls[1][1].body).receipt;
+      expect(uploaded.filename).toMatch(/^LQ26-022-RJR_2026-08-14_PDF receipt_.+\.pdf$/);
+      expect(delivered.filename).toBe(uploaded.filename);
+      expect(delivered.oneDriveId).toBe('receipt-item');
+      expect(delivered.parsed.particulars).toBe('PDF receipt');
+    } finally { global.fetch = previousFetch; }
+  });
+
 });

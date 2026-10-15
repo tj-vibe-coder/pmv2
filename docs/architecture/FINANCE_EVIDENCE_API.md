@@ -16,6 +16,8 @@ Both root and checked-in Functions API copies mount `server/financeEvidenceRoute
 
 All require approved active users. Admin/superadmin write any invoice evidence; tax filers write BIR2307 only. User/viewer reads are allowed within the existing invoice surface. No payroll or outgoing entity types are enabled. Expected revisions reject stale edits with 409; invalid input uses 400, forbidden 403, missing source/document 404.
 
+The Documents panel also sends `financeInvoiceId` to `/api/onedrive/upload`. In this mode `folderPath` is the configured execution root, not a composed destination. The server reads the invoice's current Project List record and uses its saved execution folder ID, then a linked Calcsheet execution ID. Without an ID, it searches flat and all year folders, including paginated Graph results, using the actual project number and confirmed PCS customer suffix to prefer the canonical folder. Missing/ambiguous/stale mappings fail before upload. Only the Sales Invoice child may be created, addressed by the resolved parent item ID; execution projects are never created, renamed or moved by this flow. Filenames strip the extension before truncating the stem and retain their timestamp/random uniqueness prefix.
+
 The existing OneDrive upload proxy accepts optional `financeEvidenceType`; that path checks active role/type, PDF/image extension and 25 MB decoded size before calling Graph, and returns the real drive ID. The client service's sentinel `server` is only a legacy API argument, never a persisted file identity. Other OneDrive consumers retain their existing behavior.
 
 ## Reimbursement parity

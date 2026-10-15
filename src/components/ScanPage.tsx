@@ -7,9 +7,10 @@ import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import { API_BASE } from '../config/api';
-import { parseReceipt, detectCropFromServer } from '../services/receiptParseService';
+import { parseReceipt } from '../services/receiptParseService';
 import { compressForUpload, blobToBase64 } from '../utils/receipts/imageCompress';
-import { detectReceiptQuad } from '../utils/receipts/autoCrop';
+import { makeLiquidationReceiptFilename } from '../utils/liquidation/receiptRows';
+import { suggestReceiptCrop } from '../services/receiptCropService';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
 import ReceiptCropper from './ReceiptCropper';
 import { EXPENSE_CATEGORIES } from '../data/financeCategories';
@@ -168,16 +169,7 @@ const ScanPage: React.FC = () => {
     setLowConf(false);
     try {
       const file = await convertHeicToJpeg(rawFile);
-      let detected = await detectReceiptQuad(file);
-      if (!detected) {
-        try {
-          const imageBase64 = await blobToBase64(file);
-          detected = await detectCropFromServer(imageBase64, file.type || 'image/jpeg');
-        } catch { /* best-effort */ }
-      }
-      const quad: Quad = detected ?? [
-        { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 }, { x: 0.88, y: 0.86 }, { x: 0.12, y: 0.86 },
-      ];
+      const quad = await suggestReceiptCrop(file);
       setEdit(file, quad);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -307,7 +299,9 @@ const ScanPage: React.FC = () => {
     try {
       const blob = await compressForUpload(pendingFile);
       const contentBase64 = await blobToBase64(blob);
-      const filename = `SCAN-${Date.now()}.jpg`;
+      const filename = makeLiquidationReceiptFilename({ formNo: scanContext.formNo, date,
+        particulars: description || supplier, file: { name: 'receipt.jpg', type: blob.type },
+        uniqueId: `${Date.now()}-${Math.random().toString(36).slice(2)}` });
       const upRes = await fetch(`${API_BASE}/api/onedrive/upload`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ folderPath: scanContext.folderPath, filename, contentBase64 }),

@@ -1,8 +1,30 @@
 # Project State
 
-Updated: 2026-09-21
+Updated: 2026-10-15
 
 ## Current status
+
+- **Fixed physical liquidation items implemented; LQ016 live freeze/date correction verified (2026-10-15):** Immutable row-ID/item-number ledger now governs screen/mobile/PDF/XLSX/receipt/QR/reimbursement references. All27 legacy physical references were frozen; row `row-1788328095900-5ya141bw24t` remains Item7 after the authorized 2026-06-29 correction. Total₱13,828,16 receipt metadata entries, row IDs/order and pending status were preserved; expected linked expense/reimbursement timestamp/date effects and one revision audit were inventoried. Local automated and actual browser/export checks pass; 12 JPGs could not be embedded in the local PDF export, so the full receipt-image pack is not verified. Release code is uncommitted in `/tmp/ioct-finance-evidence-release`; hosted UI still needs a reviewed code release. See the LQ016 handoff and Finance report in TASK_LOG.
+
+- **LQ009 absent in Firestore (2026-10-15):** Direct read confirms missing original document; Tab2 verified backups place disappearance betweenAug27 andSep29. Four filed expenses overlap LQ016 under new IDs, suggesting re-filing; deletion actor/reason and double-counting are unproven. Do not restore another payable without reconciliation. Finance investigation report is linked in TASK_LOG.
+
+
+- **Liquidation chronology and row receipt names implemented locally (2026-10-15):** New/loaded forms default oldest-first; gallery/phone labels and PDF captions resolve stable row IDs against their own displayed/exported order. New uploads use form/date/row-details/unique filenames, with consistent linked metadata.20 focused tests, TypeScript/lint/build pass; actual Chrome9-row/9-receipt saved form shows correct labels in ascending/descending views. Local3305 rebuilt; no live upload, historical renames, business writes or deployment. Source remains local/uncommitted in isolated release.
+
+
+- **Liquidation table wheel scrolling corrected locally (2026-10-15):** Global table overscroll containment trapped vertical wheel input. Liquidation table now chains vertical scroll to the page while retaining horizontal scrolling. Native Chrome wheel reproduction/regression, actual local computed styles, lint/TypeScript/build pass. Local3305 frontend rebuilt; refresh review tab. No business writes/deployment.
+
+
+- **Receipt Gemini crop suggestions implemented locally (2026-10-15):** Single/batch/phone scans and liquidation row image attachments suggest editable whole-paper corners, with Full photo,12second AI timeout and validated local/full fallback. Receipt/crop defaults now use latest stable3.5 Flash-Lite; actual API + Chrome synthetic preview pass without uploads.36 backend/16 React tests, TypeScript/lint/build pass. Local3305 permits only AI preview POSTs alongside auth; business uploads/writes remain blocked. Real receipt/phone/employee-role checks and deployment pending. Source remains local/uncommitted in isolated release. See `docs/architecture/RECEIPT_CROP.md` there.
+
+
+- **Particulars review regression restored (2026-10-15):** Larger field had remained only in original dirty workspace and was omitted from isolated release. Restored desktop360px/three-line auto-growing field and mobile three-line minimum in release checkout; local3305 frontend rebuilt. TypeScript/lint/build and separate real Chrome UI measurement pass. Existing user tabs left intact; refresh needed. No business writes/deployment.
+
+- **BIR2307 folder/extension fix passed real SI013 upload/link validation (2026-10-15):** Tab 2 confirmed the correct existing LBI folder, one extension, exact file hash/size, typed-link persistence, idempotent retry and panel refresh/reopen. Preserve the existing active link and original pending recovery item; do not repeat the live upload. SI008 still needs an explicit legacy folder mapping. Corrected code awaits this release; alternate-year/pagination/ambiguous-stale/child-create live cases remain untested. Finance report: `/Users/reuelrivera/IOCT CoWork/IOCT Finance/docs/agent/memory/log/2026-10-15-bir2307-corrected-live-validation.md`.
+
+
+- **BIR2307 upload defects corrected locally (2026-10-15):** Isolated release `/tmp/ioct-finance-evidence-release` now resolves existing project execution folder identity/canonical historical mapping server-side, addresses Sales Invoice by item ID and emits one filename extension with unique prefix/truncation safety. 32 backend +13 React regressions, TypeScript, focused lint, syntax/diff and separate-output production build pass. Changes remain uncommitted/unpushed; original-workspace source edits preserved. No deployment/live writes/re-upload; existing SI013 pending copy/recovery and guarded port3305 preserved. Post-fix live upload and successful typed-link persistence remain open.
+
 
 - **PR144 ready for review (2026-10-15):** RJ requested commit/push/readiness. Release changes and actual-data review are committed/pushed; PR144 marked ready, targeting main. Existing validation results remain valid (readiness changes documentation only). Inherited mobile CA Edit and real-service write/persistence gates remain documented. No merge/deployment; unrelated original-workspace changes remain excluded.
 

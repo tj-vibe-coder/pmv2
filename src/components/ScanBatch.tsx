@@ -11,7 +11,9 @@ import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import { convertHeicToJpeg, makeThumb } from '../utils/receipts/imageUtils';
 import { perspectiveCropToBlob, type Quad } from '../utils/receipts/perspectiveCrop';
-import { detectReceiptQuad } from '../utils/receipts/autoCrop';
+import { suggestReceiptCrop } from '../services/receiptCropService';
+import { makeLiquidationReceiptFilename } from '../utils/liquidation/receiptRows';
+import { FULL_PHOTO_QUAD } from '../utils/receipts/cropGeometry';
 import { compressForUpload, blobToBase64 } from '../utils/receipts/imageCompress';
 import {
   getReceiptParseMimeType,
@@ -59,10 +61,7 @@ const authHeaders = (): Record<string, string> => {
 const todayStr = (): string => new Date().toISOString().slice(0, 10);
 
 
-const DEFAULT_QUAD: Quad = [
-  { x: 0.12, y: 0.14 }, { x: 0.88, y: 0.14 },
-  { x: 0.88, y: 0.86 }, { x: 0.12, y: 0.86 },
-];
+const DEFAULT_QUAD = FULL_PHOTO_QUAD;
 
 enum BatchStage {
   select = 'select',
@@ -161,6 +160,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   const [cropUrl, setCropUrl] = useState<string | null>(null);
   const [cropQuad, setCropQuad] = useState<Quad>(DEFAULT_QUAD);
   const [cropBusy, setCropBusy] = useState(false);
+  const [cropSuggesting, setCropSuggesting] = useState(false);
   const [parsedCount, setParsedCount] = useState(0);
   const [tooManyWarn, setTooManyWarn] = useState(false);
   const [selectionWarning, setSelectionWarning] = useState('');
@@ -176,8 +176,11 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   // re-rendered the disabled button (the state read inside the handler is stale).
   const savingRef = useRef(false);
   const processGenRef = useRef(0);
+  const cropRequestRef = useRef(0);
 
   useEffect(() => () => {
+    cropRequestRef.current += 1;
+    processGenRef.current += 1;
     if (activeUrlRef.current) URL.revokeObjectURL(activeUrlRef.current);
   }, []);
 
@@ -204,18 +207,21 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
   }, []);
 
   const loadCropForFile = useCallback(async (file: File) => {
+    const request = ++cropRequestRef.current;
+    setCropSuggesting(true);
+    setCropQuad(DEFAULT_QUAD);
     setCropBusy(true);
     revokeCurrentUrl();
     try {
       const url = URL.createObjectURL(file);
       activeUrlRef.current = url;
       setCropUrl(url);
-      const quad = await detectReceiptQuad(file);
-      setCropQuad(quad ?? DEFAULT_QUAD);
+      const quad = await suggestReceiptCrop(file);
+      if (request === cropRequestRef.current) setCropQuad(quad);
     } catch {
-      setCropQuad(DEFAULT_QUAD);
+      if (request === cropRequestRef.current) setCropQuad(DEFAULT_QUAD);
     } finally {
-      setCropBusy(false);
+      if (request === cropRequestRef.current) { setCropBusy(false); setCropSuggesting(false); }
     }
   }, [revokeCurrentUrl]);
 
@@ -230,8 +236,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
       ? `${rejectedFiles.length} file${rejectedFiles.length === 1 ? ' was' : 's were'} skipped. Receipt files must be images or PDFs, and PDFs must be 15 MB or smaller.`
       : '');
     if (!validFiles.length) return;
-    // Gemini's rate limit is 15 requests/minute; cap the batch at 10 to leave a buffer
-    // (parsing runs at concurrency 3, so 10 items comfortably stays under the limit).
+    // Keep batch size bounded; crop suggestions are sequential and parsing uses concurrency 3.
     const tooMany = validFiles.length > 10;
     setTooManyWarn(tooMany);
     const sliced = tooMany ? validFiles.slice(0, 10) : validFiles;
@@ -360,16 +365,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
 
   const handleRetake = async () => {
     const item = items[cropIndex];
-    if (!item) return;
-    setCropBusy(true);
-    try {
-      const quad = await detectReceiptQuad(item.rawFile);
-      setCropQuad(quad ?? DEFAULT_QUAD);
-    } catch {
-      setCropQuad(DEFAULT_QUAD);
-    } finally {
-      setCropBusy(false);
-    }
+    if (item) await loadCropForFile(item.rawFile);
   };
 
   const handleSkipCropping = async () => {
@@ -419,7 +415,11 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
         : item.rawFile;
       const contentBase64 = await blobToBase64(compressed);
       const year = String(new Date().getFullYear());
-      const filename = makeReceiptUploadFilename(item.rawFile, Date.now(), idx);
+      const filename = deliverToDesktop && scanContext?.kind === 'liquidation'
+        ? makeLiquidationReceiptFilename({ formNo: scanContext.formNo, date: item.fields.date,
+          particulars: item.fields.description || item.fields.supplier,
+          file: { name: item.rawFile.name, type: compressed.type }, uniqueId: `${Date.now()}-${item.id}-${idx}` })
+        : makeReceiptUploadFilename(item.rawFile, Date.now(), idx);
 
       if (deliverToDesktop) {
         if (!pairingToken || !scanContext?.folderPath) {
@@ -547,7 +547,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
           Choose Photos or PDFs
         </Button>
         <Button variant="outlined" fullWidth onClick={onCancel}>Cancel</Button>
-        <input ref={fileInputRef} type="file" accept={RECEIPT_FILE_ACCEPT} multiple style={{ display: 'none' }} onChange={handleFileChange} />
+        <input aria-label="Receipt files" ref={fileInputRef} type="file" accept={RECEIPT_FILE_ACCEPT} multiple style={{ display: 'none' }} onChange={handleFileChange} />
         {cameraOpen && (
           <LiveCameraCapture
             onDone={(files) => { setCameraOpen(false); void processFiles(files); }}
@@ -571,7 +571,7 @@ const ScanBatch: React.FC<ScanBatchProps> = ({ mode, selectedProject, onCancel, 
           <Button size="small" onClick={handleSkipCropping} disabled={cropBusy}>Skip cropping (use full images)</Button>
         </Box>
         {cropUrl ? (
-          <ReceiptCropper imageUrl={cropUrl} initialQuad={cropQuad} busy={cropBusy} onConfirm={handleCropConfirm} onRetake={handleRetake} />
+          <ReceiptCropper imageUrl={cropUrl} initialQuad={cropQuad} busy={cropBusy} busyLabel={cropSuggesting ? 'Finding receipt…' : undefined} retakeLabel="Suggest again" onConfirm={handleCropConfirm} onRetake={handleRetake} />
         ) : (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>
         )}

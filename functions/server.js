@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { createProductHistoryRouter } = require('./server/calcsheetProductHistoryRouter');
 const { validateQuotationPurchaseTiming } = require('./server/calcsheetPurchaseTiming');
+const { resolveActiFronting } = require('./server/actiFronting');
 const { loadAiAssistConfig } = require('./server/aiAssist/config');
 const { createAiAssistRouter } = require('./server/aiAssist/router');
 const { createToolRegistry: createAiAssistToolRegistry } = require('./server/aiAssist/tools');
@@ -932,6 +933,168 @@ function clientApproverString(contacts) {
   return [p.name, p.position].filter(Boolean).join(' – ').trim();
 }
 
+// ── Whiteboard (app-wide — notes, to-dos, updates) ───────────────────────────
+// Pops up once per login session (Header.tsx) plus a quick-access button.
+// Every item has a visibility: 'public' (everyone sees it) or 'private' (only
+// the creator — filtered server-side here, not just hidden in the UI). Two
+// separate equality-only queries (visibility==public; visibility==private AND
+// createdBy==me) merged in memory — both single/double `==` filters, served
+// by Firestore's automatic per-field indexes (zig-zag merge), no composite
+// index needed. The sets are disjoint by construction (an item can't be both
+// public and private), so no de-dup step is needed on merge.
+
+// Which board column (if any) a logged-in user IS — needed so the person a
+// public to-do is assigned to can tick it. Login accounts don't store this,
+// so match any word of their full name / username / email local-part
+// against each person's aliases. Keep in sync with WHITEBOARD_PEOPLE's
+// aliases in src/types/Whiteboard.ts. Returns null for anyone else.
+const WHITEBOARD_PERSON_ALIASES = {
+  tj: ['tj', 'tjc', 'tyrone', 'caballero'],
+  rj: ['rj', 'rjr', 'reuel', 'rivera'],
+  renzel: ['renzel', 'punongbayan'],
+  nylle: ['nylle', 'managa'],
+  kim: ['kim', 'solis'],
+};
+// Optional note → project/calcsheet-proposal link. Returns the cleaned link,
+// null (explicitly "no link" / clear it), or false if the shape is invalid.
+function sanitizeWhiteboardLink(link) {
+  if (link === undefined || link === null) return null;
+  if (typeof link !== 'object') return false;
+  const { type, id, label } = link;
+  if (!['project', 'calcsheet'].includes(type)) return false;
+  if (!id || typeof id !== 'string') return false;
+  return { type, id, label: String(label || '').trim().slice(0, 200) };
+}
+
+// Team-wide lists on the board (src/types/Whiteboard.ts WHITEBOARD_CATEGORIES).
+const WHITEBOARD_CATEGORIES = ['general', 'project', 'sales', 'finance'];
+
+function whiteboardPersonOf(user) {
+  const words = [user.full_name, user.username, String(user.email || '').split('@')[0]]
+    .filter(Boolean)
+    .flatMap((s) => String(s).toLowerCase().split(/[^a-z]+/))
+    .filter(Boolean);
+  for (const [key, aliases] of Object.entries(WHITEBOARD_PERSON_ALIASES)) {
+    if (words.some((w) => aliases.includes(w))) return key;
+  }
+  return null;
+}
+
+app.get('/api/whiteboard', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const [publicSnap, generalSnap, privateSnap] = await Promise.all([
+      db.collection('whiteboard_items').where('visibility', '==', 'public').get(),
+      db.collection('whiteboard_items').where('visibility', '==', 'general').get(),
+      db.collection('whiteboard_items').where('visibility', '==', 'private').where('createdBy', '==', user.id).get(),
+    ]);
+    const items = [...publicSnap.docs, ...generalSnap.docs, ...privateSnap.docs]
+      .map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; })
+      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    res.json({ success: true, items });
+  } catch (err) { res.status(500).json({ error: 'Failed to get whiteboard items' }); }
+});
+
+app.post('/api/whiteboard', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { visibility, text, done, dueDate, assignedTo } = req.body || {};
+    // 'general' = the team-wide General updates list (the whole shared board):
+    // always a to-do, visible to everyone, never assigned to a person.
+    const kind = visibility === 'general' ? 'todo' : (req.body || {}).kind;
+    const link = sanitizeWhiteboardLink(req.body && req.body.link);
+    if (link === false) return res.status(400).json({ error: 'Invalid link' });
+    if (!['update', 'note', 'todo'].includes(kind)) return res.status(400).json({ error: 'Invalid kind' });
+    if (!['public', 'private', 'general'].includes(visibility)) return res.status(400).json({ error: 'Invalid visibility' });
+    const category = (req.body || {}).category || 'general';
+    if (!WHITEBOARD_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
+    if (!text || !String(text).trim()) return res.status(400).json({ error: 'Text is required' });
+    // assignedTo picks the board column (see WHITEBOARD_PEOPLE) — required
+    // for a public sticky note (it needs somewhere to live on the board),
+    // irrelevant for a private one (shown in "Just for me" instead).
+    if (visibility === 'public' && !Object.keys(WHITEBOARD_PERSON_ALIASES).includes(assignedTo)) {
+      return res.status(400).json({ error: 'assignedTo is required for a public item' });
+    }
+    const now = new Date().toISOString();
+    const doc = {
+      kind, visibility, text: String(text).trim(),
+      ...(visibility === 'public' ? { assignedTo } : {}),
+      ...(visibility === 'general' ? { category } : {}),
+      ...(kind === 'todo' ? { done: !!done, ...(dueDate ? { dueDate } : {}) } : {}),
+      ...(link ? { link } : {}),
+      createdBy: user.id,
+      createdByName: user.full_name || user.username || 'Someone',
+      createdAt: now, updatedAt: now,
+    };
+    const ref = await db.collection('whiteboard_items').add(doc);
+    res.json({ success: true, item: { ...doc, id: ref.id } });
+  } catch (err) { res.status(500).json({ error: 'Failed to post whiteboard item' }); }
+});
+
+app.put('/api/whiteboard/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const ref = db.collection('whiteboard_items').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'Item not found' });
+    const existing = snap.data();
+    const isOwner = existing.createdBy === user.id;
+    // Every edit — including dragging a note to another column — is
+    // poster-only, with one exception: the person a PUBLIC to-do is assigned
+    // to may tick/untick its `done` checkbox (and nothing else).
+    const isAssigneeDoneToggle =
+      !isOwner && existing.kind === 'todo' && existing.visibility === 'public' &&
+      !!existing.assignedTo && existing.assignedTo === whiteboardPersonOf(user) &&
+      Object.keys(req.body || {}).every((k) => k === 'done');
+    // Shared team lists (and items from the old per-person 'public' columns,
+    // which now show in General too): anyone signed in may tick them done or
+    // move them to another list (General / Project / Sales / Finance);
+    // editing the text or deleting stays poster-only.
+    const bodyKeys = Object.keys(req.body || {});
+    const isGeneralShared =
+      !isOwner && ['general', 'public'].includes(existing.visibility) && bodyKeys.length > 0 &&
+      bodyKeys.every((k) => k === 'done' || k === 'category');
+    if (!isOwner && !isAssigneeDoneToggle && !isGeneralShared) return res.status(403).json({ error: 'Not allowed to edit this item' });
+    const patch = isAssigneeDoneToggle ? { done: !!req.body.done }
+      : isGeneralShared ? {
+        ...('done' in req.body ? { done: !!req.body.done } : {}),
+        ...('category' in req.body ? { category: req.body.category } : {}),
+      }
+      : { ...req.body };
+    if ('category' in patch && !WHITEBOARD_CATEGORIES.includes(patch.category)) return res.status(400).json({ error: 'Invalid category' });
+    if ('assignedTo' in patch) {
+      if (patch.assignedTo === null || patch.assignedTo === '') patch.assignedTo = FieldValue.delete();
+      else if (!Object.keys(WHITEBOARD_PERSON_ALIASES).includes(patch.assignedTo)) return res.status(400).json({ error: 'Invalid assignedTo' });
+    }
+    // Owner edits may set, change, or clear (null) the link — validate it.
+    if (!isAssigneeDoneToggle && 'link' in patch) {
+      const link = sanitizeWhiteboardLink(patch.link);
+      if (link === false) return res.status(400).json({ error: 'Invalid link' });
+      patch.link = link;
+    }
+    await ref.update({ ...patch, updatedAt: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update whiteboard item' }); }
+});
+
+app.delete('/api/whiteboard/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const ref = db.collection('whiteboard_items').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'Item not found' });
+    const existing = snap.data();
+    // Only the poster can delete their own item — no admin override.
+    if (existing.createdBy !== user.id) return res.status(403).json({ error: 'Only the poster can delete this item' });
+    await ref.delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete whiteboard item' }); }
+});
+
 app.get('/api/clients', async (req, res) => {
   try {
     const snap = await db.collection('clients').orderBy('name').get();
@@ -954,7 +1117,7 @@ app.get('/api/clients/:id', async (req, res) => {
 });
 
 app.post('/api/clients', async (req, res) => {
-  const { code, name, address, paymentTerms, am, contacts } = req.body || {};
+  const { code, name, address, plant, paymentTerms, am, contacts } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Client name is required' });
   if (!Array.isArray(contacts) || contacts.length === 0) {
     return res.status(400).json({ error: 'At least one contact is required' });
@@ -965,6 +1128,7 @@ app.post('/api/clients', async (req, res) => {
       code: (code || '').trim().toUpperCase().slice(0, 4),
       name: name.trim(),
       address: address || '',
+      plant: (plant || '').trim(),
       paymentTerms: paymentTerms || '',
       am: am || '',
       contacts: contacts.map((c) => ({
@@ -992,7 +1156,7 @@ app.post('/api/clients', async (req, res) => {
 
 app.put('/api/clients/:id', async (req, res) => {
   const { id } = req.params;
-  const { code, name, address, paymentTerms, am, contacts } = req.body || {};
+  const { code, name, address, plant, paymentTerms, am, contacts } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Client name is required' });
   if (!Array.isArray(contacts) || contacts.length === 0) {
     return res.status(400).json({ error: 'At least one contact is required' });
@@ -1018,6 +1182,7 @@ app.put('/api/clients/:id', async (req, res) => {
       code: (code || '').trim().toUpperCase().slice(0, 4),
       name: trimmedName,
       address: address || '',
+      plant: (plant || '').trim(),
       paymentTerms: paymentTerms || '',
       am: am || '',
       contacts: cleanedContacts,
@@ -1734,28 +1899,13 @@ app.post('/api/overhead-expenses/:id/promote-to-liquidation', promoteExpenseToLi
 
 function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// Human-readable CA reference number. Per-project sequence when the CA is tied
-// to a project with a project_no (e.g. IOCT2606001-CA01); otherwise a global
-// monthly fallback (e.g. CA2606-001) for out-of-project / prospect CAs.
+// Human-readable CA reference number: a single global monthly sequence
+// (e.g. CA2606-001) for every CA regardless of project. Project traceability
+// lives on the record itself (project_id/project_no/project_name), not in
+// the number, so the sequence stays gapless/auditable per type+period.
 // Scan-max with no transaction — same approach as nextIoctProjectNo() and
 // /api/liquidations/next-form-no; volume is low and `id` stays the real key.
-async function nextCaNo(projectId, dateLike) {
-  let projectNo = null;
-  if (projectId) {
-    const pDoc = await db.collection('projects').doc(String(projectId)).get();
-    if (pDoc.exists) projectNo = String(pDoc.data().project_no || '').trim().toUpperCase() || null;
-  }
-  if (projectNo) {
-    const snap = await db.collection('cash_advances')
-      .where('project_id', '==', String(projectId)).select('ca_no').get();
-    const re = new RegExp(`^${escapeRegExp(projectNo)}-CA(\\d+)$`);
-    let max = 0;
-    for (const d of snap.docs) {
-      const m = String(d.data().ca_no || '').trim().toUpperCase().match(re);
-      if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > max) max = n; }
-    }
-    return `${projectNo}-CA${String(max + 1).padStart(2, '0')}`;
-  }
+async function nextCaNo(dateLike) {
   const prefix = `CA${phYearMonth(dateLike)}-`;
   const snap = await db.collection('cash_advances').select('ca_no').get();
   const re = new RegExp(`^${escapeRegExp(prefix)}(\\d{3})$`);
@@ -1827,9 +1977,17 @@ app.post('/api/cash-advances', async (req, res) => {
   // PATCH /api/cash-advances/:id/funding.
   const isAdminRequester = user.role === 'superadmin' || user.role === 'admin';
   const fundingSource = isAdminRequester ? normalizeFundingSource(req.body.fundingSource) : null;
+  // Only an admin/superadmin may attribute the CA to someone other than themselves.
+  let ownerId = user.id;
+  const onBehalfOfUserId = req.body.on_behalf_of_user_id != null ? String(req.body.on_behalf_of_user_id).trim() : '';
+  if (isAdminRequester && onBehalfOfUserId && onBehalfOfUserId !== user.id) {
+    const targetDoc = await db.collection('users').doc(onBehalfOfUserId).get();
+    if (!targetDoc.exists) return res.status(400).json({ success: false, error: 'Selected employee not found' });
+    ownerId = onBehalfOfUserId;
+  }
   try {
-    const caNo = await nextCaNo(projectId, new Date(requestedAt * 1000));
-    const ref = await db.collection('cash_advances').add({ user_id: user.id, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_at: requestedAt, updated_at: requestedAt, ...(fundingSource ? { fundingSource } : {}) });
+    const caNo = await nextCaNo(new Date(requestedAt * 1000));
+    const ref = await db.collection('cash_advances').add({ user_id: ownerId, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_by: ownerId !== user.id ? user.id : null, created_at: requestedAt, updated_at: requestedAt, ...(fundingSource ? { fundingSource } : {}) });
     res.status(201).json({ success: true, id: ref.id, ca_no: caNo, message: `Cash advance ${caNo} requested` });
   } catch (err) {
     console.error('Error creating cash advance:', err);
@@ -2062,6 +2220,7 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
 });
 
 // ========== LIQUIDATIONS ==========
+app.use('/api/liquidations', require('./server/liquidationItemNumbersRouter').createLiquidationItemNumbersRouter({ db, requireActiveUser }));
 app.use('/api/liquidations', require('./server/liquidationReceiptReviewRouter').createLiquidationReceiptReviewRouter({ db, requireActiveUser }));
 app.get('/api/liquidations', async (req, res) => {
   const user = await getCurrentUser(req);
@@ -2109,6 +2268,12 @@ app.get('/api/liquidations/:id', async (req, res) => {
     if (user.role !== 'superadmin' && user.role !== 'admin' && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     try { liq.receipt_review_content_hash = require('./server/liquidationReceiptReview').receiptReviewHash(liq); }
     catch (_) { liq.receipt_review_content_hash = null; } // Legacy malformed content stays loadable; it cannot be attested.
+    try {
+      const numbers = require('./server/liquidationItemNumbers');
+      liq.physical_item_numbering_persisted = !!liq.physical_item_numbering;
+      liq.physical_item_numbering = numbers.physicalNumbering(liq);
+      liq.rows_json = JSON.stringify(numbers.numberedRows(liq));
+    } catch (error) { liq.physical_item_numbering_error = error.message; }
     res.json({ success: true, liquidation: liq });
   } catch (err) {
     console.error('Error fetching liquidation:', err);
@@ -2120,13 +2285,14 @@ app.post('/api/liquidations', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
-  const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
+  const rawRows = rows_json || [];
   const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
   const total = parseFloat(total_amount) || 0;
   const now = Math.floor(Date.now() / 1000);
   const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
   const caId = ca_id ? String(ca_id) : null;
   try {
+    const { rows, numbering } = require('./server/liquidationItemNumbers').prepareNumberedRows(rawRows, null, user);
     let caCoveredAmount = 0;
     let reimbursableAmount = 0;
     if (liqStatus === 'submitted' && caId) {
@@ -2148,7 +2314,7 @@ app.post('/api/liquidations', async (req, res) => {
     // that exceeds the CA's balance — are tracked so the requester gets paid
     // back (see /api/reimbursements).
     const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
-    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
+    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, physical_item_numbering: numbering, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       // Decrement by the FULL total, not just the covered portion — a CA's
       // balance_remaining going negative IS the "company owes this employee" signal
@@ -2177,6 +2343,7 @@ app.post('/api/liquidations', async (req, res) => {
     }
     res.status(201).json({ success: true, id: ref.id, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved' });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ success: false, error: err.message });
     console.error('Error creating liquidation:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
@@ -2194,7 +2361,7 @@ app.put('/api/liquidations/:id', async (req, res) => {
     if (existing.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (existing.status === 'submitted') return res.status(400).json({ success: false, error: 'Cannot edit submitted liquidation' });
     const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
-    const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
+    const { rows } = require('./server/liquidationItemNumbers').prepareNumberedRows(rows_json || [], existing, user);
     const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
     const total = parseFloat(total_amount) || 0;
     const now = Math.floor(Date.now() / 1000);
@@ -2216,6 +2383,7 @@ app.put('/api/liquidations/:id', async (req, res) => {
       if (dupSnap.docs.some(d => d.id !== id)) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
     }
     const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
+    await require('./server/liquidationItemNumbers').reserveNumberedRows(db, ref, rows_json || [], user);
     await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       // Full total, matching POST above — the CA's balance_remaining can go
@@ -2242,6 +2410,7 @@ app.put('/api/liquidations/:id', async (req, res) => {
     }
     res.json({ success: true, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ success: false, error: err.message });
     console.error('Error updating liquidation:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
@@ -2341,10 +2510,10 @@ app.get('/api/reimbursements/:id/lines', async (req, res) => {
     const liq = liqSnap.data();
     const receiptRowIds = new Set(parseJsonArray(liq.receipts_json).map(x => x && x.rowId).filter(Boolean));
     const paid = new Set(r.paidRowIds || []);
-    const lines = parseJsonArray(liq.rows_json)
+    const lines = require('./server/liquidationItemNumbers').numberedRows(liq)
       .filter(row => row && row.id && (parseFloat(row.amount) || 0) > 0)
       .map(row => ({
-        rowId: row.id, date: row.date || '', category: row.category || '',
+        rowId: row.id, physicalItemNo: row.physicalItemNo, date: row.date || '', category: row.category || '',
         particulars: row.particulars || '', amount: parseFloat(row.amount) || 0,
         hasReceipt: receiptRowIds.has(row.id), paid: r.status === 'paid' || paid.has(row.id),
       }));
@@ -2590,6 +2759,9 @@ app.delete('/api/liquidations/:id', async (req, res) => {
     // already-paid one stays as the payment record even though its source liquidation
     // is gone, same reasoning as applyLiquidationRevision's paid-amount guard.
     if (reimbursement && reimbursement.status === 'pending') {
+      if ((Number(reimbursement.paidAmount) || 0) > 0) {
+        return res.status(400).json({ success: false, error: 'This liquidation is partly reimbursed — it cannot be deleted.' });
+      }
       await reimbursementRef.delete();
     }
     await ref.delete();
@@ -2617,7 +2789,7 @@ function parseLiqRows(rowsJson) {
 async function applyLiquidationRevision(liqId, liq, revision, approver) {
   const now = Math.floor(Date.now() / 1000);
   const oldRows = parseLiqRows(liq.rows_json);
-  const newRows = parseLiqRows(revision.rows_json);
+  const { rows: newRows } = await require('./server/liquidationItemNumbers').reserveNumberedRows(db, db.collection('liquidations').doc(liqId), parseLiqRows(revision.rows_json), approver);
   const oldTotal = parseFloat(liq.total_amount) || 0;
   const newTotal = parseFloat(revision.total_amount) || 0;
 
@@ -2652,6 +2824,10 @@ async function applyLiquidationRevision(liqId, liq, revision, approver) {
   const existingReimbursement = reimbursementSnap.exists ? reimbursementSnap.data() : null;
   if (existingReimbursement && existingReimbursement.status === 'paid' && (parseFloat(existingReimbursement.amount) || 0) !== newReimbursableAmount) {
     throw Object.assign(new Error('This revision would change an already-paid reimbursement amount — resolve the payment discrepancy manually before revising.'), { status: 400 });
+  }
+
+  if (existingReimbursement && existingReimbursement.status === 'pending' && (Number(existingReimbursement.paidAmount) || 0) > 0) {
+    throw Object.assign(new Error('This liquidation is partly reimbursed — finish paying it before revising, or resolve the payment discrepancy manually.'), { status: 400 });
   }
 
   if (caRef && caDelta !== 0) {
@@ -2853,7 +3029,10 @@ app.post('/api/liquidations/:id/propose-edit', async (req, res) => {
     if (!isAdmin && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (liq.status !== 'submitted') return res.status(400).json({ success: false, error: 'Only submitted liquidations use the edit-approval flow — edit the draft directly' });
     const { rows_json, receipts_json, total_amount, employee_name, date_of_submission, note } = req.body;
-    const rows = parseLiqRows(rows_json);
+    if (parseLiqRows(rows_json).length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
+    if (liq.pending_revision && liq.pending_revision.proposed_by !== user.id && user.role !== 'superadmin') return res.status(409).json({ success: false, error: 'Another edit is pending approval' });
+    const prepared = await require('./server/liquidationItemNumbers').reserveNumberedRows(db, ref, parseLiqRows(rows_json), user);
+    const rows = prepared.rows.map(row => ({ ...row, physicalItemNo: prepared.numbering.numbers[row.id] }));
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
     const total = parseFloat(total_amount) || 0;
     // No CA-overspend guard here, matching POST /api/liquidations and
@@ -3739,7 +3918,15 @@ function quotationGrandTotal(q) {
   const servicesLineSum = () => services.reduce((s, l) => s + num(l.amount), 0);
   const finish = (subtotal) => {
     const afterDiscount = subtotal * (1 - num(q.discountPct) / 100);
-    return afterDiscount * (1 + num(q.vatPct) / 100);
+    // Delivery fee + minimum-order surcharge (opt-in). Mirror calc.ts: tested on
+    // the goods+services subtotal, VAT-able (added before VAT), pass-through.
+    const deliveryEnabled = q.deliveryTermsEnabled === true;
+    const minOrderThreshold = Number.isFinite(Number(q.minOrderThreshold)) ? Number(q.minOrderThreshold) : 50000;
+    const deliveryFee = deliveryEnabled ? num(q.deliveryFee) : 0;
+    const smallOrderFee = Number.isFinite(Number(q.smallOrderFee)) ? Number(q.smallOrderFee) : 5000;
+    const surcharge = deliveryEnabled && subtotal < minOrderThreshold ? smallOrderFee : 0;
+    const deliveryTotal = deliveryFee + surcharge;
+    return (afterDiscount + deliveryTotal) * (1 + num(q.vatPct) / 100);
   };
 
   if (q.formulaVersion === 'legacy') {
@@ -3797,6 +3984,38 @@ function quotationGrandTotal(q) {
     servicesSub = servicesLineSum();
   }
   return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
+}
+
+// Sales can be explicitly scoped to services when a partner or client purchases
+// the materials directly. The quotation stays intact; only Sales reporting and
+// the Project List contract amount use this reduced figure.
+function quotationSalesAmount(q) {
+  if (!q || q.salesValueScope !== 'services_only') return quotationGrandTotal(q);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const manpower = Array.isArray(q.manpower) ? q.manpower : [];
+  const services = Array.isArray(q.services) ? q.services : [];
+  const servicesLineSum = () => services.reduce((s, l) => s + num(l.amount), 0);
+  let servicesSub = 0;
+
+  if (q.formulaVersion === 'legacy' && q.legacyTotalsSnapshot && Number.isFinite(Number(q.legacyTotalsSnapshot.servicesSubtotal))) {
+    servicesSub = Number(q.legacyTotalsSnapshot.servicesSubtotal);
+  } else if (q.servicesFromManpower) {
+    if (q.servicesPerLinePricing) {
+      servicesSub = servicesLineSum();
+    } else {
+      const engineeringServicesQty = Math.max(1, num(q.engineeringServicesQty) || 1);
+      const laborCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0);
+      const contingency = q.formulaVersion === 'legacy' ? num(q.globalContingencyPct) / 100 : 0;
+      const laborWithContingency = q.formulaVersion === 'legacy'
+        ? manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)) * (1 + contingency), 0)
+        : laborCost * engineeringServicesQty;
+      servicesSub = laborWithContingency * (1 + num(q.laborMarkupPct) / 100);
+    }
+  } else {
+    servicesSub = servicesLineSum();
+  }
+
+  return servicesSub * (1 - num(q.discountPct) / 100) * (1 + num(q.vatPct) / 100);
 }
 
 // Spendable Project Budget seeded onto the Project List row at proposal→project
@@ -3949,7 +4168,7 @@ function contractAmountPatchFromSales(mainData, amount, quotation, project, now)
 
 function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
-  const amount = quotationGrandTotal(quotation);
+  const amount = quotationSalesAmount(quotation);
   const budget = quotationCostBasis(quotation);
   const year = Number.isFinite(new Date(project.date || now).getFullYear())
     ? new Date(project.date || now).getFullYear()
@@ -4061,7 +4280,7 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     db.collection('calcsheet_quotations').where('projectId', '==', projectId).get(),
   ]);
   const client = clientDoc && clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
-  const partner = partnerDoc && partnerDoc.exists ? { id: partnerDoc.id, ...partnerDoc.data() } : null;
+  const partnerFromDoc = partnerDoc && partnerDoc.exists ? { id: partnerDoc.id, ...partnerDoc.data() } : null;
   const quotations = qSnap.docs.map((d) => {
     const { id: _stored, ...data } = d.data();
     return { ...data, id: d.id };
@@ -4069,8 +4288,9 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
   const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
   const selectedQuotation = ioct || acti;
-  // Joint-with-ACTI: the project carries a partner link, or an ACTI-kind quotation exists.
-  const withActi = !!project.partnerId || quotations.some((q) => q.kind === 'ACTI');
+  // Joint-with-ACTI: a partner link, an ACTI-kind quotation, or ACTI as the customer
+  // (then the customer client doc stands in as the partner).
+  const { withActi, partner } = resolveActiFronting({ project, client, partner: partnerFromDoc, quotations });
   if (!selectedQuotation) {
     const err = new Error('No IOCT or ACTI quotation found to seed contract amount');
     err.status = 400;
@@ -4078,7 +4298,7 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   }
 
   const linkedDoc = await findLinkedMainProject(project);
-  const salesAmount = quotationGrandTotal(selectedQuotation);
+  const salesAmount = quotationSalesAmount(selectedQuotation);
   // Default path when already linked: push Sales contract amount (IOCT/ACTI grand
   // total) without remapping the whole Project List row. Late price settlements
   // and quotation revisions used to leave Projects monitoring stuck on the first
@@ -4172,7 +4392,7 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     projectNo: mapped.project_no || '',
     quotationId: selectedQuotation.id,
     quotationKind: selectedQuotation.kind,
-    amount: quotationGrandTotal(selectedQuotation),
+    amount: quotationSalesAmount(selectedQuotation),
   };
 }
 
@@ -4190,9 +4410,10 @@ async function copyScheduleTasksToProject(fromProjectId, toProjectId) {
   let batch = db.batch();
   let count = 0;
   for (const it of items) {
-    const { id: _id, projectId: _pid, createdAt: _c, updatedAt: _u, predecessors, ...rest } = it.data;
+    const { id: _id, projectId: _pid, createdAt: _c, updatedAt: _u, predecessors, parentId, ...rest } = it.data;
     const remapped = Array.isArray(predecessors) ? predecessors.map((p) => idMap.get(p)).filter(Boolean) : undefined;
-    batch.set(it.ref, stripUndefinedFields({ ...rest, predecessors: remapped, projectId: String(toProjectId), createdAt: now, updatedAt: now }));
+    const newParent = parentId ? (idMap.get(parentId) || null) : null;
+    batch.set(it.ref, stripUndefinedFields({ ...rest, predecessors: remapped, parentId: newParent, projectId: String(toProjectId), createdAt: now, updatedAt: now }));
     count += 1;
     if (count % 400 === 0) { await batch.commit(); batch = db.batch(); }
   }
@@ -4210,34 +4431,41 @@ async function syncScheduleProgressToMonitoringProject(projectId) {
   if (!projDoc.exists) return;
   const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', String(projectId)).get();
   if (snap.empty) return;
-  let weighted = 0;
-  let weight = 0;
-  for (const d of snap.docs) {
-    const t = d.data();
-    const start = new Date(t.startDate).getTime();
-    const end = new Date(t.endDate).getTime();
-    const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
-    weighted += (Number(t.progressPct) || 0) * days;
-    weight += days;
-  }
-  if (weight <= 0) return;
-  const pct = Math.max(0, Math.min(100, Math.round(weighted / weight)));
+  const rows = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
+  const pct = scheduleTasksOverallProgress(rows);
+  if (pct === null) return;
   const status = pct <= 0 ? 'Not Started' : pct >= 100 ? 'Completed' : 'In Progress';
   await projDoc.ref.update({ actual_site_progress_percent: pct, project_status: status, updated_at: new Date().toISOString() });
 }
 
 // Progress-weighted overall % across a task array (milestones weigh 1 day).
+// Project % complete from schedule tasks. Only leaf tasks count (WBS summary
+// tasks roll up and would double-count). Weighted by each task's manual
+// `weight` once any leaf has one (leaves left unweighted then count 0);
+// otherwise by duration in days (milestones = 1). Mirrors
+// src/utils/calcsheet/scheduleWeights.ts. Returns null with nothing to weigh.
 function scheduleTasksOverallProgress(tasks) {
+  const parents = new Set(tasks.filter((t) => t.parentId).map((t) => String(t.parentId)));
+  const leaves = tasks.filter((t) => !parents.has(String(t.id)));
+  const manual = leaves.some((t) => Number(t.weight) > 0);
   let weighted = 0;
   let weight = 0;
-  for (const t of tasks) {
-    const start = new Date(t.startDate).getTime();
-    const end = new Date(t.endDate).getTime();
-    const days = t.isMilestone || !(end >= start) ? 1 : Math.max(1, Math.round((end - start) / 86400000) + 1);
-    weighted += (Number(t.progressPct) || 0) * days;
-    weight += days;
+  for (const t of leaves) {
+    let w;
+    if (manual) {
+      w = Math.max(0, Number(t.weight) || 0);
+    } else {
+      const start = new Date(t.startDate).getTime();
+      const end = new Date(t.endDate).getTime();
+      const dd = Number(t.durationDays);
+      w = t.isMilestone || !(end >= start) ? 1
+        : dd > 0 && dd < 1 ? dd // half-day task
+          : Math.max(1, Math.round((end - start) / 86400000) + 1);
+    }
+    weighted += (Number(t.progressPct) || 0) * w;
+    weight += w;
   }
-  return weight > 0 ? Math.max(0, Math.min(100, Math.round(weighted / weight))) : 0;
+  return weight > 0 ? Math.max(0, Math.min(100, Math.round(weighted / weight))) : null;
 }
 
 // Freeze a project's whole Gantt (all tasks) into a named version snapshot.
@@ -4252,12 +4480,27 @@ async function snapshotScheduleVersion(projectId, label, savedBy) {
     savedBy: savedBy || null,
     label: (label && String(label).trim()) || null,
     taskCount: tasks.length,
-    overallProgress: scheduleTasksOverallProgress(tasks),
+    overallProgress: scheduleTasksOverallProgress(tasks) ?? 0,
     tasks,
   };
   const ref = await db.collection('calcsheet_schedule_versions').add(doc);
   const { tasks: _t, ...meta } = doc;
   return { ...meta, id: ref.id };
+}
+
+// Make one version the project's baseline (MS Project "Set Baseline") — at most
+// one per project, so any other flagged version is cleared. versionId null
+// clears the baseline.
+async function setScheduleBaseline(projectId, versionId) {
+  const snap = await db.collection('calcsheet_schedule_versions').where('projectId', '==', String(projectId)).get();
+  const now = new Date().toISOString();
+  const batch = db.batch();
+  snap.docs.forEach((dd) => {
+    const on = dd.id === versionId;
+    if (on) batch.update(dd.ref, { isBaseline: true, baselineSetAt: now });
+    else if (dd.data().isBaseline) batch.update(dd.ref, { isBaseline: false });
+  });
+  await batch.commit();
 }
 
 // ── Projects ─────────────────────────────────────────────────────────────────
@@ -4362,7 +4605,7 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
     const mainPatch = selectedQuotation
       ? contractAmountPatchFromSales(
           mainData,
-          quotationGrandTotal(selectedQuotation),
+          quotationSalesAmount(selectedQuotation),
           selectedQuotation,
           calcsheet,
           now,
@@ -4381,7 +4624,7 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
       ...(selectedQuotation ? {
         quotationId: selectedQuotation.id,
         quotationKind: selectedQuotation.kind,
-        amount: quotationGrandTotal(selectedQuotation),
+        amount: quotationSalesAmount(selectedQuotation),
       } : {}),
     });
   } catch (err) {
@@ -4640,6 +4883,89 @@ app.delete('/api/calcsheet/presets/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to delete preset' }); }
 });
 
+// ── Scope Library (reusable inclusion bundles) ───────────────────────────────
+// Team-shared named sets of general requirements / components / services /
+// manpower (+ optional scope/exclusions text) that can be inserted into any
+// quotation. Mirrors the presets CRUD. Collection: calcsheet_scope_library.
+app.get('/api/calcsheet/scope-library', async (req, res) => {
+  try {
+    const snap = await db.collection('calcsheet_scope_library').get();
+    // Spread data first so a stray stored `id` can't clobber the doc id; sort
+    // newest-first in memory (avoids requiring an `updatedAt` field/index on
+    // every doc, matching the version-history read pattern).
+    const bundles = snap.docs
+      .map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; })
+      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    res.json({ success: true, bundles });
+  } catch (err) { res.status(500).json({ error: 'Failed to get scope library' }); }
+});
+
+app.post('/api/calcsheet/scope-library', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    // Strip any client-supplied `id`, and stamp attribution + timestamps
+    // server-side so the created bundle's id is the canonical Firestore ref.id.
+    const { id: _ignored, ...data } = req.body || {};
+    const now = new Date().toISOString();
+    const doc = {
+      ...data,
+      createdBy: user.id || null,
+      createdByName: user.full_name || user.username || null,
+      createdAt: data.createdAt || now,
+      updatedAt: now,
+    };
+    const ref = await db.collection('calcsheet_scope_library').add(doc);
+    res.json({ success: true, bundle: { ...doc, id: ref.id } });
+  } catch (err) { res.status(500).json({ error: 'Failed to save scope bundle' }); }
+});
+
+app.put('/api/calcsheet/scope-library/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { id: _ignored, ...patch } = req.body || {};
+    await db.collection('calcsheet_scope_library').doc(req.params.id)
+      .update({ ...patch, updatedAt: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to update scope bundle' }); }
+});
+
+app.delete('/api/calcsheet/scope-library/:id', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    await db.collection('calcsheet_scope_library').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete scope bundle' }); }
+});
+
+// ── Installation Work calculator — material unit pricing ────────────────────
+// Fixed set of material "slots" (pipe/junction-box/conduit-accessory) defined
+// in code (src/utils/calcsheet/installationMaterials.ts MATERIAL_SLOTS) — this
+// collection only stores the team's brand/unitCost override per slot, doc id
+// = slot key (deterministic, no seeding step needed: a slot with no doc here
+// just reads back as unpriced).
+app.get('/api/calcsheet/install-materials', async (req, res) => {
+  try {
+    const snap = await db.collection('calcsheet_install_materials').get();
+    const prices = {};
+    snap.docs.forEach((d) => { prices[d.id] = d.data(); });
+    res.json({ success: true, prices });
+  } catch (err) { res.status(500).json({ error: 'Failed to get installation material prices' }); }
+});
+
+app.put('/api/calcsheet/install-materials/:key', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { brand, unitCost } = req.body || {};
+    await db.collection('calcsheet_install_materials').doc(req.params.key)
+      .set({ brand: brand || null, unitCost: Number(unitCost) || 0 }, { merge: true });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to save installation material price' }); }
+});
+
 // ── Project work schedule (Gantt) tasks ───────────────────────────────────────
 // Equality-only filter on projectId, sorted in memory — no composite index
 // needed (see project_expenses above for why that matters on this repo's
@@ -4702,6 +5028,47 @@ app.put('/api/schedule-tasks/:id', async (req, res) => {
   }
 });
 
+// Write an exact set of task snapshots (keeping their ids) and delete others —
+// used by the Gantt's Undo / Redo. Each upserted doc is replaced wholesale, so
+// fields added since the snapshot are dropped too. Every task must belong to
+// `projectId`.
+app.post('/api/schedule-tasks/sync', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { projectId, upsert = [], remove = [] } = req.body || {};
+    if (!projectId || !Array.isArray(upsert) || !Array.isArray(remove)) {
+      return res.status(400).json({ success: false, error: 'projectId, upsert[] and remove[] are required' });
+    }
+    const pid = String(projectId);
+    const idOk = (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
+    if (!upsert.every((t) => t && idOk(t.id) && String(t.projectId) === pid) || !remove.every(idOk)) {
+      return res.status(400).json({ success: false, error: 'Invalid task ids or project' });
+    }
+    const col = db.collection('calcsheet_schedule_tasks');
+    // Don't let a sync touch another project's tasks.
+    const existing = await col.where('projectId', '==', pid).get();
+    const mine = new Set(existing.docs.map((d) => d.id));
+    const foreign = await Promise.all(upsert.filter((t) => !mine.has(t.id)).map((t) => col.doc(t.id).get()));
+    if (foreign.some((d) => d.exists)) return res.status(409).json({ success: false, error: 'A task id belongs to another project' });
+    const now = new Date().toISOString();
+    const ops = [
+      ...upsert.map((t) => (b) => { const { id, ...data } = t; b.set(col.doc(id), stripUndefinedFields({ ...data, projectId: pid, updatedAt: now })); }),
+      ...remove.filter((id) => mine.has(id)).map((id) => (b) => b.delete(col.doc(id))),
+    ];
+    for (let i = 0; i < ops.length; i += 450) {
+      const batch = db.batch();
+      ops.slice(i, i + 450).forEach((op) => op(batch));
+      await batch.commit();
+    }
+    await syncScheduleProgressToMonitoringProject(pid).catch((e) => console.error('Schedule progress sync failed:', e.message));
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error syncing schedule tasks:', err);
+    res.status(500).json({ success: false, error: 'Failed to sync schedule tasks' });
+  }
+});
+
 app.delete('/api/schedule-tasks/:id', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
@@ -4725,9 +5092,13 @@ app.post('/api/schedule-versions', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    const { projectId, label } = req.body || {};
+    const { projectId, label, baseline } = req.body || {};
     if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
     const version = await snapshotScheduleVersion(projectId, label, user.full_name || user.username || null);
+    if (baseline === true) {
+      await setScheduleBaseline(projectId, version.id);
+      version.isBaseline = true;
+    }
     res.json({ success: true, version });
   } catch (err) {
     console.error('Error saving schedule version:', err);
@@ -4785,9 +5156,14 @@ app.post('/api/schedule-versions/:id/restore', async (req, res) => {
     const items = (v.tasks || []).map((t) => ({ t, ref: db.collection('calcsheet_schedule_tasks').doc() }));
     const idMap = new Map(items.filter((it) => it.t.id).map((it) => [it.t.id, it.ref.id]));
     items.forEach(({ t, ref }) => {
-      const { id: _i, projectId: _p, createdAt: _c, updatedAt: _u, predecessors, ...rest } = t;
+      const { id: _i, projectId: _p, createdAt: _c, updatedAt: _u, predecessors, parentId, linkTypes, ...rest } = t;
       const remapped = Array.isArray(predecessors) ? predecessors.map((p) => idMap.get(p)).filter(Boolean) : undefined;
-      batch.set(ref, stripUndefinedFields({ ...rest, predecessors: remapped, projectId, createdAt: now, updatedAt: now }));
+      const newParent = parentId ? (idMap.get(parentId) || null) : null;
+      // Link type/lag map is keyed by predecessor id — remap its keys too.
+      const newLinkTypes = linkTypes && typeof linkTypes === 'object'
+        ? Object.fromEntries(Object.entries(linkTypes).filter(([k]) => idMap.has(k)).map(([k, v]) => [idMap.get(k), v]))
+        : undefined;
+      batch.set(ref, stripUndefinedFields({ ...rest, predecessors: remapped, linkTypes: newLinkTypes, parentId: newParent, projectId, createdAt: now, updatedAt: now }));
     });
     await batch.commit();
     await syncScheduleProgressToMonitoringProject(projectId).catch((e) => console.error('Schedule progress sync failed:', e.message));
@@ -4795,6 +5171,22 @@ app.post('/api/schedule-versions/:id/restore', async (req, res) => {
   } catch (err) {
     console.error('Error restoring schedule version:', err);
     res.status(500).json({ success: false, error: 'Failed to restore schedule version' });
+  }
+});
+
+// Set (on: true) or clear (on: false) an existing version as the baseline.
+app.post('/api/schedule-versions/:id/baseline', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const vdoc = await db.collection('calcsheet_schedule_versions').doc(req.params.id).get();
+    if (!vdoc.exists) return res.status(404).json({ success: false, error: 'Version not found' });
+    const on = !(req.body && req.body.on === false);
+    await setScheduleBaseline(vdoc.data().projectId, on ? vdoc.id : null);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error setting schedule baseline:', err);
+    res.status(500).json({ success: false, error: 'Failed to set baseline' });
   }
 });
 
@@ -5714,7 +6106,8 @@ app.get('/api/pricelists/filters', async (req, res) => {
 function pricelistItemFromBody(b) {
   const numOrNull = (v) => (v !== '' && v != null && Number.isFinite(Number(v)) ? Number(v) : null);
   return {
-    supplier: String(b.supplier || 'IOCT').trim(),
+    // The supplier is the vendor — never IOCT itself; blank when unknown.
+    supplier: String(b.supplier || '').trim(),
     brand: String(b.brand || '').trim(),
     pricelistName: String(b.pricelistName || 'Manual entries').trim(),
     pricelistDate: String(b.pricelistDate || new Date().toISOString().slice(0, 7)),
@@ -5893,7 +6286,11 @@ app.post('/api/onedrive/upload', async (req, res) => {
     }
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
-    const folder = await ensureFolderByPath(token, driveId, folderPath);
+    const folder = req.body.financeEvidenceType && req.body.financeInvoiceId
+      ? await require('./server/financeEvidenceFolder').resolveInvoiceEvidenceFolder({
+        db, fetch, token, driveId, invoiceId: req.body.financeInvoiceId, root: folderPath,
+      })
+      : await ensureFolderByPath(token, driveId, folderPath);
     const buf = Buffer.from(contentBase64, 'base64');
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(folder.id)}:/${encodeURIComponent(filename)}:/content`,
@@ -6525,7 +6922,7 @@ async function parseReceiptWithGemini(imageBase64, mimeType) {
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelName = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+  const modelName = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
   const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
 
   const RECEIPT_PROMPT = `You are an expert AI data extraction assistant. Extract receipt data from the provided image/pdf into a strict JSON object.
@@ -6605,7 +7002,7 @@ async function detectCropWithGemini(imageBase64, mimeType) {
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelName = process.env.GEMINI_CROP_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+  const modelName = process.env.GEMINI_CROP_MODEL || 'gemini-3.5-flash-lite';
   const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
 
   const CROP_PROMPT = `Locate the document, receipt, or piece of paper in this photo and return the coordinates of its 4 corners.
@@ -6613,7 +7010,8 @@ Output ONLY valid JSON — no markdown, no explanation.
 Coordinates are fractions from 0.0 to 1.0 relative to image size (0,0 = top-left corner, 1,1 = bottom-right corner).
 Return corners in this exact order: topLeft, topRight, bottomRight, bottomLeft.
 Example: {"topLeft":{"x":0.05,"y":0.1},"topRight":{"x":0.9,"y":0.08},"bottomRight":{"x":0.92,"y":0.95},"bottomLeft":{"x":0.04,"y":0.93}}
-If no document is visible, return: null`;
+Include the entire paper and every printed line, including faint edges and totals; never select only the text block.
+If several receipts are visible, corners are obscured, or the paper boundary is uncertain, return: null`;
 
   const result = await model.generateContent([
     { text: CROP_PROMPT },
@@ -6621,22 +7019,10 @@ If no document is visible, return: null`;
   ]);
 
   const text = result.response.text();
+  if (text.trim() === 'null') return null;
   const jsonStr = extractJson(text);
   const parsed = JSON.parse(jsonStr);
-  if (!parsed || typeof parsed !== 'object') return null;
-
-  const clamp = (v) => Math.min(1, Math.max(0, Number(v) || 0));
-  const tl = parsed.topLeft || {};
-  const tr = parsed.topRight || {};
-  const br = parsed.bottomRight || {};
-  const bl = parsed.bottomLeft || {};
-
-  return [
-    { x: clamp(tl.x), y: clamp(tl.y) },
-    { x: clamp(tr.x), y: clamp(tr.y) },
-    { x: clamp(br.x), y: clamp(br.y) },
-    { x: clamp(bl.x), y: clamp(bl.y) },
-  ];
+  return require('./server/receiptCrop').normalizeReceiptCrop(parsed);
 }
 
 app.post('/api/receipts/detect-crop', async (req, res) => {

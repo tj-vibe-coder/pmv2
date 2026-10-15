@@ -73,6 +73,8 @@ Acceptance Criteria:
 - Submitted liquidations expose **Receipts reviewed**, **Reviewed by** and **Review date** for a manual receipt-by-receipt check against original/scanned receipts. RJ records authenticated identity and actual review date after physical handover, with optional notes and explicit possession/check confirmation; prior paper reviews can be recorded with their actual date.
 - Receipt review is separate from payment/approval status. Saved form or receipt-link changes require a new review while preserving previous reviewer/date/history. Draft/pending edits block new attestations. Review withdrawal requires a reason.
 - Liquidation row controls align at the top beside multiline Particulars.
+- Receipt photos selected for scanning, batch capture or row attachment receive an automatic Gemini crop suggestion before confirmation. Employees can adjust corners or retain the full photo. Unavailable/invalid AI suggestions fall back to local detection/full photo; PDFs bypass image cropping. Crop suggestions never approve expenses or alter accounting.
+- Liquidation rows may default to oldest-to-newest, but every physical item has a fixed reference keyed to its permanent row ID. Dates, amount sorting, edits, screen/PDF/XLSX order, receipt captions and reimbursement views must never renumber physical items. Legacy references use the verified current chronological print order frozen before correction, not stored array positions; new items receive unique non-reused numbers. New receipt names include stable item reference where allocated, form/date/details and a unique suffix. See ADR-0005; initialize legacy forms individually with saved-content/mapping guards.
 - Auto-generated form numbers (LQ-XXXX)
 
 ### Feature 3: Procurement Suite

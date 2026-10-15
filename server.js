@@ -2220,6 +2220,7 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
 });
 
 // ========== LIQUIDATIONS ==========
+app.use('/api/liquidations', require('./server/liquidationItemNumbersRouter').createLiquidationItemNumbersRouter({ db, requireActiveUser }));
 app.use('/api/liquidations', require('./server/liquidationReceiptReviewRouter').createLiquidationReceiptReviewRouter({ db, requireActiveUser }));
 app.get('/api/liquidations', async (req, res) => {
   const user = await getCurrentUser(req);
@@ -2267,6 +2268,12 @@ app.get('/api/liquidations/:id', async (req, res) => {
     if (user.role !== 'superadmin' && user.role !== 'admin' && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     try { liq.receipt_review_content_hash = require('./server/liquidationReceiptReview').receiptReviewHash(liq); }
     catch (_) { liq.receipt_review_content_hash = null; } // Legacy malformed content stays loadable; it cannot be attested.
+    try {
+      const numbers = require('./server/liquidationItemNumbers');
+      liq.physical_item_numbering_persisted = !!liq.physical_item_numbering;
+      liq.physical_item_numbering = numbers.physicalNumbering(liq);
+      liq.rows_json = JSON.stringify(numbers.numberedRows(liq));
+    } catch (error) { liq.physical_item_numbering_error = error.message; }
     res.json({ success: true, liquidation: liq });
   } catch (err) {
     console.error('Error fetching liquidation:', err);
@@ -2278,13 +2285,14 @@ app.post('/api/liquidations', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
-  const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
+  const rawRows = rows_json || [];
   const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
   const total = parseFloat(total_amount) || 0;
   const now = Math.floor(Date.now() / 1000);
   const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
   const caId = ca_id ? String(ca_id) : null;
   try {
+    const { rows, numbering } = require('./server/liquidationItemNumbers').prepareNumberedRows(rawRows, null, user);
     let caCoveredAmount = 0;
     let reimbursableAmount = 0;
     if (liqStatus === 'submitted' && caId) {
@@ -2306,7 +2314,7 @@ app.post('/api/liquidations', async (req, res) => {
     // that exceeds the CA's balance — are tracked so the requester gets paid
     // back (see /api/reimbursements).
     const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
-    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
+    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, physical_item_numbering: numbering, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       // Decrement by the FULL total, not just the covered portion — a CA's
       // balance_remaining going negative IS the "company owes this employee" signal
@@ -2335,6 +2343,7 @@ app.post('/api/liquidations', async (req, res) => {
     }
     res.status(201).json({ success: true, id: ref.id, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft saved' });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ success: false, error: err.message });
     console.error('Error creating liquidation:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
@@ -2352,7 +2361,7 @@ app.put('/api/liquidations/:id', async (req, res) => {
     if (existing.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (existing.status === 'submitted') return res.status(400).json({ success: false, error: 'Cannot edit submitted liquidation' });
     const { form_no, date_of_submission, employee_name, employee_number, rows_json, receipts_json, total_amount, status, ca_id } = req.body;
-    const rows = rows_json ? (typeof rows_json === 'string' ? JSON.parse(rows_json) : rows_json) : [];
+    const { rows } = require('./server/liquidationItemNumbers').prepareNumberedRows(rows_json || [], existing, user);
     const receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
     const total = parseFloat(total_amount) || 0;
     const now = Math.floor(Date.now() / 1000);
@@ -2374,6 +2383,7 @@ app.put('/api/liquidations/:id', async (req, res) => {
       if (dupSnap.docs.some(d => d.id !== id)) return res.status(409).json({ success: false, error: `Form no ${form_no} is already used — refresh to get the next number` });
     }
     const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
+    await require('./server/liquidationItemNumbers').reserveNumberedRows(db, ref, rows_json || [], user);
     await ref.update({ form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       // Full total, matching POST above — the CA's balance_remaining can go
@@ -2400,6 +2410,7 @@ app.put('/api/liquidations/:id', async (req, res) => {
     }
     res.json({ success: true, message: liqStatus === 'submitted' ? 'Liquidation submitted' : 'Draft updated' });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ success: false, error: err.message });
     console.error('Error updating liquidation:', err);
     res.status(500).json({ success: false, error: 'Database error' });
   }
@@ -2499,10 +2510,10 @@ app.get('/api/reimbursements/:id/lines', async (req, res) => {
     const liq = liqSnap.data();
     const receiptRowIds = new Set(parseJsonArray(liq.receipts_json).map(x => x && x.rowId).filter(Boolean));
     const paid = new Set(r.paidRowIds || []);
-    const lines = parseJsonArray(liq.rows_json)
+    const lines = require('./server/liquidationItemNumbers').numberedRows(liq)
       .filter(row => row && row.id && (parseFloat(row.amount) || 0) > 0)
       .map(row => ({
-        rowId: row.id, date: row.date || '', category: row.category || '',
+        rowId: row.id, physicalItemNo: row.physicalItemNo, date: row.date || '', category: row.category || '',
         particulars: row.particulars || '', amount: parseFloat(row.amount) || 0,
         hasReceipt: receiptRowIds.has(row.id), paid: r.status === 'paid' || paid.has(row.id),
       }));
@@ -2778,7 +2789,7 @@ function parseLiqRows(rowsJson) {
 async function applyLiquidationRevision(liqId, liq, revision, approver) {
   const now = Math.floor(Date.now() / 1000);
   const oldRows = parseLiqRows(liq.rows_json);
-  const newRows = parseLiqRows(revision.rows_json);
+  const { rows: newRows } = await require('./server/liquidationItemNumbers').reserveNumberedRows(db, db.collection('liquidations').doc(liqId), parseLiqRows(revision.rows_json), approver);
   const oldTotal = parseFloat(liq.total_amount) || 0;
   const newTotal = parseFloat(revision.total_amount) || 0;
 
@@ -3018,7 +3029,10 @@ app.post('/api/liquidations/:id/propose-edit', async (req, res) => {
     if (!isAdmin && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (liq.status !== 'submitted') return res.status(400).json({ success: false, error: 'Only submitted liquidations use the edit-approval flow — edit the draft directly' });
     const { rows_json, receipts_json, total_amount, employee_name, date_of_submission, note } = req.body;
-    const rows = parseLiqRows(rows_json);
+    if (parseLiqRows(rows_json).length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
+    if (liq.pending_revision && liq.pending_revision.proposed_by !== user.id && user.role !== 'superadmin') return res.status(409).json({ success: false, error: 'Another edit is pending approval' });
+    const prepared = await require('./server/liquidationItemNumbers').reserveNumberedRows(db, ref, parseLiqRows(rows_json), user);
+    const rows = prepared.rows.map(row => ({ ...row, physicalItemNo: prepared.numbering.numbers[row.id] }));
     if (rows.length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
     const total = parseFloat(total_amount) || 0;
     // No CA-overspend guard here, matching POST /api/liquidations and
@@ -6272,7 +6286,11 @@ app.post('/api/onedrive/upload', async (req, res) => {
     }
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
-    const folder = await ensureFolderByPath(token, driveId, folderPath);
+    const folder = req.body.financeEvidenceType && req.body.financeInvoiceId
+      ? await require('./server/financeEvidenceFolder').resolveInvoiceEvidenceFolder({
+        db, fetch, token, driveId, invoiceId: req.body.financeInvoiceId, root: folderPath,
+      })
+      : await ensureFolderByPath(token, driveId, folderPath);
     const buf = Buffer.from(contentBase64, 'base64');
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(folder.id)}:/${encodeURIComponent(filename)}:/content`,
@@ -6904,7 +6922,7 @@ async function parseReceiptWithGemini(imageBase64, mimeType) {
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelName = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+  const modelName = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
   const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
 
   const RECEIPT_PROMPT = `You are an expert AI data extraction assistant. Extract receipt data from the provided image/pdf into a strict JSON object.
@@ -6984,7 +7002,7 @@ async function detectCropWithGemini(imageBase64, mimeType) {
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelName = process.env.GEMINI_CROP_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+  const modelName = process.env.GEMINI_CROP_MODEL || 'gemini-3.5-flash-lite';
   const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
 
   const CROP_PROMPT = `Locate the document, receipt, or piece of paper in this photo and return the coordinates of its 4 corners.
@@ -6992,7 +7010,8 @@ Output ONLY valid JSON — no markdown, no explanation.
 Coordinates are fractions from 0.0 to 1.0 relative to image size (0,0 = top-left corner, 1,1 = bottom-right corner).
 Return corners in this exact order: topLeft, topRight, bottomRight, bottomLeft.
 Example: {"topLeft":{"x":0.05,"y":0.1},"topRight":{"x":0.9,"y":0.08},"bottomRight":{"x":0.92,"y":0.95},"bottomLeft":{"x":0.04,"y":0.93}}
-If no document is visible, return: null`;
+Include the entire paper and every printed line, including faint edges and totals; never select only the text block.
+If several receipts are visible, corners are obscured, or the paper boundary is uncertain, return: null`;
 
   const result = await model.generateContent([
     { text: CROP_PROMPT },
@@ -7000,22 +7019,10 @@ If no document is visible, return: null`;
   ]);
 
   const text = result.response.text();
+  if (text.trim() === 'null') return null;
   const jsonStr = extractJson(text);
   const parsed = JSON.parse(jsonStr);
-  if (!parsed || typeof parsed !== 'object') return null;
-
-  const clamp = (v) => Math.min(1, Math.max(0, Number(v) || 0));
-  const tl = parsed.topLeft || {};
-  const tr = parsed.topRight || {};
-  const br = parsed.bottomRight || {};
-  const bl = parsed.bottomLeft || {};
-
-  return [
-    { x: clamp(tl.x), y: clamp(tl.y) },
-    { x: clamp(tr.x), y: clamp(tr.y) },
-    { x: clamp(br.x), y: clamp(br.y) },
-    { x: clamp(bl.x), y: clamp(bl.y) },
-  ];
+  return require('./server/receiptCrop').normalizeReceiptCrop(parsed);
 }
 
 app.post('/api/receipts/detect-crop', async (req, res) => {
