@@ -211,7 +211,41 @@ interface LoadedLiquidationOption {
   ca_id?: string | null;
   reimbursement_status?: string | null;
   pending_revision?: unknown;
+  workflow_state?: string | null;
+  workflow_dates?: { handed_in?: string | null; reviewed?: string | null; reviewed_by?: string | null; reimbursed?: number | null; needs_action?: string | null };
 }
+
+// One chip per submitted form showing its current stage (server: server/liquidationWorkflow.js workflowState).
+const WORKFLOW_CHIPS: Record<string, { label: string; color: string }> = {
+  pending_edit: { label: 'Edit pending', color: '#7b1fa2' },
+  awaiting_physical: { label: 'Awaiting paper copy', color: '#757575' },
+  review_required: { label: 'Paper copy outdated', color: '#f9a825' },
+  awaiting_rj_review: { label: 'Awaiting review', color: '#1976d2' },
+  needs_action: { label: 'Needs action', color: '#c62828' },
+  awaiting_payment: { label: 'Reimb. pending', color: '#ef6c00' },
+};
+
+const workflowChip = (d: LoadedLiquidationOption): { label: string; color: string; tip: string } | null => {
+  const dt = d.workflow_dates || {};
+  const tip = [
+    dt.needs_action && `Needs action: ${dt.needs_action}`,
+    dt.handed_in && `Paper handed in ${dt.handed_in}`,
+    dt.reviewed && `reviewed${dt.reviewed_by ? ` by ${dt.reviewed_by}` : ''} ${dt.reviewed}`,
+    dt.reimbursed && `reimbursed ${new Date(dt.reimbursed * 1000).toLocaleDateString()}`,
+  ].filter(Boolean).join(' · ');
+  const state = d.workflow_state;
+  if (state === 'closed') {
+    // Closed with a reimbursement → Reimbursed; CA-settled with nothing owed → Reviewed.
+    const reimbursed = d.reimbursement_status === 'reimbursed' || !!dt.reimbursed;
+    return { label: reimbursed ? 'Reimbursed' : 'Reviewed', color: '#2e7d32', tip };
+  }
+  if (state && WORKFLOW_CHIPS[state]) return { ...WORKFLOW_CHIPS[state], tip };
+  // Unknown/legacy state: fall back to the old reimbursement chip.
+  if (d.pending_revision) return { ...WORKFLOW_CHIPS.pending_edit, tip };
+  if (d.reimbursement_status) return d.reimbursement_status === 'reimbursed'
+    ? { label: 'Reimbursed', color: '#2e7d32', tip } : { ...WORKFLOW_CHIPS.awaiting_payment, tip };
+  return null;
+};
 
 // A proposed edit to a submitted liquidation, awaiting superadmin approval.
 interface PendingRevisionInfo {
@@ -486,6 +520,7 @@ export default function LiquidationFormPage() {
   const [pendingRevision, setPendingRevision] = useState<PendingRevisionInfo | null>(null);
   const [loadedOptionValue, setLoadedOptionValue] = useState<string>('');
   const [reviewContentHash, setReviewContentHash] = useState('');
+  const [reviewLocked, setReviewLocked] = useState(false);
   const [cashAdvances, setCashAdvances] = useState<CaOption[]>([]);
   // Reimbursement tracking of the currently loaded submitted no-CA liquidation.
   const [loadedReimb, setLoadedReimb] = useState<{ id: string; status: string | null; at: number | null; caId: string | null } | null>(null);
@@ -1097,6 +1132,7 @@ export default function LiquidationFormPage() {
     const l = data.liquidation;
     if (l.physical_item_numbering_error) { setSubmitSuccess(l.physical_item_numbering_error); return null; }
     setReviewContentHash(l.receipt_review_content_hash || '');
+    setReviewLocked(!!l.receipt_review_locked);
     const serverStatus = String(l.status ?? '').toLowerCase().trim();
     const submitted =
       isSubmitted ||
@@ -1995,17 +2031,18 @@ export default function LiquidationFormPage() {
                 ...submittedLiquidations.map((d) => (
                   <MenuItem key={`submitted-${d.id}`} value={`submitted:${d.id}`}>
                     {d.form_no || `#${d.id}`} – {d.date_of_submission || 'no date'} (₱{Number(d.total_amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })})
-                    {!!d.pending_revision && (
-                      <Chip size="small" label="Edit pending" color="warning" sx={{ ml: 1, height: 18, fontSize: '0.65rem' }} />
-                    )}
-                    {d.reimbursement_status && (
-                      <Chip
-                        size="small"
-                        label={d.reimbursement_status === 'reimbursed' ? 'Reimbursed' : 'Reimb. pending'}
-                        color={d.reimbursement_status === 'reimbursed' ? 'success' : 'warning'}
-                        sx={{ ml: 1, height: 18, fontSize: '0.65rem' }}
-                      />
-                    )}
+                    {(() => {
+                      const chip = workflowChip(d);
+                      if (!chip) return null;
+                      const el = (
+                        <Chip
+                          size="small"
+                          label={chip.label}
+                          sx={{ ml: 1, height: 18, fontSize: '0.65rem', bgcolor: chip.color, color: '#fff' }}
+                        />
+                      );
+                      return chip.tip ? <Tooltip title={chip.tip}>{el}</Tooltip> : el;
+                    })()}
                   </MenuItem>
                 )),
               ]}
@@ -2246,7 +2283,9 @@ export default function LiquidationFormPage() {
           <Box sx={{ mb: 2, p: 1.5, bgcolor: 'info.light', borderRadius: 1, border: '1px solid', borderColor: 'info.main', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
               <Typography variant="body2" sx={{ color: 'info.dark', fontWeight: 500 }}>
-                Viewing submitted liquidation (read-only). Use “Propose edit” to change it in place.
+                {reviewLocked && !isAdmin
+                  ? 'Reviewed by RJ/Admin — this liquidation is locked. Ask an admin for any changes.'
+                  : 'Viewing submitted liquidation (read-only). Use “Propose edit” to change it in place.'}
               </Typography>
               {loadedReimb && (
                 <Chip
@@ -2274,6 +2313,7 @@ export default function LiquidationFormPage() {
                   Settle this from the Reimbursements page
                 </Typography>
               )}
+              {!(reviewLocked && !isAdmin) && (
               <Button
                 variant="contained"
                 size="small"
@@ -2283,6 +2323,7 @@ export default function LiquidationFormPage() {
               >
                 {user?.role === 'superadmin' ? 'Edit (applies immediately)' : 'Propose edit'}
               </Button>
+              )}
               <Button
                 variant="outlined"
                 size="small"

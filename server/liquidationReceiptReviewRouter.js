@@ -25,7 +25,7 @@ function createLiquidationReceiptReviewRouter({ db, requireActiveUser }) {
       const liq = exists(await tx.get(ref.liquidation)); read(user, liq);
       const snap = await tx.get(ref.review); const review = snap.exists ? snap.data() : null;
       const reimb = await tx.get(db.collection('reimbursements').doc(req.params.id));
-      return { workflowStatus: workflowState(liq, review, reimb.exists ? reimb.data() : null), canSubmitPhysical: (admin(user) || (user.role === 'user' && liq.user_id === user.id)) && liq.status === 'submitted' && !liq.pending_revision, isRj: isRj(user), review, status: reviewStatus(liq, review), contentHash: receiptReviewHash(liq), revision: review?.revision || 0,
+      return { workflowStatus: workflowState(liq, review, reimb.exists ? reimb.data() : null), canSubmitPhysical: (admin(user) || (user.role === 'user' && liq.user_id === user.id)) && liq.status === 'submitted' && !liq.pending_revision, isRj: isRj(user), canRespond: !!review?.needsAction?.active && (admin(user) || (user.role === 'user' && liq.user_id === user.id)), review, status: reviewStatus(liq, review), contentHash: receiptReviewHash(liq), revision: review?.revision || 0,
         canRecord: isRj(user) && liq.status === 'submitted' && !liq.pending_revision && currentSubmission(liq, review) };
     });
     res.json(result);
@@ -38,6 +38,23 @@ function createLiquidationReceiptReviewRouter({ db, requireActiveUser }) {
       const liq = exists(await tx.get(ref.liquidation));
       const snap = await tx.get(ref.review); const before = snap.exists ? snap.data() : null;
       const contentHash = receiptReviewHash(liq);
+      // "Needs action": RJ flags what the employee must complete/justify. It
+      // deactivates any recorded review so the form unlocks for a proposed edit.
+      if (body.action === 'needs_action' || body.action === 'clear_needs_action') {
+        if (liq.status !== 'submitted') fail('Only submitted liquidations can be flagged', 409);
+        if (!Number.isSafeInteger(body.revision) || body.revision !== (before?.revision || 0)) fail('Review changed; refresh its status before saving', 409);
+        const note = text(body.note, 2000);
+        const clearing = body.action === 'clear_needs_action';
+        if (!clearing && !note) fail('Describe what the employee needs to complete or justify');
+        if (clearing && !before?.needsAction?.active) fail('No open action to clear', 409);
+        const at = new Date().toISOString(); const name = user.full_name || user.username || user.id;
+        const needsAction = clearing ? { ...before.needsAction, active: false, clearedBy: user.id, clearedByName: name, clearedAt: at }
+          : { active: true, note, flaggedBy: user.id, flaggedByName: name, flaggedAt: at };
+        const after = { ...(before || {}), active: clearing ? !!before?.active : false, revision: (before?.revision || 0) + 1, needsAction };
+        tx.set(ref.review, after);
+        tx.set(ref.review.collection('history').doc(), { actor: user.id, actorName: name, at, action: body.action, before, after });
+        return { review: after, status: reviewStatus(liq, after) };
+      }
       if (liq.status !== 'submitted' || liq.pending_revision) fail('Review the submitted form after pending edits are resolved', 409);
       if (body.contentHash !== contentHash) fail('Form changed; reload the liquidation and check its receipts again', 409);
       if (!currentSubmission(liq, before)) fail('Record the physical receipt submission for this saved form first', 409);
@@ -60,6 +77,22 @@ function createLiquidationReceiptReviewRouter({ db, requireActiveUser }) {
       return { review: after, status: reviewStatus(liq, after) };
     });
     res.json(result);
+  }));
+  router.post('/:id/receipt-review/respond', handle(async (req, res, user) => {
+    const body = req.body || {}; const ref = refs(req.params.id);
+    const result = await db.runTransaction(async tx => {
+      const liq = exists(await tx.get(ref.liquidation)); read(user, liq);
+      if (!admin(user) && user.role !== 'user') fail('Forbidden', 403);
+      const snap = await tx.get(ref.review); const before = snap.exists ? snap.data() : null;
+      if (!before?.needsAction?.active) fail('There is no open action on this liquidation', 409);
+      if (!Number.isSafeInteger(body.revision) || body.revision !== before.revision) fail('Review changed; refresh before replying', 409);
+      const response = text(body.response, 2000); if (!response) fail('Write your reply first');
+      const at = new Date().toISOString(); const name = user.full_name || user.username || user.id;
+      const after = { ...before, revision: before.revision + 1, needsAction: { ...before.needsAction, response, respondedBy: user.id, respondedByName: name, respondedAt: at } };
+      tx.set(ref.review, after);
+      tx.set(ref.review.collection('history').doc(), { actor: user.id, actorName: name, at, action: 'needs_action_response', before, after });
+      return { success: true };
+    }); res.json(result);
   }));
   router.post('/:id/physical-receipts', handle(async (req, res, user) => {
     const body = req.body || {}; const ref = refs(req.params.id);
