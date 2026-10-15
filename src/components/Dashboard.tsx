@@ -60,6 +60,9 @@ import AddProjectDialog from './AddProjectDialog';
 import { resolveBudgetsForProjects } from '../utils/calcsheetBudget';
 import { useQuotationStore } from '../store/quotationStore';
 import { API_BASE } from '../config/api';
+import { useNavigate } from 'react-router-dom';
+import UntaggedExpensesPanel from './UntaggedExpensesPanel';
+import type { ProjectSpend, ProjectSpendMonitor } from '../types/ProjectSpendMonitor';
 
 // Legacy fallback only: spend now lives in Firestore `project_expenses`
 // (GET /api/project-expenses). Used when that request fails.
@@ -201,6 +204,54 @@ const MiniBar: React.FC<{ value: number; color: string; label: string; caption?:
   </Box>
 );
 
+/** Spent vs budget, split by where the money came from, with a link to the project's expense report. */
+const SpendCell: React.FC<{ m: ProjectMonitor; spend?: ProjectSpend; color: string; onOpen: () => void }> = ({ m, spend, color, onOpen }) => {
+  const parts = spend
+    ? ([
+      ['Liq', spend.liquidation],
+      ['PO', spend.po],
+      ['Labor', spend.labor],
+      ['Other', spend.manual],
+    ] as const).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${formatCompact(v)}`)
+    : [];
+  const tooltip = [
+    `Spent ${dataService.formatCurrency(m.spent)}${m.budget > 0 ? ` of ${dataService.formatCurrency(m.budget)} budget` : ' (no budget set)'}`,
+    spend && spend.draftLiquidation > 0
+      ? `+ ${dataService.formatCurrency(spend.draftLiquidation)} in ${spend.draftLines} draft liquidation line(s), not filed yet`
+      : '',
+    'Click to open the project expense report',
+  ].filter(Boolean).join('\n');
+  return (
+    <Box
+      role="link"
+      title={tooltip}
+      onClick={(e) => { e.stopPropagation(); onOpen(); }}
+      sx={{ cursor: 'pointer', borderRadius: 1, '&:hover .spend-label': { textDecoration: 'underline' } }}
+    >
+      {m.budgetUsedPct == null ? (
+        <Typography className="spend-label" variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 600, color: m.spent > 0 ? 'text.primary' : 'text.disabled' }}>
+          {m.spent > 0 ? formatCompact(m.spent) : '₱0'}
+          <Typography component="span" variant="caption" color="text.disabled" sx={{ ml: 0.5 }}>no budget</Typography>
+        </Typography>
+      ) : (
+        <Box className="spend-label">
+          <MiniBar value={m.budgetUsedPct} color={color} label={formatCompact(m.spent)} caption={`${Math.round(m.budgetUsedPct)}% of ${formatCompact(m.budget)}`} />
+        </Box>
+      )}
+      {parts.length > 0 && (
+        <Typography variant="caption" color="text.secondary" component="div" sx={{ fontSize: '0.66rem', lineHeight: 1.3, mt: 0.25 }}>
+          {parts.join(' · ')}
+        </Typography>
+      )}
+      {spend && spend.draftLiquidation > 0 && (
+        <Typography variant="caption" component="div" sx={{ fontSize: '0.66rem', lineHeight: 1.3, color: 'warning.dark' }}>
+          +{formatCompact(spend.draftLiquidation)} in draft liquidations
+        </Typography>
+      )}
+    </Box>
+  );
+};
+
 const DASHBOARD_PREFS_KEY = 'projects-list-prefs';
 
 type DashboardListPrefs = {
@@ -329,6 +380,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
   const [uniqueYears, setUniqueYears] = useState<number[]>([]);
   const [uniqueClients, setUniqueClients] = useState<string[]>([]);
   const [spentByProject, setSpentByProject] = useState<Record<string, number>>({});
+  const [spendMonitor, setSpendMonitor] = useState<ProjectSpendMonitor | null>(null);
+  const [spendError, setSpendError] = useState('');
+  const untaggedRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csProjects = useQuotationStore((s) => s.projects);
   const quotations = useQuotationStore((s) => s.quotations);
@@ -351,7 +406,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     loadProjects();
   }, [filters, effectiveRefreshTrigger]);
 
-  // Actual spend per project from Firestore project_expenses (budget column + alerts).
+  // Spend per project (split by liquidation / PO / other), untagged expenses and the
+  // liquidation→Finance sync check, from GET /api/projects-monitor/spend.
+  // Falls back to plain project_expenses totals (then legacy localStorage) if unavailable.
   useEffect(() => {
     let cancelled = false;
     const sumBy = (rows: { projectId?: string | number; amount?: number | string }[]) => {
@@ -363,16 +420,32 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       return out;
     };
     const token = localStorage.getItem('netpacific_token');
-    fetch(`${API_BASE}/api/project-expenses`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      .then((r) => r.json())
-      .then((data) => {
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    const getJson = (path: string) => fetch(`${API_BASE}${path}`, { headers }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data?.success) throw new Error(data?.error || `Request failed (${r.status})`);
+      return data;
+    });
+    getJson('/api/projects-monitor/spend')
+      .then((data: ProjectSpendMonitor) => {
         if (cancelled) return;
-        if (!data?.success) throw new Error(data?.error || 'Failed to load expenses');
-        setSpentByProject(sumBy(data.expenses || []));
+        setSpendMonitor(data);
+        setSpendError('');
+        const totals: Record<string, number> = {};
+        Object.entries(data.byProject || {}).forEach(([id, sp]) => { totals[id] = sp.total; });
+        setSpentByProject(totals);
       })
-      .catch(() => {
-        if (!cancelled) setSpentByProject(sumBy(loadProjectExpenses()));
-      });
+      .catch(() => getJson('/api/project-expenses')
+        .then((data) => {
+          if (cancelled) return;
+          setSpendError('Untagged-expense tracking is unavailable right now (finance summary failed to load).');
+          setSpentByProject(sumBy(data.expenses || []));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setSpendError('Could not load expenses from Finance.');
+          setSpentByProject(sumBy(loadProjectExpenses()));
+        }));
     return () => {
       cancelled = true;
     };
@@ -507,6 +580,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           return m?.targetMs ?? null;
         case 'budget_used':
           return m?.budgetUsedPct ?? null;
+        case 'spent':
+          return m?.spent || null;
         case 'alerts':
           return m?.severityRank ?? null;
         case 'acti_to_ioct_po_number':
@@ -545,11 +620,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
         acc.contract += m.contract;
         acc.billed += m.billed;
         acc.unbilled += m.unbilled;
+        acc.spent += m.spent;
         if (!m.closed) acc.active += 1;
         if (m.flags.some((f) => f.severity !== 'info')) acc.atRisk += 1;
         return acc;
       },
-      { contract: 0, billed: 0, unbilled: 0, active: 0, atRisk: 0 },
+      { contract: 0, billed: 0, unbilled: 0, spent: 0, active: 0, atRisk: 0 },
     );
     return {
       ...totals,
@@ -1188,6 +1264,16 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       gradient: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`,
     },
     {
+      label: 'Project Spend',
+      value: formatCompact(summary.spent),
+      title: dataService.formatCurrency(summary.spent),
+      caption: spendMonitor
+        ? `${formatCompact(spendMonitor.untagged.totals.all)} not tagged to a project · tap to view`
+        : 'from Finance (liquidations, POs, expenses)',
+      gradient: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent2} 0%, ${NET_PACIFIC_COLORS.info} 100%)`,
+      onClick: () => untaggedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+    },
+    {
       label: 'Needs Attention',
       value: String(summary.attention),
       caption: attentionOnly ? 'showing only these · tap to clear' : `${summary.atRisk} late or over budget · tap to filter`,
@@ -1282,7 +1368,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(5, minmax(0, 1fr))' },
+          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(6, minmax(0, 1fr))' },
           gap: 1.5,
           mb: 2,
         }}
@@ -1309,8 +1395,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                 outline: card.selected ? '3px solid' : 'none',
                 outlineColor: NET_PACIFIC_COLORS.secondary,
                 outlineOffset: 2,
-                // Odd card out on the 2-column phone grid spans the full row.
-                ...(card.onClick ? { gridColumn: { xs: 'span 2', sm: 'auto' } } : {}),
               }}
             >
               {card.onClick ? <CardActionArea onClick={card.onClick} sx={{ height: '100%' }}>{body}</CardActionArea> : body}
@@ -1573,7 +1657,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                 {sortableHead('contract', 'Contract', 'right')}
                 {sortableHead('backlogs', 'Unbilled', 'right')}
                 {sortableHead('target_date', 'Target Completion')}
-                {sortableHead('budget_used', 'Budget Used')}
+                {sortableHead('spent', 'Spent vs Budget')}
                 {sortableHead('alerts', 'Alerts')}
                 {showDetails && sortableHead('po_number', 'PO Number')}
                 {showDetails && sortableHead('po_date', 'PO Date')}
@@ -1699,21 +1783,13 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                         <Typography variant="caption" color="text.disabled">Not set</Typography>
                       )}
                     </TableCell>
-                    <TableCell>
-                      {m.budgetUsedPct == null ? (
-                        <Typography variant="caption" color="text.disabled" title={m.spent > 0 ? `Spent ${dataService.formatCurrency(m.spent)}, no budget set` : 'No budget set'}>
-                          {m.spent > 0 ? `${formatCompact(m.spent)} spent` : 'No budget'}
-                        </Typography>
-                      ) : (
-                        <Box title={`Spent ${dataService.formatCurrency(m.spent)} of ${dataService.formatCurrency(m.budget)}`}>
-                          <MiniBar
-                            value={m.budgetUsedPct}
-                            color={budgetColor}
-                            label={`${Math.round(m.budgetUsedPct)}%`}
-                            caption={`of ${formatCompact(m.budget)}`}
-                          />
-                        </Box>
-                      )}
+                    <TableCell sx={{ minWidth: 150 }}>
+                      <SpendCell
+                        m={m}
+                        spend={spendMonitor?.byProject[String(project.id)]}
+                        color={budgetColor}
+                        onOpen={() => navigate(`/finance/projects/${encodeURIComponent(String(project.id))}/expenses`)}
+                      />
                     </TableCell>
                     <TableCell sx={{ minWidth: 140 }}>
                       {m.flags.length ? (
@@ -1795,6 +1871,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           </Table>
         </TableContainer>
       </Paper>
+
+      <UntaggedExpensesPanel ref={untaggedRef} monitor={spendMonitor} year={filters.year} error={spendError} />
 
       {/* Trends (collapsed by default — the table above is the monitoring view) */}
       <Paper sx={{ mt: 2, borderRadius: 2, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
