@@ -6,23 +6,25 @@ import {
   Typography,
   Card,
   CardContent,
+  CardActionArea,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
   Chip,
-  IconButton,
   TextField,
   FormControl,
+  FormControlLabel,
   InputLabel,
   Select,
   MenuItem,
-  OutlinedInput,
   Button,
   Stack,
   Checkbox,
+  Switch,
   Menu,
   ListItemIcon,
   ListItemText,
@@ -32,19 +34,23 @@ import {
   DialogActions,
   DialogContentText,
   Alert,
+  LinearProgress,
+  Collapse,
+  InputAdornment,
 } from '@mui/material';
-import { 
-  Visibility as VisibilityIcon,
+import {
   Download as DownloadIcon,
   Upload as UploadIcon,
   TableChart as ExcelIcon,
   Description as CsvIcon,
   KeyboardArrowDown as ArrowDownIcon,
+  KeyboardArrowUp as ArrowUpIcon,
   Delete as DeleteIcon,
   Warning as WarningIcon,
+  WarningAmber as WarningAmberIcon,
   Add as AddIcon,
-  ArrowUpward as ArrowUpIcon,
-  UnfoldMore as UnfoldMoreIcon,
+  Search as SearchIcon,
+  ChevronRight as ChevronRightIcon,
 } from '@mui/icons-material';
 import { Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, ComposedChart, Line } from 'recharts';
 import { Project, ProjectFilters, YearSummary } from '../types/Project';
@@ -53,7 +59,10 @@ import dataService from '../services/dataService';
 import AddProjectDialog from './AddProjectDialog';
 import { resolveBudgetsForProjects } from '../utils/calcsheetBudget';
 import { useQuotationStore } from '../store/quotationStore';
+import { API_BASE } from '../config/api';
 
+// Legacy fallback only: spend now lives in Firestore `project_expenses`
+// (GET /api/project-expenses). Used when that request fails.
 const PROJECT_EXPENSES_KEY = 'projectExpenses';
 function loadProjectExpenses(): { projectId: string; amount: number }[] {
   try {
@@ -74,6 +83,124 @@ const NET_PACIFIC_COLORS = {
   info: '#74b9ff',
 };
 
+const CLOSED_STATUSES = new Set(['CLOSED', 'COMPLETED', 'CANCELLED', 'TERMINATED']);
+const isClosedStatus = (status?: string) => CLOSED_STATUSES.has((status || '').trim().toUpperCase());
+const isCancelledStatus = (status?: string) => ['CANCELLED', 'TERMINATED'].includes((status || '').trim().toUpperCase());
+
+const DAY_MS = 86_400_000;
+// Dates before this are bad imports (e.g. Excel serials read as epoch seconds), not real deadlines.
+const MIN_REAL_DATE_MS = Date.UTC(2000, 0, 1);
+const DUE_SOON_DAYS = 14;
+
+/** Project dates are stored as epoch seconds or milliseconds (see dataService.formatDate). */
+function toMs(ts: number | null | undefined): number | null {
+  if (!ts) return null;
+  const ms = String(Math.trunc(ts)).length <= 10 ? ts * 1000 : ts;
+  return ms >= MIN_REAL_DATE_MS ? ms : null;
+}
+
+const compactPeso = new Intl.NumberFormat('en-PH', {
+  style: 'currency',
+  currency: 'PHP',
+  notation: 'compact',
+  maximumFractionDigits: 2,
+});
+const formatCompact = (n: number) => compactPeso.format(n || 0);
+
+type FlagSeverity = 'error' | 'warning' | 'info';
+interface ProjectFlag {
+  key: string;
+  label: string;
+  severity: FlagSeverity;
+}
+const SEVERITY_RANK: Record<FlagSeverity, number> = { error: 0, warning: 1, info: 2 };
+
+/** Everything the monitoring table needs about one project, computed once. */
+interface ProjectMonitor {
+  contract: number;
+  billed: number;
+  unbilled: number;
+  billedPct: number;
+  progress: number;
+  targetMs: number | null;
+  daysLeft: number | null;
+  budget: number;
+  spent: number;
+  budgetUsedPct: number | null;
+  closed: boolean;
+  flags: ProjectFlag[];
+  severityRank: number;
+}
+
+function buildMonitor(project: Project, budget: number, spent: number, todayMs: number): ProjectMonitor {
+  const contract = project.updated_contract_amount || project.contract_amount || 0;
+  const unbilled = dataService.getUnbilled(project);
+  const billed = Math.max(0, contract - unbilled);
+  const billedPct = contract > 0 ? (billed / contract) * 100 : 0;
+  const progress = Math.max(0, Math.min(100, Number(project.actual_site_progress_percent) || 0));
+  const targetMs = toMs(project.updated_completion_date) ?? toMs(project.completion_date);
+  const daysLeft = targetMs == null ? null : Math.ceil((targetMs - todayMs) / DAY_MS);
+  const budgetUsedPct = budget > 0 ? (spent / budget) * 100 : null;
+  const closed = isClosedStatus(project.project_status);
+
+  const flags: ProjectFlag[] = [];
+  if (!closed) {
+    if (progress < 100 && daysLeft != null && daysLeft < 0) {
+      flags.push({ key: 'overdue', label: `Overdue ${-daysLeft}d`, severity: 'error' });
+    } else if (progress < 90 && daysLeft != null && daysLeft <= DUE_SOON_DAYS) {
+      flags.push({ key: 'due-soon', label: daysLeft === 0 ? 'Due today' : `Due in ${daysLeft}d`, severity: 'warning' });
+    }
+    if (budgetUsedPct != null && budgetUsedPct > 100) {
+      flags.push({ key: 'over-budget', label: 'Over budget', severity: 'error' });
+    } else if (budgetUsedPct != null && budgetUsedPct >= 80) {
+      flags.push({ key: 'budget-risk', label: `Budget ${Math.round(budgetUsedPct)}% used`, severity: 'warning' });
+    }
+  }
+  if (!isCancelledStatus(project.project_status) && progress >= 100 && unbilled > 0) {
+    flags.push({ key: 'unbilled', label: `Done · ${formatCompact(unbilled)} unbilled`, severity: 'info' });
+  } else if (!closed && progress >= 100) {
+    flags.push({ key: 'closeout', label: 'Ready to close out', severity: 'info' });
+  }
+  flags.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+  const severityRank = flags.length ? SEVERITY_RANK[flags[0].severity] : 3;
+
+  return { contract, billed, unbilled, billedPct, progress, targetMs, daysLeft, budget, spent, budgetUsedPct, closed, flags, severityRank };
+}
+
+const FLAG_CHIP_SX: Record<FlagSeverity, object> = {
+  error: { bgcolor: '#fdecea', color: '#b71c1c', borderColor: '#f5c2c0' },
+  warning: { bgcolor: '#fff4e5', color: '#8a5300', borderColor: '#ffd8a8' },
+  info: { bgcolor: '#e8f1fb', color: NET_PACIFIC_COLORS.secondary, borderColor: '#c5d9f1' },
+};
+
+const FlagChip: React.FC<{ flag: ProjectFlag }> = ({ flag }) => (
+  <Chip
+    label={flag.label}
+    size="small"
+    variant="outlined"
+    sx={{ ...FLAG_CHIP_SX[flag.severity], fontSize: '0.68rem', height: 20, fontWeight: 600 }}
+  />
+);
+
+/** Small labelled bar used for progress, billing and budget columns. */
+const MiniBar: React.FC<{ value: number; color: string; label: string; caption?: string }> = ({ value, color, label, caption }) => (
+  <Box sx={{ minWidth: 110 }}>
+    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 1, mb: 0.25 }}>
+      <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 600 }}>{label}</Typography>
+      {caption && (
+        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.68rem', whiteSpace: 'nowrap' }}>
+          {caption}
+        </Typography>
+      )}
+    </Box>
+    <LinearProgress
+      variant="determinate"
+      value={Math.max(0, Math.min(100, value))}
+      sx={{ height: 6, borderRadius: 3, bgcolor: 'grey.200', '& .MuiLinearProgress-bar': { bgcolor: color, borderRadius: 3 } }}
+    />
+  </Box>
+);
+
 const DASHBOARD_PREFS_KEY = 'projects-list-prefs';
 
 type DashboardListPrefs = {
@@ -81,6 +208,11 @@ type DashboardListPrefs = {
   year?: number;
   client?: string;
   statusFilter: string[];
+  /** Hide closed/cancelled projects (the default monitoring view). */
+  activeOnly: boolean;
+  attentionOnly: boolean;
+  showDetails: boolean;
+  showCharts: boolean;
   filterActi: boolean;
   sortKey: string;
   sortDir: 'asc' | 'desc';
@@ -92,22 +224,33 @@ function loadDashboardPrefs(): DashboardListPrefs {
     year: undefined,
     client: undefined,
     statusFilter: [],
+    activeOnly: true,
+    attentionOnly: false,
+    showDetails: false,
+    showCharts: false,
     filterActi: false,
-    sortKey: 'project_no',
-    sortDir: 'desc',
+    // Most urgent first: overdue / over budget, then warnings, then info.
+    sortKey: 'alerts',
+    sortDir: 'asc',
   };
   try {
     const raw = localStorage.getItem(DASHBOARD_PREFS_KEY);
     if (!raw) return defaults;
     const parsed = JSON.parse(raw);
     const yearNum = Number(parsed.year);
+    const statusFilter: string[] = Array.isArray(parsed.statusFilter)
+      ? parsed.statusFilter.filter((s: unknown) => typeof s === 'string')
+      : [];
     return {
       searchTerm: typeof parsed.searchTerm === 'string' ? parsed.searchTerm : '',
       year: Number.isFinite(yearNum) && yearNum > 0 ? yearNum : undefined,
       client: typeof parsed.client === 'string' && parsed.client ? parsed.client : undefined,
-      statusFilter: Array.isArray(parsed.statusFilter)
-        ? parsed.statusFilter.filter((s: unknown) => typeof s === 'string')
-        : [],
+      statusFilter,
+      // Prefs saved before the Active view existed: default to Active unless statuses were picked.
+      activeOnly: typeof parsed.activeOnly === 'boolean' ? parsed.activeOnly : statusFilter.length === 0,
+      attentionOnly: !!parsed.attentionOnly,
+      showDetails: !!parsed.showDetails,
+      showCharts: !!parsed.showCharts,
       filterActi: !!parsed.filterActi,
       sortKey: typeof parsed.sortKey === 'string' && parsed.sortKey ? parsed.sortKey : 'project_no',
       sortDir: parsed.sortDir === 'asc' || parsed.sortDir === 'desc' ? parsed.sortDir : 'desc',
@@ -136,6 +279,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     client: initPrefs.client,
   });
   const [statusFilter, setStatusFilter] = useState<string[]>(initPrefs.statusFilter);
+  const [activeOnly, setActiveOnly] = useState(initPrefs.activeOnly);
+  const [attentionOnly, setAttentionOnly] = useState(initPrefs.attentionOnly);
+  const [showDetails, setShowDetails] = useState(initPrefs.showDetails);
+  const [showCharts, setShowCharts] = useState(initPrefs.showCharts);
+  const [attentionExpanded, setAttentionExpanded] = useState(false);
   const [filterActi, setFilterActi] = useState(initPrefs.filterActi);
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
@@ -144,7 +292,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
   const [isDeleting, setIsDeleting] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const effectiveRefreshTrigger = externalRefreshTrigger + refreshTrigger;
-  const [sortConfig, setSortConfig] = useState<{key: string; direction: 'asc' | 'desc'} | null>({
+  const [sortConfig, setSortConfig] = useState<{key: string; direction: 'asc' | 'desc'}>({
     key: initPrefs.sortKey,
     direction: initPrefs.sortDir,
   });
@@ -155,31 +303,24 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       year: filters.year,
       client: filters.client,
       statusFilter,
+      activeOnly,
+      attentionOnly,
+      showDetails,
+      showCharts,
       filterActi,
-      sortKey: sortConfig?.key || 'project_no',
-      sortDir: sortConfig?.direction || 'desc',
+      sortKey: sortConfig.key,
+      sortDir: sortConfig.direction,
     });
-  }, [filters.searchTerm, filters.year, filters.client, statusFilter, filterActi, sortConfig]);
+  }, [filters.searchTerm, filters.year, filters.client, statusFilter, activeOnly, attentionOnly, showDetails, showCharts, filterActi, sortConfig]);
 
-  // Sorting function
   const handleSort = (key: string) => {
-    let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc';
-    }
-    setSortConfig({ key, direction });
+    setSortConfig((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+    }));
   };
 
-  // Sort icon component
-  const getSortIcon = (columnKey: string) => {
-    if (!sortConfig || sortConfig.key !== columnKey) {
-      return <UnfoldMoreIcon sx={{ fontSize: '0.875rem', ml: 0.5, opacity: 0.5 }} />;
-    }
-    return sortConfig.direction === 'asc' ? 
-      <ArrowUpIcon sx={{ fontSize: '0.875rem', ml: 0.5 }} /> : 
-      <ArrowDownIcon sx={{ fontSize: '0.875rem', ml: 0.5 }} />;
-  };
-  const [, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<Project[]>([]);
   const [addProjectDialogOpen, setAddProjectDialogOpen] = useState(false);
   const [yearSummaries, setYearSummaries] = useState<YearSummary[]>([]);
@@ -187,6 +328,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
   const [uniqueStatuses, setUniqueStatuses] = useState<string[]>([]);
   const [uniqueYears, setUniqueYears] = useState<number[]>([]);
   const [uniqueClients, setUniqueClients] = useState<string[]>([]);
+  const [spentByProject, setSpentByProject] = useState<Record<string, number>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csProjects = useQuotationStore((s) => s.projects);
   const quotations = useQuotationStore((s) => s.quotations);
@@ -208,7 +350,34 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
 
     loadProjects();
   }, [filters, effectiveRefreshTrigger]);
-  
+
+  // Actual spend per project from Firestore project_expenses (budget column + alerts).
+  useEffect(() => {
+    let cancelled = false;
+    const sumBy = (rows: { projectId?: string | number; amount?: number | string }[]) => {
+      const out: Record<string, number> = {};
+      rows.forEach((e) => {
+        const key = String(e.projectId ?? '');
+        if (key) out[key] = (out[key] || 0) + (Number(e.amount) || 0);
+      });
+      return out;
+    };
+    const token = localStorage.getItem('netpacific_token');
+    fetch(`${API_BASE}/api/project-expenses`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (!data?.success) throw new Error(data?.error || 'Failed to load expenses');
+        setSpentByProject(sumBy(data.expenses || []));
+      })
+      .catch(() => {
+        if (!cancelled) setSpentByProject(sumBy(loadProjectExpenses()));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveRefreshTrigger]);
+
   // Load static data on mount
   useEffect(() => {
     const loadStaticData = async () => {
@@ -218,16 +387,16 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           dataService.getUniqueStatuses(),
           dataService.getUniqueYears()
         ]);
-        
+
         const allProjects = await dataService.getProjects();
         const yearGroups: Record<number, typeof allProjects> = {};
-        
+
         allProjects.forEach(project => {
           const year = project.year || new Date().getFullYear();
           if (!yearGroups[year]) yearGroups[year] = [];
           yearGroups[year].push(project);
         });
-        
+
         const calculatedYearSummaries = Object.entries(yearGroups).map(([year, projects]) => ({
           year: parseInt(year),
           projectCount: projects.length,
@@ -236,7 +405,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           totalBacklogs: projects.reduce((sum, p) => sum + dataService.getUnbilled(p), 0),
           totalOutstandingBalance: projects.reduce((sum, p) => sum + dataService.getUnbilled(p), 0)
         })).sort((a, b) => a.year - b.year);
-        
+
         setYearSummaries(calculatedYearSummaries);
         setStatusDistribution(statusDist.map(item => ({ name: item.label, value: item.value })));
         setUniqueStatuses(statuses);
@@ -251,98 +420,157 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     };
     loadStaticData();
   }, [refreshTrigger]);
-  
-  // Server returns the year/search slice; status is a client-side multi-select
-  // (empty selection = all, same as the old "All" option).
-  const filteredProjects = useMemo(() => {
-    let base = filterActi ? projects.filter(p => p.with_acti) : projects;
+
+  // Budget = persisted project_budget, else manual override, else calcsheet cost.
+  const monitorMap = useMemo(() => {
+    const budgets = resolveBudgetsForProjects(projects, csProjects, quotations);
+    const today = new Date();
+    const todayMs = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    const map: Record<string, ProjectMonitor> = {};
+    projects.forEach((p) => {
+      const key = String(p.id);
+      map[key] = buildMonitor(p, budgets[key] ?? 0, spentByProject[key] ?? 0, todayMs);
+    });
+    return map;
+  }, [projects, csProjects, quotations, spentByProject]);
+
+  // Server returns the year/client/search slice; ACTI is applied here so the
+  // status chips count what the user can actually reach.
+  const baseProjects = useMemo(
+    () => (filterActi ? projects.filter((p) => p.with_acti) : projects),
+    [projects, filterActi],
+  );
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    let active = 0;
+    baseProjects.forEach((p) => {
+      const s = p.project_status || '';
+      counts[s] = (counts[s] || 0) + 1;
+      if (!isClosedStatus(s)) active += 1;
+    });
+    return { counts, active, all: baseProjects.length };
+  }, [baseProjects]);
+
+  // Status chips that actually have projects, in the server's order, plus any
+  // status present in the data but missing from that list.
+  const statusChips = useMemo(() => {
+    const ordered = uniqueStatuses.filter((s) => statusCounts.counts[s]);
+    Object.keys(statusCounts.counts).forEach((s) => {
+      if (s && !ordered.includes(s)) ordered.push(s);
+    });
+    return ordered;
+  }, [uniqueStatuses, statusCounts]);
+
+  // The scope the KPIs describe: everything except the "needs attention" narrowing.
+  const scopedProjects = useMemo(() => {
+    let base = baseProjects;
+    if (activeOnly) base = base.filter((p) => !isClosedStatus(p.project_status));
     if (statusFilter.length > 0) {
       const allowed = new Set(statusFilter);
       base = base.filter((p) => allowed.has(p.project_status || ''));
     }
-    if (!sortConfig) return base;
+    return base;
+  }, [baseProjects, activeOnly, statusFilter]);
 
-    const sortedProjects = [...base].sort((a, b) => {
-      // Backlogs = unbilled amount (sort by computed value)
-      if (sortConfig.key === 'backlogs') {
-        const aVal = dataService.getUnbilled(a);
-        const bVal = dataService.getUnbilled(b);
-        return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
-      }
-      if (sortConfig.key === 'acti_to_ioct_po_number') {
-        const aVal = (a.commercial_trail?.acti_to_ioct_po_number || '').toLowerCase();
-        const bVal = (b.commercial_trail?.acti_to_ioct_po_number || '').toLowerCase();
-        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
-        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
-        return 0;
-      }
-
-      const aVal = a[sortConfig.key as keyof Project];
-      const bVal = b[sortConfig.key as keyof Project];
-      
-      if (aVal == null && bVal == null) return 0;
-      if (aVal == null) return 1;
-      if (bVal == null) return -1;
-      
-      // Handle numbers
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
-      }
-      
-      // Handle strings
-      const aStr = String(aVal).toLowerCase();
-      const bStr = String(bVal).toLowerCase();
-      
-      if (aStr < bStr) return sortConfig.direction === 'asc' ? -1 : 1;
-      if (aStr > bStr) return sortConfig.direction === 'asc' ? 1 : -1;
-      return 0;
-    });
-    
-    return sortedProjects;
-  }, [projects, sortConfig, filterActi, statusFilter]);
-
-  const showActiPoColumn = useMemo(
-    () => filteredProjects.some((p) => isActiInvolved(p)),
-    [filteredProjects],
+  const attentionList = useMemo(
+    () => scopedProjects
+      .filter((p) => monitorMap[String(p.id)]?.flags.length)
+      .sort((a, b) => {
+        const ma = monitorMap[String(a.id)];
+        const mb = monitorMap[String(b.id)];
+        if (ma.severityRank !== mb.severityRank) return ma.severityRank - mb.severityRank;
+        return (ma.daysLeft ?? Infinity) - (mb.daysLeft ?? Infinity);
+      }),
+    [scopedProjects, monitorMap],
   );
 
-  // Calculate summary data based on all applied filters (Backlogs = unbilled amount)
-  const summary = useMemo(() => {
-    return {
-      projectCount: filteredProjects.length,
-      totalContractAmount: filteredProjects.reduce((sum, p) => sum + (p.updated_contract_amount || 0), 0),
-      totalBilledAmount: filteredProjects.reduce((sum, p) => sum + (p.contract_billed || 0), 0),
-      totalBacklogs: filteredProjects.reduce((sum, p) => sum + dataService.getUnbilled(p), 0),
-      totalOutstandingBalance: filteredProjects.reduce((sum, p) => sum + dataService.getUnbilled(p), 0),
-    };
-  }, [filteredProjects]);
+  const filteredProjects = useMemo(() => {
+    const base = attentionOnly
+      ? scopedProjects.filter((p) => monitorMap[String(p.id)]?.flags.length)
+      : scopedProjects;
 
-  // Project health from budget vs expenses (manual override, else calcsheet cost)
-  const projectHealthMap = useMemo(() => {
-    const budgets = resolveBudgetsForProjects(filteredProjects, csProjects, quotations);
-    const expenses = loadProjectExpenses();
-    const spentByProject: Record<string, number> = {};
-    expenses.forEach((e) => {
-      spentByProject[e.projectId] = (spentByProject[e.projectId] || 0) + e.amount;
-    });
-    const map: Record<string, { label: string; color: 'success' | 'warning' | 'error' | 'default' }> = {};
-    filteredProjects.forEach((p) => {
-      const budget = budgets[String(p.id)] ?? 0;
-      const spent = spentByProject[String(p.id)] ?? 0;
-      const remaining = budget - spent;
-      const remainingPct = budget > 0 ? (remaining / budget) * 100 : 100;
-      if (budget <= 0) {
-        map[p.id] = { label: '—', color: 'default' };
-      } else if (remaining < 0) {
-        map[p.id] = { label: 'Over', color: 'error' };
-      } else if (remainingPct <= 20) {
-        map[p.id] = { label: 'At risk', color: 'warning' };
-      } else {
-        map[p.id] = { label: 'Healthy', color: 'success' };
+    const sortValue = (p: Project): number | string | null => {
+      const m = monitorMap[String(p.id)];
+      switch (sortConfig.key) {
+        case 'contract':
+        case 'contract_amount':
+          return m?.contract ?? null;
+        case 'backlogs':
+          return m?.unbilled ?? null;
+        case 'billed_pct':
+          return m?.billedPct ?? null;
+        case 'progress':
+        case 'actual_site_progress_percent':
+          return m?.progress ?? null;
+        case 'target_date':
+          return m?.targetMs ?? null;
+        case 'budget_used':
+          return m?.budgetUsedPct ?? null;
+        case 'alerts':
+          return m?.severityRank ?? null;
+        case 'acti_to_ioct_po_number':
+          return (p.commercial_trail?.acti_to_ioct_po_number || '').toLowerCase() || null;
+        default: {
+          const v = p[sortConfig.key as keyof Project];
+          if (v == null || v === '') return null;
+          return typeof v === 'number' ? v : String(v).toLowerCase();
+        }
       }
+    };
+
+    const dir = sortConfig.direction === 'asc' ? 1 : -1;
+    return [...base].sort((a, b) => {
+      const av = sortValue(a);
+      const bv = sortValue(b);
+      // Blanks always sink to the bottom, whichever direction.
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+      return String(av).localeCompare(String(bv), undefined, { numeric: true }) * dir;
     });
-    return map;
-  }, [filteredProjects, csProjects, quotations]);
+  }, [scopedProjects, attentionOnly, monitorMap, sortConfig]);
+
+  const showActiPoColumn = useMemo(
+    () => showDetails && filteredProjects.some((p) => isActiInvolved(p)),
+    [filteredProjects, showDetails],
+  );
+
+  const summary = useMemo(() => {
+    const totals = scopedProjects.reduce(
+      (acc, p) => {
+        const m = monitorMap[String(p.id)];
+        if (!m) return acc;
+        acc.contract += m.contract;
+        acc.billed += m.billed;
+        acc.unbilled += m.unbilled;
+        if (!m.closed) acc.active += 1;
+        if (m.flags.some((f) => f.severity !== 'info')) acc.atRisk += 1;
+        return acc;
+      },
+      { contract: 0, billed: 0, unbilled: 0, active: 0, atRisk: 0 },
+    );
+    return {
+      ...totals,
+      projectCount: scopedProjects.length,
+      attention: attentionList.length,
+      billedPct: totals.contract > 0 ? (totals.billed / totals.contract) * 100 : 0,
+    };
+  }, [scopedProjects, monitorMap, attentionList]);
+
+  const showActive = () => {
+    setActiveOnly(true);
+    setStatusFilter([]);
+  };
+  const showAll = () => {
+    setActiveOnly(false);
+    setStatusFilter([]);
+  };
+  const toggleStatus = (status: string) => {
+    setActiveOnly(false);
+    setStatusFilter((prev) => (prev.includes(status) ? prev.filter((s) => s !== status) : [...prev, status]));
+  };
 
   const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setFilters(prev => ({
@@ -350,7 +578,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       searchTerm: event.target.value || undefined
     }));
   };
-  
+
   // Handle project selection
   const handleProjectSelection = (projectId: string, isSelected: boolean) => {
     const newSelected = new Set(selectedProjects);
@@ -909,279 +1137,277 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     window.URL.revokeObjectURL(url);
   };
 
+  const headCellSx = { fontWeight: 600, fontSize: '0.8rem', whiteSpace: 'nowrap' as const };
+  const sortableHead = (key: string, label: string, align: 'left' | 'right' = 'left') => (
+    <TableCell align={align} sx={headCellSx} sortDirection={sortConfig.key === key ? sortConfig.direction : false}>
+      <TableSortLabel
+        active={sortConfig.key === key}
+        direction={sortConfig.key === key ? sortConfig.direction : 'asc'}
+        onClick={() => handleSort(key)}
+      >
+        {label}
+      </TableSortLabel>
+    </TableCell>
+  );
+
+  const kpiCards: {
+    label: string;
+    value: string;
+    caption: string;
+    title?: string;
+    gradient: string;
+    dark?: boolean;
+    onClick?: () => void;
+    selected?: boolean;
+  }[] = [
+    {
+      label: activeOnly ? 'Active Projects' : 'Projects',
+      value: String(summary.projectCount),
+      caption: activeOnly ? `of ${statusCounts.all} total` : `${summary.active} still active`,
+      gradient: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`,
+    },
+    {
+      label: 'Contract Value',
+      value: formatCompact(summary.contract),
+      title: dataService.formatCurrency(summary.contract),
+      caption: 'updated contract amount',
+      gradient: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.secondary} 0%, ${NET_PACIFIC_COLORS.accent2} 100%)`,
+    },
+    {
+      label: 'Billed',
+      value: formatCompact(summary.billed),
+      title: dataService.formatCurrency(summary.billed),
+      caption: `${summary.billedPct.toFixed(0)}% of contract`,
+      gradient: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`,
+    },
+    {
+      label: 'Unbilled (Backlog)',
+      value: formatCompact(summary.unbilled),
+      title: dataService.formatCurrency(summary.unbilled),
+      caption: 'still to invoice',
+      gradient: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`,
+    },
+    {
+      label: 'Needs Attention',
+      value: String(summary.attention),
+      caption: attentionOnly ? 'showing only these · tap to clear' : `${summary.atRisk} late or over budget · tap to filter`,
+      gradient: summary.attention > 0
+        ? `linear-gradient(135deg, ${NET_PACIFIC_COLORS.error} 0%, #fd79a8 100%)`
+        : `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`,
+      dark: summary.attention === 0,
+      onClick: () => setAttentionOnly((v) => !v),
+      selected: attentionOnly,
+    },
+  ];
+
+  const attentionPreview = attentionExpanded ? attentionList : attentionList.slice(0, 5);
+
   // Render dashboard
   return (
     <Box sx={{ height: '100%', overflow: 'hidden' }}>
-      <Box sx={{ mb: 1.5 }}>
-        <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
-          Project Monitoring Dashboard
-        </Typography>
+      {/* Title + page actions */}
+      <Box sx={{ mb: 1.5, display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center' }}>
+        <Box>
+          <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
+            Project Monitoring Dashboard
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Progress, billing, deadlines and budget for every project — as of{' '}
+            {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+          </Typography>
+        </Box>
+        <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={importFromFile}
+            accept=".csv,.xlsx,.xls"
+            style={{ display: 'none' }}
+          />
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<AddIcon />}
+            onClick={() => setAddProjectDialogOpen(true)}
+            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+          >
+            Add Project
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<UploadIcon />}
+            onClick={handleImportClick}
+            sx={{
+              borderColor: NET_PACIFIC_COLORS.primary,
+              color: NET_PACIFIC_COLORS.primary,
+              '&:hover': { borderColor: NET_PACIFIC_COLORS.secondary, backgroundColor: 'rgba(44, 90, 160, 0.04)' },
+            }}
+          >
+            Import
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<DownloadIcon />}
+            endIcon={<ArrowDownIcon />}
+            onClick={(e) => setExportMenuAnchor(e.currentTarget)}
+            sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+          >
+            Export
+          </Button>
+          <Menu
+            anchorEl={exportMenuAnchor}
+            open={Boolean(exportMenuAnchor)}
+            onClose={() => setExportMenuAnchor(null)}
+            PaperProps={{ sx: { mt: 1, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', borderRadius: 2 } }}
+          >
+            <MenuItem onClick={() => { exportToCSV(); setExportMenuAnchor(null); }}>
+              <ListItemIcon>
+                <CsvIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary="Export as CSV" />
+            </MenuItem>
+            <MenuItem onClick={() => { exportToExcel(); setExportMenuAnchor(null); }}>
+              <ListItemIcon>
+                <ExcelIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary="Export as Excel" />
+            </MenuItem>
+          </Menu>
+        </Stack>
       </Box>
-      
+
       {/* KPI Cards */}
-      <Grid container spacing={1.5} sx={{ mb: 2 }}>
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, color: 'white' }}>
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Total Projects</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
-                {summary.projectCount}
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(5, minmax(0, 1fr))' },
+          gap: 1.5,
+          mb: 2,
+        }}
+      >
+        {kpiCards.map((card) => {
+          const textColor = card.dark ? '#2d3436' : 'white';
+          const body = (
+            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9, color: textColor }}>{card.label}</Typography>
+              <Typography variant="h5" component="div" title={card.title} sx={{ fontWeight: 700, lineHeight: 1.1, color: textColor }}>
+                {card.value}
+              </Typography>
+              <Typography variant="caption" sx={{ opacity: 0.85, color: textColor, display: 'block', mt: 0.5 }}>
+                {card.caption}
               </Typography>
             </CardContent>
-          </Card>
-        </Grid>
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, color: 'white' }}>
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Contract Value</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
-                {dataService.formatCurrency(summary.totalContractAmount).replace('₱', '₱')}
+          );
+          return (
+            <Card
+              key={card.label}
+              sx={{
+                background: card.gradient,
+                color: textColor,
+                outline: card.selected ? '3px solid' : 'none',
+                outlineColor: NET_PACIFIC_COLORS.secondary,
+                outlineOffset: 2,
+                // Odd card out on the 2-column phone grid spans the full row.
+                ...(card.onClick ? { gridColumn: { xs: 'span 2', sm: 'auto' } } : {}),
+              }}
+            >
+              {card.onClick ? <CardActionArea onClick={card.onClick} sx={{ height: '100%' }}>{body}</CardActionArea> : body}
+            </Card>
+          );
+        })}
+      </Box>
+
+      {/* Needs attention */}
+      {attentionList.length > 0 && !attentionOnly && (
+        <Paper sx={{ p: 2, mb: 2, borderRadius: 2, border: '1px solid #f5c2c0', background: 'linear-gradient(135deg, #ffffff 0%, #fff8f8 100%)' }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <WarningAmberIcon sx={{ color: '#c62828' }} />
+              <Typography variant="h6" sx={{ fontWeight: 600, fontSize: '1.05rem', color: '#2d3436' }}>
+                Needs attention ({attentionList.length})
               </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, color: 'white' }}>
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9 }}>Backlogs</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
-                {dataService.formatCurrency(summary.totalBacklogs).replace('₱', '₱')}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Card sx={{ background: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`, color: '#2d3436' }}>
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="body2" sx={{ mb: 0.5, color: '#2d3436', opacity: 0.8 }}>Outstanding</Typography>
-              <Typography variant="h5" component="div" sx={{ fontWeight: 700, color: '#2d3436', lineHeight: 1.1 }}>
-                {dataService.formatCurrency(summary.totalOutstandingBalance).replace('₱', '₱')}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-      
-      {/* Financial Performance Overview & Status Distribution */}
-      <Grid container spacing={1.5} sx={{ mb: 2 }}>
-        <Grid size={{ xs: 12, lg: 7 }}>
-          <Paper sx={{ 
-            p: 2, 
-            borderRadius: 2,
-            background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
-            border: '1px solid #e2e8f0'
-          }}>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#2c5aa0' }}>
-              Financial Performance Overview with S-Curve Trend
-            </Typography>
-            <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart
-                data={yearSummaries.map((summary, index, arr) => {
-                  let cumulativeContracts = 0;
-                  let cumulativeBilled = 0;
-                  for (let i = 0; i <= index; i++) {
-                    cumulativeContracts += arr[i].totalContractAmount;
-                    cumulativeBilled += arr[i].totalBilledAmount;
-                  }
-                  return {
-                    ...summary,
-                    cumulativeContracts,
-                    cumulativeBilled,
-                    completionPercentage: cumulativeContracts > 0 ? (cumulativeBilled / cumulativeContracts * 100) : 0
-                  };
-                })}
-                margin={{ top: 20, right: 80, bottom: 5, left: 20 }}
-              >
-                <defs>
-                  <linearGradient id="contractGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={NET_PACIFIC_COLORS.primary} stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor={NET_PACIFIC_COLORS.primary} stopOpacity={0.3}/>
-                  </linearGradient>
-                  <linearGradient id="billedGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={NET_PACIFIC_COLORS.success} stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor={NET_PACIFIC_COLORS.success} stopOpacity={0.3}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.1)" />
-                <XAxis 
-                  dataKey="year" 
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fontSize: 11, fill: '#64748b' }}
-                />
-                <YAxis 
-                  yAxisId="left"
-                  orientation="left"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fontSize: 10, fill: '#64748b' }}
-                  tickFormatter={(value) => dataService.formatCurrency(value).replace('₱', '₱')}
-                  width={80}
-                />
-                <YAxis 
-                  yAxisId="right"
-                  orientation="right"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fontSize: 10, fill: '#64748b' }}
-                  tickFormatter={(value) => `${value}%`}
-                  domain={[0, 100]}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '8px',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-                    fontSize: '12px'
+            </Box>
+            <Button size="small" onClick={() => setAttentionOnly(true)} sx={{ color: NET_PACIFIC_COLORS.primary }}>
+              Show only these in the table
+            </Button>
+          </Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+            {attentionPreview.map((p) => {
+              const m = monitorMap[String(p.id)];
+              return (
+                <Box
+                  key={p.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onProjectSelect(p)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') onProjectSelect(p); }}
+                  sx={{
+                    display: 'flex',
+                    flexWrap: { xs: 'wrap', sm: 'nowrap' },
+                    alignItems: 'center',
+                    columnGap: 1.5,
+                    rowGap: 0.5,
+                    py: 0.75,
+                    px: 1,
+                    borderRadius: 1,
+                    cursor: 'pointer',
+                    borderTop: '1px solid #f1f1f1',
+                    '&:hover': { bgcolor: 'rgba(44, 90, 160, 0.05)' },
                   }}
-                  formatter={(value: number, name: string, item: any) => {
-                    const key = item?.dataKey || name;
-                    const n = typeof value === 'number' ? value : Number(value);
-                    if (key === 'completionPercentage' || name === 'Completion Trend (%)') {
-                      return [`${n.toFixed(2)}%`, 'Completion Trend (%)'];
-                    }
-                    if (key === 'totalBacklogs' || name === 'Backlogs') {
-                      return [dataService.formatCurrency(n), 'Backlogs'];
-                    }
-                    if (key === 'totalContractAmount' || name === 'Contract Amount') {
-                      return [dataService.formatCurrency(n), 'Contract Amount'];
-                    }
-                    return [dataService.formatCurrency(n), name];
-                  }}
-                  labelFormatter={(label) => {
-                    if (typeof label === 'string') {
-                      return `Year ${label}`;
-                    }
-                    return `Year ${String(label)}`;
-                  }}
-                />
-                <Legend iconSize={8} />
-                <Bar 
-                  yAxisId="left"
-                  dataKey="totalContractAmount" 
-                  fill="url(#contractGradient)" 
-                  name="Contract Amount"
-                  radius={[3, 3, 0, 0]}
-                />
-                <Bar 
-                  yAxisId="left"
-                  dataKey="totalBacklogs" 
-                  fill="url(#billedGradient)" 
-                  name="Backlogs"
-                  radius={[3, 3, 0, 0]}
-                />
-                <Line
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey="completionPercentage"
-                  stroke={NET_PACIFIC_COLORS.warning}
-                  strokeWidth={3}
-                  dot={{ fill: NET_PACIFIC_COLORS.warning, strokeWidth: 2, r: 4 }}
-                  name="Completion Trend (%)"
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </Paper>
-        </Grid>
-        <Grid size={{ xs: 12, lg: 5 }}>
-          <Paper sx={{ 
-            p: 2, 
-            borderRadius: 2,
-            background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
-            border: '1px solid #e2e8f0'
-          }}>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, color: '#2c5aa0' }}>
-              Project Distribution by Status
-            </Typography>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={statusDistribution.map((item, index) => ({
-                    ...item,
-                    fill: [
-                      NET_PACIFIC_COLORS.primary,
-                      NET_PACIFIC_COLORS.success,
-                      NET_PACIFIC_COLORS.warning,
-                      NET_PACIFIC_COLORS.info,
-                      NET_PACIFIC_COLORS.error,
-                      NET_PACIFIC_COLORS.accent1,
-                      NET_PACIFIC_COLORS.accent2
-                    ][index % 7]
-                  }))}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={(entry: any) => {
-                    const percent = entry.percent || 0;
-                    const status = entry.name || '';
-                    const count = entry.value || 0;
-                    return percent > 5 ? `${status}\n${count} projects` : '';
-                  }}
-                  outerRadius={80}
-                  dataKey="value"
                 >
-                  {statusDistribution.map((entry, index) => (
-                    <Cell key={`cell-${index}`} />
-                  ))}
-                </Pie>
-                <Tooltip 
-                  formatter={(value: number) => [`${value} projects`, '']}
-                />
-                <Legend 
-                  verticalAlign="bottom" 
-                  height={24}
-                  iconType="circle"
-                  wrapperStyle={{
-                    paddingTop: '10px',
-                    fontSize: '11px'
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </Paper>
-        </Grid>
-      </Grid>
-      
+                  <Box sx={{ flex: '1 1 220px', minWidth: 0 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.85rem' }} noWrap>
+                      {p.project_name}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap component="div">
+                      {[p.project_no, p.account_name].filter(Boolean).join(' · ')}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ width: { xs: '100%', sm: 130 }, flexShrink: 0 }}>
+                    <MiniBar value={m.progress} color={NET_PACIFIC_COLORS.primary} label={`${Math.round(m.progress)}%`} caption="site progress" />
+                  </Box>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, flex: '0 1 auto', justifyContent: { sm: 'flex-end' }, minWidth: { sm: 220 } }}>
+                    {m.flags.map((f) => <FlagChip key={f.key} flag={f} />)}
+                  </Box>
+                  <ChevronRightIcon sx={{ color: 'text.disabled', display: { xs: 'none', sm: 'block' } }} />
+                </Box>
+              );
+            })}
+          </Box>
+          {attentionList.length > 5 && (
+            <Button
+              size="small"
+              onClick={() => setAttentionExpanded((v) => !v)}
+              endIcon={attentionExpanded ? <ArrowUpIcon /> : <ArrowDownIcon />}
+              sx={{ mt: 0.5, color: NET_PACIFIC_COLORS.primary }}
+            >
+              {attentionExpanded ? 'Show fewer' : `Show ${attentionList.length - 5} more`}
+            </Button>
+          )}
+        </Paper>
+      )}
+
       {/* Filters */}
       <Paper sx={{ p: 1.5, mb: 1.5, borderRadius: 2 }}>
-        <Grid container spacing={1.5}>
-          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+        <Grid container spacing={1.5} alignItems="center">
+          <Grid size={{ xs: 12, sm: 6, md: 4 }}>
             <TextField
               fullWidth
-              label="Search"
+              placeholder="Search project, client, PO, code…"
               value={filters.searchTerm || ''}
               onChange={handleSearchChange}
               size="small"
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+              }}
             />
           </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
-            <FormControl fullWidth size="small">
-              <InputLabel>Status</InputLabel>
-              <Select
-                multiple
-                value={statusFilter}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setStatusFilter(typeof next === 'string' ? next.split(',').filter(Boolean) : next);
-                }}
-                input={<OutlinedInput label="Status" />}
-                renderValue={(selected) =>
-                  selected.length === 0 || selected.length === uniqueStatuses.length
-                    ? 'All'
-                    : selected.join(', ')
-                }
-              >
-                {uniqueStatuses.map((status) => (
-                  <MenuItem key={status} value={status}>
-                    <Checkbox size="small" checked={statusFilter.includes(status)} />
-                    <ListItemText primary={status} />
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Grid>
-          
           <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Client</InputLabel>
@@ -1200,7 +1426,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
               </Select>
             </FormControl>
           </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+          <Grid size={{ xs: 6, sm: 6, md: 2 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Year</InputLabel>
               <Select
@@ -1218,9 +1444,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
               </Select>
             </FormControl>
           </Grid>
-          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+          <Grid size={{ xs: 6, sm: 6, md: 3 }}>
             <Chip
-              label="With ACTI"
+              label="With ACTI only"
               color={filterActi ? 'primary' : 'default'}
               variant={filterActi ? 'filled' : 'outlined'}
               onClick={() => setFilterActi(v => !v)}
@@ -1228,94 +1454,72 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
             />
           </Grid>
         </Grid>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1.5, alignItems: 'center' }}>
+          <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>Status:</Typography>
+          <Chip
+            size="small"
+            label={`Active (${statusCounts.active})`}
+            color={activeOnly ? 'primary' : 'default'}
+            variant={activeOnly ? 'filled' : 'outlined'}
+            onClick={showActive}
+            clickable
+          />
+          <Chip
+            size="small"
+            label={`All (${statusCounts.all})`}
+            color={!activeOnly && statusFilter.length === 0 ? 'primary' : 'default'}
+            variant={!activeOnly && statusFilter.length === 0 ? 'filled' : 'outlined'}
+            onClick={showAll}
+            clickable
+          />
+          <Box sx={{ width: '1px', height: 20, bgcolor: 'divider', mx: 0.5 }} />
+          {statusChips.map((status) => {
+            const selected = statusFilter.includes(status);
+            const color = dataService.getStatusColor(status);
+            return (
+              <Chip
+                key={status || '(blank)'}
+                size="small"
+                label={`${status || 'No status'} (${statusCounts.counts[status] || 0})`}
+                onClick={() => toggleStatus(status)}
+                clickable
+                variant={selected ? 'filled' : 'outlined'}
+                sx={selected
+                  ? { bgcolor: color, color: 'white', '&:hover': { bgcolor: color, opacity: 0.9 } }
+                  : { borderColor: color, color: '#2d3436' }}
+              />
+            );
+          })}
+        </Box>
       </Paper>
-      
+
       {/* Projects Table */}
       <Paper sx={{ width: '100%', overflow: 'hidden', borderRadius: 2, flexGrow: 1 }}>
         <Box sx={{ p: 1.5, display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e0e0e0' }}>
-          <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
-            Projects ({filteredProjects.length})
-          </Typography>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={importFromFile}
-              accept=".csv,.xlsx,.xls"
-              style={{ display: 'none' }}
-            />
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={() => setAddProjectDialogOpen(true)}
-              sx={{ 
-                backgroundColor: NET_PACIFIC_COLORS.primary,
-                '&:hover': {
-                  backgroundColor: NET_PACIFIC_COLORS.secondary
-                }
-              }}
-            >
-              Add Project
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<UploadIcon />}
-              onClick={handleImportClick}
-              sx={{ 
-                borderColor: NET_PACIFIC_COLORS.primary, 
-                color: NET_PACIFIC_COLORS.primary,
-                '&:hover': {
-                  borderColor: NET_PACIFIC_COLORS.secondary,
-                  backgroundColor: 'rgba(44, 90, 160, 0.04)'
-                }
-              }}
-            >
-              Import
-            </Button>
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<DownloadIcon />}
-              endIcon={<ArrowDownIcon />}
-              onClick={(e) => setExportMenuAnchor(e.currentTarget)}
-              sx={{ backgroundColor: NET_PACIFIC_COLORS.primary }}
-            >
-              Export
-            </Button>
-            <Menu
-              anchorEl={exportMenuAnchor}
-              open={Boolean(exportMenuAnchor)}
-              onClose={() => setExportMenuAnchor(null)}
-              PaperProps={{
-                sx: {
-                  mt: 1,
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
-                  borderRadius: 2
-                }
-              }}
-            >
-              <MenuItem onClick={() => { exportToCSV(); setExportMenuAnchor(null); }}>
-                <ListItemIcon>
-                  <CsvIcon fontSize="small" />
-                </ListItemIcon>
-                <ListItemText primary="Export as CSV" />
-              </MenuItem>
-              <MenuItem onClick={() => { exportToExcel(); setExportMenuAnchor(null); }}>
-                <ListItemIcon>
-                  <ExcelIcon fontSize="small" />
-                </ListItemIcon>
-                <ListItemText primary="Export as Excel" />
-              </MenuItem>
-            </Menu>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
+              Projects ({filteredProjects.length})
+            </Typography>
+            {attentionOnly && (
+              <Chip
+                size="small"
+                label="Needs attention only"
+                onDelete={() => setAttentionOnly(false)}
+                sx={FLAG_CHIP_SX.error}
+              />
+            )}
           </Box>
+          <FormControlLabel
+            control={<Switch size="small" checked={showDetails} onChange={(e) => setShowDetails(e.target.checked)} />}
+            label={<Typography variant="body2">Show PO / ACTI details</Typography>}
+            sx={{ mr: 0 }}
+          />
         </Box>
-        
+
         {/* Bulk Actions */}
         {showBulkActions && (
           <Box sx={{ p: 2, bgcolor: 'grey.50', borderBottom: '1px solid #e0e0e0' }}>
-            <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
+            <Stack direction="row" flexWrap="wrap" useFlexGap spacing={2} alignItems="center" justifyContent="space-between">
               <Typography variant="body2" color="textSecondary">
                 {selectedProjects.size} project(s) selected
               </Typography>
@@ -1349,8 +1553,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
             </Stack>
           </Box>
         )}
-        
-        <TableContainer sx={{ maxHeight: { xs: 'none', md: 'calc(100vh - 480px)' }, minHeight: 300 }}>
+
+        <TableContainer sx={{ maxHeight: { xs: 'none', md: 'calc(100vh - 210px)' }, minHeight: 200 }}>
           <Table stickyHeader size="small">
             <TableHead>
               <TableRow>
@@ -1362,172 +1566,367 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                     onChange={(e) => handleSelectAll(e.target.checked)}
                   />
                 </TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('project_no')}>Project No.{getSortIcon('project_no')}</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('project_name')}>Project Name{getSortIcon('project_name')}</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('account_name')}>Client{getSortIcon('account_name')}</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('po_number')}>PO Number{getSortIcon('po_number')}</TableCell>
-                {showActiPoColumn && (
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('acti_to_ioct_po_number')}>ACTI PO (to IOCT){getSortIcon('acti_to_ioct_po_number')}</TableCell>
-                )}
-                {showActiPoColumn && (
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>ACTI trail</TableCell>
-                )}
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('po_date')}>PO Date{getSortIcon('po_date')}</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('client_approver')}>Client Approver{getSortIcon('client_approver')}</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('year')}>Year{getSortIcon('year')}</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('contract_amount')}>Contract Amount{getSortIcon('contract_amount')}</TableCell>
-                <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('backlogs')}>Backlogs{getSortIcon('backlogs')}</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('actual_site_progress_percent')}>Status{getSortIcon('actual_site_progress_percent')}</TableCell>
-                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Project Health</TableCell>
-                <TableCell align="center" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Actions</TableCell>
+                {sortableHead('project_name', 'Project')}
+                {sortableHead('project_status', 'Status')}
+                {sortableHead('progress', 'Site Progress')}
+                {sortableHead('billed_pct', 'Billed')}
+                {sortableHead('contract', 'Contract', 'right')}
+                {sortableHead('backlogs', 'Unbilled', 'right')}
+                {sortableHead('target_date', 'Target Completion')}
+                {sortableHead('budget_used', 'Budget Used')}
+                {sortableHead('alerts', 'Alerts')}
+                {showDetails && sortableHead('po_number', 'PO Number')}
+                {showDetails && sortableHead('po_date', 'PO Date')}
+                {showActiPoColumn && sortableHead('acti_to_ioct_po_number', 'ACTI PO (to IOCT)')}
+                {showActiPoColumn && <TableCell sx={headCellSx}>ACTI trail</TableCell>}
+                {showDetails && sortableHead('client_approver', 'Client Approver')}
+                {showDetails && sortableHead('year', 'Year')}
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredProjects.map((project) => (
-                <TableRow key={project.id} hover sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0, 0, 0, 0.02)' } }}>
-                  <TableCell padding="checkbox">
-                    <Checkbox
-                      size="small"
-                      checked={selectedProjects.has(String(project.id))}
-                      onChange={(e) => handleProjectSelection(String(project.id), e.target.checked)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-                      {project.project_no || (project.item_no ?? project.id)}
+              {filteredProjects.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={20} sx={{ py: 6, textAlign: 'center' }}>
+                    <Typography variant="body2" color="text.secondary">
+                      {loading ? 'Loading projects…' : 'No projects match these filters.'}
                     </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8rem' }}>
-                      {project.project_name}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
-                      <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-                        {project.account_name}
-                      </Typography>
-                      {project.with_acti && (
-                        <Chip
-                          label="ACTI"
-                          size="small"
-                          color="primary"
-                          variant="outlined"
-                          title={project.partner_name || 'Joint with ACTI'}
-                          sx={{ fontSize: '0.65rem', height: 18 }}
-                        />
-                      )}
-                    </Box>
-                  </TableCell>
-                  <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
-                      <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-                        {project.po_number || '—'}
-                      </Typography>
-                      {isActiInvolved(project) && project.po_number && (
-                        <Chip
-                          label="to ACTI"
-                          size="small"
-                          variant="outlined"
-                          sx={{ fontSize: '0.65rem', height: 18 }}
-                        />
-                      )}
-                    </Box>
-                  </TableCell>
-                  {showActiPoColumn && (
-                    <TableCell>
-                      <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-                        {isActiInvolved(project) ? actiToIoctPoLabel(project.commercial_trail) : '—'}
-                      </Typography>
-                    </TableCell>
-                  )}
-                  {showActiPoColumn && (
-                    <TableCell sx={{ minWidth: 160 }}>
-                      {(() => {
-                        if (!isActiInvolved(project)) {
-                          return <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>—</Typography>;
-                        }
-                        const lines = actiTrailSummary(project.commercial_trail);
-                        if (lines.length === 0) {
-                          return (
-                            <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
-                              No trail yet
-                            </Typography>
-                          );
-                        }
-                        return lines.map((line) => (
-                          <Typography key={line} variant="body2" sx={{ fontSize: '0.75rem', lineHeight: 1.35 }}>
-                            {line}
-                          </Typography>
-                        ));
-                      })()}
-                    </TableCell>
-                  )}
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-                      {project.po_date ? dataService.formatDate(project.po_date) : '—'}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-                      {project.client_approver || '—'}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-                      {project.year ?? '—'}
-                    </Typography>
-                  </TableCell>
-                  <TableCell align="right">
-                    <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8rem' }}>
-                      {dataService.formatCurrency(project.updated_contract_amount || 0)}
-                    </Typography>
-                  </TableCell>
-                  <TableCell align="right">
-                    <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8rem' }}>
-                      {dataService.formatCurrency(dataService.getUnbilled(project))}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Chip
-                      label={`${project.actual_site_progress_percent ?? 0}%`}
-                      size="small"
-                      sx={{
-                        backgroundColor: dataService.getStatusColor(project.project_status || ''),
-                        color: 'white',
-                        fontSize: '0.7rem',
-                        height: 20
-                      }}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    {projectHealthMap[project.id] && (
-                      <Box
-                        sx={{
-                          width: 14,
-                          height: 14,
-                          borderRadius: '50%',
-                          bgcolor: projectHealthMap[project.id].color === 'default' ? 'grey.400' : `${projectHealthMap[project.id].color}.main`,
-                        }}
-                        title={projectHealthMap[project.id].label}
-                      />
+                    {!loading && (activeOnly || statusFilter.length > 0 || attentionOnly) && (
+                      <Button size="small" sx={{ mt: 1 }} onClick={() => { showAll(); setAttentionOnly(false); }}>
+                        Show all statuses
+                      </Button>
                     )}
                   </TableCell>
-                  <TableCell align="center">
-                    <IconButton 
-                      size="small" 
-                      onClick={() => onProjectSelect(project)}
-                      title="View Project Details"
-                    >
-                      <VisibilityIcon sx={{ fontSize: 18 }} />
-                    </IconButton>
-                  </TableCell>
                 </TableRow>
-              ))}
+              )}
+              {filteredProjects.map((project) => {
+                const m = monitorMap[String(project.id)];
+                if (!m) return null;
+                const statusColor = dataService.getStatusColor(project.project_status || '');
+                const budgetColor = m.budgetUsedPct == null
+                  ? '#bdbdbd'
+                  : m.budgetUsedPct > 100 ? '#d32f2f' : m.budgetUsedPct >= 80 ? '#ed6c02' : NET_PACIFIC_COLORS.success;
+                const leftBorder = m.severityRank === 0 ? '#d32f2f' : m.severityRank === 1 ? '#ed6c02' : 'transparent';
+                return (
+                  <TableRow
+                    key={project.id}
+                    hover
+                    onClick={() => onProjectSelect(project)}
+                    sx={{
+                      cursor: 'pointer',
+                      '&:nth-of-type(odd)': { backgroundColor: 'rgba(0, 0, 0, 0.02)' },
+                      '& > td:first-of-type': { borderLeft: `3px solid ${leftBorder}` },
+                      opacity: m.closed ? 0.75 : 1,
+                    }}
+                  >
+                    <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        size="small"
+                        checked={selectedProjects.has(String(project.id))}
+                        onChange={(e) => handleProjectSelection(String(project.id), e.target.checked)}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 220, maxWidth: 340 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.82rem', lineHeight: 1.3 }}>
+                        {project.project_name}
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.25 }}>
+                        <Typography variant="caption" color="text.secondary">
+                          {[project.project_no || (project.item_no ?? project.id), project.account_name].filter(Boolean).join(' · ')}
+                        </Typography>
+                        {project.with_acti && (
+                          <Chip
+                            label="ACTI"
+                            size="small"
+                            color="primary"
+                            variant="outlined"
+                            title={project.partner_name || 'Joint with ACTI'}
+                            sx={{ fontSize: '0.62rem', height: 16 }}
+                          />
+                        )}
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        label={project.project_status || '—'}
+                        size="small"
+                        sx={{ backgroundColor: statusColor, color: 'white', fontSize: '0.68rem', height: 20, fontWeight: 600 }}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <MiniBar
+                        value={m.progress}
+                        color={m.progress >= 100 ? NET_PACIFIC_COLORS.success : NET_PACIFIC_COLORS.primary}
+                        label={`${Math.round(m.progress)}%`}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <MiniBar
+                        value={m.billedPct}
+                        color={NET_PACIFIC_COLORS.success}
+                        label={`${Math.round(m.billedPct)}%`}
+                        caption={formatCompact(m.billed)}
+                      />
+                    </TableCell>
+                    <TableCell align="right" title={dataService.formatCurrency(m.contract)}>
+                      <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                        {formatCompact(m.contract)}
+                      </Typography>
+                    </TableCell>
+                    <TableCell align="right" title={dataService.formatCurrency(m.unbilled)}>
+                      <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8rem', whiteSpace: 'nowrap', color: m.unbilled > 0 ? 'text.primary' : 'text.disabled' }}>
+                        {formatCompact(m.unbilled)}
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                      {m.targetMs ? (
+                        <>
+                          <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                            {dataService.formatDate(m.targetMs)}
+                          </Typography>
+                          {!m.closed && m.daysLeft != null && m.progress < 100 && (
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                fontWeight: m.daysLeft <= DUE_SOON_DAYS ? 600 : 400,
+                                color: m.daysLeft < 0 ? 'error.main' : m.daysLeft <= DUE_SOON_DAYS ? 'warning.dark' : 'text.secondary',
+                              }}
+                            >
+                              {m.daysLeft < 0 ? `${-m.daysLeft}d overdue` : m.daysLeft === 0 ? 'Due today' : `${m.daysLeft}d left`}
+                            </Typography>
+                          )}
+                        </>
+                      ) : (
+                        <Typography variant="caption" color="text.disabled">Not set</Typography>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {m.budgetUsedPct == null ? (
+                        <Typography variant="caption" color="text.disabled" title={m.spent > 0 ? `Spent ${dataService.formatCurrency(m.spent)}, no budget set` : 'No budget set'}>
+                          {m.spent > 0 ? `${formatCompact(m.spent)} spent` : 'No budget'}
+                        </Typography>
+                      ) : (
+                        <Box title={`Spent ${dataService.formatCurrency(m.spent)} of ${dataService.formatCurrency(m.budget)}`}>
+                          <MiniBar
+                            value={m.budgetUsedPct}
+                            color={budgetColor}
+                            label={`${Math.round(m.budgetUsedPct)}%`}
+                            caption={`of ${formatCompact(m.budget)}`}
+                          />
+                        </Box>
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 140 }}>
+                      {m.flags.length ? (
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                          {m.flags.map((f) => <FlagChip key={f.key} flag={f} />)}
+                        </Box>
+                      ) : (
+                        <Typography variant="caption" sx={{ color: m.closed || !m.targetMs ? 'text.disabled' : 'success.main', fontWeight: 600 }}>
+                          {m.closed ? '—' : m.targetMs ? 'On track' : 'No target date'}
+                        </Typography>
+                      )}
+                    </TableCell>
+                    {showDetails && (
+                      <TableCell>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                          <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                            {project.po_number || '—'}
+                          </Typography>
+                          {isActiInvolved(project) && project.po_number && (
+                            <Chip label="to ACTI" size="small" variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
+                          )}
+                        </Box>
+                      </TableCell>
+                    )}
+                    {showDetails && (
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                          {project.po_date ? dataService.formatDate(project.po_date) : '—'}
+                        </Typography>
+                      </TableCell>
+                    )}
+                    {showActiPoColumn && (
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                          {isActiInvolved(project) ? actiToIoctPoLabel(project.commercial_trail) : '—'}
+                        </Typography>
+                      </TableCell>
+                    )}
+                    {showActiPoColumn && (
+                      <TableCell sx={{ minWidth: 160 }}>
+                        {(() => {
+                          if (!isActiInvolved(project)) {
+                            return <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>—</Typography>;
+                          }
+                          const lines = actiTrailSummary(project.commercial_trail);
+                          if (lines.length === 0) {
+                            return (
+                              <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+                                No trail yet
+                              </Typography>
+                            );
+                          }
+                          return lines.map((line) => (
+                            <Typography key={line} variant="body2" sx={{ fontSize: '0.75rem', lineHeight: 1.35 }}>
+                              {line}
+                            </Typography>
+                          ));
+                        })()}
+                      </TableCell>
+                    )}
+                    {showDetails && (
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                          {project.client_approver || '—'}
+                        </Typography>
+                      </TableCell>
+                    )}
+                    {showDetails && (
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                          {project.year ?? '—'}
+                        </Typography>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </TableContainer>
       </Paper>
+
+      {/* Trends (collapsed by default — the table above is the monitoring view) */}
+      <Paper sx={{ mt: 2, borderRadius: 2, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+        <Button
+          fullWidth
+          onClick={() => setShowCharts((v) => !v)}
+          endIcon={showCharts ? <ArrowUpIcon /> : <ArrowDownIcon />}
+          sx={{ justifyContent: 'space-between', px: 2, py: 1.25, color: NET_PACIFIC_COLORS.primary, fontWeight: 600, textTransform: 'none', fontSize: '1rem' }}
+        >
+          Yearly trends &amp; status mix
+        </Button>
+        <Collapse in={showCharts} unmountOnExit>
+          <Grid container spacing={1.5} sx={{ p: 2, pt: 0 }}>
+            <Grid size={{ xs: 12, lg: 7 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: '#2c5aa0' }}>
+                Contract vs backlog by year, with cumulative billing %
+              </Typography>
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart
+                  data={yearSummaries.map((summary, index, arr) => {
+                    let cumulativeContracts = 0;
+                    let cumulativeBilled = 0;
+                    for (let i = 0; i <= index; i++) {
+                      cumulativeContracts += arr[i].totalContractAmount;
+                      cumulativeBilled += arr[i].totalBilledAmount;
+                    }
+                    return {
+                      ...summary,
+                      cumulativeContracts,
+                      cumulativeBilled,
+                      completionPercentage: cumulativeContracts > 0 ? (cumulativeBilled / cumulativeContracts * 100) : 0
+                    };
+                  })}
+                  margin={{ top: 20, right: 20, bottom: 5, left: 0 }}
+                >
+                  <defs>
+                    <linearGradient id="contractGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={NET_PACIFIC_COLORS.primary} stopOpacity={0.8}/>
+                      <stop offset="95%" stopColor={NET_PACIFIC_COLORS.primary} stopOpacity={0.3}/>
+                    </linearGradient>
+                    <linearGradient id="billedGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={NET_PACIFIC_COLORS.success} stopOpacity={0.8}/>
+                      <stop offset="95%" stopColor={NET_PACIFIC_COLORS.success} stopOpacity={0.3}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.1)" />
+                  <XAxis dataKey="year" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
+                  <YAxis
+                    yAxisId="left"
+                    orientation="left"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fontSize: 10, fill: '#64748b' }}
+                    tickFormatter={(value) => formatCompact(value)}
+                    width={70}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fontSize: 10, fill: '#64748b' }}
+                    tickFormatter={(value) => `${value}%`}
+                    domain={[0, 100]}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '8px',
+                      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                      fontSize: '12px'
+                    }}
+                    formatter={(value: number, name: string, item: any) => {
+                      const key = item?.dataKey || name;
+                      const n = typeof value === 'number' ? value : Number(value);
+                      if (key === 'completionPercentage' || name === 'Billed to date (%)') {
+                        return [`${n.toFixed(2)}%`, 'Billed to date (%)'];
+                      }
+                      if (key === 'totalBacklogs' || name === 'Backlogs') {
+                        return [dataService.formatCurrency(n), 'Backlogs'];
+                      }
+                      if (key === 'totalContractAmount' || name === 'Contract Amount') {
+                        return [dataService.formatCurrency(n), 'Contract Amount'];
+                      }
+                      return [dataService.formatCurrency(n), name];
+                    }}
+                    labelFormatter={(label) => `Year ${String(label)}`}
+                  />
+                  <Legend iconSize={8} />
+                  <Bar yAxisId="left" dataKey="totalContractAmount" fill="url(#contractGradient)" name="Contract Amount" radius={[3, 3, 0, 0]} />
+                  <Bar yAxisId="left" dataKey="totalBacklogs" fill="url(#billedGradient)" name="Backlogs" radius={[3, 3, 0, 0]} />
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="completionPercentage"
+                    stroke={NET_PACIFIC_COLORS.warning}
+                    strokeWidth={3}
+                    dot={{ fill: NET_PACIFIC_COLORS.warning, strokeWidth: 2, r: 4 }}
+                    name="Billed to date (%)"
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </Grid>
+            <Grid size={{ xs: 12, lg: 5 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600, color: '#2c5aa0' }}>
+                Projects by status (all years)
+              </Typography>
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie
+                    data={statusDistribution}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={50}
+                    outerRadius={90}
+                    dataKey="value"
+                    nameKey="name"
+                  >
+                    {statusDistribution.map((entry) => (
+                      <Cell key={entry.name} fill={dataService.getStatusColor(entry.name)} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value: number) => [`${value} projects`, '']} />
+                  <Legend verticalAlign="bottom" height={24} iconType="circle" wrapperStyle={{ paddingTop: '10px', fontSize: '11px' }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </Grid>
+          </Grid>
+        </Collapse>
+      </Paper>
+
 
       {/* Delete Confirmation Dialog */}
       <Dialog

@@ -116,7 +116,11 @@ class DataService {
         return '#f44336';
       case 'SUSPENDED':
       case 'ON HOLD':
+      case 'PENDING':
         return '#ff9800';
+      case 'FOR_CLOSEOUT':
+      case 'FOR CLOSEOUT':
+        return '#7e57c2';
       default:
         return '#757575';
     }
