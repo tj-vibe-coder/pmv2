@@ -1,5 +1,6 @@
 import type { Project as CalcsheetProject, Quotation } from '../types/Quotation';
 import { computeTotals, ioctCostBasis, ioctMargin } from './calcsheet/calc';
+import { awardFigures } from './calcsheet/awardFigures';
 import { getBudgets } from './projectBudgetStorage';
 
 export type OpsProjectLink = {
@@ -58,13 +59,31 @@ export function matchCalcsheetProject(
   return undefined;
 }
 
+type CsProjectLink = Pick<CalcsheetProject, 'id' | 'code' | 'mainProjectId' | 'mainProjectNo'> & Pick<Partial<CalcsheetProject>, 'awarded'>;
+
 export function resolveCalcsheetBudget(
   ops: OpsProjectLink,
-  csProjects: Pick<CalcsheetProject, 'id' | 'code' | 'mainProjectId' | 'mainProjectNo'>[],
+  csProjects: CsProjectLink[],
   quotations: Quotation[],
 ): CalcsheetBudget | null {
-  const cs = matchCalcsheetProject(ops, csProjects, quotations);
+  const cs = matchCalcsheetProject(ops, csProjects, quotations) as CsProjectLink | undefined;
   if (!cs) return null;
+  // Awarded proposal: its locked budget is the budget.
+  const awarded = cs.awarded;
+  const awardedQ = awarded ? quotations.find((q) => q.id === awarded.quotationId) : undefined;
+  if (awarded && awardedQ) {
+    const t = computeTotals(awardedQ);
+    const value = t.subtotal - t.discount;
+    return {
+      amount: awarded.budget,
+      value,
+      margin: value - awarded.budget,
+      hasMargin: ioctMargin(t) != null,
+      quotationId: awardedQ.id,
+      calcsheetProjectId: cs.id,
+      calcsheetCode: cs.code,
+    };
+  }
   const latest = pickLatestIoct(quotations.filter((q) => q.projectId === cs.id));
   if (!latest) return null;
   const totals = computeTotals(latest);
@@ -107,4 +126,50 @@ export function resolveBudgetsForProjects(
     if (fromCs) out[key] = fromCs.amount;
   }
   return out;
+}
+
+export type CalcsheetPrice = {
+  /** Contract amount the execution project should carry. */
+  price: number;
+  /** 'awarded' = locked at award; 'latest' = latest IOCT (else ACTI) quotation, not locked yet. */
+  source: 'awarded' | 'latest';
+  quotationId: string;
+  quotationLabel: string;
+  calcsheetProjectId: string;
+  calcsheetCode?: string;
+};
+
+/** The proposal price an execution project should match — same rule as the server's sync-main. */
+export function resolveCalcsheetPrice(
+  ops: OpsProjectLink,
+  csProjects: CsProjectLink[],
+  quotations: Quotation[],
+): CalcsheetPrice | null {
+  const cs = matchCalcsheetProject(ops, csProjects, quotations) as CsProjectLink | undefined;
+  if (!cs) return null;
+  const mine = quotations.filter((q) => q.projectId === cs.id);
+  const awarded = cs.awarded;
+  if (awarded) {
+    return {
+      price: awarded.price,
+      source: 'awarded',
+      quotationId: awarded.quotationId,
+      quotationLabel: `${awarded.kind} rev ${awarded.revision}`,
+      calcsheetProjectId: cs.id,
+      calcsheetCode: cs.code,
+    };
+  }
+  const newest = (a: Quotation, b: Quotation) =>
+    (parseInt(b.revision || '0', 10) || 0) - (parseInt(a.revision || '0', 10) || 0)
+    || String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+  const q = mine.filter((x) => x.kind === 'IOCT').sort(newest)[0] || mine.filter((x) => x.kind === 'ACTI').sort(newest)[0];
+  if (!q) return null;
+  return {
+    price: awardFigures(q).price,
+    source: 'latest',
+    quotationId: q.id,
+    quotationLabel: `${q.kind} rev ${q.revision}`,
+    calcsheetProjectId: cs.id,
+    calcsheetCode: cs.code,
+  };
 }

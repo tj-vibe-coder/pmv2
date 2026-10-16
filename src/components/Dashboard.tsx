@@ -57,7 +57,7 @@ import { Project, ProjectFilters, YearSummary } from '../types/Project';
 import { actiToIoctPoLabel, actiTrailSummary, isActiInvolved } from '../utils/commercialTrail';
 import dataService from '../services/dataService';
 import AddProjectDialog from './AddProjectDialog';
-import { resolveBudgetsForProjects } from '../utils/calcsheetBudget';
+import { resolveBudgetsForProjects, resolveCalcsheetPrice } from '../utils/calcsheetBudget';
 import { useQuotationStore } from '../store/quotationStore';
 import { API_BASE } from '../config/api';
 import { useNavigate } from 'react-router-dom';
@@ -135,7 +135,7 @@ interface ProjectMonitor {
   severityRank: number;
 }
 
-function buildMonitor(project: Project, budget: number, spent: number, todayMs: number): ProjectMonitor {
+function buildMonitor(project: Project, budget: number, spent: number, todayMs: number, proposalPrice: number | null = null): ProjectMonitor {
   const contract = project.updated_contract_amount || project.contract_amount || 0;
   const unbilled = dataService.getUnbilled(project);
   const billed = Math.max(0, contract - unbilled);
@@ -158,6 +158,10 @@ function buildMonitor(project: Project, budget: number, spent: number, todayMs: 
     } else if (budgetUsedPct != null && budgetUsedPct >= 80) {
       flags.push({ key: 'budget-risk', label: `Budget ${Math.round(budgetUsedPct)}% used`, severity: 'warning' });
     }
+  }
+  // Contract drifted from the proposal (awarded price, else latest quotation).
+  if (!isCancelledStatus(project.project_status) && proposalPrice != null && Math.abs(contract - proposalPrice) >= 1) {
+    flags.push({ key: 'price', label: `Price ≠ proposal (${contract > proposalPrice ? '+' : '−'}${formatCompact(Math.abs(contract - proposalPrice))})`, severity: 'warning' });
   }
   if (!isCancelledStatus(project.project_status) && progress >= 100 && unbilled > 0) {
     flags.push({ key: 'unbilled', label: `Done · ${formatCompact(unbilled)} unbilled`, severity: 'info' });
@@ -502,7 +506,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     const map: Record<string, ProjectMonitor> = {};
     projects.forEach((p) => {
       const key = String(p.id);
-      map[key] = buildMonitor(p, budgets[key] ?? 0, spentByProject[key] ?? 0, todayMs);
+      const proposal = resolveCalcsheetPrice(p, csProjects, quotations);
+      map[key] = buildMonitor(p, budgets[key] ?? 0, spentByProject[key] ?? 0, todayMs, proposal ? proposal.price : null);
     });
     return map;
   }, [projects, csProjects, quotations, spentByProject]);

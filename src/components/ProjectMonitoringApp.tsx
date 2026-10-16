@@ -4,12 +4,20 @@ import { useNavigate, useParams } from 'react-router-dom';
 import Dashboard from './Dashboard';
 import ProjectDetails from './ProjectDetails';
 import { Project } from '../types/Project';
+import { useQuotationStore } from '../store/quotationStore';
 
 const ProjectMonitoringApp: React.FC = () => {
   const { projectId: routeProjectId } = useParams<{ projectId?: string }>();
   const navigate = useNavigate();
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [listRefreshTrigger, setListRefreshTrigger] = useState(0);
+  // Proposal (Calcsheet) data feeds budgets, the awarded price check and spend vs
+  // budget here. It was only loaded on Sales routes, so a fresh load of the
+  // dashboard or a project page showed no proposal link. init() is idempotent.
+  const initCalcsheet = useQuotationStore((s) => s.init);
+  useEffect(() => {
+    void initCalcsheet();
+  }, [initCalcsheet]);
 
   const handleProjectSelect = (project: Project) => {
     navigate(`/projects/${project.id}`);

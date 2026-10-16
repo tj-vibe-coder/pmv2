@@ -54,6 +54,7 @@ import UpdateProgressDialog from './UpdateProgressDialog';
 import { getBudget, setBudget } from '../utils/projectBudgetStorage';
 import { resolveCalcsheetBudget } from '../utils/calcsheetBudget';
 import { useQuotationStore } from '../store/quotationStore';
+import { BudgetSpendSummary, ProposalPriceCheck } from './ProjectBudgetPanel';
 import { ResponsiveContainer, BarChart, CartesianGrid, XAxis, YAxis, Bar, Cell, Tooltip as RechartsTooltip } from 'recharts';
 import { ORDER_TRACKER_STORAGE_KEY } from './OrderTrackerPage';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
@@ -892,17 +893,6 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     return Object.entries(byCategory).map(([name, value]) => ({ name, value }));
   }, [project.id]);
 
-  const projectHealthColor = useMemo(() => {
-    const budget = budgetAmount;
-    const expenses = loadProjectExpenses().filter((e) => e.projectId === project.id);
-    const spent = expenses.reduce((sum, e) => sum + e.amount, 0);
-    const remaining = budget - spent;
-    const remainingPct = budget > 0 ? (remaining / budget) * 100 : 100;
-    if (budget <= 0) return '#9e9e9e';
-    if (remaining < 0) return '#f44336';
-    if (remainingPct <= 20) return '#ff9800';
-    return '#4caf50';
-  }, [project.id, budgetAmount]);
 
 
   const timelineEvents = useMemo(() => {
@@ -1314,6 +1304,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
               <Typography variant="h5" color="primary.main">
                 {dataService.formatCurrency(project.updated_contract_amount || 0)}
               </Typography>
+              <ProposalPriceCheck project={project} onProjectUpdated={onProjectUpdated} />
             </Box>
             <Divider sx={{ my: 2 }} />
             <Box sx={{ mb: 2 }}>
@@ -1386,19 +1377,11 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
               </Typography>
             </Box>
             <Divider sx={{ my: 2 }} />
-            <Box display="flex" alignItems="center">
-              <Typography variant="subtitle2" color="textSecondary" sx={{ mr: 2 }}>
-                Project Health
+            <Box>
+              <Typography variant="subtitle2" color="textSecondary" gutterBottom>
+                Spending vs Budget
               </Typography>
-              <Box
-                sx={{
-                  width: 24,
-                  height: 24,
-                  borderRadius: '50%',
-                  backgroundColor: projectHealthColor,
-                }}
-                title={projectHealthColor === '#4caf50' ? 'Healthy' : projectHealthColor === '#ff9800' ? 'At risk' : projectHealthColor === '#f44336' ? 'Over budget' : 'No budget set'}
-              />
+              <BudgetSpendSummary projectId={project.id} budget={budgetAmount} />
             </Box>
           </Paper>
 
