@@ -19,6 +19,32 @@ test('urgent remaining CA-excess payment restores only the unpaid amount and doe
   assert.equal(Object.values(db.store.reimbursement_payments)[0].paymentException.reason, 'Urgent staff need');
   assert.equal(workflowState(liq, null, db.store.reimbursements.r1), 'awaiting_physical');
 });
+test('partial CA-excess payment keeps the claim pending, restores only the amount paid, and stores note + highlighted lines', async () => {
+  const liq = { status: 'submitted', rows_json: JSON.stringify([{ id: 'a', amount: 60 }, { id: 'b', amount: 40 }]), receipts_json: '[]', total_amount: 100, reimbursement_status: 'pending' };
+  const db = new FinanceFirestore({ liquidations: { l1: liq }, reimbursements: { r1: { liquidationId: 'l1', origin: 'ca_excess', caId: 'ca1', amount: 100, status: 'pending' } }, cash_advances: { ca1: { balance_remaining: -100 } } });
+  const ctx = { user: { id: 'admin' }, now: 1234, fs: null, reference: '', proofRef: null, urgentPaymentReason: 'Urgent', partialAmount: 30, note: 'No receipt on line b', flaggedRowIds: ['b'] };
+  await settleRemaining(db, ['r1'], ctx, n => ({ __increment: n }), true);
+  assert.equal(db.store.reimbursements.r1.status, 'pending');
+  assert.equal(db.store.reimbursements.r1.paidAmount, 30);
+  assert.equal(db.store.reimbursements.r1.holdNote, 'No receipt on line b');
+  assert.deepEqual(db.store.reimbursements.r1.flaggedRowIds, ['b']);
+  assert.equal(db.store.cash_advances.ca1.balance_remaining, -70);
+  assert.equal(db.store.liquidations.l1.reimbursement_status, 'pending');
+  const pay = Object.values(db.store.reimbursement_payments)[0];
+  assert.equal(pay.kind, 'partial'); assert.equal(pay.amount, 30);
+  // Paying the rest settles the claim.
+  await settleRemaining(db, ['r1'], { ...ctx, partialAmount: undefined, now: 1300 }, n => ({ __increment: n }), true);
+  assert.equal(db.store.reimbursements.r1.status, 'paid'); assert.equal(db.store.cash_advances.ca1.balance_remaining, 0);
+  assert.equal(db.store.liquidations.l1.reimbursement_status, 'reimbursed');
+  assert.deepEqual(Object.values(db.store.reimbursement_payments).map(x => x.amount).sort((x, y) => x - y), [30, 70]);
+});
+test('partial payment rejects amounts above the balance and unknown highlighted lines', async () => {
+  const mk = () => new FinanceFirestore({ liquidations: { l1: { status: 'submitted', rows_json: '[{"id":"a","amount":100}]', receipts_json: '[]' } }, reimbursements: { r1: { liquidationId: 'l1', origin: 'no_ca', amount: 100, status: 'pending' } } });
+  const base = { user: { id: 'admin' }, now: 1, fs: null, reference: '', proofRef: null, urgentPaymentReason: 'Urgent' };
+  await assert.rejects(settleRemaining(mk(), ['r1'], { ...base, partialAmount: 101 }, n => n, true), /more than the balance/);
+  await assert.rejects(settleRemaining(mk(), ['r1'], { ...base, partialAmount: 0 }, n => n, true), /greater than zero/);
+  await assert.rejects(settleRemaining(mk(), ['r1'], { ...base, flaggedRowIds: ['zzz'] }, n => n, true), /not on this liquidation/);
+});
 for (const file of ['server.js', 'functions/server.js']) {
   test(`${file}: legacy toggle enforces review/urgent rule and retains exception history`, async () => {
     const source = fs.readFileSync(file, 'utf8'); const start = source.indexOf("app.patch('/api/liquidations/:id',"); const end = source.indexOf('// Admin-only: list pending reimbursement claims', start);
