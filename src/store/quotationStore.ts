@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { nanoid } from 'nanoid';
 import type {
+  AwardedQuotation,
   Client,
   ID,
   LaborRolePreset,
@@ -15,6 +16,7 @@ import type {
 import { seedClients, seedSalesContacts } from '../data/quotationClients';
 import { seedLaborPresets, starterGeneralReqts } from '../data/quotationPresets';
 import { quotationCode } from '../utils/calcsheet/codes';
+import { awardFigures } from '../utils/calcsheet/awardFigures';
 import type { InstallMaterialPrice } from '../utils/calcsheet/installationMaterials';
 import { getOneDriveTokenStore } from '../services/onedriveTokenStore';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
@@ -97,6 +99,10 @@ interface Actions {
   updateProject: (id: ID, patch: Partial<Project>) => Promise<void>;
   deleteProject: (id: ID) => Promise<void>;
   syncMainProject: (id: ID, opts?: { force?: boolean }) => Promise<SyncMainProjectResult>;
+  // Lock the awarded quotation's price/budget on the project (and its linked Project List row).
+  awardQuotation: (projectId: ID, quotationId: ID) => Promise<AwardResult>;
+  // Admin-only: release the price lock.
+  unawardProject: (projectId: ID) => Promise<void>;
 
   // Quotations
   createQuotation: (projectId: ID, kind: QuotationKind, recipientId: ID | null, scopeCategory?: QuotationScopeCategory) => Promise<Quotation>;
@@ -134,6 +140,11 @@ interface Actions {
   updateSettings: (patch: CalcsheetSettings) => Promise<void>;
 
   resetAll: () => Promise<void>;
+}
+
+export interface AwardResult {
+  awarded: AwardedQuotation;
+  mainProject: { id: string; previousAmount: number; amount: number; budget: number } | null;
 }
 
 export interface SyncMainProjectResult {
@@ -528,6 +539,44 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       quotations: get().quotations.filter((q) => q.projectId !== id),
     });
   },
+  awardQuotation: async (projectId, quotationId) => {
+    const quotation = get().quotations.find((q) => q.id === quotationId);
+    if (!quotation) throw new Error('Quotation not found');
+    const figures = awardFigures(quotation);
+    const res = await api<AwardResult & { success: boolean }>('POST', `/projects/${projectId}/award`, {
+      quotationId,
+      price: figures.price,
+      grandTotal: figures.grandTotal,
+      budget: figures.budget,
+    });
+    const { awarded } = res;
+    set({
+      projects: get().projects.map((p) => (p.id === projectId ? { ...p, awarded, updatedAt: now() } : p)),
+      quotations: get().quotations.map((q) => {
+        if (q.projectId !== projectId) return q;
+        if (q.id === quotationId) return { ...q, awardedAt: awarded.awardedAt, awardedBy: awarded.awardedBy, awardedById: awarded.awardedById };
+        if (!q.awardedAt) return q;
+        const { awardedAt: _a, awardedBy: _b, awardedById: _c, ...rest } = q;
+        return rest as Quotation;
+      }),
+    });
+    return { awarded, mainProject: res.mainProject ?? null };
+  },
+  unawardProject: async (projectId) => {
+    await api('POST', `/projects/${projectId}/unaward`, {});
+    set({
+      projects: get().projects.map((p) => {
+        if (p.id !== projectId) return p;
+        const { awarded: _a, ...rest } = p;
+        return { ...rest, updatedAt: now() } as Project;
+      }),
+      quotations: get().quotations.map((q) => {
+        if (q.projectId !== projectId || !q.awardedAt) return q;
+        const { awardedAt: _a, awardedBy: _b, awardedById: _c, ...rest } = q;
+        return rest as Quotation;
+      }),
+    });
+  },
   syncMainProject: async (id, opts = {}) => {
     const res = await api<SyncMainProjectResult>('POST', `/projects/${id}/sync-main`, {
       force: !!opts.force,
@@ -687,6 +736,10 @@ export const useQuotationStore = create<State & Actions>()((set, get) => ({
       createdAt: now(),
       updatedAt: now(),
     };
+    // A duplicate is a new, unlocked revision (e.g. a change order on an awarded quotation).
+    delete copy.awardedAt;
+    delete copy.awardedBy;
+    delete copy.awardedById;
     // Duplicating a legacy snapshot produces an editable revision under the current formulation.
     // importedFrom is preserved for provenance.
     if (original.formulaVersion === 'legacy') {

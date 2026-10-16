@@ -147,6 +147,50 @@ const FIXTURES: Array<[string, Quotation]> = [
       productMarkupPct: 0,
     }),
   ],
+  // Awarded-vs-execution price drift (2026-10-16): the server ignored the EWT
+  // buffer and counted optional / header component lines.
+  [
+    'EWT buffer on every section, per-line component EWT override, manual services',
+    q({
+      ewtPct: 2,
+      generalReqts: [{ id: 'g1', code: 'A', description: 'Mob', unitPrice: 10000, qty: 2 }],
+      generalReqMarkupPct: 10,
+      components: [
+        { id: 'c1', description: 'PLC', unitCost: 100000, forex: 1, qty: 1, contingencyPct: 5, discountPct: 0, markupPct: 20 },
+        { id: 'c2', description: 'HMI', unitCost: 20000, forex: 1, qty: 2, contingencyPct: 0, discountPct: 0, ewtPct: 0 },
+      ],
+      productMarkupPct: 25,
+      services: [{ id: 's1', description: 'Lump sum', amount: 120000 }],
+      discountPct: 3,
+    }),
+  ],
+  [
+    'EWT buffer with services from manpower (lump)',
+    q({ ewtPct: 2, servicesFromManpower: true, manpower, laborMarkupPct: 30, engineeringServicesQty: 2 }),
+  ],
+  [
+    'optional and header component lines are excluded from the contract',
+    q({
+      components: [
+        { id: 'h1', description: 'Panel A', isHeader: true, unitCost: 0, forex: 1, qty: 1 },
+        { id: 'c1', description: 'PLC', unitCost: 100000, forex: 1, qty: 1, contingencyPct: 0, discountPct: 0 },
+        { id: 'c2', description: 'Spare HMI (optional)', optional: true, unitCost: 30000, forex: 1, qty: 1, contingencyPct: 0, discountPct: 0 },
+      ],
+      productMarkupPct: 20,
+    }),
+  ],
+  [
+    'per-line services pricing with qty and unit price (cost basis)',
+    q({
+      servicesFromManpower: true,
+      servicesPerLinePricing: true,
+      manpower,
+      services: [
+        { id: 's1', description: 'Commissioning', qty: 5, unitPrice: 9000, amount: 60000 },
+        { id: 's2', description: 'Programming', days: 10, amount: 200000 },
+      ],
+    }),
+  ],
   [
     'legacy without snapshot (additive contingency-discount, per-role labor contingency)',
     q({
@@ -206,6 +250,13 @@ describe('server.js quotationSalesAmount parity with Sales scope', () => {
       vatPct: 12,
     });
 
+    expect(serverSalesAmount(quotation)).toBeCloseTo(salesAccountedTotal(quotation, computeTotals(quotation)), 6);
+  });
+
+  it.each([
+    ['manual services', q({ salesValueScope: 'services_only', ewtPct: 2, services: [{ id: 's1', amount: 50000 }], discountPct: 5 })],
+    ['services from manpower', q({ salesValueScope: 'services_only', ewtPct: 2, servicesFromManpower: true, manpower, laborMarkupPct: 30 })],
+  ])('services-only with EWT: %s', (_name, quotation) => {
     expect(serverSalesAmount(quotation)).toBeCloseTo(salesAccountedTotal(quotation, computeTotals(quotation)), 6);
   });
 });

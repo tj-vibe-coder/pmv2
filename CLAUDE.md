@@ -96,7 +96,7 @@ Calcsheet is the quotation/proposal system embedded at `/calcsheet/*`. As of May
 
 ### Firestore collections (production pmv2-851ae)
 - `clients` (16 docs) — unified, camelCase, multi-contact arrays. The 4 legacy main docs kept their `client_1`...`client_4` IDs.
-- `calcsheet_projects` (38 docs)
+- `calcsheet_projects` (38 docs) — `awarded` = the price lock set by `POST /api/calcsheet/projects/:id/award` (never via PUT). Quotations with `awardedAt` are locked: PUT/DELETE return 409 until an admin calls `/unaward`. See `docs/PROJECT_HISTORY.md` 2026-10-16.
 - `calcsheet_quotations` (~41 docs, all `formulaVersion: 'legacy'`)
 - `calcsheet_meta` (sequence counter)
 - `calcsheet_presets` (labor rate presets)

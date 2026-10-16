@@ -3956,6 +3956,15 @@ function numericRevision(q) {
   return Number.isFinite(n) ? n : 0;
 }
 
+const { pickContractSource, buildAwardSnapshot, budgetFollowsAward, isAwardLocked, AWARD_LOCK_FIELDS } = require('./server/calcsheetAward');
+// Engine hooks for the award helpers (function declarations below are hoisted).
+const AWARD_CALC = {
+  salesAmount: (q) => quotationSalesAmount(q),
+  grandTotal: (q) => quotationGrandTotal(q),
+  costBasis: (q) => quotationCostBasis(q),
+  newest: (a, b) => newestQuotation(a, b),
+};
+
 function newestQuotation(a, b) {
   const rev = numericRevision(b) - numericRevision(a);
   if (rev !== 0) return rev;
@@ -4019,31 +4028,38 @@ function quotationGrandTotal(q) {
     return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
   }
 
+  // EWT buffer (IOCT only) rides on every section's sell price, exactly as in
+  // calc.ts. Optional and header component lines never count toward the contract.
+  const ewtPct = num(q.ewtPct);
+  const ewtMul = 1 + ewtPct / 100;
   const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, num(q.generalReqtsExportQty) || 1) : 1;
   const hasPerLineGenMarkup = generalReqts.some((l) => l.markupPct != null);
-  const generalReqtsSubtotal = hasPerLineGenMarkup
+  const generalReqtsSubtotal = (hasPerLineGenMarkup
     ? generalReqts.reduce((s, l) => {
         const markup = l.markupPct != null ? num(l.markupPct) : num(q.generalReqMarkupPct);
         return s + lineGeneralTotal(l) * (1 + markup / 100);
       }, 0) * generalReqtsQty
-    : generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty * (1 + num(q.generalReqMarkupPct) / 100);
-  const componentsSubtotal = components.reduce((s, l) => {
+    : generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty * (1 + num(q.generalReqMarkupPct) / 100)) * ewtMul;
+  const contractComponents = components.filter((l) => !l.optional && !l.isHeader && !l.isChildHeader);
+  const componentsSubtotal = contractComponents.reduce((s, l) => {
     const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
     const adjusted = costUnit * (1 + num(l.contingencyPct) / 100);
     const markup = l.markupPct != null ? num(l.markupPct) : num(q.productMarkupPct);
-    return s + adjusted * (1 + markup / 100) * num(l.qty);
+    const ewt = l.ewtPct != null ? num(l.ewtPct) : ewtPct;
+    return s + adjusted * (1 + markup / 100) * (1 + ewt / 100) * num(l.qty);
   }, 0);
   let servicesSub;
   if (q.servicesFromManpower) {
     if (q.servicesPerLinePricing) {
+      // Per-line amounts already carry EWT (baked in by the editor).
       servicesSub = servicesLineSum();
     } else {
       const engineeringServicesQty = Math.max(1, num(q.engineeringServicesQty) || 1);
       const manpowerCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0);
-      servicesSub = manpowerCost * engineeringServicesQty * (1 + num(q.laborMarkupPct) / 100);
+      servicesSub = manpowerCost * engineeringServicesQty * (1 + num(q.laborMarkupPct) / 100) * ewtMul;
     }
   } else {
-    servicesSub = servicesLineSum();
+    servicesSub = servicesLineSum() * ewtMul;
   }
   return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
 }
@@ -4072,9 +4088,11 @@ function quotationSalesAmount(q) {
         ? manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)) * (1 + contingency), 0)
         : laborCost * engineeringServicesQty;
       servicesSub = laborWithContingency * (1 + num(q.laborMarkupPct) / 100);
+      if (q.formulaVersion !== 'legacy') servicesSub *= 1 + num(q.ewtPct) / 100;
     }
   } else {
     servicesSub = servicesLineSum();
+    if (q.formulaVersion !== 'legacy') servicesSub *= 1 + num(q.ewtPct) / 100;
   }
 
   return servicesSub * (1 - num(q.discountPct) / 100) * (1 + num(q.vatPct) / 100);
@@ -4152,17 +4170,19 @@ function quotationCostBasis(q) {
     return finishCost(generalReqtsCost, componentsCost, laborCost, generalReqtsSubtotal, componentsSubtotal, servicesSub, discountAmt);
   }
 
+  const ewtPct = num(q.ewtPct);
+  const ewtMul = 1 + ewtPct / 100;
   const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, num(q.generalReqtsExportQty) || 1) : 1;
   const engineeringServicesQty = q.servicesFromManpower ? Math.max(1, num(q.engineeringServicesQty) || 1) : 1;
   const generalReqtsCost = generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty;
   const hasPerLineGenMarkup = generalReqts.some((l) => l.markupPct != null);
-  const generalReqtsSubtotal = hasPerLineGenMarkup
+  const generalReqtsSubtotal = (hasPerLineGenMarkup
     ? generalReqts.reduce((s, l) => {
         const markup = l.markupPct != null ? num(l.markupPct) : num(q.generalReqMarkupPct);
         return s + lineGeneralTotal(l) * (1 + markup / 100);
       }, 0) * generalReqtsQty
-    : generalReqtsCost * (1 + num(q.generalReqMarkupPct) / 100);
-  const contractComponents = components.filter((l) => !l.optional);
+    : generalReqtsCost * (1 + num(q.generalReqMarkupPct) / 100)) * ewtMul;
+  const contractComponents = components.filter((l) => !l.optional && !l.isHeader && !l.isChildHeader);
   const componentsCost = contractComponents.reduce((s, l) => {
     const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
     return s + costUnit * num(l.qty);
@@ -4171,22 +4191,27 @@ function quotationCostBasis(q) {
     const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
     const adjusted = costUnit * (1 + num(l.contingencyPct) / 100);
     const markup = l.markupPct != null ? num(l.markupPct) : num(q.productMarkupPct);
-    return s + adjusted * (1 + markup / 100) * num(l.qty);
+    const ewt = l.ewtPct != null ? num(l.ewtPct) : ewtPct;
+    return s + adjusted * (1 + markup / 100) * (1 + ewt / 100) * num(l.qty);
   }, 0);
   let laborCost;
   let servicesSub;
   if (q.servicesFromManpower) {
     if (q.servicesPerLinePricing) {
       const dailyRate = manpower.reduce((s, m) => s + num(m.headcount) * (num(m.dailyRate) + num(m.allowance)), 0);
-      laborCost = services.reduce((s, l) => s + num(l.days) * dailyRate, 0);
+      laborCost = services.reduce((s, l) => {
+        const qty = l.qty != null ? num(l.qty) : num(l.days);
+        const unit = l.unitPrice != null ? num(l.unitPrice) : dailyRate;
+        return s + qty * unit;
+      }, 0);
       servicesSub = services.reduce((s, l) => s + num(l.amount), 0);
     } else {
       laborCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0) * engineeringServicesQty;
-      servicesSub = laborCost * (1 + num(q.laborMarkupPct) / 100);
+      servicesSub = laborCost * (1 + num(q.laborMarkupPct) / 100) * ewtMul;
     }
   } else {
-    servicesSub = services.reduce((s, l) => s + num(l.amount), 0);
-    laborCost = servicesSub;
+    laborCost = services.reduce((s, l) => s + num(l.amount), 0);
+    servicesSub = laborCost * ewtMul;
   }
   const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
   const discountAmt = subtotal * (num(q.discountPct) / 100);
@@ -4228,10 +4253,11 @@ function contractAmountPatchFromSales(mainData, amount, quotation, project, now)
   };
 }
 
-function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi) {
+function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi, amounts) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
-  const amount = quotationSalesAmount(quotation);
-  const budget = quotationCostBasis(quotation);
+  // `amounts` carries the awarded (locked) price/budget when the proposal was awarded.
+  const amount = amounts && Number.isFinite(amounts.amount) ? amounts.amount : quotationSalesAmount(quotation);
+  const budget = amounts && Number.isFinite(amounts.budget) ? amounts.budget : quotationCostBasis(quotation);
   const year = Number.isFinite(new Date(project.date || now).getFullYear())
     ? new Date(project.date || now).getFullYear()
     : new Date().getFullYear();
@@ -4347,20 +4373,20 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     const { id: _stored, ...data } = d.data();
     return { ...data, id: d.id };
   });
-  const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
-  const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
-  const selectedQuotation = ioct || acti;
+  // Awarded (price-locked) quotation first; else latest IOCT, fallback latest ACTI.
+  const contractSource = pickContractSource(project, quotations, AWARD_CALC);
   // Joint-with-ACTI: a partner link, an ACTI-kind quotation, or ACTI as the customer
   // (then the customer client doc stands in as the partner).
   const { withActi, partner } = resolveActiFronting({ project, client, partner: partnerFromDoc, quotations });
-  if (!selectedQuotation) {
+  if (!contractSource) {
     const err = new Error('No IOCT or ACTI quotation found to seed contract amount');
     err.status = 400;
     throw err;
   }
+  const selectedQuotation = contractSource.quotation;
 
   const linkedDoc = await findLinkedMainProject(project);
-  const salesAmount = quotationSalesAmount(selectedQuotation);
+  const salesAmount = contractSource.amount;
   // Default path when already linked: push Sales contract amount (IOCT/ACTI grand
   // total) without remapping the whole Project List row. Late price settlements
   // and quotation revisions used to leave Projects monitoring stuck on the first
@@ -4375,10 +4401,9 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
       project,
       now,
     );
-    // Fill Project Budget from IOCT cost (value − margin) when the linked
-    // row still has none — never clobber a budget someone already typed.
-    const budgetSource = ioct || selectedQuotation;
-    const seededBudget = quotationCostBasis(budgetSource);
+    // Fill Project Budget from IOCT cost (value − margin), or the awarded budget,
+    // when the linked row still has none — never clobber a budget someone typed.
+    const seededBudget = contractSource.budget;
     if (!(Number(linkedData.project_budget) > 0) && seededBudget > 0) {
       amountPatch.project_budget = seededBudget;
     }
@@ -4411,13 +4436,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   if (linkedDoc && options.force) {
     const linkedData = linkedDoc.data() || {};
     const projectNo = linkedData.project_no || await nextIoctProjectNo(now);
-    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi, contractSource);
     mainProjectId = linkedDoc.id;
     action = 'updated';
     await linkedDoc.ref.update({ ...mapped, updated_at: now });
   } else {
     const projectNo = await nextIoctProjectNo(now);
-    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi, contractSource);
     action = project.mainProjectId ? 'recreated' : 'created';
     const ref = await db.collection('projects').add({ ...mapped, created_at: now, updated_at: now });
     mainProjectId = ref.id;
@@ -4454,7 +4479,7 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     projectNo: mapped.project_no || '',
     quotationId: selectedQuotation.id,
     quotationKind: selectedQuotation.kind,
-    amount: quotationSalesAmount(selectedQuotation),
+    amount: contractSource.amount,
   };
 }
 
@@ -4621,7 +4646,8 @@ app.put('/api/calcsheet/projects/:id', async (req, res) => {
     // the URL param) and storing it inside the document is just dead data that
     // can mask the real ID during debugging. `createdBy`/`createdByName` are
     // stamped at creation and stay factual — never updatable.
-    const { id: _ignored, createdBy: _cb, createdByName: _cbn, ...body } = req.body || {};
+    // `awarded` (the price lock) is only written by /award and /unaward.
+    const { id: _ignored, createdBy: _cb, createdByName: _cbn, awarded: _aw, ...body } = req.body || {};
     const update = { ...body, updatedAt: new Date().toISOString() };
     await db.collection('calcsheet_projects').doc(req.params.id).update(update);
     res.json({ success: true });
@@ -4648,9 +4674,8 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
     const mainData = mainDoc.data() || {};
     const qSnap = await db.collection('calcsheet_quotations').where('projectId', '==', req.params.id).get();
     const quotations = qSnap.docs.map((d) => { const { id: _stored, ...data } = d.data(); return { ...data, id: d.id }; });
-    const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
-    const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
-    const selectedQuotation = ioct || acti;
+    const contractSource = pickContractSource(calcsheet, quotations, AWARD_CALC);
+    const selectedQuotation = contractSource ? contractSource.quotation : null;
     await calcsheetDoc.ref.update({
       mainProjectId: mainDoc.id,
       mainProjectNo: mainData.project_no || '',
@@ -4667,7 +4692,7 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
     const mainPatch = selectedQuotation
       ? contractAmountPatchFromSales(
           mainData,
-          quotationSalesAmount(selectedQuotation),
+          contractSource.amount,
           selectedQuotation,
           calcsheet,
           now,
@@ -4686,12 +4711,97 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
       ...(selectedQuotation ? {
         quotationId: selectedQuotation.id,
         quotationKind: selectedQuotation.kind,
-        amount: quotationSalesAmount(selectedQuotation),
+        amount: contractSource.amount,
       } : {}),
     });
   } catch (err) {
     console.error('[calcsheet] link-existing failed:', { id: req.params.id, err: err && err.message });
     res.status(500).json({ error: 'Failed to link to existing project' });
+  }
+});
+
+// Lock the awarded quotation's price on the project and push it to the linked
+// Project List record. Body: { quotationId, price, grandTotal, budget } — amounts
+// come from the client calc engine (the source of truth for quotation math).
+app.post('/api/calcsheet/projects/:id/award', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { quotationId } = req.body || {};
+    if (!quotationId) return res.status(400).json({ error: 'quotationId is required' });
+    const projectRef = db.collection('calcsheet_projects').doc(req.params.id);
+    const quotationRef = db.collection('calcsheet_quotations').doc(String(quotationId));
+    const [projectDoc, quotationDoc] = await Promise.all([projectRef.get(), quotationRef.get()]);
+    if (!projectDoc.exists) return res.status(404).json({ error: 'Calcsheet project not found' });
+    if (!quotationDoc.exists) return res.status(404).json({ error: 'Quotation not found' });
+    const project = { ...projectDoc.data(), id: projectDoc.id };
+    const quotation = { ...quotationDoc.data(), id: quotationDoc.id };
+    if (String(quotation.projectId) !== String(project.id)) {
+      return res.status(400).json({ error: 'That quotation belongs to a different project' });
+    }
+    const now = new Date().toISOString();
+    const previous = project.awarded || null;
+    const awarded = buildAwardSnapshot({ quotation, body: req.body, user, now, calc: AWARD_CALC });
+
+    const batch = db.batch();
+    batch.update(projectRef, { awarded, updatedAt: now });
+    batch.update(quotationRef, { awardedAt: now, awardedBy: awarded.awardedBy, awardedById: awarded.awardedById });
+    if (previous && previous.quotationId && previous.quotationId !== quotation.id) {
+      const prevRef = db.collection('calcsheet_quotations').doc(String(previous.quotationId));
+      const prevDoc = await prevRef.get();
+      if (prevDoc.exists) batch.update(prevRef, { awardedAt: FieldValue.delete(), awardedBy: FieldValue.delete(), awardedById: FieldValue.delete() });
+    }
+    await batch.commit();
+
+    // Linked execution project: contract = awarded price; budget follows unless hand-edited.
+    let mainProject = null;
+    if (project.mainProjectId) {
+      const mainDoc = await db.collection('projects').doc(String(project.mainProjectId)).get();
+      if (mainDoc.exists) {
+        const mainData = mainDoc.data() || {};
+        const patch = contractAmountPatchFromSales(mainData, awarded.price, quotation, project, now);
+        if (awarded.budget > 0 && budgetFollowsAward(mainData.project_budget, previous)) patch.project_budget = awarded.budget;
+        await mainDoc.ref.update(patch);
+        mainProject = {
+          id: mainDoc.id,
+          previousAmount: Number(mainData.updated_contract_amount) || Number(mainData.contract_amount) || 0,
+          amount: awarded.price,
+          budget: patch.project_budget != null ? patch.project_budget : Number(mainData.project_budget) || 0,
+        };
+      }
+    }
+    res.json({ success: true, awarded, mainProject });
+  } catch (err) {
+    console.error('[calcsheet] award failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to lock the awarded price' });
+  }
+});
+
+// Admin-only: release the price lock (e.g. a change order needs the quotation revised).
+// The Project List amount is left as is until the project is awarded again.
+app.post('/api/calcsheet/projects/:id/unaward', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    if (user.role !== 'superadmin' && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only an admin can unlock an awarded price' });
+    }
+    const projectRef = db.collection('calcsheet_projects').doc(req.params.id);
+    const projectDoc = await projectRef.get();
+    if (!projectDoc.exists) return res.status(404).json({ error: 'Calcsheet project not found' });
+    const awarded = projectDoc.data().awarded;
+    const batch = db.batch();
+    batch.update(projectRef, { awarded: FieldValue.delete(), updatedAt: new Date().toISOString() });
+    if (awarded && awarded.quotationId) {
+      const qRef = db.collection('calcsheet_quotations').doc(String(awarded.quotationId));
+      const qDoc = await qRef.get();
+      if (qDoc.exists) batch.update(qRef, { awardedAt: FieldValue.delete(), awardedBy: FieldValue.delete(), awardedById: FieldValue.delete() });
+    }
+    await batch.commit();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[calcsheet] unaward failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to unlock the awarded price' });
   }
 });
 
@@ -4769,6 +4879,8 @@ app.post('/api/calcsheet/quotations', async (req, res) => {
     const user = await requireActiveUser(req, res);
     if (!user) return;
     const { id: _ignored, ...body } = req.body || {};
+    // A duplicate of an awarded quotation is a new, unlocked revision.
+    AWARD_LOCK_FIELDS.forEach((k) => { delete body[k]; });
     const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     const timingError = validateQuotationPurchaseTiming(data);
     if (timingError) {
@@ -4806,6 +4918,11 @@ app.put('/api/calcsheet/quotations/:id', async (req, res) => {
     } catch (verErr) {
       console.warn('[calcsheet] version snapshot failed (non-blocking):', verErr && verErr.message);
     }
+    if (isAwardLocked(prevData)) {
+      res.status(409).json({ error: 'This quotation was awarded, so its price is locked. Duplicate it to revise, or ask an admin to unlock it.' });
+      return;
+    }
+    AWARD_LOCK_FIELDS.forEach((k) => { delete update[k]; });
     const timingError = validateQuotationPurchaseTiming({ ...prevData, ...body });
     if (timingError) {
       res.status(400).json({ error: timingError });
@@ -4873,6 +4990,10 @@ app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
+    const existing = await db.collection('calcsheet_quotations').doc(req.params.id).get();
+    if (existing.exists && isAwardLocked(existing.data())) {
+      return res.status(409).json({ error: 'This quotation was awarded, so it can\'t be deleted. Ask an admin to unlock it first.' });
+    }
     await db.collection('calcsheet_quotations').doc(req.params.id).delete();
     // Remove version snapshots belonging to the deleted quotation.
     const vsnap = await db.collection('calcsheet_quotation_versions').where('quotationId', '==', req.params.id).get();

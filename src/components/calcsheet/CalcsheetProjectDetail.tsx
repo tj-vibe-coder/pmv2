@@ -19,6 +19,9 @@ import FolderIcon from '@mui/icons-material/Folder';
 import CloudIcon from '@mui/icons-material/Cloud';
 import CloudOffIcon from '@mui/icons-material/CloudOff';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import LockIcon from '@mui/icons-material/Lock';
+import AwardedBudgetCard, { AwardQuotationPicker, defaultAwardQuotationId } from './AwardedBudgetCard';
+import { awardFigures } from '../../utils/calcsheet/awardFigures';
 import { useQuotationStore } from '../../store/quotationStore';
 import { computeTotals, PHP } from '../../utils/calcsheet/calc';
 import { blurNumberInputOnWheel, parseLenientFloat } from '../../utils/calcsheet/numberInput';
@@ -107,6 +110,14 @@ export default function ProjectDetail() {
   // creating a new one) so they don't think the system silently misbehaved.
   const [oneDriveInfo, setOneDriveInfo] = useState<string>('');
   const [statusConfirmOpen, setStatusConfirmOpen] = useState(false);
+  // Awarded-price lock: which quotation the project was won on.
+  const [awardPickId, setAwardPickId] = useState('');
+  const [lockDialogOpen, setLockDialogOpen] = useState(false);
+  const [unlockConfirmOpen, setUnlockConfirmOpen] = useState(false);
+  const [awardBusy, setAwardBusy] = useState(false);
+  const [awardRefresh, setAwardRefresh] = useState(0);
+  const awardQuotation = useQuotationStore((s) => s.awardQuotation);
+  const unawardProject = useQuotationStore((s) => s.unawardProject);
   const [mainSyncBusy, setMainSyncBusy] = useState(false);
   const [mainSyncErr, setMainSyncErr] = useState('');
   const [mainSyncInfo, setMainSyncInfo] = useState('');
@@ -155,6 +166,7 @@ export default function ProjectDetail() {
       await updateProject(project.id, patch);
       setMainSyncInfo(`Linked to Project List record ${data.projectNo || data.mainProjectId}.`);
       setLinkExistingOpen(false);
+      setAwardRefresh((n) => n + 1);
     } catch (e) {
       setMainSyncErr(e instanceof Error ? e.message : 'Failed to link project');
     } finally {
@@ -187,8 +199,9 @@ export default function ProjectDetail() {
           ? ` (was ${PHP(result.previousAmount)})`
           : '';
       setMainSyncInfo(
-        `${verb} from ${result.quotationKind} quotation: ${PHP(result.amount)}${prevNote}.`,
+        `${verb} from ${project.awarded ? 'the awarded ' : ''}${result.quotationKind} quotation: ${PHP(result.amount)}${prevNote}.`,
       );
+      setAwardRefresh((n) => n + 1);
       return result;
     } catch (e) {
       setMainSyncErr(e instanceof Error ? e.message : 'Failed to sync Project List record');
@@ -203,10 +216,49 @@ export default function ProjectDetail() {
     setMainSyncErr('');
     setMainSyncInfo('');
     if (nextStatus === 'won' && project.status !== 'won') {
+      setAwardPickId(defaultAwardQuotationId(project, quotations));
       setStatusConfirmOpen(true);
       return;
     }
     await updateProject(project.id, { status: nextStatus });
+  };
+
+  // Freeze the awarded quotation's price/budget (and push it to a linked Project List row).
+  const lockAward = async (quotationId: string): Promise<boolean> => {
+    if (!project || !quotationId) return false;
+    setAwardBusy(true);
+    setMainSyncErr('');
+    setMainSyncInfo('');
+    try {
+      const { awarded, mainProject } = await awardQuotation(project.id, quotationId);
+      const moved = mainProject && Math.abs(mainProject.previousAmount - mainProject.amount) >= 1
+        ? ` Project List contract updated from ${PHP(mainProject.previousAmount)} to ${PHP(mainProject.amount)}.`
+        : mainProject ? ' Project List contract matches.' : '';
+      setMainSyncInfo(`Locked ${awarded.kind} rev ${awarded.revision} at ${PHP(awarded.price)} (budget ${PHP(awarded.budget)}).${moved}`);
+      setAwardRefresh((n) => n + 1);
+      return true;
+    } catch (e) {
+      setMainSyncErr(e instanceof Error ? e.message : 'Failed to lock the awarded price');
+      return false;
+    } finally {
+      setAwardBusy(false);
+    }
+  };
+
+  const confirmUnlock = async () => {
+    if (!project) return;
+    setUnlockConfirmOpen(false);
+    setAwardBusy(true);
+    setMainSyncErr('');
+    try {
+      await unawardProject(project.id);
+      setMainSyncInfo('Awarded price unlocked. The quotation can be edited again; the Project List amount is unchanged.');
+      setAwardRefresh((n) => n + 1);
+    } catch (e) {
+      setMainSyncErr(e instanceof Error ? e.message : 'Failed to unlock');
+    } finally {
+      setAwardBusy(false);
+    }
   };
 
   const confirmWon = async (sync: boolean) => {
@@ -215,6 +267,7 @@ export default function ProjectDetail() {
     setMainSyncErr('');
     setMainSyncInfo('');
     try {
+      if (awardPickId && !(await lockAward(awardPickId))) return;
       const result = sync ? await syncToMainProject(false) : null;
       if (sync && !result) return;
       await updateProject(project.id, {
@@ -1249,9 +1302,11 @@ export default function ProjectDetail() {
               size="small"
               disabled={mainSyncBusy}
               onClick={() => { void syncToMainProject(false); }}
-              title="Push latest Sales (IOCT) quotation total to Project List contract amount. Does not reset status or billing."
+              title={project.awarded
+                ? 'Push the locked awarded price to the Project List contract amount. Does not reset status or billing.'
+                : 'Push latest Sales (IOCT) quotation total to Project List contract amount. Does not reset status or billing.'}
             >
-              {mainSyncBusy ? 'Syncing...' : 'Sync contract from Sales'}
+              {mainSyncBusy ? 'Syncing...' : project.awarded ? 'Sync locked price' : 'Sync contract from Sales'}
             </Button>
           </>
         ) : project.status === 'won' ? (
@@ -1296,6 +1351,22 @@ export default function ProjectDetail() {
           </Typography>
         )}
       </Stack>
+
+      {(project.status === 'won' || project.awarded) && (
+        <AwardedBudgetCard
+          project={project}
+          quotations={quotations}
+          isAdmin={currentUser?.role === 'superadmin' || currentUser?.role === 'admin'}
+          busy={awardBusy || mainSyncBusy}
+          refreshKey={awardRefresh}
+          onLock={() => {
+            setAwardPickId(defaultAwardQuotationId(project, quotations));
+            setLockDialogOpen(true);
+          }}
+          onUnlock={() => setUnlockConfirmOpen(true)}
+          onRepush={() => { if (project.awarded) void lockAward(project.awarded.quotationId); }}
+        />
+      )}
 
       {isCorporateOneDriveConfigured() && (
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ rowGap: 1 }}>
@@ -1825,6 +1896,7 @@ export default function ProjectDetail() {
                   {q.formulaVersion === 'legacy' && (
                     <Chip size="small" icon={<HistoryIcon />} label="Legacy" color="warning" variant="outlined" sx={{ height: 20 }} />
                   )}
+                  {q.awardedAt && <Chip size="small" icon={<LockIcon />} label="Awarded" color="success" sx={{ height: 20 }} />}
                 </Stack>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                   {recipient?.name ?? 'No recipient'}
@@ -1837,6 +1909,9 @@ export default function ProjectDetail() {
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'monospace' }}>
                       VAT {PHP(t.vat)}
                     </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'monospace' }}>
+                      Budget {PHP(awardFigures(q).budget)}
+                    </Typography>
                   </Box>
                   <Box sx={{ textAlign: 'right' }}>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Grand total</Typography>
@@ -1848,7 +1923,7 @@ export default function ProjectDetail() {
                     Open
                   </Button>
                   <IconButton onClick={() => setDuplicateTarget(q)} aria-label="Duplicate quotation"><ContentCopyIcon fontSize="small" /></IconButton>
-                  <IconButton onClick={() => setDeleteTarget(q)} aria-label="Delete quotation"><DeleteIcon fontSize="small" /></IconButton>
+                  <IconButton onClick={() => setDeleteTarget(q)} aria-label="Delete quotation" disabled={!!q.awardedAt}><DeleteIcon fontSize="small" /></IconButton>
                 </Stack>
               </Paper>
             );
@@ -1871,6 +1946,7 @@ export default function ProjectDetail() {
               <TableCell align="right">Subtotal</TableCell>
               <TableCell align="right">VAT</TableCell>
               <TableCell align="right">Grand Total</TableCell>
+              <TableCell align="right" title="Spendable budget: VAT-ex value minus margin">Budget</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
@@ -1886,6 +1962,9 @@ export default function ProjectDetail() {
                   <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                     <Stack direction="row" spacing={0.75} alignItems="center">
                       <span>rev {q.revision}</span>
+                      {q.awardedAt && (
+                        <Chip size="small" icon={<LockIcon />} label="Awarded" color="success" sx={{ height: 20 }} />
+                      )}
                       {q.formulaVersion === 'legacy' && (
                         <Chip
                           size="small"
@@ -1923,17 +2002,18 @@ export default function ProjectDetail() {
                   <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{PHP(t.subtotal)}</TableCell>
                   <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{PHP(t.vat)}</TableCell>
                   <TableCell align="right" sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{PHP(t.grandTotal)}</TableCell>
+                  <TableCell align="right" sx={{ whiteSpace: 'nowrap', color: 'text.secondary' }}>{PHP(awardFigures(q).budget)}</TableCell>
                   <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                     <IconButton size="small" component={Link} to={`/sales/calcsheet/quotations/${q.id}`}><OpenInNewIcon fontSize="small" /></IconButton>
                     <IconButton size="small" onClick={() => setDuplicateTarget(q)} title="Duplicate quotation"><ContentCopyIcon fontSize="small" /></IconButton>
-                    <IconButton size="small" onClick={() => setDeleteTarget(q)}><DeleteIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" onClick={() => setDeleteTarget(q)} disabled={!!q.awardedAt} title={q.awardedAt ? 'Awarded quotations are locked' : 'Delete quotation'}><DeleteIcon fontSize="small" /></IconButton>
                   </TableCell>
                 </TableRow>
               );
             })}
             {quotations.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ color: 'text.secondary', py: 4 }}>
+                <TableCell colSpan={8} align="center" sx={{ color: 'text.secondary', py: 4 }}>
                   No quotations yet. Create an IOCT or ACTI quotation to begin.
                 </TableCell>
               </TableRow>
@@ -2446,13 +2526,57 @@ export default function ProjectDetail() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={statusConfirmOpen} onClose={() => setStatusConfirmOpen(false)} maxWidth="xs" fullWidth>
+      <Dialog open={lockDialogOpen} onClose={() => setLockDialogOpen(false)} maxWidth="sm" fullWidth fullScreen={isPhone}>
+        <DialogTitle>Lock the awarded price</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ mt: 1 }}>
+            <Typography variant="body2">
+              Pick the quotation this project was awarded on. Its price becomes the Project List contract amount, its
+              budget is what spending is tracked against, and the quotation becomes read-only.
+            </Typography>
+            <AwardQuotationPicker quotations={quotations} clients={clients} value={awardPickId} onChange={setAwardPickId} />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLockDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="success"
+            startIcon={<LockIcon />}
+            disabled={!awardPickId || awardBusy}
+            onClick={async () => {
+              setLockDialogOpen(false);
+              await lockAward(awardPickId);
+            }}
+          >
+            Lock price
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={unlockConfirmOpen} onClose={() => setUnlockConfirmOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Unlock the awarded price?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            The awarded quotation becomes editable again and the price lock is removed. The Project List contract amount
+            stays as it is until you lock a price again. Use this for change orders.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setUnlockConfirmOpen(false)}>Cancel</Button>
+          <Button color="warning" variant="contained" onClick={() => { void confirmUnlock(); }}>Unlock</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={statusConfirmOpen} onClose={() => setStatusConfirmOpen(false)} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>Mark proposal as won?</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5} sx={{ mt: 1 }}>
             <Typography variant="body2">
-              This can create or link a record in the original Project List module using the latest IOCT quotation amount. If no IOCT quotation exists, ACTI is used as the fallback.
+              Which quotation was this project awarded on? Its price and budget get <strong>locked</strong>: the quotation
+              can't be edited any more, and the Project List contract amount and budget come from it.
             </Typography>
+            <AwardQuotationPicker quotations={quotations} clients={clients} value={awardPickId} onChange={setAwardPickId} />
             <Alert severity="info" variant="outlined">
               OneDrive execution folder is named like{' '}
               <strong>IOCT2605001-LBI Project Name</strong> when a Project List
@@ -2468,8 +2592,9 @@ export default function ProjectDetail() {
           <Button onClick={() => setStatusConfirmOpen(false)}>Cancel</Button>
           <Button onClick={() => { void confirmWon(false); }}>Mark Won Only</Button>
           <Button
-            onClick={() => {
+            onClick={async () => {
               setStatusConfirmOpen(false);
+              if (awardPickId && !(await lockAward(awardPickId))) return;
               openLinkExistingDialog(true);
             }}
           >
