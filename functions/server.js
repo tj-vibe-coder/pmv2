@@ -2556,7 +2556,7 @@ app.get('/api/reimbursements/:id/lines', async (req, res) => {
     const paySnap = await db.collection('reimbursement_payments').where('reimbursementId', '==', id).get();
     const payments = paySnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.paidAt || 0) - (a.paidAt || 0));
     res.json({
-      success: true, lines, payments,
+      success: true, lines, payments, holdNote: r.holdNote || '', flaggedRowIds: r.flaggedRowIds || [],
       amount: Number(r.amount) || 0, paidAmount: r.status === 'paid' ? Number(r.amount) || 0 : Number(r.paidAmount) || 0, origin: r.origin, status: r.status,
     });
   } catch (err) {
@@ -2663,6 +2663,9 @@ function claimPaymentContext(req, user) {
     overrideReason: typeof body.overrideReason === 'string' ? body.overrideReason.trim() : '',
     proofRef: normalizeProofRef(body.proofRef),
     urgentPaymentReason: body.urgentPaymentReason,
+    partialAmount: body.amount,
+    note: typeof body.note === 'string' ? body.note.trim().slice(0, 1000) : undefined,
+    flaggedRowIds: Array.isArray(body.flaggedRowIds) && body.flaggedRowIds.length <= 500 && body.flaggedRowIds.every(x => typeof x === 'string') ? body.flaggedRowIds : undefined,
   };
 }
 
@@ -2733,8 +2736,10 @@ app.post('/api/reimbursements/:id/pay', async (req, res) => {
     const ctx = claimPaymentContext(req, user);
     const { plans } = await require('./server/reimbursementSettlement').settleRemaining(db, [req.params.id], ctx, n => FieldValue.increment(n), true);
     const p = plans[0];
-    const syncOk = await syncExpenseFundingInvestment(p.id, 'reimbursements', { date: new Date(ctx.now * 1000).toISOString().slice(0, 10), amount: p.amount, fundingSource: ctx.fs, description: `Reimbursement ${p.r.formNo || p.id}: ${p.r.employeeName || ''}`.trim() });
-    res.json({ success: true, message: 'Reimbursement marked paid; receipt workflow tracked separately', syncWarning: !syncOk });
+    // A partial payment gets its own investment row (keyed by the payment), so later payments never overwrite it.
+    const syncOk = await syncExpenseFundingInvestment(p.isPartial ? p.payRef.id : p.id, p.isPartial ? 'reimbursement_payments' : 'reimbursements', { date: new Date(ctx.now * 1000).toISOString().slice(0, 10), amount: p.amount, fundingSource: ctx.fs, description: `Reimbursement ${p.r.formNo || p.id}${p.isPartial ? ' (partial)' : ''}: ${p.r.employeeName || ''}`.trim(), createdAt: new Date(ctx.now * 1000).toISOString() });
+    const left = round2(p.remaining - p.amount);
+    res.json({ success: true, partial: p.isPartial, remaining: left, message: p.isPartial ? `Paid ${p.amount.toFixed(2)} — ${left.toFixed(2)} still owed` : 'Reimbursement marked paid; receipt workflow tracked separately', syncWarning: !syncOk });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ success: false, error: err.message });
     console.error('Error paying reimbursement:', err); res.status(500).json({ success: false, error: 'Database error' });

@@ -56,6 +56,8 @@ interface Reimbursement {
   paidAt: number | null;
   paidBy: string | null;
   paidAmount?: number;
+  holdNote?: string;
+  flaggedRowIds?: string[];
   createdAt: number | string;
   updatedAt: number | string;
   username?: string;
@@ -80,7 +82,7 @@ interface ClaimLine {
   amount: number; hasReceipt: boolean; paid: boolean;
 }
 interface ClaimPayment {
-  id: string; kind: 'lines' | 'remaining'; amount: number; paidAt: number;
+  id: string; kind: 'lines' | 'remaining' | 'partial'; amount: number; paidAt: number; note?: string | null;
   paymentException?: { reason: string; beforeRjReview: boolean } | null;
   reference?: string; overrideReason?: string | null; rowIds?: string[] | null;
   proofRef?: ProofRef | null;
@@ -137,6 +139,14 @@ const ReimbursementDashboard: React.FC = () => {
   const [payFundingType, setPayFundingType] = useState<'corporate_bank' | 'investor_outofpocket'>('corporate_bank');
   const [payInvestor, setPayInvestor] = useState('');
   const [paySubmitting, setPaySubmitting] = useState(false);
+  // Partial payment + "lines in question" highlight, for the single-claim Pay dialog.
+  const [payAmount, setPayAmount] = useState('');
+  const [payNote, setPayNote] = useState('');
+  const [payFlagged, setPayFlagged] = useState<string[]>([]);
+  const [payLines, setPayLines] = useState<ClaimLine[]>([]);
+  const [payLinesLoading, setPayLinesLoading] = useState(false);
+  const [linesView, setLinesView] = useState(false);
+  const [claimFlags, setClaimFlags] = useState<Record<string, { note: string; ids: string[] }>>({});
 
   const [lineProofFile, setLineProofFile] = useState<File | null>(null);
   const [payProofFile, setPayProofFile] = useState<File | null>(null);
@@ -271,19 +281,35 @@ const ReimbursementDashboard: React.FC = () => {
 
   const openPayDialog = (ctx: PayDialogContext) => {
     setPayDialog(ctx); setPayUrgentReason('');
+    setPayAmount(ctx.kind === 'single-reimb' ? String(remainingOf(ctx.reimb)) : '');
+    setPayNote(ctx.kind === 'single-reimb' ? ctx.reimb.holdNote || '' : '');
+    setPayFlagged(ctx.kind === 'single-reimb' ? ctx.reimb.flaggedRowIds || [] : []);
+    setPayLines([]);
+    if (ctx.kind === 'single-reimb') {
+      setPayLinesLoading(true);
+      fetch(`${API}/reimbursements/${ctx.reimb.id}/lines`, { headers: authHeaders() }).then(r => r.json())
+        .then(d => { if (d.success) setPayLines(d.lines || []); })
+        .catch(() => undefined)
+        .finally(() => setPayLinesLoading(false));
+    }
     setPayFundingType('corporate_bank');
     setPayInvestor('');
     setError('');
   };
   const closePayDialog = () => {
     setPayDialog(null);
+    setPayLines([]); setPayFlagged([]); setPayNote(''); setPayAmount('');
     setPayProofFile(null);
     setPayFundingType('corporate_bank');
     setPayInvestor('');
   };
 
+  const payRemaining = payDialog?.kind === 'single-reimb' ? remainingOf(payDialog.reimb) : 0;
+  const payAmountNum = Math.round((parseFloat(payAmount) || 0) * 100) / 100;
+  const payAmountValid = payDialog?.kind !== 'single-reimb' || (payAmountNum > 0 && payAmountNum <= payRemaining + 0.005);
+  const payIsPartial = payDialog?.kind === 'single-reimb' && payAmountValid && payAmountNum < payRemaining - 0.005;
   const confirmPay = async () => {
-    if (!payDialog || paySubmitting) return;
+    if (!payDialog || paySubmitting || !payAmountValid) return;
     const fundingSource = payFundingType === 'investor_outofpocket' && payInvestor
       ? { type: 'investor_outofpocket' as const, investor: payInvestor }
       : undefined;
@@ -308,7 +334,7 @@ const ReimbursementDashboard: React.FC = () => {
       : fetch(`${API}/reimbursements/${payDialog.reimb.id}/pay`, {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ urgentPaymentReason: payUrgentReason, ...(fundingSource ? { fundingSource } : {}), ...(proofRef ? { proofRef } : {}) }),
+          body: JSON.stringify({ urgentPaymentReason: payUrgentReason, amount: payAmountNum, note: payNote, flaggedRowIds: payFlagged, ...(fundingSource ? { fundingSource } : {}), ...(proofRef ? { proofRef } : {}) }),
         });
     request
       .then(r => r.json())
@@ -327,8 +353,9 @@ const ReimbursementDashboard: React.FC = () => {
   };
 
   const lineKey = (claimId: string, rowId: string) => `${claimId}::${rowId}`;
-  const openLinesDialog = (targets: Reimbursement[]) => {
-    setLinesTargets(targets); setLineUrgentReason('');
+  const openLinesDialog = (targets: Reimbursement[], viewOnly = false) => {
+    setLinesTargets(targets); setLinesView(viewOnly); setLineUrgentReason('');
+    setClaimFlags(Object.fromEntries(targets.map(t => [t.id, { note: t.holdNote || '', ids: t.flaggedRowIds || [] }])));
     setClaimLines({});
     setLinePayments([]);
     setLineSelected([]);
@@ -351,7 +378,7 @@ const ReimbursementDashboard: React.FC = () => {
           const loaded: ClaimLine[] = data.lines || [];
           byClaim[targets[i].id] = loaded;
           // Default: pay only what is supported by a receipt.
-          loaded.filter(l => targets[i].status !== 'paid' && l.hasReceipt && !l.paid).forEach(l => selected.push(lineKey(targets[i].id, l.rowId)));
+          loaded.filter(l => !viewOnly && targets[i].status !== 'paid' && l.hasReceipt && !l.paid).forEach(l => selected.push(lineKey(targets[i].id, l.rowId)));
         });
         setClaimLines(byClaim);
         setLineSelected(selected);
@@ -363,7 +390,7 @@ const ReimbursementDashboard: React.FC = () => {
   const closeLinesDialog = () => { if (!lineSubmitting) setLinesTargets([]); };
   const toggleLine = (key: string) =>
     setLineSelected(prev => prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key]);
-  const historyOnly = linesTargets.length > 0 && linesTargets.every(t => t.status === 'paid');
+  const historyOnly = linesTargets.length > 0 && (linesView || linesTargets.every(t => t.status === 'paid'));
   const selectedLineEntries = linesTargets.flatMap(t =>
     (claimLines[t.id] || []).filter(l => lineSelected.includes(lineKey(t.id, l.rowId))).map(l => ({ claim: t, line: l })),
   );
@@ -592,6 +619,11 @@ const ReimbursementDashboard: React.FC = () => {
                             Partial · {formatPHP(Number(r.paidAmount))} of {formatPHP(Number(r.amount) || 0)} paid
                           </Typography>
                         )}
+                        {!historical && r.holdNote && (
+                          <Typography variant="caption" color="warning.main" sx={{ display: 'block', textAlign: 'right' }}>
+                            Note: {r.holdNote}{(r.flaggedRowIds?.length || 0) > 0 ? ` (${r.flaggedRowIds?.length} line${r.flaggedRowIds?.length === 1 ? '' : 's'} in question)` : ''}
+                          </Typography>
+                        )}
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
                           <Chip
                             size="small"
@@ -632,6 +664,9 @@ const ReimbursementDashboard: React.FC = () => {
                               sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}>
                               Pay
                             </Button>
+                          )}
+                          {!historical && r.origin === 'ca_excess' && ((Number(r.paidAmount) || 0) > 0 || r.holdNote) && (
+                            <Button size="small" onClick={() => openLinesDialog([r], true)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Lines</Button>
                           )}
                           {historical && <Button size="small" onClick={() => openLinesDialog([r])}>Payment history</Button>}
                           <MoneyTrailButton origin={origin} compact onResolved={fetchData} />
@@ -735,6 +770,11 @@ const ReimbursementDashboard: React.FC = () => {
                           Partial · {formatPHP(Number(r.paidAmount))} of {formatPHP(Number(r.amount) || 0)} paid
                         </Typography>
                       )}
+                      {!historical && r.holdNote && (
+                        <Typography variant="caption" component="div" color="warning.main">
+                          Note: {r.holdNote}{(r.flaggedRowIds?.length || 0) > 0 ? ` (${r.flaggedRowIds?.length} line${r.flaggedRowIds?.length === 1 ? '' : 's'} in question)` : ''}
+                        </Typography>
+                      )}
                     </TableCell>
                     <TableCell align="right">
                       {!historical && r.origin === 'no_ca' && (
@@ -745,6 +785,11 @@ const ReimbursementDashboard: React.FC = () => {
                       {!historical && (
                         <Button size="small" onClick={() => openPayDialog({ kind: 'single-reimb', reimb: r })} sx={{ color: NET_PACIFIC_COLORS.primary }}>
                           Pay
+                        </Button>
+                      )}
+                      {!historical && r.origin === 'ca_excess' && ((Number(r.paidAmount) || 0) > 0 || r.holdNote) && (
+                        <Button size="small" onClick={() => openLinesDialog([r], true)} sx={{ color: NET_PACIFIC_COLORS.primary }}>
+                          Lines
                         </Button>
                       )}
                       {historical && <Button size="small" onClick={() => openLinesDialog([r])}>Payment history</Button>}
@@ -847,6 +892,45 @@ const ReimbursementDashboard: React.FC = () => {
                 ? `Mark the reimbursement claim for ${payDialog.reimb.employeeName || payDialog.reimb.full_name || payDialog.reimb.username || 'this employee'} (${formatPHP(remainingOf(payDialog.reimb))}${(Number(payDialog.reimb.paidAmount) || 0) > 0 ? ' remaining' : ''}) as paid.`
                 : ''}
           </DialogContentText>
+          {payDialog?.kind === 'single-reimb' && (
+            <>
+              <TextField
+                size="small" type="number" fullWidth sx={{ mb: 2 }} label="Amount to pay now"
+                value={payAmount} onChange={e => setPayAmount(e.target.value)}
+                error={!payAmountValid}
+                helperText={!payAmountValid ? `Enter an amount between 0.01 and ${formatPHP(payRemaining)}`
+                  : payIsPartial ? `Partial payment — ${formatPHP(payRemaining - payAmountNum)} stays owed` : 'Full balance. Lower it to pay only part now.'}
+                inputProps={{ min: 0.01, max: payRemaining, step: '0.01' }}
+              />
+              <TextField fullWidth multiline size="small" label="Note (optional)" value={payNote} onChange={e => setPayNote(e.target.value)}
+                helperText="Shown on the claim, e.g. why the balance is on hold." sx={{ mb: 1.5 }} inputProps={{ maxLength: 1000 }} />
+              {payLinesLoading ? <CircularProgress size={20} sx={{ mb: 2 }} /> : payLines.length > 0 && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2">Highlight lines in question (optional)</Typography>
+                  <TableContainer sx={{ maxHeight: 220, border: 1, borderColor: 'divider', borderRadius: 1, mt: 0.5 }}>
+                    <Table size="small" stickyHeader>
+                      <TableBody>
+                        {payLines.map(l => (
+                          <TableRow key={l.rowId} hover sx={payFlagged.includes(l.rowId) ? { bgcolor: 'rgba(237, 108, 2, 0.14)' } : undefined}>
+                            <TableCell padding="checkbox">
+                              <Checkbox size="small" checked={payFlagged.includes(l.rowId)}
+                                onChange={() => setPayFlagged(prev => prev.includes(l.rowId) ? prev.filter(x => x !== l.rowId) : [...prev, l.rowId])} />
+                            </TableCell>
+                            <TableCell sx={{ fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{l.date}</TableCell>
+                            <TableCell sx={{ fontSize: '0.78rem' }}>
+                              Item {l.physicalItemNo ?? '—'} · {l.particulars || l.category}
+                              {!l.hasReceipt && <Chip size="small" color="warning" variant="outlined" label="No receipt" sx={{ ml: 0.75 }} />}
+                            </TableCell>
+                            <TableCell sx={{ fontSize: '0.78rem' }} align="right">{formatPHP(l.amount)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
+              )}
+            </>
+          )}
           <TextField fullWidth multiline size="small" label="Urgent payment reason (only when paying before RJ review)" value={payUrgentReason} onChange={e => setPayUrgentReason(e.target.value)} helperText="Leave blank for normal reviewed payments. Earlier urgent payment stays open until RJ review." sx={{ mb: 2 }} inputProps={{ maxLength: 2000 }} />
           <TextField
             select
@@ -892,10 +976,10 @@ const ReimbursementDashboard: React.FC = () => {
           <Button
             variant="contained"
             onClick={confirmPay}
-            disabled={paySubmitting || (payFundingType === 'investor_outofpocket' && !payInvestor)}
+            disabled={paySubmitting || !payAmountValid || (payFundingType === 'investor_outofpocket' && !payInvestor)}
             sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
           >
-            {paySubmitting ? <CircularProgress size={20} /> : 'Confirm Payment'}
+            {paySubmitting ? <CircularProgress size={20} /> : payIsPartial ? `Pay ${formatPHP(payAmountNum)} (partial)` : 'Confirm Payment'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -912,6 +996,11 @@ const ReimbursementDashboard: React.FC = () => {
             Receipted lines are pre-selected. Lines left unpaid stay on their claim and can be paid later once the receipt is attached.
             {linesTargets.length > 1 && ' All selected lines are paid as one transfer: one reference and one proof, recorded against each form.'}
           </DialogContentText>
+          {linesTargets.map(t => claimFlags[t.id]?.note ? (
+            <Alert key={`n-${t.id}`} severity="warning" sx={{ mb: 1.5 }}>
+              {linesTargets.length > 1 ? `${t.formNo || t.id}: ` : 'Note: '}{claimFlags[t.id].note}
+            </Alert>
+          ) : null)}
           {linesLoading ? (
             <Box sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>
           ) : isPhone ? (
@@ -963,12 +1052,12 @@ const ReimbursementDashboard: React.FC = () => {
                       </TableRow>
                     )] : []),
                     ...(claimLines[t.id] || []).map(l => (
-                    <TableRow key={`${t.id}-${l.rowId}`} hover sx={l.paid ? { opacity: 0.55 } : undefined}>
+                    <TableRow key={`${t.id}-${l.rowId}`} hover sx={{ ...(l.paid ? { opacity: 0.55 } : {}), ...(!l.paid && claimFlags[t.id]?.ids.includes(l.rowId) ? { bgcolor: 'rgba(237, 108, 2, 0.14)' } : {}) }}>
                       <TableCell padding="checkbox">
                         <Checkbox checked={lineSelected.includes(lineKey(t.id, l.rowId))} disabled={l.paid || historyOnly} onChange={() => toggleLine(lineKey(t.id, l.rowId))} />
                       </TableCell>
                       <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{l.date}</TableCell>
-                      <TableCell sx={{ fontSize: '0.8rem' }}>Item {l.physicalItemNo ?? '—'} · {l.particulars || l.category}</TableCell>
+                      <TableCell sx={{ fontSize: '0.8rem' }}>Item {l.physicalItemNo ?? '—'} · {l.particulars || l.category}{!l.paid && claimFlags[t.id]?.ids.includes(l.rowId) && <Chip size="small" color="warning" label="In question" sx={{ ml: 0.75 }} />}</TableCell>
                       <TableCell>
                         {l.paid
                           ? <Chip size="small" color="success" label="Paid" />
@@ -1031,7 +1120,7 @@ const ReimbursementDashboard: React.FC = () => {
               <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Payment history</Typography>
               {linePayments.map(pm => (
                 <Typography key={pm.id} variant="body2" color="text.secondary">
-                  {formatDate(pm.paidAt)} · {formatPHP(pm.amount)} · {pm.kind === 'lines' ? `${pm.rowIds?.length || 0} line(s)` : 'remaining balance'}
+                  {formatDate(pm.paidAt)} · {formatPHP(pm.amount)} · {pm.kind === 'lines' ? `${pm.rowIds?.length || 0} line(s)` : pm.kind === 'partial' ? 'partial payment' : 'remaining balance'}{pm.note ? ` · note: ${pm.note}` : ''}
                   {pm.paymentException ? ` · urgent early payment: ${pm.paymentException.reason}` : ''}{pm.reference ? ` · ref ${pm.reference}` : ''}{pm.overrideReason ? ` · override: ${pm.overrideReason}` : ''}
                   {pm.proofRef?.webUrl && (
                     <> · <a href={pm.proofRef.webUrl} target="_blank" rel="noreferrer">proof</a></>
