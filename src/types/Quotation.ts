@@ -116,6 +116,24 @@ export interface Project {
   // the project's OneDrive execution folder under a "Customer PO" subfolder;
   // this array only stores pointers + light metadata, never the file bytes.
   customerPOs?: CustomerPO[];
+
+  // Price lock frozen when the project is won (POST /calcsheet/projects/:id/award).
+  // The linked Project List contract amount = `price`; its budget seeds from `budget`.
+  awarded?: AwardedQuotation;
+}
+
+export interface AwardedQuotation {
+  quotationId: ID;
+  kind: QuotationKind | string;
+  revision: string;
+  /** Contract amount (Sales scope: grand total, or services-only when materials are client-supplied). */
+  price: number;
+  grandTotal: number;
+  /** Spendable budget: VAT-ex value minus margin (ioctCostBasis). */
+  budget: number;
+  awardedAt: string;
+  awardedBy: string;
+  awardedById?: string;
 }
 
 export interface CustomerPO {
@@ -256,6 +274,11 @@ export interface Quotation {
   id: ID;
   projectId: ID;
   kind: QuotationKind;
+  // Set when the project was awarded on this quotation (see Project.awarded).
+  // Present = price-locked: the server rejects edits/deletes until an admin unlocks.
+  awardedAt?: string;
+  awardedBy?: string;
+  awardedById?: string;
   // Absent = 'both' (every quotation created before this field existed, and
   // the default for new ones). See QuotationScopeCategory for what each value
   // locks.

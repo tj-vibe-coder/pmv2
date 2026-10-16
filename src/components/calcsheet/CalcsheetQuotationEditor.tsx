@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import HistoryIcon from '@mui/icons-material/History';
+import LockIcon from '@mui/icons-material/Lock';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import ConstructionIcon from '@mui/icons-material/Construction';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -646,15 +647,19 @@ export default function QuotationEditor() {
   const customer = clients.find((c) => c.id === project.customerId);
   const issuer = quotation.kind;
   const isLegacy = quotation.formulaVersion === 'legacy';
+  // Awarded quotations are price-locked (server rejects saves with 409) — same
+  // read-only treatment as a legacy snapshot. Revise via Duplicate.
+  const priceLocked = !!quotation.awardedAt;
+  const inputsLocked = isLegacy || priceLocked;
   // Scope category, fixed at quotation creation (see QuotationScopeCategory).
   // 'supply' leaves only B (Components) editable; 'services' leaves only B
   // locked (A and C stay editable); 'both' (default, incl. every quotation
   // predating this field) locks nothing. Combined with isLegacy below, since a
   // legacy quotation is already fully locked regardless of scope.
   const scopeCategory = quotation.scopeCategory ?? 'both';
-  const generalReqtsLocked = isLegacy || scopeCategory === 'supply';
-  const componentsLocked = isLegacy || scopeCategory === 'services';
-  const servicesLocked = isLegacy || scopeCategory === 'supply';
+  const generalReqtsLocked = inputsLocked || scopeCategory === 'supply';
+  const componentsLocked = inputsLocked || scopeCategory === 'services';
+  const servicesLocked = inputsLocked || scopeCategory === 'supply';
   // Shown as a quick preview on the Terms & Conditions confirmation dialogs
   // (Save / Export PDF) so the team can eyeball the actual Delivery wording —
   // the thing most often left stale, e.g. after enabling the delivery fee —
@@ -676,12 +681,12 @@ export default function QuotationEditor() {
   );
 
   const setField = <K extends keyof Quotation>(k: K, v: any) => {
-    if (isLegacy) return;
+    if (inputsLocked) return;
     setDraft((d) => d ? ({ ...d, [k]: v } as Quotation) : d);
   };
 
   const setTermsOverride = (key: keyof NonNullable<Quotation['termsOverrides']>, value: string) => {
-    if (isLegacy) return;
+    if (inputsLocked) return;
     setDraft((d) => {
       if (!d) return d;
       const existing = d.termsOverrides ?? {};
@@ -691,7 +696,7 @@ export default function QuotationEditor() {
   };
 
   const setProductContingency = (value: number) => {
-    if (isLegacy) return;
+    if (inputsLocked) return;
     setDraft((d) => {
       if (!d) return d;
       const previous = d.productContingencyPct ?? 0;
@@ -934,7 +939,7 @@ export default function QuotationEditor() {
     { key: 'description', card: 'title', label: 'Description', width: 260, render: (r, idx) => (
       <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
         <TextField value={r.description ?? ''} onChange={(e) => updateRow('components', idx, 'description', e.target.value)}
-          variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
+          variant="standard" fullWidth disabled={inputsLocked} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
           InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
           inputProps={{ style: { padding: '6px 4px' } }} />
         {r.historicalPriceSource && (
@@ -951,7 +956,7 @@ export default function QuotationEditor() {
               variant={groupDisplayMode(r.group) === 'lot' ? 'outlined' : 'filled'}
               onClick={() => toggleGroupDisplay(r.group!)}
               onDelete={() => ungroupComp(r.id)}
-              disabled={isLegacy}
+              disabled={inputsLocked}
               sx={{ height: 20, cursor: 'pointer', '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }}
             />
           </Tooltip>
@@ -984,7 +989,7 @@ export default function QuotationEditor() {
           invalid={Boolean(
             row.expectedPurchaseDate && row.expectedPurchaseDate < quotationDate
           )}
-          disabled={isLegacy}
+          disabled={inputsLocked}
           onClick={() => setTimingComponentId(row.id)}
         />
       ),
@@ -992,7 +997,7 @@ export default function QuotationEditor() {
     { key: 'optional', label: 'Optional', width: 70, align: 'center', render: (r, idx) => (
       <Checkbox size="small" sx={{ p: 0 }}
         checked={!!r.optional}
-        disabled={isLegacy}
+        disabled={inputsLocked}
         onChange={(e) => updateRow('components', idx, 'optional', e.target.checked)}
         title="Optional item — priced for reference, not included in the contract total"
       />
@@ -1114,7 +1119,7 @@ export default function QuotationEditor() {
   };
 
   const getComponentContextMenu = (row: ComponentLine, idx: number): ContextMenuItem[] => {
-    if (isLegacy) return [];
+    if (inputsLocked) return [];
     const items: ContextMenuItem[] = [];
     if (!row.isHeader && !row.isChildHeader) {
       items.push({
@@ -1152,7 +1157,7 @@ export default function QuotationEditor() {
   };
 
   const getServiceContextMenu = (row: ServiceLine, idx: number): ContextMenuItem[] => {
-    if (isLegacy) return [];
+    if (inputsLocked) return [];
     const items: ContextMenuItem[] = [];
     if (!row.isHeader && !row.isChildHeader && perLinePricing) {
       items.push({
@@ -1201,7 +1206,7 @@ export default function QuotationEditor() {
         { key: 'description', card: 'title', label: 'Description', render: (r, idx) => (
           <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
             <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)}
-              variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
+              variant="standard" fullWidth disabled={inputsLocked} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
               inputProps={{ style: { padding: '6px 4px' } }} />
             {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupSvc(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
@@ -1231,7 +1236,7 @@ export default function QuotationEditor() {
         { key: 'code', card: 'eyebrow', label: 'Code', width: 90, mono: true },
         { key: 'description', card: 'title', label: 'Description', render: (r, idx) => (
           <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
-            <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)} variant="standard" fullWidth disabled={isLegacy} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
+            <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)} variant="standard" fullWidth disabled={inputsLocked} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }} inputProps={{ style: { padding: '6px 4px' } }} />
           </Stack>
         ) },
@@ -1485,6 +1490,9 @@ export default function QuotationEditor() {
                 variant="outlined"
               />
             )}
+            {priceLocked && (
+              <Chip size="small" icon={<LockIcon />} label="Awarded · price locked" color="success" />
+            )}
             <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
               {quotationRefNo(project.code, recipient?.code, quotation.revision)}
             </Typography>
@@ -1502,7 +1510,7 @@ export default function QuotationEditor() {
               sx={{ alignSelf: 'flex-start', mt: 0.5 }}
             />
           )}
-          {isDirty && !isLegacy && (
+          {isDirty && !inputsLocked && (
             <Chip
               size="small"
               label="Unsaved changes"
@@ -1513,7 +1521,7 @@ export default function QuotationEditor() {
           )}
         </Stack>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          {!isLegacy && canLiveSync && (
+          {!inputsLocked && canLiveSync && (
             <Tooltip title="Refresh this quotation from the server every 2 seconds, so rows added by an agent appear live. Unsaved edits are never overwritten.">
               <FormControlLabel
                 sx={{ mr: 0 }}
@@ -1522,7 +1530,7 @@ export default function QuotationEditor() {
               />
             </Tooltip>
           )}
-          {!isLegacy && (
+          {!inputsLocked && (
             <>
               <Button
                 startIcon={<SaveIcon />}
@@ -1584,7 +1592,7 @@ export default function QuotationEditor() {
           >
             Duplicate
           </Button>
-          {!isLegacy && (
+          {!inputsLocked && (
             <Button
               startIcon={<LibraryAddIcon />}
               variant="outlined"
@@ -1595,7 +1603,7 @@ export default function QuotationEditor() {
               Copy from…
             </Button>
           )}
-          {!isLegacy && (
+          {!inputsLocked && (
             <Button
               startIcon={<BookmarksIcon />}
               variant="outlined"
@@ -1628,6 +1636,24 @@ export default function QuotationEditor() {
           <Button component={Link} to={`/sales/calcsheet/projects/${project.id}`} variant="text" size="small">← Project</Button>
         </Stack>
       </Stack>
+
+      {priceLocked && (
+        <Alert
+          severity="success"
+          icon={<LockIcon />}
+          action={
+            <Button color="inherit" size="small" startIcon={<ContentCopyIcon />} onClick={handleOpenDuplicate}>
+              Duplicate to revise
+            </Button>
+          }
+        >
+          <AlertTitle>Awarded — price locked</AlertTitle>
+          This is the quotation the project was awarded on
+          {quotation.awardedAt ? ` (${new Date(quotation.awardedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}${quotation.awardedBy ? `, ${quotation.awardedBy}` : ''})` : ''}.
+          Its price and budget are frozen so the execution project and expense monitoring stay aligned.
+          For a change order, duplicate it into a new revision; an admin can unlock it from the proposal page.
+        </Alert>
+      )}
 
       {isLegacy && (
         <Alert
@@ -1662,7 +1688,7 @@ export default function QuotationEditor() {
             label="Recipient"
             value={quotation.recipientId ?? ''}
             onChange={(e) => {
-              if (isLegacy) return;
+              if (inputsLocked) return;
               const newRecipientId = e.target.value || null;
               const newClient = clients.find((c) => c.id === newRecipientId) ?? null;
               const newPrimary = newClient?.contacts?.find((c) => c.isPrimary) ?? newClient?.contacts?.[0] ?? null;
@@ -1671,7 +1697,7 @@ export default function QuotationEditor() {
                 contactId: newPrimary?.id,
               } as any);
             }}
-            disabled={isLegacy}
+            disabled={inputsLocked}
           >
             {clients.map((c) => <MenuItem key={c.id} value={c.id}>{c.code} — {c.name}</MenuItem>)}
           </TextField>
@@ -1685,7 +1711,7 @@ export default function QuotationEditor() {
               return fallback?.id ?? '';
             })()}
             onChange={(e) => setField('contactId', e.target.value || undefined)}
-            disabled={isLegacy || !recipient || !recipient.contacts || recipient.contacts.length === 0}
+            disabled={inputsLocked || !recipient || !recipient.contacts || recipient.contacts.length === 0}
             helperText={(() => {
               const c = recipient?.contacts?.find((x) => x.id === quotation.contactId)
                 ?? recipient?.contacts?.find((x) => x.isPrimary)
@@ -1699,25 +1725,25 @@ export default function QuotationEditor() {
               </MenuItem>
             ))}
           </TextField>
-          <TextField label="Revision" value={quotation.revision} onChange={(e) => setField('revision', e.target.value)} disabled={isLegacy} />
+          <TextField label="Revision" value={quotation.revision} onChange={(e) => setField('revision', e.target.value)} disabled={inputsLocked} />
           <TextField
             label="Date Sent"
             type="date"
             value={quotation.dateSent || todayDateOnly()}
             onChange={(e) => setField('dateSent', e.target.value || undefined)}
-            disabled={isLegacy}
+            disabled={inputsLocked}
             InputLabelProps={{ shrink: true }}
             helperText={quotation.dateSent ? 'User-defined export date' : 'Defaults to export date'}
           />
-          <NumField label="Validity (days)" value={quotation.validityDays} onChange={(v) => setField('validityDays', v)} integer disabled={isLegacy} />
-          <NumField label="Warranty (months)" value={quotation.warrantyMonths} onChange={(v) => setField('warrantyMonths', v)} integer disabled={isLegacy} />
+          <NumField label="Validity (days)" value={quotation.validityDays} onChange={(v) => setField('validityDays', v)} integer disabled={inputsLocked} />
+          <NumField label="Warranty (months)" value={quotation.warrantyMonths} onChange={(v) => setField('warrantyMonths', v)} integer disabled={inputsLocked} />
           <Box sx={{ gridColumn: 'span 2' }}>
             <TextField
               select
               label="Payment Terms"
               size="small"
               fullWidth
-              disabled={isLegacy}
+              disabled={inputsLocked}
               value={isCustomPayment ? CUSTOM_PAYMENT : quotation.paymentTerms}
               onChange={(e) => setField('paymentTerms', e.target.value === CUSTOM_PAYMENT ? '' : e.target.value)}
             >
@@ -1734,7 +1760,7 @@ export default function QuotationEditor() {
                 fullWidth
                 value={quotation.paymentTerms}
                 onChange={(e) => setField('paymentTerms', e.target.value)}
-                disabled={isLegacy}
+                disabled={inputsLocked}
                 sx={{ mt: 1 }}
               />
             )}
@@ -1772,7 +1798,7 @@ export default function QuotationEditor() {
                   value={quotation.preparedBy ?? ''}
                   onChange={(_, v) => setField('preparedBy', v ?? '')}
                   onInputChange={(_, v, reason) => { if (reason === 'input') setField('preparedBy', v); }}
-                  disabled={isLegacy}
+                  disabled={inputsLocked}
                   renderOption={staffOption}
                   renderInput={(params) => (
                     <TextField
@@ -1788,7 +1814,7 @@ export default function QuotationEditor() {
                     label="Job Title (PDF signature)"
                     size="small"
                     fullWidth
-                    disabled={isLegacy}
+                    disabled={inputsLocked}
                     value={quotation.preparedByTitle ?? ''}
                     onChange={(e) => setField('preparedByTitle', e.target.value || undefined)}
                     placeholder={(() => { const c = quotation.preparedBy ? effectiveSalesContacts.find((x) => x.name === quotation.preparedBy) : undefined; return positionFor(c) || 'e.g. Sales Engineer'; })()}
@@ -1801,7 +1827,7 @@ export default function QuotationEditor() {
                   value={quotation.authorizedBy ?? ''}
                   onChange={(_, v) => setField('authorizedBy', v ?? '')}
                   onInputChange={(_, v, reason) => { if (reason === 'input') setField('authorizedBy', v); }}
-                  disabled={isLegacy}
+                  disabled={inputsLocked}
                   renderOption={staffOption}
                   renderInput={(params) => (
                     <TextField
@@ -1840,7 +1866,7 @@ export default function QuotationEditor() {
                     size="small"
                     checked={!!quotation.pageBreakBeforeTerms}
                     onChange={(e) => setField('pageBreakBeforeTerms', e.target.checked)}
-                    disabled={isLegacy}
+                    disabled={inputsLocked}
                   />
                 }
                 label={<Typography variant="caption">Start Terms on new PDF page</Typography>}
@@ -1931,13 +1957,13 @@ export default function QuotationEditor() {
                     size="small"
                     checked={quotation.vatPct > 0}
                     onChange={(e) => setField('vatPct', e.target.checked ? 12 : 0)}
-                    disabled={isLegacy}
+                    disabled={inputsLocked}
                   />
                 }
                 label={<Typography variant="body2">Include VAT</Typography>}
               />
               {quotation.vatPct > 0 && (
-                <NumField label="VAT %" value={quotation.vatPct} onChange={(v) => setField('vatPct', v)} sx={{ width: 80 }} disabled={isLegacy} />
+                <NumField label="VAT %" value={quotation.vatPct} onChange={(v) => setField('vatPct', v)} sx={{ width: 80 }} disabled={inputsLocked} />
               )}
             </Stack>
           </Stack>
@@ -1950,7 +1976,7 @@ export default function QuotationEditor() {
                   size="small"
                   checked={!!quotation.deliveryTermsEnabled}
                   onChange={(e) => setField('deliveryTermsEnabled', e.target.checked)}
-                  disabled={isLegacy}
+                  disabled={inputsLocked}
                 />
               }
               label={<Typography variant="body2">Charge delivery fee &amp; minimum-order surcharge</Typography>}
@@ -1958,9 +1984,9 @@ export default function QuotationEditor() {
             {quotation.deliveryTermsEnabled && (
               <>
                 <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' }, gap: 2, mt: 1 }}>
-                  <NumField label="Delivery Fee (₱)" value={quotation.deliveryFee ?? 0} onChange={(v) => setField('deliveryFee', v)} helperText="Base freight/delivery charge" disabled={isLegacy} sx={{ width: '100%' }} />
-                  <NumField label="Min. order (₱)" value={quotation.minOrderThreshold ?? 50000} onChange={(v) => setField('minOrderThreshold', v)} helperText="Below this, add the surcharge" disabled={isLegacy} sx={{ width: '100%' }} />
-                  <NumField label="Small-order surcharge (₱)" value={quotation.smallOrderFee ?? 5000} onChange={(v) => setField('smallOrderFee', v)} helperText="Added when under minimum" disabled={isLegacy} sx={{ width: '100%' }} />
+                  <NumField label="Delivery Fee (₱)" value={quotation.deliveryFee ?? 0} onChange={(v) => setField('deliveryFee', v)} helperText="Base freight/delivery charge" disabled={inputsLocked} sx={{ width: '100%' }} />
+                  <NumField label="Min. order (₱)" value={quotation.minOrderThreshold ?? 50000} onChange={(v) => setField('minOrderThreshold', v)} helperText="Below this, add the surcharge" disabled={inputsLocked} sx={{ width: '100%' }} />
+                  <NumField label="Small-order surcharge (₱)" value={quotation.smallOrderFee ?? 5000} onChange={(v) => setField('smallOrderFee', v)} helperText="Added when under minimum" disabled={inputsLocked} sx={{ width: '100%' }} />
                 </Box>
                 {totals.subtotal < (quotation.minOrderThreshold ?? 50000) && (
                   <Alert severity="info" sx={{ mt: 1, py: 0 }}>
@@ -1987,7 +2013,7 @@ export default function QuotationEditor() {
                   ? `Client PDF shows ${formatDiscountPct(quotation.discountPct)}% (rounded)`
                   : 'Or use Discount ₱ / Target net below'
               }
-              disabled={isLegacy}
+              disabled={inputsLocked}
               sx={{ width: '100%' }}
             />
             <NumField
@@ -2004,7 +2030,7 @@ export default function QuotationEditor() {
                 }
               }}
               helperText="IOCT-only gross-up, folded into markup — never printed on the PDF/Excel"
-              disabled={isLegacy}
+              disabled={inputsLocked}
               sx={{ width: '100%' }}
             />
             <TextField
@@ -2026,7 +2052,7 @@ export default function QuotationEditor() {
                     ? 'Used for product price-contingency forecasts'
                     : 'Blank assumes 3 months after the quotation date'
               }
-              disabled={isLegacy}
+              disabled={inputsLocked}
             />
             <NumField
               label="Discount (₱)"
@@ -2040,7 +2066,7 @@ export default function QuotationEditor() {
                   ? 'Exact peso off the subtotal (e.g. negotiated cut)'
                   : 'Add line items first'
               }
-              disabled={isLegacy || !totals || totals.subtotal <= 0}
+              disabled={inputsLocked || !totals || totals.subtotal <= 0}
               sx={{ width: '100%' }}
             />
             <NumField
@@ -2055,7 +2081,7 @@ export default function QuotationEditor() {
                   ? 'Type the figure you want to charge (e.g. 532000 for 14 × 38000)'
                   : 'Add line items first'
               }
-              disabled={isLegacy || !totals || totals.subtotal <= 0}
+              disabled={inputsLocked || !totals || totals.subtotal <= 0}
               sx={{ width: '100%' }}
             />
           </Box>
@@ -2067,7 +2093,7 @@ export default function QuotationEditor() {
         <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} justifyContent="space-between" alignItems="center" mb={1}>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>A. General Requirements</Typography>
-            {generalReqtsLocked && !isLegacy && (
+            {generalReqtsLocked && !inputsLocked && (
               <Chip label="Locked — Supply only" size="small" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
             )}
             <FormControlLabel
@@ -2139,7 +2165,7 @@ export default function QuotationEditor() {
         <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} justifyContent="space-between" alignItems="center" mb={1}>
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>B. Supply of Components</Typography>
-            {componentsLocked && !isLegacy && (
+            {componentsLocked && !inputsLocked && (
               <Chip label="Locked — Services only" size="small" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
             )}
             <FormControlLabel
@@ -2230,7 +2256,7 @@ export default function QuotationEditor() {
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} alignItems="center">
               <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>C. Engineering Services</Typography>
-              {servicesLocked && !isLegacy && (
+              {servicesLocked && !inputsLocked && (
                 <Chip label="Locked — Supply only" size="small" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
               )}
             </Stack>
@@ -2653,7 +2679,7 @@ export default function QuotationEditor() {
                       </TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{total}</TableCell>
                       <TableCell align="right">
-                        {!isLegacy && (
+                        {!inputsLocked && (
                           <Button size="small" startIcon={<UndoIcon />} onClick={() => restoreVersion(v)}>
                             Restore
                           </Button>

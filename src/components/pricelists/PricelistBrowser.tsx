@@ -96,7 +96,8 @@ export default function PricelistBrowser() {
 
   const selectedIds = useMemo(() => new Set(selected.keys()), [selected]);
   const selectedItems = useMemo(() => Array.from(selected.values()), [selected]);
-  const projectQuotations = quotations.filter((q) => q.projectId === targetProjectId);
+  // Awarded quotations are price-locked (server rejects edits), so they can't take new items.
+  const projectQuotations = quotations.filter((q) => q.projectId === targetProjectId && !q.awardedAt);
   const targetQuotation = quotations.find((q) => q.id === targetQuotationId);
   const existingPartNos = useMemo(
     () => new Set((targetQuotation?.components ?? []).map((c) => c.partNo).filter(Boolean)),
