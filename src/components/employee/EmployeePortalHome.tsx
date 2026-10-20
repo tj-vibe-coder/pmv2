@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Box, Typography, Grid, Paper, Button } from '@mui/material';
+import { Box, Typography, Grid, Paper, Button, useMediaQuery } from '@mui/material';
+import HubModuleList from '../HubModuleList';
 import {
   CalendarMonth as CalendarIcon,
   Receipt as ReceiptIcon,
@@ -13,6 +14,8 @@ const NET_PACIFIC_COLORS = { primary: '#2c5aa0', accent1: '#4f7bc8' };
 
 const EmployeePortalHome: React.FC = () => {
   const navigate = useNavigate();
+  // Portrait phones (< 600 px): modules show as one list of tappable rows instead of big tiles.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
 
   const modules = [
     {
@@ -52,6 +55,9 @@ const EmployeePortalHome: React.FC = () => {
       <Typography variant="h4" sx={{ fontWeight: 700, color: NET_PACIFIC_COLORS.primary, mb: 3 }}>
         Employee Portal
       </Typography>
+      {isPhone ? (
+        <HubModuleList items={modules} onOpen={(path) => navigate(path)} />
+      ) : (
       <Grid container spacing={2}>
         {modules.map((m) => (
           <Grid key={m.path} size={{ xs: 12, sm: 6, md: 4 }}>
@@ -89,6 +95,7 @@ const EmployeePortalHome: React.FC = () => {
           </Grid>
         ))}
       </Grid>
+      )}
     </Box>
   );
 };

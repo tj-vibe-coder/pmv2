@@ -894,3 +894,10 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
 - **UI (`ReimbursementDashboard.tsx`, desktop table + phone cards):** Pay dialog gets "Amount to pay now", a note and a "Highlight lines in question" checklist. The claims list shows the note and the highlighted-line count. The Lines dialog shades highlighted rows ("In question") and shows the note. CA-excess claims with a partial payment or a note get a read-only **Lines** button. Per-line payment is still `no_ca` only.
 - **Tests:** two new cases in `server/reimbursementSettlement.test.js` (partial then remainder; bad amount / unknown line). Edit mirrored into `functions/server.js` for the parity test.
 - **Not done:** the note/highlight appear only on the admin Reimbursements page, not on the employee's liquidation form. Not runtime-verified in a browser against real data.
+
+## 2026-10-20 — Mobile layout for Finance Hub and Employee Portal home
+- **Why:** the two hub pages were long stacks of full-width gradient cards and big "Open" tiles on phones, unlike the compact card pages. Interface-only; portrait phones (< 600 px) only, desktop/tablet unchanged.
+- **`FinanceHomePage.tsx`:** the summary KPI cards render as compact two-per-row gradient cards (same colours/links/role rules as the desktop cards, driven by a `kpiTiles` list + `KPI_STYLE` map); the three module sections (Inflow & Receivables, Outflow & Expense Operations, Financial Intelligence & Compliance) become one outlined list of tappable rows each; the header shortcut buttons use a flex gap so a wrapped button no longer sticks to the row above.
+- **`EmployeePortalHome.tsx`:** the five module tiles become the same tappable list.
+- **New `src/components/HubModuleList.tsx`:** shared list-of-rows component (icon, title, two-line description, chevron) used by both pages.
+- **Verified:** `tsc` clean; checked by hand on iPhone Safari. Note: after RJ's jspdf bump a stale `node_modules` caused local errors — fixed with `npm ci` (no repo change).
