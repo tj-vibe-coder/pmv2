@@ -10,6 +10,7 @@ import {
   Button,
   Alert,
   Stack,
+  useMediaQuery,
 } from '@mui/material';
 import {
   Paid as PaidIcon,
@@ -29,6 +30,7 @@ import {
   ShoppingCart as PoIcon,
   ManageSearch as ReceiptSearchIcon,
 } from '@mui/icons-material';
+import HubModuleList from '../HubModuleList';
 import { useAuth } from '../../contexts/AuthContext';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
 import { API_BASE } from '../../config/api';
@@ -68,6 +70,8 @@ interface ModuleCard {
 
 const FinanceHomePage: React.FC = () => {
   const navigate = useNavigate();
+  // Portrait phones (< 600 px): summary cards become compact tiles and module tiles become list rows.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const { user } = useAuth();
   const payrollAllowed = isPayrollAuthorized(user?.role);
   const isAdmin = user?.role === 'superadmin' || user?.role === 'admin';
@@ -305,6 +309,64 @@ const FinanceHomePage: React.FC = () => {
       : []),
   ];
 
+  // Phone summary tiles — same figures and links as the gradient cards, in a compact outlined style.
+  interface KpiTile { key: string; label: string; value: string; sub: string; to?: string }
+  const KPI_STYLE: Record<string, { bg: string; fg: string }> = {
+    ar: { bg: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.primary} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, fg: 'white' },
+    overdue: arSummary.overdueCount > 0
+      ? { bg: 'linear-gradient(135deg, #e53935 0%, #ef9a9a 100%)', fg: 'white' }
+      : { bg: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`, fg: '#2d3436' },
+    'acti-pending': { bg: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, ${NET_PACIFIC_COLORS.accent1} 100%)`, fg: 'white' },
+    'acti-ongoing': { bg: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent2} 0%, ${NET_PACIFIC_COLORS.secondary} 100%)`, fg: 'white' },
+    expenses: { bg: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.accent1} 0%, ${NET_PACIFIC_COLORS.accent2} 100%)`, fg: 'white' },
+    ca: { bg: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, fg: 'white' },
+    reimb: { bg: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.warning} 0%, #ffeaa7 100%)`, fg: '#2d3436' },
+    invest: { bg: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.success} 0%, #55efc4 100%)`, fg: 'white' },
+    payroll: { bg: `linear-gradient(135deg, ${NET_PACIFIC_COLORS.info} 0%, #a29bfe 100%)`, fg: 'white' },
+  };
+  const kpiTiles: KpiTile[] = [
+    {
+      key: 'ar', label: 'AR Outstanding', value: formatPHP(arSummary.outstanding),
+      sub: `${arSummary.openCount} open invoice${arSummary.openCount === 1 ? '' : 's'}`, to: '/finance/collections?tab=receivables',
+    },
+    arSummary.overdueCount > 0
+      ? {
+          key: 'overdue', label: 'AR Overdue', value: formatPHP(arSummary.overdueAmount),
+          sub: `${arSummary.overdueCount} overdue invoice${arSummary.overdueCount === 1 ? '' : 's'}`, to: '/finance/collections?tab=receivables',
+        }
+      : { key: 'overdue', label: 'AR Overdue', value: formatPHP(0), sub: 'No overdue invoices' },
+    ...(user?.role !== 'tax_filer' && actiPendingAr.length > 0 ? [{
+      key: 'acti-pending', label: 'ACTI pending AR', value: formatPHP(actiPendingArTotal),
+      sub: `${actiPendingAr.length} completed · no invoice yet`, to: '/finance/collections?tab=acti',
+    }] : []),
+    ...(user?.role !== 'tax_filer' && actiOngoing.length > 0 ? [{
+      key: 'acti-ongoing', label: 'ACTI ongoing, no PO', value: formatPHP(actiOngoingTotal),
+      sub: `${actiOngoing.length} in progress · watchlist`, to: '/finance/collections?tab=acti',
+    }] : []),
+    ...(user?.role !== 'tax_filer' ? [
+      {
+        key: 'expenses', label: 'Total Expenses (YTD)', value: formatPHP(totalExpensesYtd),
+        sub: `Year ${new Date().getFullYear()} · Register`, to: '/finance/expense-monitoring',
+      },
+      {
+        key: 'ca', label: 'Outstanding Cash Advances', value: formatPHP(outstandingCA),
+        sub: 'Unliquidated balances · Liquidate', to: '/finance/expense-monitoring/liquidation-form',
+      },
+    ] : []),
+    ...(isAdmin && user?.role !== 'tax_filer' ? [{
+      key: 'reimb', label: 'Pending Reimbursements', value: String(pendingReimbursements),
+      sub: 'Awaiting payout · Review', to: '/finance/reimbursements',
+    }] : []),
+    ...(user?.role !== 'tax_filer' ? [{
+      key: 'invest', label: 'Total Investments', value: formatPHP(totalInvested),
+      sub: investmentTarget != null ? `Target ${formatPHP(investmentTarget)} · Ledger` : 'Capital contributions · Ledger', to: '/finance/investment-tracker',
+    }] : []),
+    ...(payrollAllowed && user?.role !== 'tax_filer' ? [{
+      key: 'payroll', label: 'Latest Payroll Run', value: latestRun ? String(latestRun.status) : '—',
+      sub: latestRun ? `${latestRun.periodStart?.slice(0, 10)} – ${latestRun.periodEnd?.slice(0, 10)}` : 'Manage Payroll', to: '/finance/payroll',
+    }] : []),
+  ];
+
   return (
     <Box sx={{ height: '100%', overflow: 'auto', pb: 4 }}>
       {/* Header & Quick Action Shortcuts */}
@@ -318,7 +380,7 @@ const FinanceHomePage: React.FC = () => {
           </Typography>
         </Box>
 
-        <Stack direction="row" spacing={1} flexWrap="wrap">
+        <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ width: { xs: '100%', sm: 'auto' } }}>
           {user?.role !== 'tax_filer' && (
             <Button
               variant="outlined"
@@ -380,6 +442,26 @@ const FinanceHomePage: React.FC = () => {
       {error && <Alert severity="warning" sx={{ mb: 2 }}>{error}</Alert>}
 
       {/* KPI Cards Grid */}
+      {isPhone ? (
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1, mb: 2.5 }}>
+          {kpiTiles.map((t) => {
+            const st = KPI_STYLE[t.key];
+            return (
+              <Card
+                key={t.key}
+                onClick={t.to ? () => navigate(t.to as string) : undefined}
+                sx={{ background: st.bg, color: st.fg, cursor: t.to ? 'pointer' : 'default', '&:active': t.to ? { opacity: 0.9 } : undefined }}
+              >
+                <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  <Typography variant="body2" sx={{ opacity: 0.9, lineHeight: 1.25, minHeight: '2.5em' }}>{t.label}</Typography>
+                  <Typography variant="h6" component="div" sx={{ fontWeight: 700, lineHeight: 1.15, mt: 0.25, overflowWrap: 'anywhere' }}>{t.value}</Typography>
+                  <Typography variant="caption" sx={{ opacity: 0.85, display: 'block', lineHeight: 1.25, mt: 0.25 }}>{t.sub}</Typography>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </Box>
+      ) : (
       <Grid container spacing={1.5} sx={{ mb: 3 }}>
         {/* AR Outstanding */}
         <Grid size={{ xs: 12, sm: 6, md: 3 }}>
@@ -621,7 +703,33 @@ const FinanceHomePage: React.FC = () => {
           </Grid>
         )}
       </Grid>
+      )}
 
+      {isPhone ? (
+        <>
+          <Box sx={{ mb: 2.5 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1, color: NET_PACIFIC_COLORS.secondary, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <PaidIcon fontSize="small" sx={{ color: NET_PACIFIC_COLORS.primary }} /> Inflow & Receivables
+            </Typography>
+            <HubModuleList items={receivablesModules} onOpen={(path) => navigate(path)} />
+          </Box>
+          {user?.role !== 'tax_filer' && outflowModules.length > 0 && (
+            <Box sx={{ mb: 2.5 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1, color: NET_PACIFIC_COLORS.secondary, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <ExpenseWalletIcon fontSize="small" sx={{ color: NET_PACIFIC_COLORS.primary }} /> Outflow & Expense Operations
+              </Typography>
+              <HubModuleList items={outflowModules} onOpen={(path) => navigate(path)} />
+            </Box>
+          )}
+          <Box sx={{ mb: 2.5 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1, color: NET_PACIFIC_COLORS.secondary, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <AnalyticsIcon fontSize="small" sx={{ color: NET_PACIFIC_COLORS.primary }} /> Financial Intelligence & Compliance
+            </Typography>
+            <HubModuleList items={intelligenceModules} onOpen={(path) => navigate(path)} />
+          </Box>
+        </>
+      ) : (
+      <>
       {/* --- Section 1: Inflow & Receivables --- */}
       <Box sx={{ mb: 3 }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5, color: NET_PACIFIC_COLORS.secondary, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -761,6 +869,8 @@ const FinanceHomePage: React.FC = () => {
           ))}
         </Grid>
       </Box>
+      </>
+      )}
     </Box>
   );
 };
