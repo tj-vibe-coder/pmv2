@@ -983,16 +983,11 @@ const WHITEBOARD_PERSON_ALIASES = {
   nylle: ['nylle', 'managa'],
   kim: ['kim', 'solis'],
 };
-// Optional note → project/calcsheet-proposal link. Returns the cleaned link,
-// null (explicitly "no link" / clear it), or false if the shape is invalid.
-function sanitizeWhiteboardLink(link) {
-  if (link === undefined || link === null) return null;
-  if (typeof link !== 'object') return false;
-  const { type, id, label } = link;
-  if (!['project', 'calcsheet'].includes(type)) return false;
-  if (!id || typeof id !== 'string') return false;
-  return { type, id, label: String(label || '').trim().slice(0, 200) };
-}
+// Link validation, repeat dates and "done by" rules live in server/whiteboardRules.js (unit-tested).
+const {
+  sanitizeWhiteboardLink, WHITEBOARD_RECURRENCES, SERVER_ONLY_FIELDS, applyDoneTransition, phToday,
+  sanitizeRecurrenceDay, firstDueDate,
+} = require('./server/whiteboardRules');
 
 // Team-wide lists on the board (src/types/Whiteboard.ts WHITEBOARD_CATEGORIES).
 const WHITEBOARD_CATEGORIES = ['general', 'project', 'sales', 'finance'];
@@ -1028,7 +1023,7 @@ app.post('/api/whiteboard', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    const { visibility, text, done, dueDate, assignedTo } = req.body || {};
+    const { visibility, text, done, dueDate, assignedTo, recurrence, recurrenceDay } = req.body || {};
     // 'general' = the team-wide General updates list (the whole shared board):
     // always a to-do, visible to everyone, never assigned to a person.
     const kind = visibility === 'general' ? 'todo' : (req.body || {}).kind;
@@ -1039,6 +1034,11 @@ app.post('/api/whiteboard', async (req, res) => {
     const category = (req.body || {}).category || 'general';
     if (!WHITEBOARD_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'Text is required' });
+    // A repeating to-do needs a due date to repeat from — default to today (Philippine time).
+    if (recurrence && (kind !== 'todo' || !WHITEBOARD_RECURRENCES.includes(recurrence))) return res.status(400).json({ error: 'Invalid recurrence' });
+    // Specific day of a repeat: a weekday (weekly) or a day of the month / last day (monthly).
+    const recDay = recurrence ? sanitizeRecurrenceDay(recurrence, recurrenceDay) : null;
+    if (recDay === false) return res.status(400).json({ error: 'Invalid recurrence day' });
     // assignedTo picks the board column (see WHITEBOARD_PEOPLE) — required
     // for a public sticky note (it needs somewhere to live on the board),
     // irrelevant for a private one (shown in "Just for me" instead).
@@ -1050,7 +1050,8 @@ app.post('/api/whiteboard', async (req, res) => {
       kind, visibility, text: String(text).trim(),
       ...(visibility === 'public' ? { assignedTo } : {}),
       ...(visibility === 'general' ? { category } : {}),
-      ...(kind === 'todo' ? { done: !!done, ...(dueDate ? { dueDate } : {}) } : {}),
+      ...(kind === 'todo' ? { done: !!done, ...(dueDate || recurrence ? { dueDate: dueDate || firstDueDate(recurrence, recDay, phToday()) } : {}) } : {}),
+      ...(recurrence ? { recurrence, ...(recDay !== null ? { recurrenceDay: recDay } : {}) } : {}),
       ...(link ? { link } : {}),
       createdBy: user.id,
       createdByName: user.full_name || user.username || 'Someone',
@@ -1092,7 +1093,27 @@ app.put('/api/whiteboard/:id', async (req, res) => {
         ...('category' in req.body ? { category: req.body.category } : {}),
       }
       : { ...req.body };
+    // Who-did-it / bookkeeping fields are server-only — never taken from the client.
+    for (const f of SERVER_ONLY_FIELDS) delete patch[f];
     if ('category' in patch && !WHITEBOARD_CATEGORIES.includes(patch.category)) return res.status(400).json({ error: 'Invalid category' });
+    let defaultedDueDate = null;
+    if ('recurrence' in patch || 'recurrenceDay' in patch) {
+      const rule = 'recurrence' in patch ? (patch.recurrence || null) : (existing.recurrence || null);
+      if (!rule) {
+        patch.recurrence = FieldValue.delete();
+        patch.recurrenceDay = FieldValue.delete();
+      } else {
+        if (!WHITEBOARD_RECURRENCES.includes(rule) || existing.kind !== 'todo') return res.status(400).json({ error: 'Invalid recurrence' });
+        // Changing the rule without sending a day resets the day (a weekday means nothing for "monthly").
+        const dayInput = 'recurrenceDay' in patch ? patch.recurrenceDay : ('recurrence' in patch ? null : existing.recurrenceDay);
+        const day = sanitizeRecurrenceDay(rule, dayInput);
+        if (day === false) return res.status(400).json({ error: 'Invalid recurrence day' });
+        patch.recurrence = rule;
+        patch.recurrenceDay = day === null ? FieldValue.delete() : day;
+        const hasDue = 'dueDate' in patch ? !!patch.dueDate : !!existing.dueDate;
+        if (!hasDue) { defaultedDueDate = firstDueDate(rule, day, phToday()); patch.dueDate = defaultedDueDate; }
+      }
+    }
     if ('assignedTo' in patch) {
       if (patch.assignedTo === null || patch.assignedTo === '') patch.assignedTo = FieldValue.delete();
       else if (!Object.keys(WHITEBOARD_PERSON_ALIASES).includes(patch.assignedTo)) return res.status(400).json({ error: 'Invalid assignedTo' });
@@ -1103,8 +1124,30 @@ app.put('/api/whiteboard/:id', async (req, res) => {
       if (link === false) return res.status(400).json({ error: 'Invalid link' });
       patch.link = link;
     }
-    await ref.update({ ...patch, updatedAt: new Date().toISOString() });
-    res.json({ success: true });
+    const nowIso = new Date().toISOString();
+    const { patch: finalPatch, spawn } = applyDoneTransition({
+      existing, existingId: snap.id, patch, nowIso, deleteField: FieldValue.delete(),
+      actor: { id: user.id, name: user.full_name || user.username || 'Someone' },
+    });
+    let spawned = null;
+    if (spawn) {
+      // Ticking a repeating to-do creates the next one — atomically with marking this one done.
+      const nextRef = db.collection('whiteboard_items').doc();
+      const batch = db.batch();
+      batch.set(nextRef, spawn);
+      batch.update(ref, { ...finalPatch, spawnedNextId: nextRef.id, updatedAt: nowIso });
+      await batch.commit();
+      spawned = { ...spawn, id: nextRef.id };
+    } else {
+      await ref.update({ ...finalPatch, updatedAt: nowIso });
+    }
+    const ticked = 'done' in finalPatch && finalPatch.done === true && !existing.done;
+    res.json({
+      success: true,
+      ...(ticked ? { doneBy: user.id, doneByName: user.full_name || user.username || 'Someone', doneAt: nowIso } : {}),
+      ...(defaultedDueDate ? { dueDate: defaultedDueDate } : {}),
+      ...(spawned ? { spawned } : {}),
+    });
   } catch (err) { res.status(500).json({ error: 'Failed to update whiteboard item' }); }
 });
 

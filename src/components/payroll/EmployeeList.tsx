@@ -14,8 +14,9 @@ import { getEmployees, createEmployee, updateEmployee, deactivateEmployee } from
 import { resolveRateType } from '../../utils/payrollEngine';
 import { useAuth } from '../../contexts/AuthContext';
 import EmployeeForm from './EmployeeForm';
+import { API_BASE } from '../../config/api';
 
-const API_BASE = process.env.REACT_APP_API_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
+// Dev: the host the page was loaded from (so a phone on the LAN reaches the API); prod: same origin. See config/api.ts.
 
 const fmt = (n?: number) =>
   n !== undefined

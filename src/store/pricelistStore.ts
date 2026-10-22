@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import type { PricelistItem, PricelistFiltersState, PricelistFilterOptions, PricelistAuditEntry } from '../types/Pricelist';
 import { EMPTY_FILTERS } from '../types/Pricelist';
+import { API_BASE } from '../config/api';
 
-const API_BASE = process.env.REACT_APP_API_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
+// Dev: the host the page was loaded from (so a phone on the LAN reaches the API); prod: same origin. See config/api.ts.
 
 function authHeaders(): HeadersInit {
   const token = localStorage.getItem('netpacific_token');
