@@ -21,9 +21,10 @@ import type { InstallMaterialPrice } from '../utils/calcsheet/installationMateri
 import { getOneDriveTokenStore } from '../services/onedriveTokenStore';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import { ensureProposalFolder, ensureWonExecutionLayout } from '../services/onedriveFolderService';
+import { API_BASE } from '../config/api';
 
 // API base — talks to pmv2's Express server
-const API_BASE = process.env.REACT_APP_API_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
+// Dev: the host the page was loaded from (so a phone on the LAN reaches the API); prod: same origin. See config/api.ts.
 const BASE = `${API_BASE}/api/calcsheet`;
 
 const normalizeLaborPresets = (presets: LaborRolePreset[]): LaborRolePreset[] =>

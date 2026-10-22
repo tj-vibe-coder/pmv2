@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Box, Grid, Paper, Typography, Card, CardContent, Button,
   IconButton, TextField, Dialog, DialogActions, DialogContent, DialogTitle,
@@ -156,11 +156,22 @@ export default function CollectionsDashboard() {
 
   // filters for Receivables tab
   const [search, setSearch] = useState('');
+  // `?invoice=<id>` (e.g. from a Whiteboard link) → show just that invoice, once the invoices have loaded.
+  const focusInvoiceId = searchParams.get('invoice');
+  const focusedInvoiceRef = useRef<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<InvoiceStatus | ''>('');
   const [filterActi, setFilterActi] = useState(false);
 
   // filters for Settled tab
   const [searchSettled, setSearchSettled] = useState('');
+  useEffect(() => {
+    if (loading || !focusInvoiceId || focusedInvoiceRef.current === focusInvoiceId) return;
+    const inv = invoices.find((i) => String(i.id) === focusInvoiceId);
+    if (!inv) return;
+    focusedInvoiceRef.current = focusInvoiceId;
+    setSearch(inv.invoice_no);
+    setSearchSettled(inv.invoice_no);
+  }, [loading, focusInvoiceId, invoices]);
   const [filterSettledStatus, setFilterSettledStatus] = useState<'all' | 'paid' | 'partial'>('all');
   const [filterSettledBillTo, setFilterSettledBillTo] = useState<'all' | 'customer' | 'acti'>('all');
 

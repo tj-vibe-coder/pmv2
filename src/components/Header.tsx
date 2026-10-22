@@ -28,6 +28,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import WhiteboardDialog from './WhiteboardDialog';
 import { useWhiteboardStore } from '../store/whiteboardStore';
+import { whiteboardDueState } from '../types/Whiteboard';
 
 // Shown once per browser tab session, right after login — sessionStorage
 // clears itself when the tab/window closes, so it naturally re-shows on the
@@ -55,6 +56,8 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
   // the team always sees there's an open item, even with the board closed.
   const fetchWhiteboard = useWhiteboardStore((s) => s.fetchItems);
   const generalPending = useWhiteboardStore((s) => s.items.filter((i) => (i.visibility === 'general' || i.visibility === 'public') && !i.done).length);
+  // Of those, how many are past their due date — turns the badge red.
+  const generalOverdue = useWhiteboardStore((s) => s.items.filter((i) => (i.visibility === 'general' || i.visibility === 'public') && !i.done && whiteboardDueState(i.dueDate) === 'overdue').length);
   useEffect(() => {
     if (isAuthenticated) fetchWhiteboard().catch(() => {});
   }, [isAuthenticated, fetchWhiteboard]);
@@ -194,10 +197,12 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
 
               <IconButton
                 onClick={() => setWhiteboardOpen(true)}
-                title={generalPending ? `Whiteboard — ${generalPending} pending general update${generalPending === 1 ? '' : 's'}` : 'Whiteboard — notes, to-dos & updates'}
+                title={generalPending
+                  ? `Whiteboard — ${generalPending} pending${generalOverdue ? `, ${generalOverdue} overdue` : ''}`
+                  : 'Whiteboard — notes, to-dos & updates'}
                 sx={{ color: '#2c5aa0' }}
               >
-                <Badge badgeContent={generalPending} color="warning" max={99}>
+                <Badge badgeContent={generalPending} color={generalOverdue ? 'error' : 'warning'} max={99}>
                   <StickyNote2Icon />
                 </Badge>
               </IconButton>

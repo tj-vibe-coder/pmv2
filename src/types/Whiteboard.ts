@@ -1,3 +1,5 @@
+import { financeFocusUrl } from '../utils/financeTraceFocus';
+
 // App-wide Whiteboard — a sticky-note board (one column per team
 // member) plus a private "Just for me" area. Not calcsheet-specific; the
 // popup (once per login session) and the always-available quick-access
@@ -66,17 +68,108 @@ export function whiteboardPersonOf(user: { full_name?: string | null; username?:
 // proposal doesn't). `label` is a snapshot taken when the link was made, so
 // rendering a note never needs to fetch the project; a later rename won't
 // update it until the note is re-linked.
-export type WhiteboardLinkType = 'project' | 'calcsheet';
+export type WhiteboardLinkType = 'project' | 'calcsheet' | 'invoice' | 'liquidation';
 export interface WhiteboardLink {
   type: WhiteboardLinkType;
   id: string;
   label: string;
 }
 
-export function whiteboardLinkHref(link: WhiteboardLink): string {
-  return link.type === 'project'
-    ? `/projects/${encodeURIComponent(link.id)}`
-    : `/sales/calcsheet/projects/${encodeURIComponent(link.id)}`;
+export const WHITEBOARD_LINK_GROUPS: Record<WhiteboardLinkType, string> = {
+  project: 'Projects',
+  calcsheet: 'Calcsheet proposals',
+  invoice: 'Invoices',
+  liquidation: 'Liquidations',
+};
+
+export function whiteboardLinkHref(link: WhiteboardLink, from?: string): string {
+  const id = encodeURIComponent(link.id);
+  switch (link.type) {
+    case 'project': return `/projects/${id}`;
+    case 'calcsheet': return `/sales/calcsheet/projects/${id}`;
+    case 'invoice': return `/finance/collections?tab=receivables&invoice=${id}`;
+    case 'liquidation': return financeFocusUrl({ type: 'liquidation', id: link.id, rowId: '__form__' }, from);
+  }
+}
+
+// ── Repeating to-dos ──────────────────────────────────────────────────────────
+// Ticking a repeating to-do creates the next one (server-side), so the list never runs dry.
+export type WhiteboardRecurrence = 'daily' | 'weekly' | 'monthly' | 'yearly';
+export const WHITEBOARD_RECURRENCES: { key: WhiteboardRecurrence; label: string }[] = [
+  { key: 'daily', label: 'Every day' },
+  { key: 'weekly', label: 'Every week' },
+  { key: 'monthly', label: 'Every month' },
+  { key: 'yearly', label: 'Every year' },
+];
+
+export const WHITEBOARD_WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const ordinal = (n: number) => {
+  const v = n % 100;
+  return `${n}${v >= 11 && v <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+};
+export const whiteboardMonthDayLabel = (day: number) => (day === 0 ? 'Last day of the month' : ordinal(day));
+
+/** Short chip text: "Daily", "Weekly · Mon", "Monthly · 15th", "Monthly · last day", "Yearly". */
+export function whiteboardRecurrenceLabel(rule: WhiteboardRecurrence, day?: number | null): string {
+  const base = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' }[rule];
+  if (rule === 'weekly' && day != null) return `${base} · ${WHITEBOARD_WEEKDAYS[day]?.slice(0, 3) ?? ''}`;
+  if (rule === 'monthly' && day != null) return `${base} · ${day === 0 ? 'last day' : ordinal(day)}`;
+  return base;
+}
+
+/** The day a repeat starts on when the user picks a frequency: the due date's weekday / day of month (or today's). */
+export function defaultRecurrenceDay(rule: WhiteboardRecurrence | '', dueDate?: string): number | null {
+  if (rule !== 'weekly' && rule !== 'monthly') return null;
+  const d = dueDate ? new Date(`${dueDate}T00:00:00`) : new Date();
+  return rule === 'weekly' ? d.getDay() : d.getDate();
+}
+
+/** First due date of a new repeating item with no due date (mirrors the server): the next time its chosen day comes round. */
+export function whiteboardFirstDueDate(rule: WhiteboardRecurrence, day: number | null | undefined, today: string = whiteboardToday()): string {
+  const t = new Date(`${today}T00:00:00`);
+  if (rule === 'weekly' && day != null) {
+    while (t.getDay() !== day) t.setDate(t.getDate() + 1);
+    return whiteboardToday(t);
+  }
+  if (rule === 'monthly' && day != null) {
+    const pick = (y: number, m: number) => new Date(y, m, day === 0 ? new Date(y, m + 1, 0).getDate() : Math.min(day, new Date(y, m + 1, 0).getDate()));
+    const thisMonth = pick(t.getFullYear(), t.getMonth());
+    return whiteboardToday(whiteboardToday(thisMonth) >= today ? thisMonth : pick(t.getFullYear(), t.getMonth() + 1));
+  }
+  return today;
+}
+
+// ── Due dates ─────────────────────────────────────────────────────────────────
+export type WhiteboardDueState = 'overdue' | 'today' | 'soon' | 'later';
+
+/** Today as YYYY-MM-DD in the viewer's local calendar (the team is all in the Philippines). */
+export const whiteboardToday = (now: Date = new Date()): string =>
+  `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+/** Where a to-do's due date sits relative to today: overdue, today, within 3 days, or later. null = no due date. */
+export function whiteboardDueState(dueDate: string | undefined, today: string = whiteboardToday()): WhiteboardDueState | null {
+  if (!dueDate) return null;
+  if (dueDate < today) return 'overdue';
+  if (dueDate === today) return 'today';
+  const soon = new Date(`${today}T00:00:00`);
+  soon.setDate(soon.getDate() + 3);
+  return dueDate <= whiteboardToday(soon) ? 'soon' : 'later';
+}
+
+/** Overdue and soonest-due first, then the rest oldest-first like a checklist. Does not mutate. */
+export function sortWhiteboardPending<T extends { dueDate?: string; createdAt: string }>(items: T[], today: string = whiteboardToday()): T[] {
+  const rank = (i: T) => {
+    const s = whiteboardDueState(i.dueDate, today);
+    return s === 'overdue' ? 0 : s === 'today' ? 1 : s === 'soon' ? 2 : 3;
+  };
+  return [...items].sort((a, b) => {
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    if (ra < 3) return String(a.dueDate).localeCompare(String(b.dueDate)) || a.createdAt.localeCompare(b.createdAt);
+    return a.createdAt.localeCompare(b.createdAt);
+  });
 }
 
 export interface WhiteboardItem {
@@ -98,8 +191,19 @@ export interface WhiteboardItem {
   category?: WhiteboardCategory;
   // Only meaningful when kind === 'todo'.
   done?: boolean;
+  // Who ticked it and when — set by the server (never by the client) when `done` flips to true.
+  doneBy?: string;
+  doneByName?: string;
+  doneAt?: string;
   // Optional deadline, YYYY-MM-DD. Only meaningful when kind === 'todo'.
   dueDate?: string;
+  // Repeating to-do: ticking it creates the next one (see server/whiteboardRules.js).
+  recurrence?: WhiteboardRecurrence;
+  /** The specific day a repeat falls on: weekly → 0–6 (0 = Sunday); monthly → 1–31, or 0 = the last day. */
+  recurrenceDay?: number;
+  /** Server bookkeeping for repeats: the item this one was created from / the one created when this was ticked. */
+  recurrenceOf?: string;
+  spawnedNextId?: string;
   link?: WhiteboardLink;
   createdBy: string;
   createdByName: string;
