@@ -46,6 +46,9 @@ import BookmarksIcon from '@mui/icons-material/Bookmarks';
 import { exportQuotationPdf } from '../../utils/calcsheet/pdfExport';
 import { compactLayoutAvailability, type QuotationPdfLayout } from '../../utils/calcsheet/quotationPdfLayout';
 import { exportQuotationXlsx } from '../../utils/calcsheet/xlsxExport';
+import { findInternalLookingText } from '../../utils/calcsheet/internalText';
+import InternalNoteDialog, { InternalNoteButton } from './InternalNoteDialog';
+import InternalTextWarning from './InternalTextWarning';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
@@ -519,6 +522,9 @@ export default function QuotationEditor() {
   const [desigoOpen, setDesigoOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [timingComponentId, setTimingComponentId] = useState<string | null>(null);
+  // Internal note (team-only, never printed) being viewed/edited, and the Excel "possible internal text" prompt.
+  const [noteTarget, setNoteTarget] = useState<{ section: 'components' | 'services'; id: string } | null>(null);
+  const [xlsxWarnOpen, setXlsxWarnOpen] = useState(false);
 
   // "What did you change?" prompt shown on Save — the note is attached to
   // the version snapshot the server takes of the pre-save state.
@@ -945,6 +951,8 @@ export default function QuotationEditor() {
         {r.historicalPriceSource && (
           <HistoricalSourceChip source={r.historicalPriceSource} />
         )}
+        <InternalNoteButton note={r.internalNote} lineLabel={r.description || r.code} disabled={inputsLocked}
+          onClick={() => setNoteTarget({ section: 'components', id: r.id })} />
         {r.group && (
           <Tooltip title={groupDisplayMode(r.group) === 'lot'
             ? `"${r.group}" prints as one 1.00 LOT line — click to show each item's qty instead`
@@ -1209,6 +1217,8 @@ export default function QuotationEditor() {
               variant="standard" fullWidth disabled={inputsLocked} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }}
               inputProps={{ style: { padding: '6px 4px' } }} />
+            <InternalNoteButton note={r.internalNote} lineLabel={r.description || r.code} disabled={inputsLocked}
+              onClick={() => setNoteTarget({ section: 'services', id: r.id })} />
             {r.group && <Chip label={r.group} size="small" color="info" variant="outlined" onDelete={() => ungroupSvc(r.id)} sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }} />}
           </Stack>
         ) },
@@ -1238,6 +1248,8 @@ export default function QuotationEditor() {
           <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
             <TextField value={r.description ?? ''} onChange={(e) => updateServiceRow(idx, 'description', e.target.value)} variant="standard" fullWidth disabled={inputsLocked} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
               InputProps={{ disableUnderline: true, sx: { fontSize: '0.8125rem' } }} inputProps={{ style: { padding: '6px 4px' } }} />
+            <InternalNoteButton note={r.internalNote} lineLabel={r.description || r.code} disabled={inputsLocked}
+              onClick={() => setNoteTarget({ section: 'services', id: r.id })} />
           </Stack>
         ) },
         { key: 'amount', card: 'total', label: 'Amount', width: 150, type: 'number', align: 'right', step: 0.01 },
@@ -1443,6 +1455,27 @@ export default function QuotationEditor() {
   };
 
   const exportXlsx = () => exportQuotationXlsx(quotation, project, recipient ?? null, customer ?? null);
+  // Excel has no confirmation step of its own, so warn first if printed fields look like they hold internal wording.
+  const requestExportXlsx = () => {
+    if (findInternalLookingText(quotation).length > 0) setXlsxWarnOpen(true);
+    else void exportXlsx();
+  };
+
+  const noteLine = noteTarget
+    ? ((noteTarget.section === 'components' ? quotation.components : quotation.services) as Array<ComponentLine | ServiceLine>)
+      .find((l) => l.id === noteTarget.id)
+    : undefined;
+  const saveInternalNote = (text: string) => {
+    if (!noteTarget) return;
+    const list = (noteTarget.section === 'components' ? quotation.components : quotation.services) as Array<{ id: string }>;
+    const idx = list.findIndex((l) => l.id === noteTarget.id);
+    const value = text.trim() || undefined; // an emptied note is removed, not stored as ''
+    if (idx >= 0) {
+      if (noteTarget.section === 'components') updateRow('components', idx, 'internalNote', value);
+      else updateServiceRow(idx, 'internalNote', value);
+    }
+    setNoteTarget(null);
+  };
   const compactPdf = compactLayoutAvailability(
     quotation.generalReqts.length + quotation.components.length + quotation.services.length,
   );
@@ -1577,7 +1610,7 @@ export default function QuotationEditor() {
           <Button
             startIcon={<GridOnIcon />}
             variant="outlined"
-            onClick={exportXlsx}
+            onClick={requestExportXlsx}
             disabled={isDirty}
             title={isDirty ? 'Save changes before exporting' : undefined}
           >
@@ -2782,6 +2815,7 @@ export default function QuotationEditor() {
       >
         <DialogTitle sx={{ fontWeight: 600 }}>Confirm Terms &amp; Conditions</DialogTitle>
         <DialogContent>
+          {exportConfirmOpen && <InternalTextWarning findings={findInternalLookingText(quotation)} />}
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Before exporting this quotation to the client, please confirm the Terms &amp; Conditions
             — especially Delivery — are correct and up to date.
@@ -2820,6 +2854,27 @@ export default function QuotationEditor() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <Dialog open={xlsxWarnOpen} onClose={() => setXlsxWarnOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 600 }}>Possible internal text</DialogTitle>
+        <DialogContent>
+          {xlsxWarnOpen && <InternalTextWarning findings={findInternalLookingText(quotation)} />}
+          <Typography variant="body2" color="text.secondary">Export the Excel anyway, or go back and move that wording into the lines' internal notes?</Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setXlsxWarnOpen(false)}>Go back</Button>
+          <Button variant="contained" startIcon={<GridOnIcon />} onClick={() => { setXlsxWarnOpen(false); void exportXlsx(); }}>Export anyway</Button>
+        </DialogActions>
+      </Dialog>
+
+      <InternalNoteDialog
+        open={!!noteTarget}
+        lineLabel={noteLine ? (noteLine.description || noteLine.code || '') : ''}
+        note={noteLine?.internalNote}
+        readOnly={inputsLocked}
+        onSave={saveInternalNote}
+        onClose={() => setNoteTarget(null)}
+      />
 
       <ProductPickerDialog
         open={catalogOpen}

@@ -183,6 +183,7 @@ The phase-by-phase log and the full "Recent additions" change history — OneDri
 - **`npm start` writes to PRODUCTION Firestore.** To test with fake data, use the emulator: `npm run emulator`, then run the server with `FIRESTORE_EMULATOR_HOST=127.0.0.1:8080`. Never seed test data into prod.
 - **Ship only through a PR into `main`.** Merging triggers the auto-deploy. Check that the Actions "Deploy to Firebase" run went green; don't push straight to `main`.
 - **Quotation line descriptions are brand-neutral** (no SIMATIC / WAGO / SITOP in the text). Brand and exact item go in the **Brand** and **Part No.** columns; hide the Part No. column manually if a client copy shouldn't show it.
+- **Internal wording never goes in a printed field.** Price source, "budgetary", "for supplier quote", pricelist names and `[tags]` belong in the line's **internal note** (`internalNote`, the note icon in the description cell; components and services) — it is never printed on the PDF/Excel. Export warns if a printed field looks like it holds internal text. Agents write it via `PUT /api/calcsheet/quotations/:id` (send the full `components`/`services` array — PUT replaces it). See `docs/DATA_MODEL.md`.
 - **Configurator prices (Siemens PLC, Desigo BMS, Control Panel, Installation Work):**
   - A Sales → Pricelists item with the **same part number** overrides the built-in price.
   - Unpriced items go in at ₱0 as **"For inquiry"**. Once the supplier quotes, add the price to Pricelists with that part number so every future quotation picks it up.

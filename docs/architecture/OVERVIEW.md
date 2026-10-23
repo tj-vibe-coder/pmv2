@@ -80,7 +80,7 @@ User profile fields (`full_name`, `designation`) feed report prepared-by signatu
 - `POST /api/calcsheet/product-history/suggest` is a read-only calculation endpoint. It validates the selected observation and any explicitly confirmed candidates, rejects unrelated or blank identities, filters invalid evidence, then computes a quarterly trend with an annualized fallback.
 - The Add Product dialog keeps managed **Pricelists** and read-only **Quotation History** as separate tabs. History loads lazily when opened.
 - `Quotation.expectedPurchaseDate` supplies the default horizon; `ComponentLine.expectedPurchaseDate` may override it. The server validates both quotation create and update writes against Date Sent using strict calendar-date checks.
-- A historical selection stores `ComponentLine.historicalPriceSource` as internal provenance. Customer PDF/XLSX exporters use explicit public fields and do not serialize this snapshot.
+- A historical selection stores `ComponentLine.historicalPriceSource` as internal provenance. Customer PDF/XLSX exporters use explicit public fields and do not serialize this snapshot. The same holds for `internalNote` on component and service lines (team-only free text; see `docs/DATA_MODEL.md`).
 - Suggestion application is explicit. Date or candidate changes synchronously clear the prior suggestion so stale percentages cannot be added.
 
 **SQLite (legacy)** — `database/projects.db`, used for historical data migration. Not used at runtime.
