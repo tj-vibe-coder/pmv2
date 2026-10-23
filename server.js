@@ -1175,12 +1175,11 @@ async function mutateWhiteboardItem(req, res, apply) {
   res.json(outcome.response);
 }
 
-// Add a subtask — poster only (anyone may tick them, like the task itself).
+// Add a subtask — anyone who can see the item (the poster and the person who added it can remove it again).
 app.post('/api/whiteboard/:id/subtasks', async (req, res) => {
   try {
-    await mutateWhiteboardItem(req, res, ({ existing, isOwner, nowIso }) => {
-      if (!isOwner) return { status: 403, error: 'Only the poster can add subtasks' };
-      const out = addSubtask(existing.subtasks, { id: crypto.randomUUID(), text: (req.body || {}).text, nowIso });
+    await mutateWhiteboardItem(req, res, ({ existing, actor, nowIso }) => {
+      const out = addSubtask(existing.subtasks, { id: crypto.randomUUID(), text: (req.body || {}).text, actor, nowIso });
       return out.error ? out : { patch: { subtasks: out.subtasks }, response: { subtasks: out.subtasks } };
     });
   } catch (err) { res.status(500).json({ error: 'Failed to add subtask' }); }
@@ -1198,20 +1197,19 @@ app.put('/api/whiteboard/:id/subtasks/:subtaskId', async (req, res) => {
 
 app.delete('/api/whiteboard/:id/subtasks/:subtaskId', async (req, res) => {
   try {
-    await mutateWhiteboardItem(req, res, ({ existing, isOwner }) => {
-      if (!isOwner) return { status: 403, error: 'Only the poster can delete subtasks' };
-      const out = removeSubtask(existing.subtasks, req.params.subtaskId);
+    await mutateWhiteboardItem(req, res, ({ existing, actor, isOwner }) => {
+      const out = removeSubtask(existing.subtasks, req.params.subtaskId, { actorId: actor.id, isOwner });
       return out.error ? out : { patch: { subtasks: out.subtasks }, response: { subtasks: out.subtasks } };
     });
   } catch (err) { res.status(500).json({ error: 'Failed to delete subtask' }); }
 });
 
-// Post a dated status note — anyone who can see the item; only the poster may move the progress bar with it.
+// Post a dated status note — anyone who can see the item, optionally moving the progress bar with it.
 app.post('/api/whiteboard/:id/updates', async (req, res) => {
   try {
-    await mutateWhiteboardItem(req, res, ({ existing, actor, isOwner, nowIso }) => {
+    await mutateWhiteboardItem(req, res, ({ existing, actor, nowIso }) => {
       const { text, progress } = req.body || {};
-      const out = addUpdate(existing.updates, { id: crypto.randomUUID(), text, progress, actor, isOwner, nowIso });
+      const out = addUpdate(existing.updates, { id: crypto.randomUUID(), text, progress, actor, nowIso });
       if (out.error) return out;
       return {
         patch: { updates: out.updates, progress: out.progress === null ? FieldValue.delete() : out.progress },

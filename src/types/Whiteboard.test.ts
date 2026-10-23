@@ -1,7 +1,5 @@
-import {
-  defaultRecurrenceDay, sortWhiteboardPending, whiteboardDueState, whiteboardFirstDueDate, whiteboardLinkHref,
-  whiteboardMonthDayLabel, whiteboardRecurrenceLabel, whiteboardToday,
-} from './Whiteboard';
+import { defaultRecurrenceDay, sortWhiteboardPending, whiteboardDueState, whiteboardFirstDueDate, whiteboardLinkHref,
+  whiteboardMonthDayLabel, whiteboardRecurrenceLabel, whiteboardToday, whiteboardTag } from './Whiteboard';
 
 const TODAY = '2026-10-22';
 
@@ -79,4 +77,33 @@ it('first due date of a repeat with no due date matches the server rules', () =>
   expect(whiteboardFirstDueDate('monthly', 15, '2026-10-22')).toBe('2026-11-15');
   expect(whiteboardFirstDueDate('monthly', 0, '2026-10-22')).toBe('2026-10-31');
   expect(whiteboardFirstDueDate('daily', null, '2026-10-22')).toBe('2026-10-22');
+});
+
+describe('whiteboardTag', () => {
+  it('gives each roster person the team tag, whatever form of their name is stored', () => {
+    expect(whiteboardTag('Tyrone James Caballero')).toBe('TJC');
+    expect(whiteboardTag('Reuel Joshua Rivera')).toBe('RJR');
+    expect(whiteboardTag('Reuel Rivera')).toBe('RJR');
+    expect(whiteboardTag('Renzel Punongbayan')).toBe('RPP');
+    expect(whiteboardTag('Nylle Harold Managa')).toBe('NDM');
+    expect(whiteboardTag('Kim Solis')).toBe('KKS');
+    // a username or short name stored instead of the full name
+    expect(whiteboardTag('TJC')).toBe('TJC');
+    expect(whiteboardTag('RJ')).toBe('RJR');
+    expect(whiteboardTag('Nylle')).toBe('NDM');
+  });
+
+  it('falls back to initials (at most three) for anyone else, and keeps a one-word name', () => {
+    expect(whiteboardTag('Alex Morgan Reyes')).toBe('AMR');
+    expect(whiteboardTag('Alex Reyes')).toBe('AR');
+    expect(whiteboardTag('Alex Morgan Reyes Jr')).toBe('AMR');
+    expect(whiteboardTag('projects')).toBe('projects');
+  });
+
+  it('never returns an empty tag', () => {
+    expect(whiteboardTag('')).toBe('?');
+    expect(whiteboardTag('   ')).toBe('?');
+    expect(whiteboardTag(undefined)).toBe('?');
+    expect(whiteboardTag(null)).toBe('?');
+  });
 });
