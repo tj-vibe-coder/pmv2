@@ -418,10 +418,19 @@ interface Quotation {
 interface ComponentLine {
   expectedPurchaseDate?: string;     // Optional per-line override
   historicalPriceSource?: HistoricalPriceSource;
+  internalNote?: string;             // Team-only free text — never printed
+}
+
+interface ServiceLine {
+  internalNote?: string;             // Team-only free text — never printed
 }
 ```
 
 `historicalPriceSource` is internal provenance stored with the component line. It is not included in quotation PDF/XLSX exports.
+
+`internalNote` (on both `ComponentLine` and `ServiceLine`, added 2026-10-23) is free text for the team only — price source, "budgetary", pricelist name, who quoted it. The PDF and Excel exporters print explicit public fields and never serialize it (guarded by `src/utils/calcsheet/internalNote.export.test.tsx`). It belongs here, **not** in `description`/`subheader`/`brand`/`partNo`/`group`, which all print. The editor shows it as a small note icon in the line's description cell; before a PDF/Excel export, `findInternalLookingText()` warns about printed fields that contain `[bracket tags]` or words like "budgetary" / "for supplier quote" / "pricelist". Duplicating a quotation copies the notes.
+
+Writing it from an agent: `POST` / `PUT /api/calcsheet/quotations[/:id]` store the body as-is (no field whitelist), so `components[].internalNote` and `services[].internalNote` are accepted. `PUT` replaces the **whole** `components` / `services` array, so read the quotation, change the lines you need and send the full array back — a partial array deletes the other lines.
 
 ### 2.16 `ai_assist_audit`
 

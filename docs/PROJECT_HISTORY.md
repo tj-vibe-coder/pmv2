@@ -6,6 +6,17 @@
 
 ---
 
+## 2026-10-23 — Calcsheet: internal notes that never print (branch `rj/calcsheet-internal-note`)
+
+**Why**: an agent preparing quotation PCS2610158-IST-01 put price-source wording in `description` ("(budgetary – for supplier quote) [Not in pricelist]", "[Pricelist: …]") and the PDF printed it on almost every BOM line. There was no free-text field that stays internal (`historicalPriceSource` is structured provenance, not a note). Requested via a peer-agent note; scope agreed with RJ.
+
+- **Field**: `internalNote?: string` on `ComponentLine` **and** `ServiceLine`. Exporters print explicit public fields, so it never prints; locked in by `internalNote.export.test.tsx`, which runs the real PDF and Excel exporters on notes and asserts none of the text appears (mutation-checked: planting a leak in either exporter fails it).
+- **Editor**: `InternalNoteDialog.tsx` — a small note icon inside the description cell of component and service rows (dim when empty, filled when set, hover shows the text). Click opens a dialog that says it is never printed; Clear note removes it (an emptied note is stored as absent, not ''). On an awarded (locked) quotation existing notes are read-only and empty ones show no icon. Duplicating a quotation copies notes (it spreads the whole quotation).
+- **Safety net (warn only, never edits text)**: `findInternalLookingText()` (`utils/calcsheet/internalText.ts`) flags `[bracket tags]` and "budgetary" / "supplier quote" / "pricelist|price list" in printed fields (description, subheader, brand, part no., group; all three line sections). The PDF's existing Terms & Conditions confirm dialog now shows the list (`InternalTextWarning.tsx`); Excel, which had no confirm step, gets a small "Possible internal text — Export anyway / Go back" prompt. Brackets can be legitimate, hence warn-only.
+- **API for agents**: nothing to change — `POST`/`PUT /api/calcsheet/quotations` store the body as-is (verified end to end against the in-memory Firestore harness). Caveat now documented in `docs/DATA_MODEL.md`: `PUT` replaces the whole `components`/`services` array, so agents must send the full array. `CLAUDE.md` §7 got the convention "internal wording goes in the internal note".
+- **Not done (by choice)**: PCS2610158-IST-01's existing tagged descriptions were left alone — now there's a field to move them into. The CoWork root `AGENTS.md` "Quotation Prep Rules" lives outside this repo; point it at `internalNote`.
+- **Checks**: `tsc` and `CI=true npm run build` clean; new tests — 5 detector, 12 note UI/warning, 2 export guards.
+
 ## 2026-10-23 — Whiteboard: subtasks, dated status notes, progress bar
 
 **Why**: some tasks take weeks, and a task sitting untouched looks like its owner is idle. A dated note + progress bar lets everyone see where a task stands.

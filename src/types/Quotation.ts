@@ -205,6 +205,10 @@ export interface ComponentLine {
   ewtPct?: number;
   expectedPurchaseDate?: string;
   historicalPriceSource?: HistoricalPriceSource;
+  /** Free-text note for the team only — price source, "budgetary", pricelist
+   * name, who quoted it. Never printed on the PDF or Excel (exporters use
+   * explicit public fields). Put internal text here, not in `description`. */
+  internalNote?: string;
   /** Optional item: priced for reference but NOT included in the contract
    * cost/subtotal/grand total. Listed in a separate "Optional Items" section
    * on exports so the client can add it if they avail. */
@@ -243,6 +247,8 @@ export interface ServiceLine {
   /** A calculation-neutral label rendered above this contiguous block of items. */
   subheader?: string;
   markupPct?: number;
+  /** Team-only note — never printed on the PDF or Excel. See ComponentLine.internalNote. */
+  internalNote?: string;
   /** Section-header row — same label-only, excluded-from-totals row as
    * ComponentLine.isHeader, for breaking Engineering Services into named
    * sections. */
