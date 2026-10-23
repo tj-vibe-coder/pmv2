@@ -172,6 +172,29 @@ export function sortWhiteboardPending<T extends { dueDate?: string; createdAt: s
   });
 }
 
+// A checklist line under a task. Anyone may tick it (like the task itself); only the poster adds or removes them.
+export interface WhiteboardSubtask {
+  id: string;
+  text: string;
+  done: boolean;
+  createdAt: string;
+  // Who ticked it and when — set by the server.
+  doneBy?: string;
+  doneByName?: string;
+  doneAt?: string;
+}
+
+// A dated status note on a task, so a slow task doesn't look neglected. Anyone may add one; `progress`
+// (0–100) can only be set by the poster, and the task's own `progress` is the latest note's value.
+export interface WhiteboardUpdate {
+  id: string;
+  text: string;
+  progress?: number;
+  by: string;
+  byName: string;
+  at: string;
+}
+
 export interface WhiteboardItem {
   id: string;
   kind: WhiteboardKind;
@@ -205,6 +228,11 @@ export interface WhiteboardItem {
   recurrenceOf?: string;
   spawnedNextId?: string;
   link?: WhiteboardLink;
+  // Checklist, dated status notes (oldest first) and 0–100 progress. All three are written only through the
+  // server's subtask / note endpoints, never the generic edit.
+  subtasks?: WhiteboardSubtask[];
+  updates?: WhiteboardUpdate[];
+  progress?: number;
   createdBy: string;
   createdByName: string;
   createdAt: string;

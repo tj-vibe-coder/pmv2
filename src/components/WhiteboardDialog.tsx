@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type DragEvent, type ReactElement } from 'react';
 import {
-  Accordion, AccordionDetails, AccordionSummary, Alert, Autocomplete, Box, Button, Checkbox, Chip, Dialog, DialogActions,
+  Accordion, AccordionDetails, AccordionSummary, Alert, Autocomplete, Box, Button, Checkbox, Chip, Collapse, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Menu, MenuItem, Stack,
   TextField, Tooltip, Typography, useMediaQuery,
 } from '@mui/material';
 import LinkIcon from '@mui/icons-material/Link';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChecklistIcon from '@mui/icons-material/Checklist';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import RepeatIcon from '@mui/icons-material/Repeat';
 import EventRepeatOutlinedIcon from '@mui/icons-material/EventRepeatOutlined';
@@ -31,6 +33,7 @@ import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useWhiteboardStore } from '../store/whiteboardStore';
+import WhiteboardItemDetail, { ProgressBar, formatNoteTime } from './WhiteboardItemDetail';
 import {
   WHITEBOARD_CATEGORIES, WHITEBOARD_LINK_GROUPS, WHITEBOARD_RECURRENCES, WHITEBOARD_WEEKDAYS, defaultRecurrenceDay,
   sortWhiteboardPending, whiteboardCategoryOf, whiteboardDueState, whiteboardFirstDueDate, whiteboardLinkHref,
@@ -325,6 +328,12 @@ function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink, on
   const kind = KIND_ICON[item.kind];
   const [moveAnchor, setMoveAnchor] = useState<HTMLElement | null>(null);
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  // Subtasks and status notes live in a collapsible panel under the row.
+  const [expanded, setExpanded] = useState(false);
+  const subtaskCount = item.subtasks?.length ?? 0;
+  const subtasksDone = item.subtasks?.filter((s) => s.done).length ?? 0;
+  const noteCount = item.updates?.length ?? 0;
+  const latestNote = noteCount > 0 ? item.updates![noteCount - 1] : null;
   const current = whiteboardCategoryOf(item);
   // Phones: one ⋮ menu (move / edit / delete) instead of three tiny icons.
   const phoneMenu = isPhone && (onMove || canEdit) ? [
@@ -344,12 +353,13 @@ function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink, on
     ] : []),
   ] : null;
   return (
+    <Box sx={{ borderBottom: '1px dashed', borderColor: 'divider', '&:last-of-type': { borderBottom: 0 } }}>
     <Stack
       direction="row" alignItems="flex-start" spacing={1} data-testid={`wb-item-${item.id}`}
       draggable={!!onMove && !isPhone}
       onDragStart={onMove ? (e) => { e.dataTransfer.setData(DRAG_TYPE, item.id); e.dataTransfer.effectAllowed = 'move'; } : undefined}
       sx={{
-        py: 0.5, borderBottom: '1px dashed', borderColor: 'divider', '&:last-of-type': { borderBottom: 0 },
+        py: 0.5,
         ...(onMove && !isPhone ? { cursor: 'grab', '&:hover .wb-drag': { opacity: 1 } } : {}),
         ...(dueState === 'overdue' ? { borderLeft: '3px solid', borderLeftColor: 'error.main', pl: 0.75 } : {}),
       }}
@@ -378,6 +388,16 @@ function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink, on
               title={`Open ${LINK_TITLE[item.link.type]}`}
               sx={{ height: 18, fontSize: 11, maxWidth: '100%', '& .MuiChip-label': { px: 0.75, overflow: 'hidden', textOverflow: 'ellipsis' } }} />
           )}
+          {subtaskCount > 0 && (
+            <Chip size="small" icon={<ChecklistIcon sx={{ fontSize: '13px !important' }} />} label={`${subtasksDone}/${subtaskCount}`} variant="outlined"
+              color={subtasksDone === subtaskCount ? 'success' : 'default'} onClick={() => setExpanded(true)} title="Subtasks done — tap to open"
+              sx={{ height: 18, fontSize: 11, '& .MuiChip-label': { px: 0.5 } }} />
+          )}
+          {noteCount > 0 && (
+            <Chip size="small" icon={<ChatBubbleOutlineIcon sx={{ fontSize: '12px !important' }} />} label={noteCount} variant="outlined"
+              onClick={() => setExpanded(true)} title="Status notes — tap to read"
+              sx={{ height: 18, fontSize: 11, '& .MuiChip-label': { px: 0.5 } }} />
+          )}
           <Typography variant="caption" color="text.disabled">{item.createdByName} · {format(new Date(item.createdAt), 'MMM d')}</Typography>
           {item.done && item.doneByName && (
             <Typography variant="caption" color="success.main" data-testid="wb-done-by">
@@ -385,7 +405,22 @@ function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink, on
             </Typography>
           )}
         </Stack>
+        {!item.done && item.progress !== undefined && <ProgressBar value={item.progress} />}
+        {latestNote && !expanded && (
+          <Typography
+            variant="caption" color="text.secondary" noWrap onClick={() => setExpanded(true)} data-testid="wb-latest-note"
+            sx={{ display: 'block', mt: 0.25, cursor: 'pointer' }}
+          >
+            {latestNote.byName}: {latestNote.text} · {formatNoteTime(latestNote.at)}
+          </Typography>
+        )}
       </Box>
+      <IconButton
+        size="small" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded} sx={{ p: isPhone ? 0.75 : 0.25, mt: isPhone ? -0.25 : 0 }}
+        aria-label={expanded ? 'Hide subtasks and notes' : 'Show subtasks and notes'} title={expanded ? 'Hide subtasks and notes' : 'Subtasks, status notes & progress'}
+      >
+        <ExpandMoreIcon sx={{ fontSize: isPhone ? 22 : 18, transform: expanded ? 'rotate(180deg)' : undefined, transition: 'transform 150ms' }} />
+      </IconButton>
       {phoneMenu && (
         <>
           <IconButton size="small" onClick={(e) => setMenuAnchor(e.currentTarget)} aria-label="Item actions"><MoreVertIcon fontSize="small" /></IconButton>
@@ -415,6 +450,10 @@ function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink, on
         </>
       )}
     </Stack>
+    <Collapse in={expanded} timeout="auto" unmountOnExit>
+      <WhiteboardItemDetail item={item} isOwner={canEdit} />
+    </Collapse>
+    </Box>
   );
 }
 

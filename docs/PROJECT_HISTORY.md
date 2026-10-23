@@ -6,6 +6,17 @@
 
 ---
 
+## 2026-10-23 — Whiteboard: subtasks, dated status notes, progress bar
+
+**Why**: some tasks take weeks, and a task sitting untouched looks like its owner is idle. A dated note + progress bar lets everyone see where a task stands.
+
+- **Data** (`whiteboard_items` docs, all optional): `subtasks[] {id,text,done,createdAt,doneBy?,doneByName?,doneAt?}`, `updates[] {id,text,progress?,by,byName,at}` (oldest first), `progress` (0–100). `progress` is **always derived** = the latest note that carries one — the bar can't move without a dated note. All three are in `SERVER_ONLY_FIELDS`, so the generic `PUT /api/whiteboard/:id` strips them.
+- **Endpoints** (`server.js`, via `mutateWhiteboardItem`, a Firestore transaction per change): `POST /api/whiteboard/:id/subtasks`, `PUT|DELETE …/subtasks/:subtaskId`, `POST /api/whiteboard/:id/updates`, `DELETE …/updates/:updateId`. A private item answers 404 to anyone but its poster. Pure rules + caps (50 subtasks, 200 notes, 200/1000 chars) live in `server/whiteboardRules.js` (21 `node --test` tests pass).
+- **Permissions** (match the board's existing "anyone ticks, poster edits"): poster adds/removes subtasks and is the **only** one who can set progress; anyone ticks subtasks and posts notes; a note's author or the task's poster can delete it.
+- **Repeating to-dos**: the spawned next copy keeps the checklist (all unticked) but not the notes/progress.
+- **UI**: `WhiteboardItemDetail.tsx` (new) — collapsible panel under each row (chevron). Collapsed rows already show the progress bar, a `done/total` subtask chip, a note-count chip and a one-line latest-note preview, so status is visible without opening. The panel sits **outside** the draggable row so selecting text in a note doesn't start a drag. Store: `addSubtask / setSubtaskDone / deleteSubtask / addUpdate / deleteUpdate` in `whiteboardStore.ts`.
+- **Checks**: `tsc` clean, `CI=true npm run build` clean, 26 dialog tests + 8 type tests + 21 `node --test` rules tests pass. **Runtime-verified against a fake Firestore** (real `server.js` with `firebase-admin` swapped for an in-memory fake — no emulator/Java on RJ's Mac): 20 HTTP checks of the endpoints + permissions, and a Chrome walkthrough (poster view, teammate view, 500 px phone width). **Not verified against real Firestore** — first prod use is the real test of the transactions. Small polish: ticked subtasks show the first name only (full name on hover); bigger delete-note tap target on phones.
+
 ## 2026-09-30 — Siemens PLC configurator optimizations
 
 `siemensPlc.ts` / `SiemensPlcDialog.tsx`. The dialog now starts on optimizing defaults (`cpu: 'auto'`, `expansion: 'auto'`, `moduleSizes: 'auto'`, `memCard: 'auto'`); `DEFAULT_PLC_INPUTS` keeps the old fixed behaviour for the unit tests.

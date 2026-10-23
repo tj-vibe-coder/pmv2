@@ -132,6 +132,7 @@ function applyDoneTransition({ existing, existingId, patch, actor, nowIso, today
         ...(Number.isInteger(existing.recurrenceDay) ? { recurrenceDay: existing.recurrenceDay } : {}),
         recurrenceOf: existingId,
         ...(existing.link ? { link: existing.link } : {}),
+        ...(existing.subtasks && existing.subtasks.length ? { subtasks: resetSubtasks(existing.subtasks) } : {}),
         createdBy: existing.createdBy,
         createdByName: existing.createdByName,
         createdAt: nowIso,
@@ -146,8 +147,96 @@ function applyDoneTransition({ existing, existingId, patch, actor, nowIso, today
   return { patch: out, spawn };
 }
 
+// ── Subtasks, status notes and progress ───────────────────────────────────────
+// A task can carry a checklist (`subtasks`), a dated log of status notes (`updates`) and a 0–100
+// `progress`. Progress is never set on its own: it is whatever the latest note that carries one says,
+// so the bar can't move without a dated note explaining why. These helpers are pure — each returns
+// { error, status } or the new field values; server.js applies them inside a Firestore transaction.
+const MAX_SUBTASKS = 50;
+const MAX_UPDATES = 200;
+const MAX_SUBTASK_LEN = 200;
+const MAX_UPDATE_LEN = 1000;
+
+// Private items are only ever the poster's; everything else is visible to any signed-in user.
+function canViewWhiteboardItem(item, userId) {
+  return item.visibility !== 'private' || item.createdBy === userId;
+}
+
+// null = no progress given, 0–100 integer, or false if it isn't a number in range.
+function sanitizeProgress(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return false;
+  return Math.round(n);
+}
+
+// The task's progress: the latest note that carries one (null when none does).
+function latestProgress(updates) {
+  for (let i = (updates || []).length - 1; i >= 0; i -= 1) {
+    if (Number.isInteger(updates[i].progress)) return updates[i].progress;
+  }
+  return null;
+}
+
+function addSubtask(subtasks, { id, text, nowIso }) {
+  const list = subtasks || [];
+  const clean = String(text || '').trim();
+  if (!clean) return { status: 400, error: 'Subtask text is required' };
+  if (clean.length > MAX_SUBTASK_LEN) return { status: 400, error: `Subtask is too long (max ${MAX_SUBTASK_LEN} characters)` };
+  if (list.length >= MAX_SUBTASKS) return { status: 400, error: `A task can have at most ${MAX_SUBTASKS} subtasks` };
+  return { subtasks: [...list, { id, text: clean, done: false, createdAt: nowIso }] };
+}
+
+// Ticking records who and when (never taken from the client); unticking clears it.
+function setSubtaskDone(subtasks, subtaskId, done, { actor, nowIso }) {
+  const list = subtasks || [];
+  if (!list.some((s) => s.id === subtaskId)) return { status: 404, error: 'Subtask not found' };
+  return {
+    subtasks: list.map((s) => {
+      if (s.id !== subtaskId) return s;
+      const { doneBy, doneByName, doneAt, ...rest } = s;
+      return done ? { ...rest, done: true, doneBy: actor.id, doneByName: actor.name, doneAt: nowIso } : { ...rest, done: false };
+    }),
+  };
+}
+
+function removeSubtask(subtasks, subtaskId) {
+  const list = subtasks || [];
+  if (!list.some((s) => s.id === subtaskId)) return { status: 404, error: 'Subtask not found' };
+  return { subtasks: list.filter((s) => s.id !== subtaskId) };
+}
+
+// A status note, optionally moving the progress bar — which only the poster may do.
+function addUpdate(updates, { id, text, progress, actor, isOwner, nowIso }) {
+  const list = updates || [];
+  const clean = String(text || '').trim();
+  if (!clean) return { status: 400, error: 'Note text is required' };
+  if (clean.length > MAX_UPDATE_LEN) return { status: 400, error: `Note is too long (max ${MAX_UPDATE_LEN} characters)` };
+  const pct = sanitizeProgress(progress);
+  if (pct === false) return { status: 400, error: 'Progress must be a number from 0 to 100' };
+  if (pct !== null && !isOwner) return { status: 403, error: 'Only the poster can set progress' };
+  if (list.length >= MAX_UPDATES) return { status: 400, error: `A task can have at most ${MAX_UPDATES} notes` };
+  const next = [...list, { id, text: clean, ...(pct !== null ? { progress: pct } : {}), by: actor.id, byName: actor.name, at: nowIso }];
+  return { updates: next, progress: latestProgress(next) };
+}
+
+// A note can be removed by whoever wrote it or by the task's poster; progress falls back to the previous note's.
+function removeUpdate(updates, updateId, { actorId, isOwner }) {
+  const list = updates || [];
+  const target = list.find((u) => u.id === updateId);
+  if (!target) return { status: 404, error: 'Note not found' };
+  if (!isOwner && target.by !== actorId) return { status: 403, error: 'Only the author or the poster can delete this note' };
+  const next = list.filter((u) => u.id !== updateId);
+  return { updates: next, progress: latestProgress(next) };
+}
+
+// A repeating task's next copy starts with the same checklist, all unticked.
+function resetSubtasks(subtasks) {
+  return (subtasks || []).map((s) => ({ id: s.id, text: s.text, done: false, createdAt: s.createdAt }));
+}
+
 // Fields only the server may set — stripped from anything a client sends.
-const SERVER_ONLY_FIELDS = ['doneBy', 'doneByName', 'doneAt', 'spawnedNextId', 'recurrenceOf', 'createdBy', 'createdByName', 'createdAt', 'id'];
+const SERVER_ONLY_FIELDS = ['doneBy', 'doneByName', 'doneAt', 'spawnedNextId', 'recurrenceOf', 'createdBy', 'createdByName', 'createdAt', 'id', 'subtasks', 'updates', 'progress'];
 
 module.exports = {
   WHITEBOARD_LINK_TYPES,
@@ -159,4 +248,13 @@ module.exports = {
   nextRecurringDueDate,
   firstDueDate,
   applyDoneTransition,
+  canViewWhiteboardItem,
+  sanitizeProgress,
+  latestProgress,
+  addSubtask,
+  setSubtaskDone,
+  removeSubtask,
+  addUpdate,
+  removeUpdate,
+  resetSubtasks,
 };

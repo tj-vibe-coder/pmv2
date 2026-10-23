@@ -262,3 +262,146 @@ describe('choosing the specific day of a repeat', () => {
     expect(within(screen.getByTestId('wb-item-k')).getByText('Monthly · 15th')).toBeInTheDocument();
   });
 });
+
+describe('subtasks, status notes and progress', () => {
+  const addSubtask = jest.fn().mockResolvedValue(undefined);
+  const setSubtaskDone = jest.fn().mockResolvedValue(undefined);
+  const deleteSubtask = jest.fn().mockResolvedValue(undefined);
+  const addUpdate = jest.fn().mockResolvedValue(undefined);
+  const deleteUpdate = jest.fn().mockResolvedValue(undefined);
+
+  const sub = (id: string, text: string, done = false) => ({ id, text, done, createdAt: '2026-10-20T00:00:00.000Z' });
+  const note = (id: string, text: string, by: string, extra: object = {}) => ({ id, text, by, byName: by === 'u1' ? 'TJ' : 'RJ', at: '2026-10-21T06:10:00.000Z', ...extra });
+
+  beforeEach(() => {
+    [addSubtask, setSubtaskDone, deleteSubtask, addUpdate, deleteUpdate].forEach((f) => f.mockClear());
+    useWhiteboardStore.setState({
+      items: [
+        // posted by the signed-in user (u1) → "mine"
+        item({
+          id: 'mine', text: 'Install panel', createdBy: 'u1', createdByName: 'TJ', progress: 40,
+          subtasks: [{ ...sub('s1', 'Order breakers', true), doneBy: 'u3', doneByName: 'Renzel Punongbayan', doneAt: '2026-10-20T06:20:00.000Z' }, sub('s2', 'Wire it')],
+          updates: [note('n1', 'Waiting on supplier', 'u1', { progress: 40 }), note('n2', 'Supplier replied', 'u2')],
+        }),
+        // posted by someone else
+        item({ id: 'theirs', text: 'Site survey', progress: 70, subtasks: [sub('t1', 'Book visit')], updates: [note('n3', 'Visit booked', 'u2', { progress: 70 })] }),
+      ],
+      addSubtask, setSubtaskDone, deleteSubtask, addUpdate, deleteUpdate,
+    });
+  });
+
+  it('shows progress, subtask count, note count and the latest note without opening anything', () => {
+    renderBoard();
+    const row = screen.getByTestId('wb-item-mine');
+    expect(within(row).getByTestId('wb-progress')).toHaveTextContent('40%');
+    expect(within(row).getByText('1/2')).toBeInTheDocument();
+    expect(within(row).getByText('2')).toBeInTheDocument();
+    expect(within(row).getByTestId('wb-latest-note')).toHaveTextContent('RJ: Supplier replied');
+    expect(screen.queryByTestId('wb-detail-mine')).not.toBeInTheDocument(); // collapsed
+  });
+
+  it('expands and collapses the subtasks and notes', async () => {
+    renderBoard();
+    const row = screen.getByTestId('wb-item-mine');
+    fireEvent.click(within(row).getByRole('button', { name: /show subtasks and notes/i }));
+    const detail = screen.getByTestId('wb-detail-mine');
+    expect(within(detail).getByText('Order breakers')).toBeInTheDocument();
+    expect(within(detail).getByText('Waiting on supplier')).toBeInTheDocument();
+    expect(within(detail).getByText('Supplier replied')).toBeInTheDocument();
+    // the one-line preview gives way to the full log
+    expect(within(row).queryByTestId('wb-latest-note')).not.toBeInTheDocument();
+    fireEvent.click(within(row).getByRole('button', { name: /hide subtasks and notes/i }));
+    await waitFor(() => expect(screen.queryByTestId('wb-detail-mine')).not.toBeInTheDocument());
+  });
+
+  it('does not make the row draggable-by-accident: the panel sits outside the draggable row', () => {
+    renderBoard();
+    fireEvent.click(within(screen.getByTestId('wb-item-mine')).getByRole('button', { name: /show subtasks and notes/i }));
+    expect(screen.getByTestId('wb-item-mine')).not.toContainElement(screen.getByTestId('wb-detail-mine'));
+  });
+
+  it('shows who ticked a subtask by first name, with the full name on hover', () => {
+    renderBoard();
+    fireEvent.click(within(screen.getByTestId('wb-item-mine')).getByRole('button', { name: /show subtasks and notes/i }));
+    const ticked = within(screen.getByTestId('wb-detail-mine')).getByText(/✓ Renzel/);
+    expect(ticked).toHaveAttribute('title', 'Renzel Punongbayan');
+    expect(ticked).not.toHaveTextContent('Punongbayan');
+  });
+
+  it('anyone can tick a subtask', () => {
+    renderBoard();
+    fireEvent.click(within(screen.getByTestId('wb-item-theirs')).getByRole('button', { name: /show subtasks and notes/i }));
+    fireEvent.click(within(screen.getByTestId('wb-detail-theirs')).getByRole('checkbox', { name: 'Book visit' }));
+    expect(setSubtaskDone).toHaveBeenCalledWith('theirs', 't1', true);
+  });
+
+  it('the poster can add and remove subtasks and move the progress bar with a note', async () => {
+    renderBoard();
+    fireEvent.click(within(screen.getByTestId('wb-item-mine')).getByRole('button', { name: /show subtasks and notes/i }));
+    const detail = screen.getByTestId('wb-detail-mine');
+
+    fireEvent.change(within(detail).getByLabelText('New subtask'), { target: { value: 'Test it' } });
+    fireEvent.keyDown(within(detail).getByLabelText('New subtask'), { key: 'Enter' });
+    expect(addSubtask).toHaveBeenCalledWith('mine', 'Test it');
+
+    fireEvent.click(within(detail).getByRole('button', { name: /delete subtask wire it/i }));
+    expect(deleteSubtask).toHaveBeenCalledWith('mine', 's2');
+
+    fireEvent.change(within(detail).getByLabelText('Status note'), { target: { value: 'Parts arrived' } });
+    fireEvent.change(within(detail).getByRole('slider'), { target: { value: 65 } });
+    fireEvent.click(within(detail).getByRole('button', { name: /post note/i }));
+    expect(addUpdate).toHaveBeenCalledWith('mine', { text: 'Parts arrived', progress: 65 });
+    await waitFor(() => expect(within(detail).getByLabelText('Status note')).toHaveValue(''));
+  });
+
+  it('a note posted without touching the slider leaves progress alone', async () => {
+    renderBoard();
+    fireEvent.click(within(screen.getByTestId('wb-item-mine')).getByRole('button', { name: /show subtasks and notes/i }));
+    const detail = screen.getByTestId('wb-detail-mine');
+    fireEvent.change(within(detail).getByLabelText('Status note'), { target: { value: 'Still on it' } });
+    fireEvent.click(within(detail).getByRole('button', { name: /post note/i }));
+    expect(addUpdate).toHaveBeenCalledWith('mine', { text: 'Still on it' });
+    await waitFor(() => expect(within(detail).getByLabelText('Status note')).toHaveValue(''));
+  });
+
+  it('a teammate can add a note but sees no progress slider and cannot add or remove subtasks', async () => {
+    renderBoard();
+    fireEvent.click(within(screen.getByTestId('wb-item-theirs')).getByRole('button', { name: /show subtasks and notes/i }));
+    const detail = screen.getByTestId('wb-detail-theirs');
+    expect(within(detail).queryByRole('slider')).not.toBeInTheDocument();
+    expect(within(detail).queryByLabelText('New subtask')).not.toBeInTheDocument();
+    expect(within(detail).queryByRole('button', { name: /delete subtask/i })).not.toBeInTheDocument();
+    fireEvent.change(within(detail).getByLabelText('Status note'), { target: { value: 'FYI the gate code changed' } });
+    fireEvent.click(within(detail).getByRole('button', { name: /post note/i }));
+    expect(addUpdate).toHaveBeenCalledWith('theirs', { text: 'FYI the gate code changed' });
+    await waitFor(() => expect(within(detail).getByLabelText('Status note')).toHaveValue(''));
+  });
+
+  it('notes can be deleted by their author or the poster, not by other people', () => {
+    renderBoard();
+    // On the poster's own task they can delete every note…
+    fireEvent.click(within(screen.getByTestId('wb-item-mine')).getByRole('button', { name: /show subtasks and notes/i }));
+    expect(within(screen.getByTestId('wb-detail-mine')).getAllByRole('button', { name: 'Delete note' })).toHaveLength(2);
+    // …but on someone else's task only their own (none here — the one note is RJ's).
+    fireEvent.click(within(screen.getByTestId('wb-item-theirs')).getByRole('button', { name: /show subtasks and notes/i }));
+    expect(within(screen.getByTestId('wb-detail-theirs')).queryByRole('button', { name: 'Delete note' })).not.toBeInTheDocument();
+  });
+
+  it('hides the progress bar once the task is done', () => {
+    useWhiteboardStore.setState({ items: [item({ id: 'd', text: 'Finished', done: true, progress: 90 })] });
+    renderBoard();
+    fireEvent.click(screen.getByRole('button', { name: /show done/i }));
+    expect(within(screen.getByTestId('wb-item-d')).queryByTestId('wb-progress')).not.toBeInTheDocument();
+  });
+
+  it('shows the server’s message when something is not allowed', async () => {
+    addUpdate.mockRejectedValueOnce(new Error('Only the poster can set progress'));
+    renderBoard();
+    fireEvent.click(within(screen.getByTestId('wb-item-mine')).getByRole('button', { name: /show subtasks and notes/i }));
+    const detail = screen.getByTestId('wb-detail-mine');
+    fireEvent.change(within(detail).getByLabelText('Status note'), { target: { value: 'x' } });
+    fireEvent.click(within(detail).getByRole('button', { name: /post note/i }));
+    expect(await within(detail).findByText('Only the poster can set progress')).toBeInTheDocument();
+    expect(within(detail).getByLabelText('Status note')).toHaveValue('x'); // draft kept
+  });
+});

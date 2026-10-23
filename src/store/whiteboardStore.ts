@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { WhiteboardCategory, WhiteboardItem, WhiteboardKind, WhiteboardLink, WhiteboardPerson, WhiteboardRecurrence, WhiteboardVisibility } from '../types/Whiteboard';
+import type { WhiteboardCategory, WhiteboardItem, WhiteboardKind, WhiteboardLink, WhiteboardPerson, WhiteboardRecurrence, WhiteboardSubtask, WhiteboardUpdate, WhiteboardVisibility } from '../types/Whiteboard';
 import { API_BASE } from '../config/api';
 
 // App-wide (not calcsheet-scoped) — talks to /api/whiteboard directly, same
@@ -54,7 +54,32 @@ interface WhiteboardActions {
   // leave the old value in place rather than clearing it.
   updateItem: (id: string, patch: Partial<Pick<WhiteboardItem, 'text' | 'visibility' | 'done' | 'category'>> & { assignedTo?: WhiteboardPerson | null; dueDate?: string | null; recurrence?: WhiteboardRecurrence | null; recurrenceDay?: number | null; link?: WhiteboardLink | null }) => Promise<{ spawned?: WhiteboardItem } | void>;
   deleteItem: (id: string) => Promise<void>;
+  // Subtasks and dated status notes. The server owns these arrays and answers with the new values.
+  addSubtask: (id: string, text: string) => Promise<void>;
+  setSubtaskDone: (id: string, subtaskId: string, done: boolean) => Promise<void>;
+  deleteSubtask: (id: string, subtaskId: string) => Promise<void>;
+  addUpdate: (id: string, note: { text: string; progress?: number }) => Promise<void>;
+  deleteUpdate: (id: string, updateId: string) => Promise<void>;
   setOpen: (open: boolean) => void;
+}
+
+// What the subtask / note endpoints send back: the changed arrays (and, for notes, the task's new progress — null = none).
+interface DetailResponse { subtasks?: WhiteboardSubtask[]; updates?: WhiteboardUpdate[]; progress?: number | null; updatedAt?: string }
+
+// Shared by the five subtask / note actions: call the endpoint, then fold the server's answer into the item.
+// (Runs only when an action is called, by which time the store below exists.)
+async function changeDetail(method: string, id: string, path: string, body?: unknown): Promise<void> {
+  const res = await api<DetailResponse>(method, `/${id}${path}`, body);
+  useWhiteboardStore.setState((state) => ({
+    items: state.items.map((i) => {
+      if (i.id !== id) return i;
+      const next: WhiteboardItem = { ...i, updatedAt: res.updatedAt ?? i.updatedAt };
+      if (res.subtasks) next.subtasks = res.subtasks;
+      if (res.updates) next.updates = res.updates;
+      if ('progress' in res) next.progress = res.progress ?? undefined;
+      return next;
+    }),
+  }));
 }
 
 export const useWhiteboardStore = create<WhiteboardState & WhiteboardActions>()((set, get) => ({
@@ -164,6 +189,12 @@ export const useWhiteboardStore = create<WhiteboardState & WhiteboardActions>()(
     await api('DELETE', `/${id}`);
     set({ items: get().items.filter((i) => i.id !== id) });
   },
+
+  addSubtask: (id, text) => changeDetail('POST', id, '/subtasks', { text }),
+  setSubtaskDone: (id, subtaskId, done) => changeDetail('PUT', id, `/subtasks/${subtaskId}`, { done }),
+  deleteSubtask: (id, subtaskId) => changeDetail('DELETE', id, `/subtasks/${subtaskId}`),
+  addUpdate: (id, note) => changeDetail('POST', id, '/updates', note),
+  deleteUpdate: (id, updateId) => changeDetail('DELETE', id, `/updates/${updateId}`),
 
   setOpen: (open) => set({ open }),
 }));

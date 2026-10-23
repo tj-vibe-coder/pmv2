@@ -987,6 +987,7 @@ const WHITEBOARD_PERSON_ALIASES = {
 const {
   sanitizeWhiteboardLink, WHITEBOARD_RECURRENCES, SERVER_ONLY_FIELDS, applyDoneTransition, phToday,
   sanitizeRecurrenceDay, firstDueDate,
+  canViewWhiteboardItem, addSubtask, setSubtaskDone, removeSubtask, addUpdate, removeUpdate,
 } = require('./server/whiteboardRules');
 
 // Team-wide lists on the board (src/types/Whiteboard.ts WHITEBOARD_CATEGORIES).
@@ -1149,6 +1150,88 @@ app.put('/api/whiteboard/:id', async (req, res) => {
       ...(spawned ? { spawned } : {}),
     });
   } catch (err) { res.status(500).json({ error: 'Failed to update whiteboard item' }); }
+});
+
+// Subtasks and status notes — each change is a read-modify-write of one array on the item, done in a
+// transaction so two people posting at once can't overwrite each other. `apply` (see
+// server/whiteboardRules.js) returns { error, status } or { patch, response }.
+async function mutateWhiteboardItem(req, res, apply) {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const ref = db.collection('whiteboard_items').doc(req.params.id);
+  const nowIso = new Date().toISOString();
+  const actor = { id: user.id, name: user.full_name || user.username || 'Someone' };
+  const outcome = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    // A private item is invisible to everyone but its poster — same answer as a missing one.
+    if (!snap.exists || !canViewWhiteboardItem(snap.data(), user.id)) return { status: 404, error: 'Item not found' };
+    const existing = snap.data();
+    const result = apply({ existing, actor, isOwner: existing.createdBy === user.id, nowIso });
+    if (result.error) return result;
+    tx.update(ref, { ...result.patch, updatedAt: nowIso });
+    return { response: { success: true, ...result.response, updatedAt: nowIso } };
+  });
+  if (outcome.error) return res.status(outcome.status).json({ error: outcome.error });
+  res.json(outcome.response);
+}
+
+// Add a subtask — poster only (anyone may tick them, like the task itself).
+app.post('/api/whiteboard/:id/subtasks', async (req, res) => {
+  try {
+    await mutateWhiteboardItem(req, res, ({ existing, isOwner, nowIso }) => {
+      if (!isOwner) return { status: 403, error: 'Only the poster can add subtasks' };
+      const out = addSubtask(existing.subtasks, { id: crypto.randomUUID(), text: (req.body || {}).text, nowIso });
+      return out.error ? out : { patch: { subtasks: out.subtasks }, response: { subtasks: out.subtasks } };
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to add subtask' }); }
+});
+
+// Tick / untick a subtask — anyone who can see the item.
+app.put('/api/whiteboard/:id/subtasks/:subtaskId', async (req, res) => {
+  try {
+    await mutateWhiteboardItem(req, res, ({ existing, actor, nowIso }) => {
+      const out = setSubtaskDone(existing.subtasks, req.params.subtaskId, !!(req.body || {}).done, { actor, nowIso });
+      return out.error ? out : { patch: { subtasks: out.subtasks }, response: { subtasks: out.subtasks } };
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to update subtask' }); }
+});
+
+app.delete('/api/whiteboard/:id/subtasks/:subtaskId', async (req, res) => {
+  try {
+    await mutateWhiteboardItem(req, res, ({ existing, isOwner }) => {
+      if (!isOwner) return { status: 403, error: 'Only the poster can delete subtasks' };
+      const out = removeSubtask(existing.subtasks, req.params.subtaskId);
+      return out.error ? out : { patch: { subtasks: out.subtasks }, response: { subtasks: out.subtasks } };
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete subtask' }); }
+});
+
+// Post a dated status note — anyone who can see the item; only the poster may move the progress bar with it.
+app.post('/api/whiteboard/:id/updates', async (req, res) => {
+  try {
+    await mutateWhiteboardItem(req, res, ({ existing, actor, isOwner, nowIso }) => {
+      const { text, progress } = req.body || {};
+      const out = addUpdate(existing.updates, { id: crypto.randomUUID(), text, progress, actor, isOwner, nowIso });
+      if (out.error) return out;
+      return {
+        patch: { updates: out.updates, progress: out.progress === null ? FieldValue.delete() : out.progress },
+        response: { updates: out.updates, progress: out.progress },
+      };
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to post note' }); }
+});
+
+app.delete('/api/whiteboard/:id/updates/:updateId', async (req, res) => {
+  try {
+    await mutateWhiteboardItem(req, res, ({ existing, actor, isOwner }) => {
+      const out = removeUpdate(existing.updates, req.params.updateId, { actorId: actor.id, isOwner });
+      if (out.error) return out;
+      return {
+        patch: { updates: out.updates, progress: out.progress === null ? FieldValue.delete() : out.progress },
+        response: { updates: out.updates, progress: out.progress },
+      };
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete note' }); }
 });
 
 app.delete('/api/whiteboard/:id', async (req, res) => {
