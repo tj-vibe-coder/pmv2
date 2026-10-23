@@ -164,55 +164,68 @@ test('progress is a 0–100 whole number, or absent', () => {
   assert.equal(sanitizeProgress('abc'), false);
 });
 
-test('subtasks: add, tick (records who and when), untick, remove', () => {
-  const added = addSubtask(undefined, { id: 's1', text: '  Get quote  ', nowIso: NOW });
-  assert.deepEqual(added.subtasks, [{ id: 's1', text: 'Get quote', done: false, createdAt: NOW }]);
-  assert.equal(addSubtask(added.subtasks, { id: 's2', text: '   ', nowIso: NOW }).status, 400);
-  assert.equal(addSubtask(added.subtasks, { id: 's2', text: 'x'.repeat(201), nowIso: NOW }).status, 400);
+test('subtasks: add (records who), tick (records who and when), untick', () => {
+  const added = addSubtask(undefined, { id: 's1', text: '  Get quote  ', actor, nowIso: NOW });
+  const mine = { id: 's1', text: 'Get quote', done: false, createdBy: 'u1', createdByName: 'Nylle', createdAt: NOW };
+  assert.deepEqual(added.subtasks, [mine]);
+  assert.equal(addSubtask(added.subtasks, { id: 's2', text: '   ', actor, nowIso: NOW }).status, 400);
+  assert.equal(addSubtask(added.subtasks, { id: 's2', text: 'x'.repeat(201), actor, nowIso: NOW }).status, 400);
   const full = Array.from({ length: 50 }, (_, i) => ({ id: `s${i}`, text: 't', done: false, createdAt: NOW }));
-  assert.equal(addSubtask(full, { id: 'n', text: 'one more', nowIso: NOW }).status, 400);
+  assert.equal(addSubtask(full, { id: 'n', text: 'one more', actor, nowIso: NOW }).status, 400);
 
   const ticked = setSubtaskDone(added.subtasks, 's1', true, { actor, nowIso: NOW });
-  assert.deepEqual(ticked.subtasks[0], { id: 's1', text: 'Get quote', done: true, createdAt: NOW, doneBy: 'u1', doneByName: 'Nylle', doneAt: NOW });
+  assert.deepEqual(ticked.subtasks[0], { ...mine, done: true, doneBy: 'u1', doneByName: 'Nylle', doneAt: NOW });
   const unticked = setSubtaskDone(ticked.subtasks, 's1', false, { actor, nowIso: NOW });
-  assert.deepEqual(unticked.subtasks[0], { id: 's1', text: 'Get quote', done: false, createdAt: NOW });
+  assert.deepEqual(unticked.subtasks[0], mine);
   assert.equal(setSubtaskDone(added.subtasks, 'nope', true, { actor, nowIso: NOW }).status, 404);
+});
 
-  assert.deepEqual(removeSubtask(added.subtasks, 's1').subtasks, []);
-  assert.equal(removeSubtask(added.subtasks, 'nope').status, 404);
+test('subtasks: anyone can add one; only its author or the poster can remove it', () => {
+  const mate = { id: 'u2', name: 'RJ' };
+  // a teammate (not the poster) adds a subtask to someone else's task
+  const byMate = addSubtask([], { id: 's1', text: 'Book the crane', actor: mate, nowIso: NOW });
+  assert.equal(byMate.subtasks[0].createdBy, 'u2');
+  const list = [...byMate.subtasks, { id: 's2', text: "Poster's own", done: false, createdBy: 'u9', createdByName: 'TJ', createdAt: NOW }, { id: 's3', text: 'Old, no author', done: false, createdAt: NOW }];
+
+  assert.equal(removeSubtask(list, 's1', { actorId: 'u2', isOwner: false }).subtasks.length, 2); // author removes their own
+  assert.equal(removeSubtask(list, 's2', { actorId: 'u2', isOwner: false }).status, 403);          // …not the poster's
+  assert.equal(removeSubtask(list, 's3', { actorId: 'u2', isOwner: false }).status, 403);          // no recorded author → poster's
+  assert.equal(removeSubtask(list, 's1', { actorId: 'u9', isOwner: true }).subtasks.length, 2);    // poster removes a teammate's
+  assert.equal(removeSubtask(list, 's3', { actorId: 'u9', isOwner: true }).subtasks.length, 2);
+  assert.equal(removeSubtask(list, 'nope', { actorId: 'u9', isOwner: true }).status, 404);
 });
 
 test('notes: dated, attributed, and progress follows the latest note that sets one', () => {
   const t1 = '2026-10-20T01:00:00.000Z';
   const t2 = '2026-10-21T02:00:00.000Z';
   const t3 = '2026-10-22T03:00:00.000Z';
-  const a = addUpdate(undefined, { id: 'u-a', text: 'Waiting on supplier', progress: 30, actor, isOwner: true, nowIso: t1 });
+  const a = addUpdate(undefined, { id: 'u-a', text: 'Waiting on supplier', progress: 30, actor, nowIso: t1 });
   assert.deepEqual(a.updates, [{ id: 'u-a', text: 'Waiting on supplier', progress: 30, by: 'u1', byName: 'Nylle', at: t1 }]);
   assert.equal(a.progress, 30);
 
-  // a teammate can add a note, but it leaves progress alone
+  // a note without a progress value leaves progress alone
   const mate = { id: 'u2', name: 'RJ' };
-  const b = addUpdate(a.updates, { id: 'u-b', text: 'Supplier replied', actor: mate, isOwner: false, nowIso: t2 });
+  const b = addUpdate(a.updates, { id: 'u-b', text: 'Supplier replied', actor: mate, nowIso: t2 });
   assert.equal(b.updates.length, 2);
   assert.ok(!('progress' in b.updates[1]));
   assert.equal(b.progress, 30);
 
-  const c = addUpdate(b.updates, { id: 'u-c', text: 'PO released', progress: 70, actor, isOwner: true, nowIso: t3 });
+  // …and anyone — not only the poster — can move it with a note
+  const c = addUpdate(b.updates, { id: 'u-c', text: 'PO released', progress: 70, actor: mate, nowIso: t3 });
   assert.equal(c.progress, 70);
+  assert.equal(c.updates[2].byName, 'RJ');
   assert.equal(latestProgress(c.updates), 70);
   assert.equal(latestProgress([]), null);
   assert.equal(latestProgress(undefined), null);
 });
 
-test('notes: validation and who may move the progress bar', () => {
-  const base = { id: 'n1', actor, isOwner: true, nowIso: NOW };
+test('notes: validation', () => {
+  const base = { id: 'n1', actor, nowIso: NOW };
   assert.equal(addUpdate([], { ...base, text: '  ' }).status, 400);
   assert.equal(addUpdate([], { ...base, text: 'x'.repeat(1001) }).status, 400);
   assert.equal(addUpdate([], { ...base, text: 'ok', progress: 120 }).status, 400);
   assert.equal(addUpdate([], { ...base, text: 'ok', progress: 'abc' }).status, 400);
-  const notOwner = addUpdate([], { ...base, isOwner: false, text: 'ok', progress: 50 });
-  assert.equal(notOwner.status, 403);
-  assert.equal(addUpdate([], { ...base, isOwner: false, text: 'ok' }).updates.length, 1);
+  assert.equal(addUpdate([], { ...base, text: 'ok', progress: 50 }).progress, 50);
   const full = Array.from({ length: 200 }, (_, i) => ({ id: `n${i}`, text: 't', by: 'u1', byName: 'N', at: NOW }));
   assert.equal(addUpdate(full, { ...base, text: 'one more' }).status, 400);
 });
@@ -238,11 +251,11 @@ test('notes: delete by author or poster; progress falls back to the previous not
 test('a repeating task spawns with its checklist reset and no notes or progress', () => {
   const existing = {
     kind: 'todo', done: false, visibility: 'general', text: 'Monthly report', dueDate: '2026-10-15', recurrence: 'monthly', createdBy: 'u9', createdByName: 'RJ',
-    subtasks: [{ id: 's1', text: 'Gather numbers', done: true, doneBy: 'u1', doneByName: 'Nylle', doneAt: NOW, createdAt: NOW }],
+    subtasks: [{ id: 's1', text: 'Gather numbers', done: true, doneBy: 'u1', doneByName: 'Nylle', doneAt: NOW, createdBy: 'u9', createdByName: 'RJ', createdAt: NOW }],
     updates: [{ id: 'n1', text: 'Started', progress: 40, by: 'u9', byName: 'RJ', at: NOW }], progress: 40,
   };
   const { spawn } = applyDoneTransition({ existing, existingId: 'i1', patch: { done: true }, actor, nowIso: NOW, today: '2026-10-22', deleteField: DELETE });
-  assert.deepEqual(spawn.subtasks, [{ id: 's1', text: 'Gather numbers', done: false, createdAt: NOW }]);
+  assert.deepEqual(spawn.subtasks, [{ id: 's1', text: 'Gather numbers', done: false, createdBy: 'u9', createdByName: 'RJ', createdAt: NOW }]);
   assert.ok(!('updates' in spawn));
   assert.ok(!('progress' in spawn));
   // no checklist → no empty array written

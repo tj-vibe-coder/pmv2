@@ -33,11 +33,11 @@ import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useWhiteboardStore } from '../store/whiteboardStore';
-import WhiteboardItemDetail, { ProgressBar, formatNoteTime } from './WhiteboardItemDetail';
+import WhiteboardItemDetail, { ProgressBar } from './WhiteboardItemDetail';
 import {
   WHITEBOARD_CATEGORIES, WHITEBOARD_LINK_GROUPS, WHITEBOARD_RECURRENCES, WHITEBOARD_WEEKDAYS, defaultRecurrenceDay,
   sortWhiteboardPending, whiteboardCategoryOf, whiteboardDueState, whiteboardFirstDueDate, whiteboardLinkHref,
-  whiteboardMonthDayLabel, whiteboardRecurrenceLabel,
+  whiteboardMonthDayLabel, whiteboardRecurrenceLabel, whiteboardTag,
 } from '../types/Whiteboard';
 import type { WhiteboardCategory, WhiteboardItem, WhiteboardKind, WhiteboardLink, WhiteboardRecurrence } from '../types/Whiteboard';
 
@@ -330,6 +330,7 @@ function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink, on
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   // Subtasks and status notes live in a collapsible panel under the row.
   const [expanded, setExpanded] = useState(false);
+  // People show as short tags (TJC, RJR…) — keeps the card compact; the full name is on hover.
   const subtaskCount = item.subtasks?.length ?? 0;
   const subtasksDone = item.subtasks?.filter((s) => s.done).length ?? 0;
   const noteCount = item.updates?.length ?? 0;
@@ -398,10 +399,12 @@ function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink, on
               onClick={() => setExpanded(true)} title="Status notes — tap to read"
               sx={{ height: 18, fontSize: 11, '& .MuiChip-label': { px: 0.5 } }} />
           )}
-          <Typography variant="caption" color="text.disabled">{item.createdByName} · {format(new Date(item.createdAt), 'MMM d')}</Typography>
+          <Typography variant="caption" color="text.disabled" title={item.createdByName}>
+            {whiteboardTag(item.createdByName)} · {format(new Date(item.createdAt), 'MMM d')}
+          </Typography>
           {item.done && item.doneByName && (
-            <Typography variant="caption" color="success.main" data-testid="wb-done-by">
-              ✓ {item.doneByName}{item.doneAt ? ` · ${format(new Date(item.doneAt), 'MMM d')}` : ''}
+            <Typography variant="caption" color="success.main" data-testid="wb-done-by" title={item.doneByName}>
+              ✓ {whiteboardTag(item.doneByName)}{item.doneAt ? ` · ${format(new Date(item.doneAt), 'MMM d')}` : ''}
             </Typography>
           )}
         </Stack>
@@ -409,9 +412,9 @@ function ItemRow({ item, canEdit, onToggleDone, onEdit, onDelete, onOpenLink, on
         {latestNote && !expanded && (
           <Typography
             variant="caption" color="text.secondary" noWrap onClick={() => setExpanded(true)} data-testid="wb-latest-note"
-            sx={{ display: 'block', mt: 0.25, cursor: 'pointer' }}
+            sx={{ display: 'block', mt: 0.25, cursor: 'pointer' }} title={`${latestNote.byName}: ${latestNote.text}`}
           >
-            {latestNote.byName}: {latestNote.text} · {formatNoteTime(latestNote.at)}
+            {whiteboardTag(latestNote.byName)}: {latestNote.text} · {format(new Date(latestNote.at), 'MMM d')}
           </Typography>
         )}
       </Box>

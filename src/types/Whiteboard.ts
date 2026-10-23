@@ -33,6 +33,8 @@ export type WhiteboardPerson = 'tj' | 'rj' | 'renzel' | 'nylle' | 'kim';
 export interface WhiteboardPersonInfo {
   key: WhiteboardPerson;
   label: string;
+  // The short tag the team uses for this person on the board (TJC, RJR…).
+  tag: string;
   color: string;      // column header background
   lightColor: string; // sticky-note background
   // Lowercase words that identify this person's login account (any word of
@@ -44,11 +46,11 @@ export interface WhiteboardPersonInfo {
 // tj = Tyrone James Caballero, rj = Reuel Joshua Rivera, renzel = Renzel
 // Punongbayan, nylle = Nylle Harold Managa, kim = Kim Solis.
 export const WHITEBOARD_PEOPLE: WhiteboardPersonInfo[] = [
-  { key: 'tj', label: 'TJ', color: '#f0b357', lightColor: '#fdf1de', aliases: ['tj', 'tjc', 'tyrone', 'caballero'] },
-  { key: 'rj', label: 'RJ', color: '#7fb1e0', lightColor: '#e7f1fb', aliases: ['rj', 'rjr', 'reuel', 'rivera'] },
-  { key: 'renzel', label: 'Renzel', color: '#a8cf7c', lightColor: '#eef7e4', aliases: ['renzel', 'punongbayan'] },
-  { key: 'nylle', label: 'Nylle', color: '#b18fd1', lightColor: '#f2eaf9', aliases: ['nylle', 'managa'] },
-  { key: 'kim', label: 'Kim', color: '#e8909f', lightColor: '#fcecef', aliases: ['kim', 'solis'] },
+  { key: 'tj', label: 'TJ', tag: 'TJC', color: '#f0b357', lightColor: '#fdf1de', aliases: ['tj', 'tjc', 'tyrone', 'caballero'] },
+  { key: 'rj', label: 'RJ', tag: 'RJR', color: '#7fb1e0', lightColor: '#e7f1fb', aliases: ['rj', 'rjr', 'reuel', 'rivera'] },
+  { key: 'renzel', label: 'Renzel', tag: 'RPP', color: '#a8cf7c', lightColor: '#eef7e4', aliases: ['renzel', 'punongbayan'] },
+  { key: 'nylle', label: 'Nylle', tag: 'NDM', color: '#b18fd1', lightColor: '#f2eaf9', aliases: ['nylle', 'managa'] },
+  { key: 'kim', label: 'Kim', tag: 'KKS', color: '#e8909f', lightColor: '#fcecef', aliases: ['kim', 'solis'] },
 ];
 
 // Which column (if any) a logged-in user is — so the person a public to-do is
@@ -61,6 +63,16 @@ export function whiteboardPersonOf(user: { full_name?: string | null; username?:
     .filter(Boolean);
   const match = WHITEBOARD_PEOPLE.find((p) => words.some((w) => p.aliases.includes(w)));
   return match ? match.key : null;
+}
+
+// How a person is shown on the board, to keep cards compact: the team's tag for them (TJC, RJR, RPP, NDM, KKS) when the
+// name is one of the roster's people, otherwise the initials ("Some Other Person" → "SOP"). A one-word name is kept as is.
+export function whiteboardTag(name: string | null | undefined): string {
+  const person = whiteboardPersonOf({ full_name: name });
+  if (person) return WHITEBOARD_PEOPLE.find((p) => p.key === person)!.tag;
+  const words = (name || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  return words.length === 1 ? words[0] : words.slice(0, 3).map((w) => w[0].toUpperCase()).join('');
 }
 
 // Optional connection from a note to one Project List project or one
@@ -172,20 +184,23 @@ export function sortWhiteboardPending<T extends { dueDate?: string; createdAt: s
   });
 }
 
-// A checklist line under a task. Anyone may tick it (like the task itself); only the poster adds or removes them.
+// A checklist line under a task. Anyone may add or tick one; it can be removed by whoever added it or by the task's poster.
 export interface WhiteboardSubtask {
   id: string;
   text: string;
   done: boolean;
   createdAt: string;
+  // Who added it — set by the server (absent on a subtask the poster made before this was recorded).
+  createdBy?: string;
+  createdByName?: string;
   // Who ticked it and when — set by the server.
   doneBy?: string;
   doneByName?: string;
   doneAt?: string;
 }
 
-// A dated status note on a task, so a slow task doesn't look neglected. Anyone may add one; `progress`
-// (0–100) can only be set by the poster, and the task's own `progress` is the latest note's value.
+// A dated status note on a task, so a slow task doesn't look neglected. Anyone may add one, optionally with
+// a `progress` (0–100); the task's own `progress` is the latest note's value.
 export interface WhiteboardUpdate {
   id: string;
   text: string;

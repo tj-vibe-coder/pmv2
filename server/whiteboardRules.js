@@ -149,8 +149,8 @@ function applyDoneTransition({ existing, existingId, patch, actor, nowIso, today
 
 // ── Subtasks, status notes and progress ───────────────────────────────────────
 // A task can carry a checklist (`subtasks`), a dated log of status notes (`updates`) and a 0–100
-// `progress`. Progress is never set on its own: it is whatever the latest note that carries one says,
-// so the bar can't move without a dated note explaining why. These helpers are pure — each returns
+// `progress`. Anyone who can see a task can add to all three; progress is never set on its own: it is
+// whatever the latest note that carries one says, so the bar can't move without a dated note explaining why. These helpers are pure — each returns
 // { error, status } or the new field values; server.js applies them inside a Firestore transaction.
 const MAX_SUBTASKS = 50;
 const MAX_UPDATES = 200;
@@ -178,13 +178,14 @@ function latestProgress(updates) {
   return null;
 }
 
-function addSubtask(subtasks, { id, text, nowIso }) {
+// Records who added it, so they (or the poster) can take it off again.
+function addSubtask(subtasks, { id, text, actor, nowIso }) {
   const list = subtasks || [];
   const clean = String(text || '').trim();
   if (!clean) return { status: 400, error: 'Subtask text is required' };
   if (clean.length > MAX_SUBTASK_LEN) return { status: 400, error: `Subtask is too long (max ${MAX_SUBTASK_LEN} characters)` };
   if (list.length >= MAX_SUBTASKS) return { status: 400, error: `A task can have at most ${MAX_SUBTASKS} subtasks` };
-  return { subtasks: [...list, { id, text: clean, done: false, createdAt: nowIso }] };
+  return { subtasks: [...list, { id, text: clean, done: false, createdBy: actor.id, createdByName: actor.name, createdAt: nowIso }] };
 }
 
 // Ticking records who and when (never taken from the client); unticking clears it.
@@ -200,21 +201,23 @@ function setSubtaskDone(subtasks, subtaskId, done, { actor, nowIso }) {
   };
 }
 
-function removeSubtask(subtasks, subtaskId) {
+// Removed by whoever added it or by the task's poster (a subtask with no recorded author is the poster's to remove).
+function removeSubtask(subtasks, subtaskId, { actorId, isOwner }) {
   const list = subtasks || [];
-  if (!list.some((s) => s.id === subtaskId)) return { status: 404, error: 'Subtask not found' };
+  const target = list.find((s) => s.id === subtaskId);
+  if (!target) return { status: 404, error: 'Subtask not found' };
+  if (!isOwner && target.createdBy !== actorId) return { status: 403, error: 'Only the person who added it or the poster can delete this subtask' };
   return { subtasks: list.filter((s) => s.id !== subtaskId) };
 }
 
-// A status note, optionally moving the progress bar — which only the poster may do.
-function addUpdate(updates, { id, text, progress, actor, isOwner, nowIso }) {
+// A status note, optionally moving the progress bar — open to anyone who can see the task.
+function addUpdate(updates, { id, text, progress, actor, nowIso }) {
   const list = updates || [];
   const clean = String(text || '').trim();
   if (!clean) return { status: 400, error: 'Note text is required' };
   if (clean.length > MAX_UPDATE_LEN) return { status: 400, error: `Note is too long (max ${MAX_UPDATE_LEN} characters)` };
   const pct = sanitizeProgress(progress);
   if (pct === false) return { status: 400, error: 'Progress must be a number from 0 to 100' };
-  if (pct !== null && !isOwner) return { status: 403, error: 'Only the poster can set progress' };
   if (list.length >= MAX_UPDATES) return { status: 400, error: `A task can have at most ${MAX_UPDATES} notes` };
   const next = [...list, { id, text: clean, ...(pct !== null ? { progress: pct } : {}), by: actor.id, byName: actor.name, at: nowIso }];
   return { updates: next, progress: latestProgress(next) };
@@ -232,7 +235,9 @@ function removeUpdate(updates, updateId, { actorId, isOwner }) {
 
 // A repeating task's next copy starts with the same checklist, all unticked.
 function resetSubtasks(subtasks) {
-  return (subtasks || []).map((s) => ({ id: s.id, text: s.text, done: false, createdAt: s.createdAt }));
+  return (subtasks || []).map(({ id, text, createdBy, createdByName, createdAt }) => ({
+    id, text, done: false, ...(createdBy ? { createdBy, createdByName } : {}), createdAt,
+  }));
 }
 
 // Fields only the server may set — stripped from anything a client sends.
