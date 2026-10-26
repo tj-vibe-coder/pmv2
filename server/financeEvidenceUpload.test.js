@@ -14,7 +14,7 @@ for (const file of ['server.js', 'functions/server.js']) {
       require: name => name.endsWith('financeEvidenceFolder') ? { resolveInvoiceEvidenceFolder: async args => { resolved = args; if (folderError) throw new Error('Ambiguous project folder'); return { id: 'resolved-sales' }; } } : require('./financeEvidence'), Buffer, db: {},
       getGraphAppToken: async () => { calls++; return 'mock-graph'; },
       resolveCorporateDriveId: async () => 'actual-drive', ensureFolderByPath: async () => ({ id: 'folder' }),
-      contentTypeForFilename: () => 'application/pdf', fetch: async url => { uploadedUrl = url; return { ok: true, json: async () => ({ id: 'item1', webUrl: 'https://example.com/doc.pdf' }) }; },
+      contentTypeForFilename: () => 'application/pdf', isBlockedDrivePath: () => false, ONEDRIVE_BLOCKED_RESPONSE: {}, fetch: async url => { uploadedUrl = url; return { ok: true, json: async () => ({ id: 'item1', webUrl: 'https://example.com/doc.pdf' }) }; },
     });
     const res = { status(code) { status = code; return this; }, json(data) { result = data; return this; } };
     await handler({ body }, res); return { status, result, calls, resolved, uploadedUrl };

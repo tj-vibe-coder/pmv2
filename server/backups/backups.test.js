@@ -113,3 +113,27 @@ test('exportFirestoreDatabase generates deterministic snapshot and SHA-256 manif
   assert.ok(result.snapshotJson.includes('Test Project'));
   assert.ok(result.snapshotJson.includes('Acme Corp'));
 });
+
+test('exportFirestoreDatabase leaves out session/pairing collections and password hashes', async () => {
+  const col = (id, docs) => ({
+    id,
+    get: async () => ({ docs: docs.map(([docId, data]) => ({ id: docId, data: () => ({ ...data }), ref: { listCollections: async () => [] } })) }),
+  });
+  const fakeDb = {
+    listCollections: async () => [
+      col('auth_sessions', [['live-token-abc', { userId: 'u1' }]]),
+      col('scanner_sessions', [['scan_live-token-def', { userId: 'u1' }]]),
+      col('qr_pairings', [['pairing-ghi', { userId: 'u1' }]]),
+      col('users', [['u1', { username: 'someone', password_hash: 'c2VjcmV0', role: 'user' }]]),
+    ],
+  };
+  const result = await exportFirestoreDatabase(fakeDb, { app: () => ({ options: { projectId: 'test-pmv2' } }) }, {
+    timestamp: '2026-10-26T00:00:00.000Z',
+  });
+  assert.deepEqual(Object.keys(result.snapshot.collections), ['users']);
+  assert.deepEqual(result.snapshot.collections.users[0].data, { username: 'someone', role: 'user' });
+  for (const secret of ['live-token-abc', 'scan_live-token-def', 'pairing-ghi', 'c2VjcmV0', 'password_hash"']) {
+    assert.ok(!result.snapshotJson.includes(secret), `snapshot must not contain ${secret}`);
+  }
+  assert.deepEqual(result.manifest.excludedCollections, ['auth_sessions', 'scanner_sessions', 'qr_pairings']);
+});

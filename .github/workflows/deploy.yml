@@ -34,6 +34,10 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
+      # Stops a deploy that would serve /api routes without a login check.
+      - name: API access tests
+        run: npm run test:api-access
+
       - name: Build React app
         run: npm run build
         env:

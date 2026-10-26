@@ -3,6 +3,10 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
+import { installApiAuthFetch } from './utils/apiAuthFetch';
+
+// Before anything renders, so every API call carries the login token.
+installApiAuthFetch();
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
