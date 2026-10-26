@@ -15,6 +15,7 @@ const { GoogleGenAI: AiAssistGoogleGenAI } = require('@google/genai');
 const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
 const { createBackupsRouter } = require('./server/backups/router');
 const { createSoaRouter } = require('./server/soa/soaRouter');
+const { createApiAccessGate } = require('./server/apiAccess');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -41,6 +42,9 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Every /api route requires an approved user unless server/apiAccess.js lists it
+// as public. Keep this above all routes (server/apiAccess.test.js checks).
+app.use(createApiAccessGate({ getCurrentUser, isActiveUser }));
 
 // Initialize Firebase Admin (Firestore)
 const admin = require('firebase-admin');
@@ -130,20 +134,50 @@ function primaryClientContact(client) {
 // anyone who learned/guessed a user's Firestore doc id could forge by hand,
 // with no expiry ever enforced. See docs/agent/PROJECT_STATE.md 2026-08-17.
 const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days, absolute
+// Sessions minted before this version are refused. Bumping it logs everyone out
+// once (done for v2 after the 2026-10 audit: full backups had carried live tokens).
+const AUTH_SESSION_VERSION = 2;
 
 async function mintAuthSession(userId, username) {
   const token = crypto.randomBytes(32).toString('hex');
   await db.collection('auth_sessions').doc(token).set({
     userId,
     username,
+    v: AUTH_SESSION_VERSION,
     createdAt: Date.now(),
     expiresAt: Date.now() + AUTH_SESSION_TTL_MS,
   });
   return token;
 }
 
-// Helper: get current user from Bearer token
-async function getCurrentUser(req) {
+// Ends every login and phone-scanner session of a user, except the caller's own
+// `keepToken` (so a superadmin editing their own account isn't logged out).
+// Used when a password, role or approval changes, or the user is deleted.
+async function revokeUserSessions(userId, keepToken) {
+  for (const collection of ['auth_sessions', 'scanner_sessions']) {
+    const snap = await db.collection(collection).where('userId', '==', String(userId)).get();
+    const refs = snap.docs.filter((d) => d.id !== keepToken).map((d) => d.ref);
+    for (let i = 0; i < refs.length; i += 500) {
+      const batch = db.batch();
+      refs.slice(i, i + 500).forEach((ref) => batch.delete(ref));
+      await batch.commit();
+    }
+  }
+}
+
+function bearerToken(req) {
+  const authHeader = req.headers.authorization;
+  return authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+}
+
+// Helper: get current user from Bearer token. Resolved once per request — the
+// /api access gate and the route handler share the lookup.
+function getCurrentUser(req) {
+  if (!req._currentUserPromise) req._currentUserPromise = lookupCurrentUser(req);
+  return req._currentUserPromise;
+}
+
+async function lookupCurrentUser(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.substring(7);
@@ -162,7 +196,7 @@ async function getCurrentUser(req) {
     const sessSnap = await db.collection('auth_sessions').doc(token).get();
     if (!sessSnap.exists) return null;
     const sess = sessSnap.data();
-    if (!sess || Date.now() > sess.expiresAt) return null;
+    if (!sess || Date.now() > sess.expiresAt || (sess.v || 1) < AUTH_SESSION_VERSION) return null;
     const userDoc = await db.collection('users').doc(sess.userId).get();
     if (!userDoc.exists) return null;
     return { id: userDoc.id, ...userDoc.data() };
@@ -568,6 +602,7 @@ usersRouter.post('/reset-requests/:id/resolve', async (req, res) => {
       const userDoc = await userRef.get();
       if (!userDoc.exists) return res.status(404).json({ success: false, error: 'User no longer exists' });
       await userRef.update({ password_hash: Buffer.from(nextPassword).toString('base64'), updated_at: now });
+      await revokeUserSessions(userRef.id, bearerToken(req));
       status = 'resolved';
     }
     await ref.update({ status, resolved_by: user.username, resolved_at: now });
@@ -630,6 +665,10 @@ usersRouter.patch('/:id', async (req, res) => {
       if (!snap.empty && snap.docs[0].id !== targetId) return res.status(409).json({ success: false, error: 'Email already exists' });
     }
     await ref.update(updates);
+    const accessChanged = updates.password_hash
+      || (updates.role && updates.role !== currentData.role)
+      || (updates.approved === 0 && currentData.approved !== 0);
+    if (accessChanged) await revokeUserSessions(targetId, bearerToken(req));
     const updatedDoc = await ref.get();
     const d = updatedDoc.data();
     res.json({
@@ -676,6 +715,7 @@ async function deleteUserHandler(req, res) {
       if (saSnap.size <= 1) return res.status(400).json({ success: false, error: 'Cannot delete the last superadmin' });
     }
     await targetRef.delete();
+    await revokeUserSessions(targetId);
     console.log(`User ${targetId} deleted by superadmin ${user.username}`);
     res.json({ success: true, message: 'User deleted' });
   } catch (err) {
@@ -6572,6 +6612,48 @@ async function ensureFolderByPath(token, driveId, folderPath) {
   return { id: current.id, webUrl: current.webUrl || '', name: current.name };
 }
 
+// The proxy below works on the whole corporate drive, but nothing in the app uses
+// the '00 System' tree through it (system backups are written server-side), and
+// older backups there hold credentials. So the proxy refuses that tree, by path
+// and — for routes that take an item id — by looking up where the item lives.
+const ONEDRIVE_BLOCKED_ROOTS = ['00 system'];
+
+function isBlockedDrivePath(drivePath) {
+  const segments = String(drivePath || '').replace(/\\/g, '/').split('/').map((s) => s.trim()).filter(Boolean);
+  if (segments.some((s) => s === '.' || s === '..')) return true; // URL parsing would resolve these
+  return segments.length > 0 && ONEDRIVE_BLOCKED_ROOTS.includes(segments[0].toLowerCase());
+}
+
+// Uses parentReference.path when Graph sends it; otherwise walks up parent ids
+// until the drive root, remembering the top-level folder name on the way.
+async function isBlockedDriveItem(token, driveId, itemId) {
+  let id = itemId;
+  let topLevelName = null;
+  for (let depth = 0; depth < 20; depth++) {
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(id)}?$select=name,parentReference,root`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.status === 404 && depth === 0) return false; // the real call 404s the same way
+    if (!r.ok) throw new Error('item lookup failed ' + r.status);
+    const item = await r.json();
+    if (item.root) return depth > 0 && isBlockedDrivePath(topLevelName);
+    const parent = item.parentReference || {};
+    const at = typeof parent.path === 'string' ? parent.path.indexOf('root:') : -1;
+    if (at !== -1) {
+      let relative = parent.path.slice(at + 'root:'.length);
+      try { relative = decodeURIComponent(relative); } catch (_) { /* keep as-is */ }
+      return isBlockedDrivePath(`${relative}/${item.name || ''}`);
+    }
+    if (!parent.id) return true; // can't tell where it lives
+    topLevelName = item.name || '';
+    id = parent.id;
+  }
+  return true; // deeper than any folder the app uses
+}
+
+const ONEDRIVE_BLOCKED_RESPONSE = { error: 'This OneDrive folder is not available through the app' };
+
 function contentTypeForFilename(filename) {
   const ext = String(filename).toLowerCase().split('.').pop();
   if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
@@ -6588,6 +6670,7 @@ app.post('/api/onedrive/upload', async (req, res) => {
   if (!folderPath || !filename || !contentBase64) {
     return res.status(400).json({ error: 'folderPath, filename, and contentBase64 are required' });
   }
+  if (isBlockedDrivePath(folderPath)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
   try {
     if (req.body.financeEvidenceType) {
       const { TYPES } = require('./server/financeEvidence');
@@ -6626,6 +6709,7 @@ app.delete('/api/onedrive/item/:id', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, req.params.id)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}`,
       { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } }
@@ -6647,6 +6731,7 @@ app.get('/api/onedrive/item/:id/thumbnail', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, req.params.id)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/thumbnails/0/medium`,
       { headers: { Authorization: 'Bearer ' + token } }
@@ -6668,6 +6753,7 @@ app.get('/api/onedrive/item/:id/content', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, req.params.id)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/content`,
       { headers: { Authorization: 'Bearer ' + token } }
@@ -6696,6 +6782,7 @@ app.put('/api/onedrive/item/:id/content', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, req.params.id)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const buf = Buffer.from(contentBase64, 'base64');
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/content`,
@@ -6718,6 +6805,7 @@ app.post('/api/onedrive/ensure-folder', async (req, res) => {
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   const { path: folderPath } = req.body || {};
   if (!folderPath) return res.status(400).json({ error: 'path is required' });
+  if (isBlockedDrivePath(folderPath)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
@@ -6734,9 +6822,11 @@ app.post('/api/onedrive/move', async (req, res) => {
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   const { itemId, destPath, name } = req.body || {};
   if (!itemId || !destPath) return res.status(400).json({ error: 'itemId and destPath are required' });
+  if (isBlockedDrivePath(destPath)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, itemId)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const dest = await ensureFolderByPath(token, driveId, destPath);
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(itemId)}`,
@@ -6771,6 +6861,7 @@ app.post('/api/onedrive/rename', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, itemId)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(itemId)}`,
       {
@@ -6801,6 +6892,7 @@ app.post('/api/onedrive/upload-by-id', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, folderId)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const buf = Buffer.from(contentBase64, 'base64');
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(folderId)}:/${encodeURIComponent(filename)}:/content`,
@@ -6839,6 +6931,7 @@ app.get('/api/onedrive/by-path', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   if (!req.query.path) return res.status(400).json({ error: 'path is required' });
+  if (isBlockedDrivePath(req.query.path)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
@@ -6867,6 +6960,9 @@ app.get('/api/onedrive/children', async (req, res) => {
     const id = req.query.id ? String(req.query.id) : '';
     const path = req.query.path ? String(req.query.path) : '';
     const prefix = req.query.prefix ? String(req.query.prefix).toLowerCase() : '';
+    if (id ? await isBlockedDriveItem(token, driveId, id) : isBlockedDrivePath(path)) {
+      return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
+    }
     const enc = path ? path.split('/').map(encodeURIComponent).join('/') : '';
     const url = id
       ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(id)}/children?$top=500&$select=id,webUrl,name,folder`
@@ -6894,6 +6990,7 @@ app.post('/api/onedrive/child-folder', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, parentId)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const cr = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(parentId)}/children`,
       { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) }

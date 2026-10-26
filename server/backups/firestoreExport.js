@@ -2,6 +2,13 @@
 
 const crypto = require('node:crypto');
 
+// Credentials never go into a backup: anyone who can read the file could replay a
+// live login/scanner token or recover a password (password_hash is base64, not a
+// real hash). A restore leaves users needing a password reset and everyone
+// logging in again, which is the point.
+const EXCLUDED_COLLECTIONS = ['auth_sessions', 'scanner_sessions', 'qr_pairings'];
+const REDACTED_FIELDS = { users: ['password_hash'] };
+
 function serializeFirestoreValue(value, admin) {
   if (value === null || value === undefined) return value;
   if (admin && admin.firestore && admin.firestore.Timestamp && value instanceof admin.firestore.Timestamp) {
@@ -51,7 +58,10 @@ async function mapWithConcurrency(items, limit, mapper) {
 
 async function exportCollectionRecursively(collectionRef, admin, concurrency = 20) {
   const snapshot = await collectionRef.get();
+  const redacted = REDACTED_FIELDS[collectionRef.id] || [];
   return mapWithConcurrency(snapshot.docs, concurrency, async (doc) => {
+    const data = doc.data();
+    for (const field of redacted) delete data[field];
     const subcollections = {};
     if (typeof doc.ref.listCollections === 'function') {
       const children = await doc.ref.listCollections();
@@ -61,7 +71,7 @@ async function exportCollectionRecursively(collectionRef, admin, concurrency = 2
     }
     return {
       id: doc.id,
-      data: serializeFirestoreValue(doc.data(), admin),
+      data: serializeFirestoreValue(data, admin),
       subcollections,
     };
   });
@@ -92,7 +102,7 @@ async function exportFirestoreDatabase(db, admin, options = {}) {
 
   let rootCollections = [];
   if (typeof db.listCollections === 'function') {
-    rootCollections = await db.listCollections();
+    rootCollections = (await db.listCollections()).filter((col) => !EXCLUDED_COLLECTIONS.includes(col.id));
   }
 
   // Sort root collections alphabetically for deterministic output
@@ -133,6 +143,8 @@ async function exportFirestoreDatabase(db, admin, options = {}) {
     sizeBytes,
     sha256,
     collectionsSummary,
+    excludedCollections: EXCLUDED_COLLECTIONS,
+    redactedFields: REDACTED_FIELDS,
     snapshotFileName: `firestore-backup-${timestamp.replace(/[:.]/g, '-').slice(0, 19)}.json`,
   };
 
@@ -147,6 +159,8 @@ async function exportFirestoreDatabase(db, admin, options = {}) {
 }
 
 module.exports = {
+  EXCLUDED_COLLECTIONS,
+  REDACTED_FIELDS,
   serializeFirestoreValue,
   exportFirestoreDatabase,
   countDocumentsDeep,
