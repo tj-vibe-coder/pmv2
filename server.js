@@ -16,6 +16,12 @@ const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
 const { createBackupsRouter } = require('./server/backups/router');
 const { createSoaRouter } = require('./server/soa/soaRouter');
 const { createApiAccessGate } = require('./server/apiAccess');
+const { hashPassword, verifyPassword } = require('./server/passwords');
+const { createLoginThrottle, clientAddress, retryMinutes } = require('./server/loginThrottle');
+
+// Production = Cloud Functions (K_SERVICE) or an explicit NODE_ENV; everything
+// else is a dev machine.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -24,19 +30,19 @@ const ALLOWED_ORIGINS = [
   'https://pm.iocontroltech.com',
   'https://pmv2-851ae.web.app',
   'https://pmv2-851ae.firebaseapp.com',
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:5173', // Calcsheet Vite dev server
 ];
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    // Dev only: allow private-LAN origins so you can test from a phone/other device on the same network.
-    if (process.env.NODE_ENV !== 'production' &&
+    // Dev only: allow localhost and private-LAN origins so you can test from a phone/other device on the same network.
+    if (!IS_PRODUCTION &&
         /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+):\d+$/.test(origin)) {
       return callback(null, true);
     }
-    callback(new Error('Not allowed by CORS'));
+    // Not allowed: answer without CORS headers so the browser blocks it, rather
+    // than throwing (which turned every such request into a 500). Non-browser
+    // callers still have to pass the /api login gate below.
+    callback(null, false);
   },
   credentials: true,
 }));
@@ -59,39 +65,28 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
 
-console.log('Connected to Firebase Firestore');
-if (require.main === module) {
-  createDefaultUsers();
-  startServer();
-}
+// Attempt limits on the public auth routes (see server/loginThrottle.js). The
+// per-address budgets are generous because the office shares one address.
+const loginThrottle = createLoginThrottle({
+  db,
+  policies: {
+    login: { max: 5, windowMs: 15 * 60 * 1000, lockMs: 15 * 60 * 1000 },
+    'login-ip': { max: 30, windowMs: 15 * 60 * 1000, lockMs: 15 * 60 * 1000 },
+    // max counts the attempt that gets refused, so these allow 5 per hour.
+    register: { max: 6, windowMs: 60 * 60 * 1000, lockMs: 60 * 60 * 1000 },
+    forgot: { max: 6, windowMs: 60 * 60 * 1000, lockMs: 60 * 60 * 1000 },
+  },
+});
+const tooManyAttempts = (ms) => {
+  const m = retryMinutes(ms);
+  return `Too many attempts. Try again in ${m} minute${m === 1 ? '' : 's'}.`;
+};
 
-// Create default users on startup
-async function createDefaultUsers() {
-  const defaults = [
-    { username: 'TJC', email: 'tyronejames.caballero@gmail.com', password: 'IOCT0201!', role: 'superadmin', full_name: 'Tyrone James Caballero', contact_number: '+63 969 162 2660', approved: 1 },
-    { username: 'admin', email: 'admin@netpacific.com', password: 'admin123', role: 'admin', full_name: null, contact_number: null, approved: 1 },
-    { username: 'user', email: 'user@netpacific.com', password: 'user123', role: 'user', full_name: null, contact_number: null, approved: 1 },
-    { username: 'projects', email: 'projects@iocontroltech.com', password: 'IOCT0201!', role: 'admin', full_name: null, contact_number: null, approved: 1 },
-  ];
-  for (const u of defaults) {
-    try {
-      const snap = await db.collection('users').where('username', '==', u.username).limit(1).get();
-      if (snap.empty) {
-        const passwordHash = Buffer.from(u.password).toString('base64');
-        const now = Math.floor(Date.now() / 1000);
-        await db.collection('users').add({ username: u.username, email: u.email, password_hash: passwordHash, role: u.role, approved: u.approved, full_name: u.full_name, designation: null, contact_number: u.contact_number, created_at: now, updated_at: now });
-        console.log(`Default user created: ${u.username}`);
-      } else if (u.username === 'TJC') {
-        const existing = snap.docs[0].data();
-        const patch = {};
-        if (!existing.full_name) patch.full_name = 'Tyrone James Caballero';
-        if (!existing.contact_number) patch.contact_number = '+63 969 162 2660';
-        if (Object.keys(patch).length > 0) await snap.docs[0].ref.update(patch);
-      }
-    } catch (e) {
-      console.error(`Error creating default user ${u.username}:`, e.message);
-    }
-  }
+console.log('Connected to Firebase Firestore');
+// Accounts are created only through /api/auth/register or the superadmin user
+// management screen — there is no startup seed.
+if (require.main === module) {
+  startServer();
 }
 
 async function syncOperationsStatusToCalcsheet(mainProjectId, projectData) {
@@ -348,13 +343,23 @@ function userResponse(id, user) {
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.json({ success: false, error: 'Username and password are required' });
+  const address = clientAddress(req);
   try {
-    const snap = await db.collection('users').where('username', '==', username).get();
-    if (snap.empty) return res.json({ success: false, error: 'Invalid credentials' });
-    const providedPasswordHash = Buffer.from(password).toString('base64');
-    const candidates = snap.docs
-      .map((doc) => ({ doc, data: doc.data() }))
-      .filter((entry) => entry.data.password_hash === providedPasswordHash)
+    // Locked accounts/addresses don't get a password check at all.
+    const [byUser, byAddress] = await Promise.all([
+      loginThrottle.check('login', username),
+      loginThrottle.check('login-ip', address),
+    ]);
+    const lock = byUser.locked ? byUser : byAddress.locked ? byAddress : null;
+    if (lock) return res.status(429).json({ success: false, error: tooManyAttempts(lock.retryAfterMs) });
+
+    const snap = await db.collection('users').where('username', '==', String(username)).get();
+    const checked = await Promise.all(snap.docs.map(async (doc) => {
+      const data = doc.data();
+      return { doc, data, ...(await verifyPassword(String(password), data.password_hash)) };
+    }));
+    const candidates = checked
+      .filter((entry) => entry.ok)
       .sort((a, b) => {
         const aActive = isActiveUser(a.data) ? 1 : 0;
         const bActive = isActiveUser(b.data) ? 1 : 0;
@@ -363,11 +368,28 @@ app.post('/api/auth/login', async (req, res) => {
         const bUpdated = Number(b.data.updated_at || b.data.created_at || 0);
         return bUpdated - aUpdated;
       });
-    if (candidates.length === 0) return res.json({ success: false, error: 'Invalid credentials' });
-    const userDoc = candidates[0].doc;
-    const user = userDoc.data();
+    if (candidates.length === 0) {
+      // Unknown username and wrong password count the same, so the reply can't
+      // be used to tell which usernames exist.
+      const [u, a] = await Promise.all([loginThrottle.hit('login', username), loginThrottle.hit('login-ip', address)]);
+      const hitLock = u.locked ? u : a.locked ? a : null;
+      if (hitLock) return res.status(429).json({ success: false, error: tooManyAttempts(hitLock.retryAfterMs) });
+      return res.json({ success: false, error: 'Invalid credentials' });
+    }
+    const { doc: userDoc, data: user, needsUpgrade } = candidates[0];
     const approved = user.approved === 1 || user.approved === true;
     if (!approved && user.role !== 'superadmin') return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
+    if (needsUpgrade) {
+      // Legacy base64 record: rewrite as a real hash now that we hold the
+      // plaintext. updated_at is left alone so duplicate-username ordering
+      // (see CLAUDE.md follow-up #12) doesn't change.
+      try {
+        await userDoc.ref.update({ password_hash: await hashPassword(String(password)) });
+      } catch (e) {
+        console.error(`Password hash upgrade failed for ${user.username}:`, e.message);
+      }
+    }
+    await Promise.all([loginThrottle.clear('login', username), loginThrottle.clear('login-ip', address)]);
     const token = await mintAuthSession(userDoc.id, user.username);
     res.json({ success: true, user: userResponse(userDoc.id, user), token });
   } catch (err) {
@@ -402,12 +424,14 @@ app.post('/api/auth/register', async (req, res) => {
   if (!emailRegex.test(email)) return res.json({ success: false, error: 'Please enter a valid email address' });
   if (!['user', 'viewer'].includes(role)) return res.json({ success: false, error: 'Invalid role specified' });
   try {
+    const budget = await loginThrottle.hit('register', clientAddress(req));
+    if (budget.locked) return res.status(429).json({ success: false, error: tooManyAttempts(budget.retryAfterMs) });
     const [uSnap, eSnap] = await Promise.all([
       db.collection('users').where('username', '==', username).limit(1).get(),
       db.collection('users').where('email', '==', email).limit(1).get(),
     ]);
     if (!uSnap.empty || !eSnap.empty) return res.json({ success: false, error: 'Username or email already exists' });
-    const passwordHash = Buffer.from(password).toString('base64');
+    const passwordHash = await hashPassword(String(password));
     const createdAt = Math.floor(Date.now() / 1000);
     const ref = await db.collection('users').add({ username, email, password_hash: passwordHash, role, approved: 0, full_name: null, designation: null, contact_number: null, created_at: createdAt, updated_at: createdAt });
     console.log(`New user registered: ${username} (${email}) with role: ${role} (pending approval)`);
@@ -433,6 +457,8 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   const generic = { success: true, message: 'If that account exists, an administrator has been notified to reset your password.' };
   if (!identifier) return res.status(400).json({ success: false, error: 'Enter your username or email.' });
   try {
+    const budget = await loginThrottle.hit('forgot', clientAddress(req));
+    if (budget.locked) return res.status(429).json({ success: false, error: tooManyAttempts(budget.retryAfterMs) });
     let snap = await db.collection('users').where('username', '==', identifier).limit(1).get();
     if (snap.empty) snap = await db.collection('users').where('email', '==', identifier).limit(1).get();
     if (snap.empty) return res.json(generic); // unknown account — say nothing
@@ -501,7 +527,7 @@ usersRouter.post('/', async (req, res) => {
     ]);
     if (!uSnap.empty) return res.status(409).json({ success: false, error: 'Username already exists' });
     if (!eSnap.empty) return res.status(409).json({ success: false, error: 'Email already exists' });
-    const passwordHash = Buffer.from(nextPassword).toString('base64');
+    const passwordHash = await hashPassword(nextPassword);
     const now = Math.floor(Date.now() / 1000);
     const ref = await db.collection('users').add({
       username: nextUsername,
@@ -601,7 +627,7 @@ usersRouter.post('/reset-requests/:id/resolve', async (req, res) => {
       const userRef = db.collection('users').doc(String(reqData.user_id));
       const userDoc = await userRef.get();
       if (!userDoc.exists) return res.status(404).json({ success: false, error: 'User no longer exists' });
-      await userRef.update({ password_hash: Buffer.from(nextPassword).toString('base64'), updated_at: now });
+      await userRef.update({ password_hash: await hashPassword(nextPassword), updated_at: now });
       await revokeUserSessions(userRef.id, bearerToken(req));
       status = 'resolved';
     }
@@ -635,7 +661,7 @@ usersRouter.patch('/:id', async (req, res) => {
   if (password !== undefined && String(password).length > 0) {
     const nextPassword = String(password);
     if (nextPassword.length < 6) return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long' });
-    updates.password_hash = Buffer.from(nextPassword).toString('base64');
+    updates.password_hash = await hashPassword(nextPassword);
   }
   if (full_name !== undefined) updates.full_name = full_name == null ? null : String(full_name).trim();
   if (designation !== undefined) updates.designation = designation == null ? null : String(designation).trim();
