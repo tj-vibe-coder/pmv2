@@ -15,6 +15,13 @@ const { GoogleGenAI: AiAssistGoogleGenAI } = require('@google/genai');
 const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
 const { createBackupsRouter } = require('./server/backups/router');
 const { createSoaRouter } = require('./server/soa/soaRouter');
+const { createApiAccessGate } = require('./server/apiAccess');
+const { hashPassword, verifyPassword } = require('./server/passwords');
+const { createLoginThrottle, clientAddress, retryMinutes } = require('./server/loginThrottle');
+
+// Production = Cloud Functions (K_SERVICE) or an explicit NODE_ENV; everything
+// else is a dev machine.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -23,24 +30,27 @@ const ALLOWED_ORIGINS = [
   'https://pm.iocontroltech.com',
   'https://pmv2-851ae.web.app',
   'https://pmv2-851ae.firebaseapp.com',
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:5173', // Calcsheet Vite dev server
 ];
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    // Dev only: allow private-LAN origins so you can test from a phone/other device on the same network.
-    if (process.env.NODE_ENV !== 'production' &&
+    // Dev only: allow localhost and private-LAN origins so you can test from a phone/other device on the same network.
+    if (!IS_PRODUCTION &&
         /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+):\d+$/.test(origin)) {
       return callback(null, true);
     }
-    callback(new Error('Not allowed by CORS'));
+    // Not allowed: answer without CORS headers so the browser blocks it, rather
+    // than throwing (which turned every such request into a 500). Non-browser
+    // callers still have to pass the /api login gate below.
+    callback(null, false);
   },
   credentials: true,
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Every /api route requires an approved user unless server/apiAccess.js lists it
+// as public. Keep this above all routes (server/apiAccess.test.js checks).
+app.use(createApiAccessGate({ getCurrentUser, isActiveUser }));
 
 // Initialize Firebase Admin (Firestore)
 const admin = require('firebase-admin');
@@ -55,39 +65,28 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
 
-console.log('Connected to Firebase Firestore');
-if (require.main === module) {
-  createDefaultUsers();
-  startServer();
-}
+// Attempt limits on the public auth routes (see server/loginThrottle.js). The
+// per-address budgets are generous because the office shares one address.
+const loginThrottle = createLoginThrottle({
+  db,
+  policies: {
+    login: { max: 5, windowMs: 15 * 60 * 1000, lockMs: 15 * 60 * 1000 },
+    'login-ip': { max: 30, windowMs: 15 * 60 * 1000, lockMs: 15 * 60 * 1000 },
+    // max counts the attempt that gets refused, so these allow 5 per hour.
+    register: { max: 6, windowMs: 60 * 60 * 1000, lockMs: 60 * 60 * 1000 },
+    forgot: { max: 6, windowMs: 60 * 60 * 1000, lockMs: 60 * 60 * 1000 },
+  },
+});
+const tooManyAttempts = (ms) => {
+  const m = retryMinutes(ms);
+  return `Too many attempts. Try again in ${m} minute${m === 1 ? '' : 's'}.`;
+};
 
-// Create default users on startup
-async function createDefaultUsers() {
-  const defaults = [
-    { username: 'TJC', email: 'tyronejames.caballero@gmail.com', password: 'IOCT0201!', role: 'superadmin', full_name: 'Tyrone James Caballero', contact_number: '+63 969 162 2660', approved: 1 },
-    { username: 'admin', email: 'admin@netpacific.com', password: 'admin123', role: 'admin', full_name: null, contact_number: null, approved: 1 },
-    { username: 'user', email: 'user@netpacific.com', password: 'user123', role: 'user', full_name: null, contact_number: null, approved: 1 },
-    { username: 'projects', email: 'projects@iocontroltech.com', password: 'IOCT0201!', role: 'admin', full_name: null, contact_number: null, approved: 1 },
-  ];
-  for (const u of defaults) {
-    try {
-      const snap = await db.collection('users').where('username', '==', u.username).limit(1).get();
-      if (snap.empty) {
-        const passwordHash = Buffer.from(u.password).toString('base64');
-        const now = Math.floor(Date.now() / 1000);
-        await db.collection('users').add({ username: u.username, email: u.email, password_hash: passwordHash, role: u.role, approved: u.approved, full_name: u.full_name, designation: null, contact_number: u.contact_number, created_at: now, updated_at: now });
-        console.log(`Default user created: ${u.username}`);
-      } else if (u.username === 'TJC') {
-        const existing = snap.docs[0].data();
-        const patch = {};
-        if (!existing.full_name) patch.full_name = 'Tyrone James Caballero';
-        if (!existing.contact_number) patch.contact_number = '+63 969 162 2660';
-        if (Object.keys(patch).length > 0) await snap.docs[0].ref.update(patch);
-      }
-    } catch (e) {
-      console.error(`Error creating default user ${u.username}:`, e.message);
-    }
-  }
+console.log('Connected to Firebase Firestore');
+// Accounts are created only through /api/auth/register or the superadmin user
+// management screen — there is no startup seed.
+if (require.main === module) {
+  startServer();
 }
 
 async function syncOperationsStatusToCalcsheet(mainProjectId, projectData) {
@@ -130,20 +129,50 @@ function primaryClientContact(client) {
 // anyone who learned/guessed a user's Firestore doc id could forge by hand,
 // with no expiry ever enforced. See docs/agent/PROJECT_STATE.md 2026-08-17.
 const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days, absolute
+// Sessions minted before this version are refused. Bumping it logs everyone out
+// once (done for v2 after the 2026-10 audit: full backups had carried live tokens).
+const AUTH_SESSION_VERSION = 2;
 
 async function mintAuthSession(userId, username) {
   const token = crypto.randomBytes(32).toString('hex');
   await db.collection('auth_sessions').doc(token).set({
     userId,
     username,
+    v: AUTH_SESSION_VERSION,
     createdAt: Date.now(),
     expiresAt: Date.now() + AUTH_SESSION_TTL_MS,
   });
   return token;
 }
 
-// Helper: get current user from Bearer token
-async function getCurrentUser(req) {
+// Ends every login and phone-scanner session of a user, except the caller's own
+// `keepToken` (so a superadmin editing their own account isn't logged out).
+// Used when a password, role or approval changes, or the user is deleted.
+async function revokeUserSessions(userId, keepToken) {
+  for (const collection of ['auth_sessions', 'scanner_sessions']) {
+    const snap = await db.collection(collection).where('userId', '==', String(userId)).get();
+    const refs = snap.docs.filter((d) => d.id !== keepToken).map((d) => d.ref);
+    for (let i = 0; i < refs.length; i += 500) {
+      const batch = db.batch();
+      refs.slice(i, i + 500).forEach((ref) => batch.delete(ref));
+      await batch.commit();
+    }
+  }
+}
+
+function bearerToken(req) {
+  const authHeader = req.headers.authorization;
+  return authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+}
+
+// Helper: get current user from Bearer token. Resolved once per request — the
+// /api access gate and the route handler share the lookup.
+function getCurrentUser(req) {
+  if (!req._currentUserPromise) req._currentUserPromise = lookupCurrentUser(req);
+  return req._currentUserPromise;
+}
+
+async function lookupCurrentUser(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.substring(7);
@@ -162,7 +191,7 @@ async function getCurrentUser(req) {
     const sessSnap = await db.collection('auth_sessions').doc(token).get();
     if (!sessSnap.exists) return null;
     const sess = sessSnap.data();
-    if (!sess || Date.now() > sess.expiresAt) return null;
+    if (!sess || Date.now() > sess.expiresAt || (sess.v || 1) < AUTH_SESSION_VERSION) return null;
     const userDoc = await db.collection('users').doc(sess.userId).get();
     if (!userDoc.exists) return null;
     return { id: userDoc.id, ...userDoc.data() };
@@ -314,13 +343,23 @@ function userResponse(id, user) {
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.json({ success: false, error: 'Username and password are required' });
+  const address = clientAddress(req);
   try {
-    const snap = await db.collection('users').where('username', '==', username).get();
-    if (snap.empty) return res.json({ success: false, error: 'Invalid credentials' });
-    const providedPasswordHash = Buffer.from(password).toString('base64');
-    const candidates = snap.docs
-      .map((doc) => ({ doc, data: doc.data() }))
-      .filter((entry) => entry.data.password_hash === providedPasswordHash)
+    // Locked accounts/addresses don't get a password check at all.
+    const [byUser, byAddress] = await Promise.all([
+      loginThrottle.check('login', username),
+      loginThrottle.check('login-ip', address),
+    ]);
+    const lock = byUser.locked ? byUser : byAddress.locked ? byAddress : null;
+    if (lock) return res.status(429).json({ success: false, error: tooManyAttempts(lock.retryAfterMs) });
+
+    const snap = await db.collection('users').where('username', '==', String(username)).get();
+    const checked = await Promise.all(snap.docs.map(async (doc) => {
+      const data = doc.data();
+      return { doc, data, ...(await verifyPassword(String(password), data.password_hash)) };
+    }));
+    const candidates = checked
+      .filter((entry) => entry.ok)
       .sort((a, b) => {
         const aActive = isActiveUser(a.data) ? 1 : 0;
         const bActive = isActiveUser(b.data) ? 1 : 0;
@@ -329,11 +368,28 @@ app.post('/api/auth/login', async (req, res) => {
         const bUpdated = Number(b.data.updated_at || b.data.created_at || 0);
         return bUpdated - aUpdated;
       });
-    if (candidates.length === 0) return res.json({ success: false, error: 'Invalid credentials' });
-    const userDoc = candidates[0].doc;
-    const user = userDoc.data();
+    if (candidates.length === 0) {
+      // Unknown username and wrong password count the same, so the reply can't
+      // be used to tell which usernames exist.
+      const [u, a] = await Promise.all([loginThrottle.hit('login', username), loginThrottle.hit('login-ip', address)]);
+      const hitLock = u.locked ? u : a.locked ? a : null;
+      if (hitLock) return res.status(429).json({ success: false, error: tooManyAttempts(hitLock.retryAfterMs) });
+      return res.json({ success: false, error: 'Invalid credentials' });
+    }
+    const { doc: userDoc, data: user, needsUpgrade } = candidates[0];
     const approved = user.approved === 1 || user.approved === true;
     if (!approved && user.role !== 'superadmin') return res.json({ success: false, error: 'Account pending approval. Contact an administrator.' });
+    if (needsUpgrade) {
+      // Legacy base64 record: rewrite as a real hash now that we hold the
+      // plaintext. updated_at is left alone so duplicate-username ordering
+      // (see CLAUDE.md follow-up #12) doesn't change.
+      try {
+        await userDoc.ref.update({ password_hash: await hashPassword(String(password)) });
+      } catch (e) {
+        console.error(`Password hash upgrade failed for ${user.username}:`, e.message);
+      }
+    }
+    await Promise.all([loginThrottle.clear('login', username), loginThrottle.clear('login-ip', address)]);
     const token = await mintAuthSession(userDoc.id, user.username);
     res.json({ success: true, user: userResponse(userDoc.id, user), token });
   } catch (err) {
@@ -368,12 +424,14 @@ app.post('/api/auth/register', async (req, res) => {
   if (!emailRegex.test(email)) return res.json({ success: false, error: 'Please enter a valid email address' });
   if (!['user', 'viewer'].includes(role)) return res.json({ success: false, error: 'Invalid role specified' });
   try {
+    const budget = await loginThrottle.hit('register', clientAddress(req));
+    if (budget.locked) return res.status(429).json({ success: false, error: tooManyAttempts(budget.retryAfterMs) });
     const [uSnap, eSnap] = await Promise.all([
       db.collection('users').where('username', '==', username).limit(1).get(),
       db.collection('users').where('email', '==', email).limit(1).get(),
     ]);
     if (!uSnap.empty || !eSnap.empty) return res.json({ success: false, error: 'Username or email already exists' });
-    const passwordHash = Buffer.from(password).toString('base64');
+    const passwordHash = await hashPassword(String(password));
     const createdAt = Math.floor(Date.now() / 1000);
     const ref = await db.collection('users').add({ username, email, password_hash: passwordHash, role, approved: 0, full_name: null, designation: null, contact_number: null, created_at: createdAt, updated_at: createdAt });
     console.log(`New user registered: ${username} (${email}) with role: ${role} (pending approval)`);
@@ -399,6 +457,8 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   const generic = { success: true, message: 'If that account exists, an administrator has been notified to reset your password.' };
   if (!identifier) return res.status(400).json({ success: false, error: 'Enter your username or email.' });
   try {
+    const budget = await loginThrottle.hit('forgot', clientAddress(req));
+    if (budget.locked) return res.status(429).json({ success: false, error: tooManyAttempts(budget.retryAfterMs) });
     let snap = await db.collection('users').where('username', '==', identifier).limit(1).get();
     if (snap.empty) snap = await db.collection('users').where('email', '==', identifier).limit(1).get();
     if (snap.empty) return res.json(generic); // unknown account — say nothing
@@ -467,7 +527,7 @@ usersRouter.post('/', async (req, res) => {
     ]);
     if (!uSnap.empty) return res.status(409).json({ success: false, error: 'Username already exists' });
     if (!eSnap.empty) return res.status(409).json({ success: false, error: 'Email already exists' });
-    const passwordHash = Buffer.from(nextPassword).toString('base64');
+    const passwordHash = await hashPassword(nextPassword);
     const now = Math.floor(Date.now() / 1000);
     const ref = await db.collection('users').add({
       username: nextUsername,
@@ -567,7 +627,8 @@ usersRouter.post('/reset-requests/:id/resolve', async (req, res) => {
       const userRef = db.collection('users').doc(String(reqData.user_id));
       const userDoc = await userRef.get();
       if (!userDoc.exists) return res.status(404).json({ success: false, error: 'User no longer exists' });
-      await userRef.update({ password_hash: Buffer.from(nextPassword).toString('base64'), updated_at: now });
+      await userRef.update({ password_hash: await hashPassword(nextPassword), updated_at: now });
+      await revokeUserSessions(userRef.id, bearerToken(req));
       status = 'resolved';
     }
     await ref.update({ status, resolved_by: user.username, resolved_at: now });
@@ -600,7 +661,7 @@ usersRouter.patch('/:id', async (req, res) => {
   if (password !== undefined && String(password).length > 0) {
     const nextPassword = String(password);
     if (nextPassword.length < 6) return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long' });
-    updates.password_hash = Buffer.from(nextPassword).toString('base64');
+    updates.password_hash = await hashPassword(nextPassword);
   }
   if (full_name !== undefined) updates.full_name = full_name == null ? null : String(full_name).trim();
   if (designation !== undefined) updates.designation = designation == null ? null : String(designation).trim();
@@ -630,6 +691,10 @@ usersRouter.patch('/:id', async (req, res) => {
       if (!snap.empty && snap.docs[0].id !== targetId) return res.status(409).json({ success: false, error: 'Email already exists' });
     }
     await ref.update(updates);
+    const accessChanged = updates.password_hash
+      || (updates.role && updates.role !== currentData.role)
+      || (updates.approved === 0 && currentData.approved !== 0);
+    if (accessChanged) await revokeUserSessions(targetId, bearerToken(req));
     const updatedDoc = await ref.get();
     const d = updatedDoc.data();
     res.json({
@@ -676,6 +741,7 @@ async function deleteUserHandler(req, res) {
       if (saSnap.size <= 1) return res.status(400).json({ success: false, error: 'Cannot delete the last superadmin' });
     }
     await targetRef.delete();
+    await revokeUserSessions(targetId);
     console.log(`User ${targetId} deleted by superadmin ${user.username}`);
     res.json({ success: true, message: 'User deleted' });
   } catch (err) {
@@ -983,16 +1049,12 @@ const WHITEBOARD_PERSON_ALIASES = {
   nylle: ['nylle', 'managa'],
   kim: ['kim', 'solis'],
 };
-// Optional note → project/calcsheet-proposal link. Returns the cleaned link,
-// null (explicitly "no link" / clear it), or false if the shape is invalid.
-function sanitizeWhiteboardLink(link) {
-  if (link === undefined || link === null) return null;
-  if (typeof link !== 'object') return false;
-  const { type, id, label } = link;
-  if (!['project', 'calcsheet'].includes(type)) return false;
-  if (!id || typeof id !== 'string') return false;
-  return { type, id, label: String(label || '').trim().slice(0, 200) };
-}
+// Link validation, repeat dates and "done by" rules live in server/whiteboardRules.js (unit-tested).
+const {
+  sanitizeWhiteboardLink, WHITEBOARD_RECURRENCES, SERVER_ONLY_FIELDS, applyDoneTransition, phToday,
+  sanitizeRecurrenceDay, firstDueDate,
+  canViewWhiteboardItem, addSubtask, setSubtaskDone, removeSubtask, addUpdate, removeUpdate,
+} = require('./server/whiteboardRules');
 
 // Team-wide lists on the board (src/types/Whiteboard.ts WHITEBOARD_CATEGORIES).
 const WHITEBOARD_CATEGORIES = ['general', 'project', 'sales', 'finance'];
@@ -1028,7 +1090,7 @@ app.post('/api/whiteboard', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
-    const { visibility, text, done, dueDate, assignedTo } = req.body || {};
+    const { visibility, text, done, dueDate, assignedTo, recurrence, recurrenceDay } = req.body || {};
     // 'general' = the team-wide General updates list (the whole shared board):
     // always a to-do, visible to everyone, never assigned to a person.
     const kind = visibility === 'general' ? 'todo' : (req.body || {}).kind;
@@ -1039,6 +1101,11 @@ app.post('/api/whiteboard', async (req, res) => {
     const category = (req.body || {}).category || 'general';
     if (!WHITEBOARD_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'Text is required' });
+    // A repeating to-do needs a due date to repeat from — default to today (Philippine time).
+    if (recurrence && (kind !== 'todo' || !WHITEBOARD_RECURRENCES.includes(recurrence))) return res.status(400).json({ error: 'Invalid recurrence' });
+    // Specific day of a repeat: a weekday (weekly) or a day of the month / last day (monthly).
+    const recDay = recurrence ? sanitizeRecurrenceDay(recurrence, recurrenceDay) : null;
+    if (recDay === false) return res.status(400).json({ error: 'Invalid recurrence day' });
     // assignedTo picks the board column (see WHITEBOARD_PEOPLE) — required
     // for a public sticky note (it needs somewhere to live on the board),
     // irrelevant for a private one (shown in "Just for me" instead).
@@ -1050,7 +1117,8 @@ app.post('/api/whiteboard', async (req, res) => {
       kind, visibility, text: String(text).trim(),
       ...(visibility === 'public' ? { assignedTo } : {}),
       ...(visibility === 'general' ? { category } : {}),
-      ...(kind === 'todo' ? { done: !!done, ...(dueDate ? { dueDate } : {}) } : {}),
+      ...(kind === 'todo' ? { done: !!done, ...(dueDate || recurrence ? { dueDate: dueDate || firstDueDate(recurrence, recDay, phToday()) } : {}) } : {}),
+      ...(recurrence ? { recurrence, ...(recDay !== null ? { recurrenceDay: recDay } : {}) } : {}),
       ...(link ? { link } : {}),
       createdBy: user.id,
       createdByName: user.full_name || user.username || 'Someone',
@@ -1092,7 +1160,27 @@ app.put('/api/whiteboard/:id', async (req, res) => {
         ...('category' in req.body ? { category: req.body.category } : {}),
       }
       : { ...req.body };
+    // Who-did-it / bookkeeping fields are server-only — never taken from the client.
+    for (const f of SERVER_ONLY_FIELDS) delete patch[f];
     if ('category' in patch && !WHITEBOARD_CATEGORIES.includes(patch.category)) return res.status(400).json({ error: 'Invalid category' });
+    let defaultedDueDate = null;
+    if ('recurrence' in patch || 'recurrenceDay' in patch) {
+      const rule = 'recurrence' in patch ? (patch.recurrence || null) : (existing.recurrence || null);
+      if (!rule) {
+        patch.recurrence = FieldValue.delete();
+        patch.recurrenceDay = FieldValue.delete();
+      } else {
+        if (!WHITEBOARD_RECURRENCES.includes(rule) || existing.kind !== 'todo') return res.status(400).json({ error: 'Invalid recurrence' });
+        // Changing the rule without sending a day resets the day (a weekday means nothing for "monthly").
+        const dayInput = 'recurrenceDay' in patch ? patch.recurrenceDay : ('recurrence' in patch ? null : existing.recurrenceDay);
+        const day = sanitizeRecurrenceDay(rule, dayInput);
+        if (day === false) return res.status(400).json({ error: 'Invalid recurrence day' });
+        patch.recurrence = rule;
+        patch.recurrenceDay = day === null ? FieldValue.delete() : day;
+        const hasDue = 'dueDate' in patch ? !!patch.dueDate : !!existing.dueDate;
+        if (!hasDue) { defaultedDueDate = firstDueDate(rule, day, phToday()); patch.dueDate = defaultedDueDate; }
+      }
+    }
     if ('assignedTo' in patch) {
       if (patch.assignedTo === null || patch.assignedTo === '') patch.assignedTo = FieldValue.delete();
       else if (!Object.keys(WHITEBOARD_PERSON_ALIASES).includes(patch.assignedTo)) return res.status(400).json({ error: 'Invalid assignedTo' });
@@ -1103,9 +1191,111 @@ app.put('/api/whiteboard/:id', async (req, res) => {
       if (link === false) return res.status(400).json({ error: 'Invalid link' });
       patch.link = link;
     }
-    await ref.update({ ...patch, updatedAt: new Date().toISOString() });
-    res.json({ success: true });
+    const nowIso = new Date().toISOString();
+    const { patch: finalPatch, spawn } = applyDoneTransition({
+      existing, existingId: snap.id, patch, nowIso, deleteField: FieldValue.delete(),
+      actor: { id: user.id, name: user.full_name || user.username || 'Someone' },
+    });
+    let spawned = null;
+    if (spawn) {
+      // Ticking a repeating to-do creates the next one — atomically with marking this one done.
+      const nextRef = db.collection('whiteboard_items').doc();
+      const batch = db.batch();
+      batch.set(nextRef, spawn);
+      batch.update(ref, { ...finalPatch, spawnedNextId: nextRef.id, updatedAt: nowIso });
+      await batch.commit();
+      spawned = { ...spawn, id: nextRef.id };
+    } else {
+      await ref.update({ ...finalPatch, updatedAt: nowIso });
+    }
+    const ticked = 'done' in finalPatch && finalPatch.done === true && !existing.done;
+    res.json({
+      success: true,
+      ...(ticked ? { doneBy: user.id, doneByName: user.full_name || user.username || 'Someone', doneAt: nowIso } : {}),
+      ...(defaultedDueDate ? { dueDate: defaultedDueDate } : {}),
+      ...(spawned ? { spawned } : {}),
+    });
   } catch (err) { res.status(500).json({ error: 'Failed to update whiteboard item' }); }
+});
+
+// Subtasks and status notes — each change is a read-modify-write of one array on the item, done in a
+// transaction so two people posting at once can't overwrite each other. `apply` (see
+// server/whiteboardRules.js) returns { error, status } or { patch, response }.
+async function mutateWhiteboardItem(req, res, apply) {
+  const user = await requireActiveUser(req, res);
+  if (!user) return;
+  const ref = db.collection('whiteboard_items').doc(req.params.id);
+  const nowIso = new Date().toISOString();
+  const actor = { id: user.id, name: user.full_name || user.username || 'Someone' };
+  const outcome = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    // A private item is invisible to everyone but its poster — same answer as a missing one.
+    if (!snap.exists || !canViewWhiteboardItem(snap.data(), user.id)) return { status: 404, error: 'Item not found' };
+    const existing = snap.data();
+    const result = apply({ existing, actor, isOwner: existing.createdBy === user.id, nowIso });
+    if (result.error) return result;
+    tx.update(ref, { ...result.patch, updatedAt: nowIso });
+    return { response: { success: true, ...result.response, updatedAt: nowIso } };
+  });
+  if (outcome.error) return res.status(outcome.status).json({ error: outcome.error });
+  res.json(outcome.response);
+}
+
+// Add a subtask — anyone who can see the item (the poster and the person who added it can remove it again).
+app.post('/api/whiteboard/:id/subtasks', async (req, res) => {
+  try {
+    await mutateWhiteboardItem(req, res, ({ existing, actor, nowIso }) => {
+      const out = addSubtask(existing.subtasks, { id: crypto.randomUUID(), text: (req.body || {}).text, actor, nowIso });
+      return out.error ? out : { patch: { subtasks: out.subtasks }, response: { subtasks: out.subtasks } };
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to add subtask' }); }
+});
+
+// Tick / untick a subtask — anyone who can see the item.
+app.put('/api/whiteboard/:id/subtasks/:subtaskId', async (req, res) => {
+  try {
+    await mutateWhiteboardItem(req, res, ({ existing, actor, nowIso }) => {
+      const out = setSubtaskDone(existing.subtasks, req.params.subtaskId, !!(req.body || {}).done, { actor, nowIso });
+      return out.error ? out : { patch: { subtasks: out.subtasks }, response: { subtasks: out.subtasks } };
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to update subtask' }); }
+});
+
+app.delete('/api/whiteboard/:id/subtasks/:subtaskId', async (req, res) => {
+  try {
+    await mutateWhiteboardItem(req, res, ({ existing, actor, isOwner }) => {
+      const out = removeSubtask(existing.subtasks, req.params.subtaskId, { actorId: actor.id, isOwner });
+      return out.error ? out : { patch: { subtasks: out.subtasks }, response: { subtasks: out.subtasks } };
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete subtask' }); }
+});
+
+// Post a dated status note — anyone who can see the item, optionally moving the progress bar with it.
+app.post('/api/whiteboard/:id/updates', async (req, res) => {
+  try {
+    await mutateWhiteboardItem(req, res, ({ existing, actor, nowIso }) => {
+      const { text, progress } = req.body || {};
+      const out = addUpdate(existing.updates, { id: crypto.randomUUID(), text, progress, actor, nowIso });
+      if (out.error) return out;
+      return {
+        patch: { updates: out.updates, progress: out.progress === null ? FieldValue.delete() : out.progress },
+        response: { updates: out.updates, progress: out.progress },
+      };
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to post note' }); }
+});
+
+app.delete('/api/whiteboard/:id/updates/:updateId', async (req, res) => {
+  try {
+    await mutateWhiteboardItem(req, res, ({ existing, actor, isOwner }) => {
+      const out = removeUpdate(existing.updates, req.params.updateId, { actorId: actor.id, isOwner });
+      if (out.error) return out;
+      return {
+        patch: { updates: out.updates, progress: out.progress === null ? FieldValue.delete() : out.progress },
+        response: { updates: out.updates, progress: out.progress },
+      };
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete note' }); }
 });
 
 app.delete('/api/whiteboard/:id', async (req, res) => {
@@ -2249,6 +2439,7 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
 
 // ========== LIQUIDATIONS ==========
 app.use('/api/liquidations', require('./server/liquidationItemSearchRouter').createLiquidationItemSearchRouter({ db, requireActiveUser }));
+app.use('/api/projects-monitor', require('./server/projectSpendMonitorRouter').createProjectSpendMonitorRouter({ db, requireActiveUser }));
 app.use('/api/liquidations', require('./server/liquidationItemNumbersRouter').createLiquidationItemNumbersRouter({ db, requireActiveUser }));
 app.use('/api/liquidations', require('./server/liquidationReceiptReviewRouter').createLiquidationReceiptReviewRouter({ db, requireActiveUser }));
 app.get('/api/liquidations', async (req, res) => {
@@ -2267,6 +2458,20 @@ app.get('/api/liquidations', async (req, res) => {
       }
       return liq;
     }));
+    // Attach each submitted form's workflow stage (paper hand-in → RJ review → payment) for the status chip.
+    const submitted = rows.filter(r => r.status === 'submitted');
+    if (submitted.length) {
+      const { workflowState } = require('./server/liquidationWorkflow');
+      const refs = col => submitted.map(r => db.collection(col).doc(r.id));
+      const [reviews, reimbs] = await Promise.all([db.getAll(...refs('liquidation_receipt_reviews')), db.getAll(...refs('reimbursements'))]);
+      submitted.forEach((r, i) => {
+        const { id, username, full_name, ...data } = r;
+        const rv = reviews[i].exists ? reviews[i].data() : null;
+        try { r.workflow_state = workflowState(data, rv, reimbs[i].exists ? reimbs[i].data() : null); }
+        catch (_) { r.workflow_state = null; }
+        r.workflow_dates = { handed_in: rv?.physicalSubmission?.active ? (rv.physicalSubmission.submittedDate || null) : null, reviewed: rv?.active ? (rv.reviewDate || null) : null, reviewed_by: rv?.active ? (rv.reviewedByName || null) : null, reimbursed: r.reimbursed_at || null, needs_action: rv?.needsAction?.active ? rv.needsAction.note : null };
+      });
+    }
     rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
     res.json({ success: true, liquidations: rows });
   } catch (err) {
@@ -2304,6 +2509,11 @@ app.get('/api/liquidations/:id', async (req, res) => {
       liq.physical_item_numbering = numbers.physicalNumbering(liq);
       liq.rows_json = JSON.stringify(numbers.numberedRows(liq));
     } catch (error) { liq.physical_item_numbering_error = error.message; }
+    // Once RJ/an admin marks the form reviewed, non-admins can no longer propose edits.
+    try {
+      const review = await db.collection('liquidation_receipt_reviews').doc(doc.id).get();
+      liq.receipt_review_locked = review.exists && require('./server/liquidationReceiptReview').reviewStatus(doc.data(), review.data()) === 'reviewed';
+    } catch (_) { liq.receipt_review_locked = false; }
     res.json({ success: true, liquidation: liq });
   } catch (err) {
     console.error('Error fetching liquidation:', err);
@@ -3069,6 +3279,12 @@ app.post('/api/liquidations/:id/propose-edit', async (req, res) => {
     const isAdmin = user.role === 'superadmin' || user.role === 'admin';
     if (!isAdmin && liq.user_id !== user.id) return res.status(403).json({ success: false, error: 'Forbidden' });
     if (liq.status !== 'submitted') return res.status(400).json({ success: false, error: 'Only submitted liquidations use the edit-approval flow — edit the draft directly' });
+    if (!isAdmin) {
+      const review = await db.collection('liquidation_receipt_reviews').doc(id).get();
+      let reviewed = false;
+      try { reviewed = review.exists && require('./server/liquidationReceiptReview').reviewStatus(liq, review.data()) === 'reviewed'; } catch (_) {}
+      if (reviewed) return res.status(403).json({ success: false, error: 'This liquidation has been reviewed and is locked. Ask RJ/an admin to make changes.' });
+    }
     const { rows_json, receipts_json, total_amount, employee_name, date_of_submission, note } = req.body;
     if (parseLiqRows(rows_json).length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
     if (liq.pending_revision && liq.pending_revision.proposed_by !== user.id && user.role !== 'superadmin') return res.status(409).json({ success: false, error: 'Another edit is pending approval' });
@@ -3935,6 +4151,15 @@ function numericRevision(q) {
   return Number.isFinite(n) ? n : 0;
 }
 
+const { pickContractSource, buildAwardSnapshot, budgetFollowsAward, isAwardLocked, AWARD_LOCK_FIELDS } = require('./server/calcsheetAward');
+// Engine hooks for the award helpers (function declarations below are hoisted).
+const AWARD_CALC = {
+  salesAmount: (q) => quotationSalesAmount(q),
+  grandTotal: (q) => quotationGrandTotal(q),
+  costBasis: (q) => quotationCostBasis(q),
+  newest: (a, b) => newestQuotation(a, b),
+};
+
 function newestQuotation(a, b) {
   const rev = numericRevision(b) - numericRevision(a);
   if (rev !== 0) return rev;
@@ -3998,31 +4223,38 @@ function quotationGrandTotal(q) {
     return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
   }
 
+  // EWT buffer (IOCT only) rides on every section's sell price, exactly as in
+  // calc.ts. Optional and header component lines never count toward the contract.
+  const ewtPct = num(q.ewtPct);
+  const ewtMul = 1 + ewtPct / 100;
   const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, num(q.generalReqtsExportQty) || 1) : 1;
   const hasPerLineGenMarkup = generalReqts.some((l) => l.markupPct != null);
-  const generalReqtsSubtotal = hasPerLineGenMarkup
+  const generalReqtsSubtotal = (hasPerLineGenMarkup
     ? generalReqts.reduce((s, l) => {
         const markup = l.markupPct != null ? num(l.markupPct) : num(q.generalReqMarkupPct);
         return s + lineGeneralTotal(l) * (1 + markup / 100);
       }, 0) * generalReqtsQty
-    : generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty * (1 + num(q.generalReqMarkupPct) / 100);
-  const componentsSubtotal = components.reduce((s, l) => {
+    : generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty * (1 + num(q.generalReqMarkupPct) / 100)) * ewtMul;
+  const contractComponents = components.filter((l) => !l.optional && !l.isHeader && !l.isChildHeader);
+  const componentsSubtotal = contractComponents.reduce((s, l) => {
     const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
     const adjusted = costUnit * (1 + num(l.contingencyPct) / 100);
     const markup = l.markupPct != null ? num(l.markupPct) : num(q.productMarkupPct);
-    return s + adjusted * (1 + markup / 100) * num(l.qty);
+    const ewt = l.ewtPct != null ? num(l.ewtPct) : ewtPct;
+    return s + adjusted * (1 + markup / 100) * (1 + ewt / 100) * num(l.qty);
   }, 0);
   let servicesSub;
   if (q.servicesFromManpower) {
     if (q.servicesPerLinePricing) {
+      // Per-line amounts already carry EWT (baked in by the editor).
       servicesSub = servicesLineSum();
     } else {
       const engineeringServicesQty = Math.max(1, num(q.engineeringServicesQty) || 1);
       const manpowerCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0);
-      servicesSub = manpowerCost * engineeringServicesQty * (1 + num(q.laborMarkupPct) / 100);
+      servicesSub = manpowerCost * engineeringServicesQty * (1 + num(q.laborMarkupPct) / 100) * ewtMul;
     }
   } else {
-    servicesSub = servicesLineSum();
+    servicesSub = servicesLineSum() * ewtMul;
   }
   return finish(generalReqtsSubtotal + componentsSubtotal + servicesSub);
 }
@@ -4051,9 +4283,11 @@ function quotationSalesAmount(q) {
         ? manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)) * (1 + contingency), 0)
         : laborCost * engineeringServicesQty;
       servicesSub = laborWithContingency * (1 + num(q.laborMarkupPct) / 100);
+      if (q.formulaVersion !== 'legacy') servicesSub *= 1 + num(q.ewtPct) / 100;
     }
   } else {
     servicesSub = servicesLineSum();
+    if (q.formulaVersion !== 'legacy') servicesSub *= 1 + num(q.ewtPct) / 100;
   }
 
   return servicesSub * (1 - num(q.discountPct) / 100) * (1 + num(q.vatPct) / 100);
@@ -4131,17 +4365,19 @@ function quotationCostBasis(q) {
     return finishCost(generalReqtsCost, componentsCost, laborCost, generalReqtsSubtotal, componentsSubtotal, servicesSub, discountAmt);
   }
 
+  const ewtPct = num(q.ewtPct);
+  const ewtMul = 1 + ewtPct / 100;
   const generalReqtsQty = q.exportGeneralReqtsAsLot ? Math.max(1, num(q.generalReqtsExportQty) || 1) : 1;
   const engineeringServicesQty = q.servicesFromManpower ? Math.max(1, num(q.engineeringServicesQty) || 1) : 1;
   const generalReqtsCost = generalReqts.reduce((s, l) => s + lineGeneralTotal(l), 0) * generalReqtsQty;
   const hasPerLineGenMarkup = generalReqts.some((l) => l.markupPct != null);
-  const generalReqtsSubtotal = hasPerLineGenMarkup
+  const generalReqtsSubtotal = (hasPerLineGenMarkup
     ? generalReqts.reduce((s, l) => {
         const markup = l.markupPct != null ? num(l.markupPct) : num(q.generalReqMarkupPct);
         return s + lineGeneralTotal(l) * (1 + markup / 100);
       }, 0) * generalReqtsQty
-    : generalReqtsCost * (1 + num(q.generalReqMarkupPct) / 100);
-  const contractComponents = components.filter((l) => !l.optional);
+    : generalReqtsCost * (1 + num(q.generalReqMarkupPct) / 100)) * ewtMul;
+  const contractComponents = components.filter((l) => !l.optional && !l.isHeader && !l.isChildHeader);
   const componentsCost = contractComponents.reduce((s, l) => {
     const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
     return s + costUnit * num(l.qty);
@@ -4150,22 +4386,27 @@ function quotationCostBasis(q) {
     const costUnit = num(l.unitCost) * (num(l.forex) || 1) * (1 - num(l.discountPct) / 100);
     const adjusted = costUnit * (1 + num(l.contingencyPct) / 100);
     const markup = l.markupPct != null ? num(l.markupPct) : num(q.productMarkupPct);
-    return s + adjusted * (1 + markup / 100) * num(l.qty);
+    const ewt = l.ewtPct != null ? num(l.ewtPct) : ewtPct;
+    return s + adjusted * (1 + markup / 100) * (1 + ewt / 100) * num(l.qty);
   }, 0);
   let laborCost;
   let servicesSub;
   if (q.servicesFromManpower) {
     if (q.servicesPerLinePricing) {
       const dailyRate = manpower.reduce((s, m) => s + num(m.headcount) * (num(m.dailyRate) + num(m.allowance)), 0);
-      laborCost = services.reduce((s, l) => s + num(l.days) * dailyRate, 0);
+      laborCost = services.reduce((s, l) => {
+        const qty = l.qty != null ? num(l.qty) : num(l.days);
+        const unit = l.unitPrice != null ? num(l.unitPrice) : dailyRate;
+        return s + qty * unit;
+      }, 0);
       servicesSub = services.reduce((s, l) => s + num(l.amount), 0);
     } else {
       laborCost = manpower.reduce((s, m) => s + num(m.headcount) * num(m.mandays) * (num(m.dailyRate) + num(m.allowance)), 0) * engineeringServicesQty;
-      servicesSub = laborCost * (1 + num(q.laborMarkupPct) / 100);
+      servicesSub = laborCost * (1 + num(q.laborMarkupPct) / 100) * ewtMul;
     }
   } else {
-    servicesSub = services.reduce((s, l) => s + num(l.amount), 0);
-    laborCost = servicesSub;
+    laborCost = services.reduce((s, l) => s + num(l.amount), 0);
+    servicesSub = laborCost * ewtMul;
   }
   const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
   const discountAmt = subtotal * (num(q.discountPct) / 100);
@@ -4207,10 +4448,11 @@ function contractAmountPatchFromSales(mainData, amount, quotation, project, now)
   };
 }
 
-function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi) {
+function mapCalcsheetToMainProject(project, client, quotation, now, projectNo, partner, withActi, amounts) {
   const projectDate = parseProjectDateToUnix(project.date) || Math.floor(Date.now() / 1000);
-  const amount = quotationSalesAmount(quotation);
-  const budget = quotationCostBasis(quotation);
+  // `amounts` carries the awarded (locked) price/budget when the proposal was awarded.
+  const amount = amounts && Number.isFinite(amounts.amount) ? amounts.amount : quotationSalesAmount(quotation);
+  const budget = amounts && Number.isFinite(amounts.budget) ? amounts.budget : quotationCostBasis(quotation);
   const year = Number.isFinite(new Date(project.date || now).getFullYear())
     ? new Date(project.date || now).getFullYear()
     : new Date().getFullYear();
@@ -4326,20 +4568,20 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     const { id: _stored, ...data } = d.data();
     return { ...data, id: d.id };
   });
-  const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
-  const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
-  const selectedQuotation = ioct || acti;
+  // Awarded (price-locked) quotation first; else latest IOCT, fallback latest ACTI.
+  const contractSource = pickContractSource(project, quotations, AWARD_CALC);
   // Joint-with-ACTI: a partner link, an ACTI-kind quotation, or ACTI as the customer
   // (then the customer client doc stands in as the partner).
   const { withActi, partner } = resolveActiFronting({ project, client, partner: partnerFromDoc, quotations });
-  if (!selectedQuotation) {
+  if (!contractSource) {
     const err = new Error('No IOCT or ACTI quotation found to seed contract amount');
     err.status = 400;
     throw err;
   }
+  const selectedQuotation = contractSource.quotation;
 
   const linkedDoc = await findLinkedMainProject(project);
-  const salesAmount = quotationSalesAmount(selectedQuotation);
+  const salesAmount = contractSource.amount;
   // Default path when already linked: push Sales contract amount (IOCT/ACTI grand
   // total) without remapping the whole Project List row. Late price settlements
   // and quotation revisions used to leave Projects monitoring stuck on the first
@@ -4354,10 +4596,9 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
       project,
       now,
     );
-    // Fill Project Budget from IOCT cost (value − margin) when the linked
-    // row still has none — never clobber a budget someone already typed.
-    const budgetSource = ioct || selectedQuotation;
-    const seededBudget = quotationCostBasis(budgetSource);
+    // Fill Project Budget from IOCT cost (value − margin), or the awarded budget,
+    // when the linked row still has none — never clobber a budget someone typed.
+    const seededBudget = contractSource.budget;
     if (!(Number(linkedData.project_budget) > 0) && seededBudget > 0) {
       amountPatch.project_budget = seededBudget;
     }
@@ -4390,13 +4631,13 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
   if (linkedDoc && options.force) {
     const linkedData = linkedDoc.data() || {};
     const projectNo = linkedData.project_no || await nextIoctProjectNo(now);
-    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi, contractSource);
     mainProjectId = linkedDoc.id;
     action = 'updated';
     await linkedDoc.ref.update({ ...mapped, updated_at: now });
   } else {
     const projectNo = await nextIoctProjectNo(now);
-    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi);
+    mapped = mapCalcsheetToMainProject(project, client, selectedQuotation, now, projectNo, partner, withActi, contractSource);
     action = project.mainProjectId ? 'recreated' : 'created';
     const ref = await db.collection('projects').add({ ...mapped, created_at: now, updated_at: now });
     mainProjectId = ref.id;
@@ -4433,7 +4674,7 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
     projectNo: mapped.project_no || '',
     quotationId: selectedQuotation.id,
     quotationKind: selectedQuotation.kind,
-    amount: quotationSalesAmount(selectedQuotation),
+    amount: contractSource.amount,
   };
 }
 
@@ -4600,7 +4841,8 @@ app.put('/api/calcsheet/projects/:id', async (req, res) => {
     // the URL param) and storing it inside the document is just dead data that
     // can mask the real ID during debugging. `createdBy`/`createdByName` are
     // stamped at creation and stay factual — never updatable.
-    const { id: _ignored, createdBy: _cb, createdByName: _cbn, ...body } = req.body || {};
+    // `awarded` (the price lock) is only written by /award and /unaward.
+    const { id: _ignored, createdBy: _cb, createdByName: _cbn, awarded: _aw, ...body } = req.body || {};
     const update = { ...body, updatedAt: new Date().toISOString() };
     await db.collection('calcsheet_projects').doc(req.params.id).update(update);
     res.json({ success: true });
@@ -4627,9 +4869,8 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
     const mainData = mainDoc.data() || {};
     const qSnap = await db.collection('calcsheet_quotations').where('projectId', '==', req.params.id).get();
     const quotations = qSnap.docs.map((d) => { const { id: _stored, ...data } = d.data(); return { ...data, id: d.id }; });
-    const ioct = quotations.filter((q) => q.kind === 'IOCT').sort(newestQuotation)[0];
-    const acti = quotations.filter((q) => q.kind === 'ACTI').sort(newestQuotation)[0];
-    const selectedQuotation = ioct || acti;
+    const contractSource = pickContractSource(calcsheet, quotations, AWARD_CALC);
+    const selectedQuotation = contractSource ? contractSource.quotation : null;
     await calcsheetDoc.ref.update({
       mainProjectId: mainDoc.id,
       mainProjectNo: mainData.project_no || '',
@@ -4646,7 +4887,7 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
     const mainPatch = selectedQuotation
       ? contractAmountPatchFromSales(
           mainData,
-          quotationSalesAmount(selectedQuotation),
+          contractSource.amount,
           selectedQuotation,
           calcsheet,
           now,
@@ -4665,12 +4906,97 @@ app.post('/api/calcsheet/projects/:id/link-existing', async (req, res) => {
       ...(selectedQuotation ? {
         quotationId: selectedQuotation.id,
         quotationKind: selectedQuotation.kind,
-        amount: quotationSalesAmount(selectedQuotation),
+        amount: contractSource.amount,
       } : {}),
     });
   } catch (err) {
     console.error('[calcsheet] link-existing failed:', { id: req.params.id, err: err && err.message });
     res.status(500).json({ error: 'Failed to link to existing project' });
+  }
+});
+
+// Lock the awarded quotation's price on the project and push it to the linked
+// Project List record. Body: { quotationId, price, grandTotal, budget } — amounts
+// come from the client calc engine (the source of truth for quotation math).
+app.post('/api/calcsheet/projects/:id/award', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { quotationId } = req.body || {};
+    if (!quotationId) return res.status(400).json({ error: 'quotationId is required' });
+    const projectRef = db.collection('calcsheet_projects').doc(req.params.id);
+    const quotationRef = db.collection('calcsheet_quotations').doc(String(quotationId));
+    const [projectDoc, quotationDoc] = await Promise.all([projectRef.get(), quotationRef.get()]);
+    if (!projectDoc.exists) return res.status(404).json({ error: 'Calcsheet project not found' });
+    if (!quotationDoc.exists) return res.status(404).json({ error: 'Quotation not found' });
+    const project = { ...projectDoc.data(), id: projectDoc.id };
+    const quotation = { ...quotationDoc.data(), id: quotationDoc.id };
+    if (String(quotation.projectId) !== String(project.id)) {
+      return res.status(400).json({ error: 'That quotation belongs to a different project' });
+    }
+    const now = new Date().toISOString();
+    const previous = project.awarded || null;
+    const awarded = buildAwardSnapshot({ quotation, body: req.body, user, now, calc: AWARD_CALC });
+
+    const batch = db.batch();
+    batch.update(projectRef, { awarded, updatedAt: now });
+    batch.update(quotationRef, { awardedAt: now, awardedBy: awarded.awardedBy, awardedById: awarded.awardedById });
+    if (previous && previous.quotationId && previous.quotationId !== quotation.id) {
+      const prevRef = db.collection('calcsheet_quotations').doc(String(previous.quotationId));
+      const prevDoc = await prevRef.get();
+      if (prevDoc.exists) batch.update(prevRef, { awardedAt: FieldValue.delete(), awardedBy: FieldValue.delete(), awardedById: FieldValue.delete() });
+    }
+    await batch.commit();
+
+    // Linked execution project: contract = awarded price; budget follows unless hand-edited.
+    let mainProject = null;
+    if (project.mainProjectId) {
+      const mainDoc = await db.collection('projects').doc(String(project.mainProjectId)).get();
+      if (mainDoc.exists) {
+        const mainData = mainDoc.data() || {};
+        const patch = contractAmountPatchFromSales(mainData, awarded.price, quotation, project, now);
+        if (awarded.budget > 0 && budgetFollowsAward(mainData.project_budget, previous)) patch.project_budget = awarded.budget;
+        await mainDoc.ref.update(patch);
+        mainProject = {
+          id: mainDoc.id,
+          previousAmount: Number(mainData.updated_contract_amount) || Number(mainData.contract_amount) || 0,
+          amount: awarded.price,
+          budget: patch.project_budget != null ? patch.project_budget : Number(mainData.project_budget) || 0,
+        };
+      }
+    }
+    res.json({ success: true, awarded, mainProject });
+  } catch (err) {
+    console.error('[calcsheet] award failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to lock the awarded price' });
+  }
+});
+
+// Admin-only: release the price lock (e.g. a change order needs the quotation revised).
+// The Project List amount is left as is until the project is awarded again.
+app.post('/api/calcsheet/projects/:id/unaward', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    if (user.role !== 'superadmin' && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only an admin can unlock an awarded price' });
+    }
+    const projectRef = db.collection('calcsheet_projects').doc(req.params.id);
+    const projectDoc = await projectRef.get();
+    if (!projectDoc.exists) return res.status(404).json({ error: 'Calcsheet project not found' });
+    const awarded = projectDoc.data().awarded;
+    const batch = db.batch();
+    batch.update(projectRef, { awarded: FieldValue.delete(), updatedAt: new Date().toISOString() });
+    if (awarded && awarded.quotationId) {
+      const qRef = db.collection('calcsheet_quotations').doc(String(awarded.quotationId));
+      const qDoc = await qRef.get();
+      if (qDoc.exists) batch.update(qRef, { awardedAt: FieldValue.delete(), awardedBy: FieldValue.delete(), awardedById: FieldValue.delete() });
+    }
+    await batch.commit();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[calcsheet] unaward failed:', { id: req.params.id, err: err && err.message });
+    res.status(500).json({ error: 'Failed to unlock the awarded price' });
   }
 });
 
@@ -4748,6 +5074,8 @@ app.post('/api/calcsheet/quotations', async (req, res) => {
     const user = await requireActiveUser(req, res);
     if (!user) return;
     const { id: _ignored, ...body } = req.body || {};
+    // A duplicate of an awarded quotation is a new, unlocked revision.
+    AWARD_LOCK_FIELDS.forEach((k) => { delete body[k]; });
     const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     const timingError = validateQuotationPurchaseTiming(data);
     if (timingError) {
@@ -4785,6 +5113,11 @@ app.put('/api/calcsheet/quotations/:id', async (req, res) => {
     } catch (verErr) {
       console.warn('[calcsheet] version snapshot failed (non-blocking):', verErr && verErr.message);
     }
+    if (isAwardLocked(prevData)) {
+      res.status(409).json({ error: 'This quotation was awarded, so its price is locked. Duplicate it to revise, or ask an admin to unlock it.' });
+      return;
+    }
+    AWARD_LOCK_FIELDS.forEach((k) => { delete update[k]; });
     const timingError = validateQuotationPurchaseTiming({ ...prevData, ...body });
     if (timingError) {
       res.status(400).json({ error: timingError });
@@ -4852,6 +5185,10 @@ app.delete('/api/calcsheet/quotations/:id', async (req, res) => {
   try {
     const user = await requireActiveUser(req, res);
     if (!user) return;
+    const existing = await db.collection('calcsheet_quotations').doc(req.params.id).get();
+    if (existing.exists && isAwardLocked(existing.data())) {
+      return res.status(409).json({ error: 'This quotation was awarded, so it can\'t be deleted. Ask an admin to unlock it first.' });
+    }
     await db.collection('calcsheet_quotations').doc(req.params.id).delete();
     // Remove version snapshots belonging to the deleted quotation.
     const vsnap = await db.collection('calcsheet_quotation_versions').where('quotationId', '==', req.params.id).get();
@@ -6301,6 +6638,48 @@ async function ensureFolderByPath(token, driveId, folderPath) {
   return { id: current.id, webUrl: current.webUrl || '', name: current.name };
 }
 
+// The proxy below works on the whole corporate drive, but nothing in the app uses
+// the '00 System' tree through it (system backups are written server-side), and
+// older backups there hold credentials. So the proxy refuses that tree, by path
+// and — for routes that take an item id — by looking up where the item lives.
+const ONEDRIVE_BLOCKED_ROOTS = ['00 system'];
+
+function isBlockedDrivePath(drivePath) {
+  const segments = String(drivePath || '').replace(/\\/g, '/').split('/').map((s) => s.trim()).filter(Boolean);
+  if (segments.some((s) => s === '.' || s === '..')) return true; // URL parsing would resolve these
+  return segments.length > 0 && ONEDRIVE_BLOCKED_ROOTS.includes(segments[0].toLowerCase());
+}
+
+// Uses parentReference.path when Graph sends it; otherwise walks up parent ids
+// until the drive root, remembering the top-level folder name on the way.
+async function isBlockedDriveItem(token, driveId, itemId) {
+  let id = itemId;
+  let topLevelName = null;
+  for (let depth = 0; depth < 20; depth++) {
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(id)}?$select=name,parentReference,root`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    if (r.status === 404 && depth === 0) return false; // the real call 404s the same way
+    if (!r.ok) throw new Error('item lookup failed ' + r.status);
+    const item = await r.json();
+    if (item.root) return depth > 0 && isBlockedDrivePath(topLevelName);
+    const parent = item.parentReference || {};
+    const at = typeof parent.path === 'string' ? parent.path.indexOf('root:') : -1;
+    if (at !== -1) {
+      let relative = parent.path.slice(at + 'root:'.length);
+      try { relative = decodeURIComponent(relative); } catch (_) { /* keep as-is */ }
+      return isBlockedDrivePath(`${relative}/${item.name || ''}`);
+    }
+    if (!parent.id) return true; // can't tell where it lives
+    topLevelName = item.name || '';
+    id = parent.id;
+  }
+  return true; // deeper than any folder the app uses
+}
+
+const ONEDRIVE_BLOCKED_RESPONSE = { error: 'This OneDrive folder is not available through the app' };
+
 function contentTypeForFilename(filename) {
   const ext = String(filename).toLowerCase().split('.').pop();
   if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
@@ -6317,6 +6696,7 @@ app.post('/api/onedrive/upload', async (req, res) => {
   if (!folderPath || !filename || !contentBase64) {
     return res.status(400).json({ error: 'folderPath, filename, and contentBase64 are required' });
   }
+  if (isBlockedDrivePath(folderPath)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
   try {
     if (req.body.financeEvidenceType) {
       const { TYPES } = require('./server/financeEvidence');
@@ -6355,6 +6735,7 @@ app.delete('/api/onedrive/item/:id', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, req.params.id)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}`,
       { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } }
@@ -6376,6 +6757,7 @@ app.get('/api/onedrive/item/:id/thumbnail', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, req.params.id)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/thumbnails/0/medium`,
       { headers: { Authorization: 'Bearer ' + token } }
@@ -6397,6 +6779,7 @@ app.get('/api/onedrive/item/:id/content', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, req.params.id)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/content`,
       { headers: { Authorization: 'Bearer ' + token } }
@@ -6425,6 +6808,7 @@ app.put('/api/onedrive/item/:id/content', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, req.params.id)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const buf = Buffer.from(contentBase64, 'base64');
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(req.params.id)}/content`,
@@ -6447,6 +6831,7 @@ app.post('/api/onedrive/ensure-folder', async (req, res) => {
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   const { path: folderPath } = req.body || {};
   if (!folderPath) return res.status(400).json({ error: 'path is required' });
+  if (isBlockedDrivePath(folderPath)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
@@ -6463,9 +6848,11 @@ app.post('/api/onedrive/move', async (req, res) => {
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   const { itemId, destPath, name } = req.body || {};
   if (!itemId || !destPath) return res.status(400).json({ error: 'itemId and destPath are required' });
+  if (isBlockedDrivePath(destPath)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, itemId)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const dest = await ensureFolderByPath(token, driveId, destPath);
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(itemId)}`,
@@ -6500,6 +6887,7 @@ app.post('/api/onedrive/rename', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, itemId)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(itemId)}`,
       {
@@ -6530,6 +6918,7 @@ app.post('/api/onedrive/upload-by-id', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, folderId)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const buf = Buffer.from(contentBase64, 'base64');
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(folderId)}:/${encodeURIComponent(filename)}:/content`,
@@ -6568,6 +6957,7 @@ app.get('/api/onedrive/by-path', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   if (!req.query.path) return res.status(400).json({ error: 'path is required' });
+  if (isBlockedDrivePath(req.query.path)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
@@ -6596,6 +6986,9 @@ app.get('/api/onedrive/children', async (req, res) => {
     const id = req.query.id ? String(req.query.id) : '';
     const path = req.query.path ? String(req.query.path) : '';
     const prefix = req.query.prefix ? String(req.query.prefix).toLowerCase() : '';
+    if (id ? await isBlockedDriveItem(token, driveId, id) : isBlockedDrivePath(path)) {
+      return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
+    }
     const enc = path ? path.split('/').map(encodeURIComponent).join('/') : '';
     const url = id
       ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(id)}/children?$top=500&$select=id,webUrl,name,folder`
@@ -6623,6 +7016,7 @@ app.post('/api/onedrive/child-folder', async (req, res) => {
   try {
     const token = await getGraphAppToken();
     const driveId = await resolveCorporateDriveId(token);
+    if (await isBlockedDriveItem(token, driveId, parentId)) return res.status(403).json(ONEDRIVE_BLOCKED_RESPONSE);
     const cr = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(parentId)}/children`,
       { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) }
@@ -6970,6 +7364,12 @@ async function parseReceiptWithGemini(imageBase64, mimeType) {
 Do NOT wrap the output in markdown code blocks. Output ONLY valid, parsable JSON.
 If a value is not found or unreadable, use null.
 Remove all currency symbols (e.g., ', '₱', 'PHP') and commas from numeric values before outputting.
+
+CURRENCY RULES (the company books in Philippine pesos):
+- The peso sign '₱' looks like a 'P' with one or two horizontal strokes. It is NOT a dollar sign '$'. Amounts written with '₱' are PHP.
+- Read EVERY page of a multi-page document before answering.
+- If the document states amounts in a foreign currency (e.g. USD) AND also gives the Philippine peso equivalent anywhere (e.g. a "Tax Information" block with "Total Charges (including VAT) PHP 582.30", or an exchange-rate line), use the PHP figures for subtotal, tax and total and set currency to "PHP". Use the peso total INCLUDING VAT as "total", the peso VAT as "tax", and the peso amount before VAT as "subtotal".
+- Only report a foreign currency when no peso amount appears anywhere in the document.
 
 The JSON MUST exactly match this structure:
 {

@@ -54,7 +54,7 @@
 - **Firebase project**: `pmv2-851ae` (production Firestore — all writes are real)
 - **Service account**: `pmv2-851ae-firebase-adminsdk-fbsvc-c4d13e6cb1.json` in repo root (gitignored)
 - **Hosting rewrite**: `/api/**` → Cloud Function `api`; everything else → `index.html` (SPA)
-- **Predeploy gotcha**: `scripts/prepare-functions.js` copies root `server.js` → `functions/server.js` **and** runtime modules from root `server/*.js` (skipping `*.test.js`) → `functions/server/`, **overwriting** any local edits under functions/. Deployed function runs whatever's in root `server.js` + `server/`. The hardened env-var seed in `functions/server.js` is a no-op once the 4 default users exist in Firestore. If you add a new `require('./server/…')` from `server.js`, it must live as a non-test file under root `server/` so prepare-functions packages it — otherwise Cloud Functions deploy fails with `MODULE_NOT_FOUND` (see 2026-07-27 PR #59 deploy).
+- **Predeploy gotcha**: `scripts/prepare-functions.js` copies root `server.js` → `functions/server.js` **and** runtime modules from root `server/*.js` (skipping `*.test.js`) → `functions/server/`, **overwriting** any local edits under functions/. Deployed function runs whatever's in root `server.js` + `server/`. If you add a new `require('./server/…')` from `server.js`, it must live as a non-test file under root `server/` so prepare-functions packages it — otherwise Cloud Functions deploy fails with `MODULE_NOT_FOUND` (see 2026-07-27 PR #59 deploy).
 
 ### Run locally
 
@@ -131,7 +131,10 @@ The phase-by-phase log and the full "Recent additions" change history — OneDri
 
 ## 4. Security
 
-**Pending user action**: rotate the 4 default user passwords in Firestore (TJC, admin, user, projects) — current values still work but are visible in git history. The committed deploy-prep security cleanup detail is logged in `docs/PROJECT_HISTORY.md`.
+- **Passwords are scrypt-hashed** (`server/passwords.js`, since 2026-10-26); legacy reversible records upgrade silently at next login. Always use `hashPassword` / `verifyPassword`, never compare `password_hash` by hand. The startup seed (`createDefaultUsers`) is gone — there are no default accounts in the code; a fresh database needs its first superadmin created by hand (see `docs/DATA_MODEL.md`).
+- **Public auth routes are rate-limited** via Firestore collection `login_throttle` (`server/loginThrottle.js`): 5 failed logins per account / 15 min → 15-min lock; 30 per address; register and forgot-password 5 per address per hour. A locked-out teammate simply waits; the lock expires on its own (a password reset by a superadmin does not clear it).
+- **Default-account passwords** (TJC, admin, user, projects) were readable in old git history; RJ was asked to rotate them on 2026-10-26 — confirm done. The old plaintext values must never be reused.
+- The 2026-10 audit notes live outside the repo (public) with Nylle; shipped fixes are logged in `docs/PROJECT_HISTORY.md` 2026-10-26.
 
 ---
 
@@ -140,7 +143,7 @@ The phase-by-phase log and the full "Recent additions" change history — OneDri
 1. **IOCT/ACTI cleanup**: original 66 quotations → 41 after dedup. Remaining duplicates are user-driven cleanup based on actual issued letterhead.
 2. **PCS2602005 customer override**: parser used General Info's "ACT" but folder says ADI (Analog B1P1 facility). Override customer in UI.
 3. **Stub projects need manual quotations**: `PCS2511032-EBC-00` (EBECOR), `PCS2508036-TPI-00` (Tann Group SCADA).
-4. **Authentication**: not wired into calcsheet endpoints beyond reading `netpacific_token` from localStorage. The legacy import endpoint requires `getCurrentUser(req)` but bulk-import scripts bypass via firebase-admin.
+4. **Authorization inside the app** (auth itself is now deny-by-default, see §6): `viewer` is self-registerable but only one route treats it as read-only; `POST /api/suppliers` (wipe-and-replace) and bulk `DELETE /api/projects` are open to every role because the Suppliers page and Dashboard rely on them. Needs a product decision from RJ before gating.
 5. **14 kind-not-found reconciliation entries**: pre-existing file-resolution issue in `scripts/reconcile-legacy-import.js` (script can't locate some source xlsx by basename). Unrelated to the VAT fix. Worth a dedicated debug session if data integrity verification matters.
 6. **Outdated `firebase-functions` package** in `functions/package.json` — Firebase warns on deploy; upgrade involves breaking changes.
 7. **Password rotation** in Firestore (see Security section).
@@ -165,6 +168,7 @@ The phase-by-phase log and the full "Recent additions" change history — OneDri
 ## 6. Conventions
 
 - **Commit messages**: imperative mood, focused on "why", co-authored with Claude as `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` only when the user explicitly asks for a commit.
+- **API routes are closed by default** (since 2026-10-26, PR #158): `server/apiAccess.js` is mounted above every route and rejects any `/api` request without an approved user. New routes need no auth boilerplate for *login*, only for *roles*. Adding a public route means editing `PUBLIC_ROUTES` **and** its test. Phone-scanner tokens are limited to `SCANNER_ROUTES`. Scripts and agents that call the API must send a Bearer token. Bump `AUTH_SESSION_VERSION` in `server.js` to force a global logout. See `docs/PROJECT_HISTORY.md` 2026-10-26.
 - **Don't commit unless asked.** Don't push unless asked. Don't deploy unless asked.
 - **Don't create new `docs/*.md` or `README*.md`** files unless explicitly asked. `docs/` folder contains the project's canonical reference docs — update existing ones, don't create new ones without approval.
 - **Use existing tools**: Read/Edit/Write for files, not `cat`/`sed`/`echo`.

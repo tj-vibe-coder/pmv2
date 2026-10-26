@@ -50,19 +50,21 @@ phHolidays ── standalone collection
 | `created_at` | number | Yes | Unix seconds |
 | `updated_at` | number | Yes | Unix seconds |
 
-**Default users** (created on server startup via `server.js:createDefaultUsers()`):
+**Password storage** (`server/passwords.js`): `password_hash` is `scrypt$<N>$<r>$<p>$<salt>$<hash>`
+for every password set or changed since 2026-10-26. Older records hold a legacy reversible
+encoding; login still accepts it and rewrites the record as scrypt on that user's next
+successful sign-in, so no reset is needed. Never read or compare `password_hash` directly —
+go through `verifyPassword()` / `hashPassword()`.
 
-Default user passwords are loaded from environment variables
-(`DEFAULT_USER_PASSWORD_<USERNAME>`) and intentionally not documented here.
-The seed only runs for users whose password env var is set; in production,
-prefer creating accounts via the admin UI and skip seeding entirely.
+**No startup seed.** The former `createDefaultUsers()` was removed on 2026-10-26. Accounts
+come only from `POST /api/auth/register` (self-service, `user`/`viewer`, unapproved) or the
+superadmin's User Management screen. A fresh database therefore has no login at all: create the
+first superadmin directly in Firestore (`role: 'superadmin'`, `approved: 1`, `password_hash`
+from `hashPassword()`), or temporarily register and promote via a one-off admin script.
 
-| Username | Email | Role |
-|---|---|---|
-| `TJC` | (configured per deployment) | superadmin |
-| `admin` | (configured per deployment) | admin |
-| `user` | (configured per deployment) | user |
-| `projects` | (configured per deployment) | admin |
+**Login attempt limits** (`server/loginThrottle.js`, collection `login_throttle`): 5 failed
+logins per account or 30 per client address in 15 minutes lock for 15 minutes; register and
+forgot-password allow 5 per address per hour. Locked attempts get `429 { success: false, error }`.
 
 ### 2.2 `projects`
 
