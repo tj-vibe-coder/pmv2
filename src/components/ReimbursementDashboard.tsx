@@ -7,10 +7,12 @@ import {
 } from '@mui/material';
 import { WORKFLOW_LABELS, reimbursementCashDue } from '../types/LiquidationWorkflow';
 import { API_BASE } from '../config/api';
-import { blobToBase64, compressForUpload } from '../utils/receipts/imageCompress';
-import { convertHeicToJpeg } from '../utils/receipts/imageUtils';
+import { ProofRef, PROOF_ACCEPT, uploadPaymentProof } from '../utils/receipts/paymentProof';
 import { useLocation, useNavigate } from 'react-router-dom';
 import MoneyTrailButton from './finance/MoneyTrailButton';
+import PaymentTransferDialog from './finance/PaymentTransferDialog';
+import TransferBreakdown from './finance/TransferBreakdown';
+import { PaymentTransfer, PaymentTransferInput, transferKey, usePaymentTransfers } from '../services/paymentTransferService';
 import { getFinanceTrace } from '../services/financeTraceService';
 import { useFinanceRowFocus } from '../hooks/useFinanceRowFocus';
 import { financeFocusToken, financeFocusUrl, parseFinanceFocus } from '../utils/financeTraceFocus';
@@ -87,29 +89,6 @@ interface ClaimPayment {
   reference?: string; overrideReason?: string | null; rowIds?: string[] | null;
   proofRef?: ProofRef | null;
 }
-interface ProofRef { oneDriveId: string; webUrl: string; filename: string }
-
-const PROOF_ACCEPT = 'image/*,.pdf,.heic,.heif';
-
-// Upload a proof-of-payment file (screenshot/PDF) to OneDrive and return its reference.
-async function uploadPaymentProof(file: File, formNo: string | null, authToken: string | null): Promise<ProofRef> {
-  const safe = await convertHeicToJpeg(file);
-  const compressed = await compressForUpload(safe);
-  const contentBase64 = await blobToBase64(compressed);
-  const extMatch = safe.name.match(/\.[a-z0-9]+$/i);
-  const ext = extMatch ? extMatch[0] : (safe.type === 'application/pdf' ? '.pdf' : '.jpg');
-  const filename = `PROOF-${Date.now()}${ext}`;
-  const folderPath = `Reimbursement Proofs/${new Date().getFullYear()}/${(formNo || 'unassigned').replace(/[\\/:*?"<>|]/g, '-')}`;
-  const res = await fetch(`${API}/onedrive/upload`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
-    body: JSON.stringify({ folderPath, filename, contentBase64 }),
-  });
-  const data = await res.json().catch(() => ({ ok: false })) as { ok: boolean; id?: string; webUrl?: string };
-  if (!data.ok || !data.id || !data.webUrl) throw new Error('Proof upload to OneDrive failed. Try again.');
-  return { oneDriveId: data.id, webUrl: data.webUrl, filename };
-}
-
 const remainingOf = reimbursementCashDue;
 
 type PayDialogContext =
@@ -165,6 +144,9 @@ const ReimbursementDashboard: React.FC = () => {
 
   const [closeTarget, setCloseTarget] = useState<CashAdvanceRow | null>(null);
   const [closing, setClosing] = useState(false);
+  // This page is admin-only (the reimbursements API is), so transfers always load.
+  const paymentTransfers = usePaymentTransfers(true);
+  const [transferDialog, setTransferDialog] = useState<{ transfer?: PaymentTransfer; initial?: Partial<PaymentTransferInput> } | null>(null);
 
   const authHeaders = (): Record<string, string> => {
     const token = localStorage.getItem('netpacific_token');
@@ -562,6 +544,18 @@ const ReimbursementDashboard: React.FC = () => {
             >
               Pay lines ({selectedIds.length})
             </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => setTransferDialog({ initial: {
+                amount: Math.round(selectedClaims.reduce((sum, r) => sum + (Number(r.amount) || 0), 0) * 100) / 100 || undefined,
+                payeeName: selectedClaims[0]?.employeeName || null,
+                allocations: selectedClaims.map(r => ({ type: 'reimbursement' as const, id: r.id, amount: Number(r.amount) || 0 })),
+              } })}
+              title="Record one bank transfer and how it splits across claims and cash advances, with its proof"
+            >
+              Record transfer
+            </Button>
             </Box>
           </Box>
           {isPhone ? (
@@ -624,6 +618,7 @@ const ReimbursementDashboard: React.FC = () => {
                             Note: {r.holdNote}{(r.flaggedRowIds?.length || 0) > 0 ? ` (${r.flaggedRowIds?.length} line${r.flaggedRowIds?.length === 1 ? '' : 's'} in question)` : ''}
                           </Typography>
                         )}
+                        <TransferBreakdown transfers={paymentTransfers.byKey.get(transferKey('reimbursement', r.id))} onEdit={(t) => setTransferDialog({ transfer: t })} />
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
                           <Chip
                             size="small"
@@ -775,6 +770,7 @@ const ReimbursementDashboard: React.FC = () => {
                           Note: {r.holdNote}{(r.flaggedRowIds?.length || 0) > 0 ? ` (${r.flaggedRowIds?.length} line${r.flaggedRowIds?.length === 1 ? '' : 's'} in question)` : ''}
                         </Typography>
                       )}
+                      <TransferBreakdown transfers={paymentTransfers.byKey.get(transferKey('reimbursement', r.id))} onEdit={(t) => setTransferDialog({ transfer: t })} />
                     </TableCell>
                     <TableCell align="right">
                       {!historical && r.origin === 'no_ca' && (
@@ -1147,6 +1143,13 @@ const ReimbursementDashboard: React.FC = () => {
         </DialogActions>
       </Dialog>
 
+      <PaymentTransferDialog
+        open={!!transferDialog}
+        transfer={transferDialog?.transfer}
+        initial={transferDialog?.initial}
+        onClose={() => setTransferDialog(null)}
+        onSaved={() => { void paymentTransfers.reload(); setToast('Transfer saved'); }}
+      />
       <Dialog open={!!closeTarget} onClose={() => setCloseTarget(null)} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ fontWeight: 600 }}>Close &amp; Settle — {closeTarget?.ca_no || closeTarget?.id}</DialogTitle>
         <DialogContent>

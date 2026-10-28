@@ -35,7 +35,11 @@ import {
   Grid,
   useMediaQuery,
 } from '@mui/material';
-import { Edit as EditIcon, Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, PhotoCamera as PhotoCameraIcon, AccountBalanceWallet as WalletIcon } from '@mui/icons-material';
+import { Edit as EditIcon, Add as AddIcon, Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, KeyboardArrowDown as ExpandMoreIcon, KeyboardArrowUp as ExpandLessIcon, ReceiptLong as ReceiptLongIcon, RemoveCircleOutline as RemoveIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, PhotoCamera as PhotoCameraIcon, AccountBalanceWallet as WalletIcon, Payments as PaymentsIcon, AttachFile as AttachFileIcon } from '@mui/icons-material';
+import { ProofRef, PROOF_ACCEPT, uploadPaymentProof } from '../utils/receipts/paymentProof';
+import { PaymentTransfer, PaymentTransferInput, transferKey, usePaymentTransfers } from '../services/paymentTransferService';
+import PaymentTransferDialog from './finance/PaymentTransferDialog';
+import TransferBreakdown from './finance/TransferBreakdown';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { API_BASE } from '../config/api';
@@ -132,6 +136,12 @@ interface CashAdvanceRow {
   username?: string;
   full_name?: string | null;
   fundingSource?: FundingSource;
+  // Set by POST /api/cash-advances/:id/release once the cash is actually sent.
+  releasedAt?: number | null;
+  releasedBy?: string | null;
+  releaseReference?: string | null;
+  releaseNote?: string | null;
+  proofRef?: ProofRef | null;
 }
 
 interface LiquidationRow {
@@ -196,6 +206,14 @@ export default function CAFormPage() {
   const [confirmDelete, setConfirmDelete] = useState<CashAdvanceRow | null>(null);
   const [closeTarget, setCloseTarget] = useState<CashAdvanceRow | null>(null);
   const [closing, setClosing] = useState(false);
+  const [releaseTarget, setReleaseTarget] = useState<CashAdvanceRow | null>(null);
+  const [releaseDate, setReleaseDate] = useState('');
+  const [releaseReference, setReleaseReference] = useState('');
+  const [releaseNote, setReleaseNote] = useState('');
+  const [releaseProofFile, setReleaseProofFile] = useState<File | null>(null);
+  const [releaseRemoveProof, setReleaseRemoveProof] = useState(false);
+  const [releasing, setReleasing] = useState(false);
+  const [transferDialog, setTransferDialog] = useState<{ transfer?: PaymentTransfer; initial?: Partial<PaymentTransferInput> } | null>(null);
   // Edit-funding dialog — separate state from the "new request" funding fields above so
   // opening it (for any existing CA, including ones created before this feature shipped)
   // doesn't clobber whatever the admin has mid-typed into the request form.
@@ -230,6 +248,8 @@ export default function CAFormPage() {
   const canSubmit = breakdownTotal > 0 && (selectedProject != null || purpose.trim() !== '');
 
   const isAdmin = user?.role === 'superadmin' || user?.role === 'admin';
+
+  const paymentTransfers = usePaymentTransfers(isAdmin);
 
   const financeFocus = useFinanceRowFocus({
     records: list,
@@ -884,6 +904,77 @@ export default function CAFormPage() {
     }
   };
 
+  const openRelease = (ca: CashAdvanceRow) => {
+    const toDate = (ts: number | null | undefined) => (ts ? new Date(ts * 1000).toISOString().slice(0, 10) : '');
+    setReleaseTarget(ca);
+    setReleaseDate(toDate(ca.releasedAt) || toDate(ca.approved_at) || new Date().toISOString().slice(0, 10));
+    setReleaseReference(ca.releaseReference || '');
+    setReleaseNote(ca.releaseNote || '');
+    setReleaseProofFile(null);
+    setReleaseRemoveProof(false);
+  };
+
+  const handleRelease = async () => {
+    if (!releaseTarget) return;
+    const token = localStorage.getItem('netpacific_token');
+    if (!token) return;
+    setReleasing(true);
+    setError(null);
+    try {
+      const body: Record<string, unknown> = { releasedDate: releaseDate, reference: releaseReference, note: releaseNote };
+      if (releaseProofFile) body.proofRef = await uploadPaymentProof(releaseProofFile, releaseTarget.ca_no || releaseTarget.id, token, 'Cash Advance Proofs');
+      else if (releaseRemoveProof) body.proofRef = null;
+      const res = await fetch(`${API_BASE}/api/cash-advances/${releaseTarget.id}/release`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        setSnackbar(data.message || 'Cash advance marked released');
+        setReleaseTarget(null);
+        fetchList();
+      } else setError(data.error || 'Saving the release failed');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Network error');
+    } finally {
+      setReleasing(false);
+    }
+  };
+
+  // "Released Jul 10, 2026 · Ref 365… · Proof" line shown under a CA's status.
+  const renderReleaseInfo = (ca: CashAdvanceRow) => (
+    <>
+      {ca.releasedAt && (
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, overflowWrap: 'anywhere' }}>
+        Released {new Date(ca.releasedAt * 1000).toLocaleDateString()}
+        {ca.releaseReference ? ` · Ref ${ca.releaseReference}` : ''}
+        {ca.proofRef && (
+          <>
+            {' · '}
+            <a href={ca.proofRef.webUrl} target="_blank" rel="noopener noreferrer">Proof</a>
+          </>
+        )}
+        {ca.releaseNote && <Box component="span" sx={{ display: 'block', fontStyle: 'italic' }}>{ca.releaseNote}</Box>}
+      </Typography>
+      )}
+      <TransferBreakdown transfers={paymentTransfers.byKey.get(transferKey('cash_advance', ca.id))} onEdit={(t) => setTransferDialog({ transfer: t })} />
+    </>
+  );
+
+  // The CA was paid in a transfer that also covered other items: record the split once.
+  const openTransferFromRelease = () => {
+    if (!releaseTarget) return;
+    setTransferDialog({ initial: {
+      date: releaseDate, reference: releaseReference.trim() || null, remark: releaseNote.trim() || null,
+      amount: Number(releaseTarget.amount), payeeName: releaseTarget.full_name || releaseTarget.username || null,
+      proofRef: releaseRemoveProof ? null : releaseTarget.proofRef || null,
+      allocations: [{ type: 'cash_advance', id: releaseTarget.id, amount: Number(releaseTarget.amount) }],
+    } });
+  };
+
+  const canRecordRelease = (ca: CashAdvanceRow) => isAdmin && (ca.status === 'approved' || ca.status === 'closed');
+
   return (
     <Box sx={{ height: '100%', overflow: 'auto', p: 3 }}>
       <Box sx={{ mb: 1.5 }}>
@@ -1405,6 +1496,7 @@ export default function CAFormPage() {
                   </Typography>
                 )}
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>Requested {requestedOn}</Typography>
+                {renderReleaseInfo(ca)}
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5, mt: 1 }}>
                   {isAdmin && ca.status === 'pending' && (
                     <>
@@ -1419,6 +1511,11 @@ export default function CAFormPage() {
                       sx={{ color: NET_PACIFIC_COLORS.primary }}
                     >
                       Liquidate
+                    </Button>
+                  )}
+                  {canRecordRelease(ca) && (
+                    <Button size="small" variant="outlined" startIcon={<PaymentsIcon />} onClick={() => openRelease(ca)} sx={{ color: NET_PACIFIC_COLORS.primary }}>
+                      {ca.releasedAt ? 'Edit release' : 'Mark released'}
                     </Button>
                   )}
                   {isAdmin && ca.status === 'approved' && Number(ca.balance_remaining) > 0 && (
@@ -1609,6 +1706,7 @@ export default function CAFormPage() {
                         color={ca.status === 'approved' ? 'success' : ca.status === 'rejected' ? 'error' : 'default'}
                         sx={{ textTransform: 'capitalize' }}
                       />
+                      {renderReleaseInfo(ca)}
                     </TableCell>
                     <TableCell sx={{ fontSize: '0.8rem' }}>
                       {ca.requested_at
@@ -1656,6 +1754,17 @@ export default function CAFormPage() {
                           title="Submit a liquidation against this CA"
                         >
                           Liquidate
+                        </Button>
+                      )}
+                      {canRecordRelease(ca) && (
+                        <Button
+                          size="small"
+                          startIcon={<PaymentsIcon />}
+                          onClick={() => openRelease(ca)}
+                          sx={{ color: NET_PACIFIC_COLORS.primary, mr: 0.5 }}
+                          title="Record when and how the cash was sent, with proof of payment"
+                        >
+                          {ca.releasedAt ? 'Edit release' : 'Mark released'}
                         </Button>
                       )}
                       {isAdmin && ca.status === 'approved' && Number(ca.balance_remaining) > 0 && (
@@ -1770,6 +1879,55 @@ export default function CAFormPage() {
           </Button>
         </DialogActions>
       </Dialog>
+      <Dialog open={!!releaseTarget} onClose={() => !releasing && setReleaseTarget(null)} maxWidth="sm" fullWidth fullScreen={isPhone}>
+        <DialogTitle sx={{ fontWeight: 600 }}>Release — {releaseTarget?.ca_no || releaseTarget?.id}</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Record how ₱{releaseTarget ? Number(releaseTarget.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '0.00'} was sent to{' '}
+            {releaseTarget?.full_name || releaseTarget?.username || 'the employee'}.
+          </DialogContentText>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <TextField label="Release date" type="date" size="small" value={releaseDate} onChange={(e) => setReleaseDate(e.target.value)} InputLabelProps={{ shrink: true }} required />
+            <TextField label="Reference no." size="small" value={releaseReference} onChange={(e) => setReleaseReference(e.target.value)} placeholder="e.g. InstaPay ref" />
+            <TextField
+              label="Note" size="small" multiline minRows={2} value={releaseNote} onChange={(e) => setReleaseNote(e.target.value)}
+              placeholder="e.g. Same transfer also paid LQ26-005 (₱600)"
+            />
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
+              <Button component="label" size="small" variant="outlined" startIcon={<AttachFileIcon />} disabled={releasing}>
+                {releaseProofFile || (releaseTarget?.proofRef && !releaseRemoveProof) ? 'Replace proof' : 'Attach proof'}
+                <input type="file" hidden accept={PROOF_ACCEPT} onChange={(e) => { setReleaseProofFile(e.target.files?.[0] || null); setReleaseRemoveProof(false); e.target.value = ''; }} />
+              </Button>
+              {releaseProofFile ? (
+                <Typography variant="caption" sx={{ overflowWrap: 'anywhere' }}>{releaseProofFile.name}</Typography>
+              ) : releaseTarget?.proofRef && !releaseRemoveProof ? (
+                <>
+                  <a href={releaseTarget.proofRef.webUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.75rem' }}>Current proof</a>
+                  <Button size="small" color="error" onClick={() => setReleaseRemoveProof(true)} disabled={releasing}>Remove</Button>
+                </>
+              ) : (
+                <Typography variant="caption" color="text.secondary">Screenshot or PDF of the transfer</Typography>
+              )}
+            </Box>
+            <Alert severity="info" action={<Button color="inherit" size="small" onClick={openTransferFromRelease} disabled={releasing}>Record transfer</Button>}>
+              Did the same transfer also pay other CAs or reimbursements? Record it as one transfer so the proof shows the full breakdown.
+            </Alert>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setReleaseTarget(null)} disabled={releasing}>Cancel</Button>
+          <Button variant="contained" onClick={handleRelease} disabled={releasing || !releaseDate}>
+            {releasing ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <PaymentTransferDialog
+        open={!!transferDialog}
+        transfer={transferDialog?.transfer}
+        initial={transferDialog?.initial}
+        onClose={() => setTransferDialog(null)}
+        onSaved={() => { void paymentTransfers.reload(); setSnackbar('Transfer saved'); }}
+      />
       <Dialog open={!!closeTarget} onClose={() => setCloseTarget(null)} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ fontWeight: 600 }}>Close &amp; Settle — {closeTarget?.ca_no || closeTarget?.id}</DialogTitle>
         <DialogContent>
