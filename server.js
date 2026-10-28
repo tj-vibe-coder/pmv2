@@ -2399,6 +2399,42 @@ app.post('/api/cash-advances/:id/close', async (req, res) => {
   }
 });
 
+// Admin-only: record how an approved CA's cash was sent to the employee — release date,
+// bank/e-wallet reference, optional note and a proof-of-payment file the client already
+// uploaded to OneDrive (same proofRef shape as reimbursement payments). Re-posting edits
+// the record; an omitted proofRef keeps the existing one, proofRef: null removes it.
+app.post('/api/cash-advances/:id/release', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const { id } = req.params;
+  const date = String(req.body.releasedDate ?? '').trim();
+  const parsedDate = new Date(date + 'T12:00:00Z');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
+    return res.status(400).json({ success: false, error: 'Enter a valid release date' });
+  }
+  const reference = String(req.body.reference ?? '').trim() || null;
+  const note = String(req.body.note ?? '').trim() || null;
+  const proofRef = normalizeProofRef(req.body.proofRef);
+  if (req.body.proofRef && !proofRef) return res.status(400).json({ success: false, error: 'Invalid proof of payment reference' });
+  try {
+    const ref = db.collection('cash_advances').doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, error: 'Cash advance not found' });
+    const ca = doc.data();
+    if (ca.status !== 'approved' && ca.status !== 'closed') return res.status(400).json({ success: false, error: 'Only approved cash advances can be marked released' });
+    const now = Math.floor(Date.now() / 1000);
+    const updates = { releasedAt: Math.floor(parsedDate.getTime() / 1000), releasedBy: user.id,
+      releaseReference: reference, releaseNote: note, updated_at: now };
+    if (req.body.proofRef !== undefined) updates.proofRef = proofRef;
+    await ref.update(updates);
+    res.json({ success: true, message: `${ca.ca_no || 'Cash advance'} marked released` });
+  } catch (err) {
+    console.error('Error recording cash advance release:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 app.delete('/api/cash-advances/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -2975,6 +3011,105 @@ app.post('/api/reimbursements/batch-mark', async (req, res) => {
   } catch (err) {
     if (err.status) return res.status(err.status).json({ success: false, error: err.message });
     console.error('Error batch-marking reimbursements:', err); res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// ── Payment transfers (payment_transfers) ─────────────────────────────────────
+// One real transfer + its proof, broken down across the CAs/reimbursements it paid.
+// A record of the money trail only: it never changes a CA balance or a claim's paid
+// amount (those stay with the approve/pay endpoints). See server/paymentTransfers.js.
+async function requireFinanceAdmin(req, res) {
+  const user = await getCurrentUser(req);
+  if (!user || user.scannerScope || (user.role !== 'superadmin' && user.approved !== 1 && user.approved !== true)) { res.status(401).json({ success: false, error: 'Unauthorized' }); return null; }
+  if (user.role !== 'superadmin' && user.role !== 'admin') { res.status(403).json({ success: false, error: 'Admin only' }); return null; }
+  return user;
+}
+
+// Validates the body and checks every allocation against its source doc and other transfers.
+async function preparePaymentTransfer(body, excludeId) {
+  const pt = require('./server/paymentTransfers');
+  const { value, error } = pt.normalizeTransferInput(body);
+  if (error) return { error };
+  value.proofRef = normalizeProofRef(body.proofRef);
+  if (body.proofRef && !value.proofRef) return { error: 'Invalid proof of payment reference' };
+  const docs = {};
+  await Promise.all(value.allocations.map(async a => {
+    const snap = await db.collection(pt.SOURCE_COLLECTION[a.type]).doc(a.id).get();
+    if (snap.exists) docs[pt.allocationKey(a)] = snap.data();
+  }));
+  const others = await db.collection('payment_transfers').where('allocationKeys', 'array-contains-any', value.allocationKeys).get();
+  const limitError = pt.applyAllocationLimits(value.allocations, docs, pt.otherAllocationTotals(others.docs.map(d => ({ id: d.id, ...d.data() })), excludeId));
+  if (limitError) return { error: limitError };
+  return { value };
+}
+
+// ?key=cash_advance:<id> | reimbursement:<id> narrows to transfers touching that document.
+app.get('/api/payment-transfers', async (req, res) => {
+  if (!(await requireFinanceAdmin(req, res))) return;
+  try {
+    const key = typeof req.query.key === 'string' ? req.query.key.trim() : '';
+    const snap = key
+      ? await db.collection('payment_transfers').where('allocationKeys', 'array-contains', key).get()
+      : await db.collection('payment_transfers').limit(1000).get();
+    const transfers = snap.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    res.json({ success: true, transfers });
+  } catch (err) {
+    console.error('Error fetching payment transfers:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Optional body.id lets a transfer reuse an existing reimbursement_payments.transferId.
+app.post('/api/payment-transfers', async (req, res) => {
+  const user = await requireFinanceAdmin(req, res);
+  if (!user) return;
+  const body = req.body || {};
+  const customId = typeof body.id === 'string' ? body.id.trim() : '';
+  if (customId && !/^[A-Za-z0-9_-]{3,100}$/.test(customId)) return res.status(400).json({ success: false, error: 'Transfer id may only use letters, digits, - and _' });
+  try {
+    const { value, error } = await preparePaymentTransfer(body, null);
+    if (error) return res.status(400).json({ success: false, error });
+    const ref = customId ? db.collection('payment_transfers').doc(customId) : db.collection('payment_transfers').doc();
+    const now = Math.floor(Date.now() / 1000);
+    await ref.create({ ...value, createdBy: user.id, createdAt: now, updatedBy: user.id, updatedAt: now });
+    res.status(201).json({ success: true, id: ref.id, message: 'Transfer recorded' });
+  } catch (err) {
+    if (err && err.code === 6) return res.status(409).json({ success: false, error: 'A transfer with that id already exists' });
+    console.error('Error creating payment transfer:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+// Full replace of the transfer's fields; omitting proofRef keeps the stored proof.
+app.put('/api/payment-transfers/:id', async (req, res) => {
+  const user = await requireFinanceAdmin(req, res);
+  if (!user) return;
+  try {
+    const ref = db.collection('payment_transfers').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ success: false, error: 'Transfer not found' });
+    const body = req.body || {};
+    const { value, error } = await preparePaymentTransfer(body, req.params.id);
+    if (error) return res.status(400).json({ success: false, error });
+    if (body.proofRef === undefined) value.proofRef = snap.data().proofRef || null;
+    await ref.update({ ...value, updatedBy: user.id, updatedAt: Math.floor(Date.now() / 1000) });
+    res.json({ success: true, id: ref.id, message: 'Transfer updated' });
+  } catch (err) {
+    console.error('Error updating payment transfer:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
+app.delete('/api/payment-transfers/:id', async (req, res) => {
+  if (!(await requireFinanceAdmin(req, res))) return;
+  try {
+    const ref = db.collection('payment_transfers').doc(req.params.id);
+    if (!(await ref.get()).exists) return res.status(404).json({ success: false, error: 'Transfer not found' });
+    await ref.delete();
+    res.json({ success: true, message: 'Transfer deleted' });
+  } catch (err) {
+    console.error('Error deleting payment transfer:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
   }
 });
 
