@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-10-30 — Self-service "Change password" (branch `nylle/change-password`)
+
+**Why**: until now only a superadmin could set a password (User Management, or resolving a forgot-password request), so any teammate wanting a new password had to ask RJ. With the formerly-public default passwords still in circulation, people needed a way to change their own.
+
+- **Server**: `POST /api/auth/change-password` (`server/changePassword.js`, mounted in `server.js` above the users router). Signed-in user only (the gate handles login; phone-scanner sessions are refused explicitly). Verifies `currentPassword` with `verifyPassword` (legacy base64 records accepted), stores `newPassword` with `hashPassword`, bumps `updated_at`, then `revokeUserSessions(user.id, callerToken)` — every other login and scanner session of that user ends, the caller's stays. Rules: both fields required, new ≥ 8 chars, new ≠ current. A wrong current password runs through the same `login` lockout as the login form (`check` before verifying, `hit` on failure, `clear` on success) so the form can't be used to guess.
+- **Client**: `ChangePasswordDialog.tsx` (current / new / confirm, one show-hide toggle, `maxWidth="xs"`, full-screen below 600 px, error alert at the top per DESIGN_PHILOSOPHY §11, success state with a Done button). Opened from a new **Change password** item in the avatar menu (`Header.tsx`, above Logout). Sends the token explicitly; the global fetch shim would add it anyway.
+- **Docs**: `docs/API.md` auth section.
+- **Verified**: 236 server tests (`changePassword.test.js`: success path with revocation, legacy current password, validation without counting attempts, lockout, 401 for no session / scanner), 4 RTL tests for the dialog, `tsc`, `CI=true npm run build`; smoke run of the real `server.js`: two devices signed in → change from one → caller still valid, other device 401, old password refused, new accepted and stored as scrypt, scanner session refused (403 from the gate; the handler's own check would give 401).
+- **Unchanged**: superadmin `PATCH /api/users/:id` and the forgot-password request flow. Nobody is logged out by the deploy.
+
+---
+
 ## 2026-10-26 — Credential hardening: scrypt passwords, no seed, login limits, CORS (branch `nylle/credential-hardening`)
 
 **Why**: second slice of the security review (first slice: PR #158 below). `password_hash` was a reversible encoding, so anyone who could read a `users` record or an old backup had the password itself; `server.js` still carried a startup seed with default accounts (dead code once the accounts existed, but public source); the public auth routes accepted unlimited attempts; and the production CORS list included localhost origins, with disallowed origins producing a 500.

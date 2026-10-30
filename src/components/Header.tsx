@@ -24,9 +24,11 @@ import {
   Person as PersonIcon,
   Menu as MenuIcon,
   StickyNote2 as StickyNote2Icon,
+  LockReset as LockResetIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import WhiteboardDialog from './WhiteboardDialog';
+import ChangePasswordDialog from './ChangePasswordDialog';
 import { useWhiteboardStore } from '../store/whiteboardStore';
 import { whiteboardDueState } from '../types/Whiteboard';
 
@@ -43,6 +45,7 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
   const { user, isAuthenticated, logout } = useAuth();
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const isEmployeeWorkspace = location.pathname === '/employee' || location.pathname.startsWith('/employee/');
@@ -242,6 +245,12 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
                   </ListItemIcon>
                   <ListItemText primary="Employee Portal (DTR)" />
                 </MenuItem>
+                <MenuItem onClick={() => { handleUserMenuClose(); setChangePasswordOpen(true); }}>
+                  <ListItemIcon>
+                    <LockResetIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText primary="Change password" />
+                </MenuItem>
                 <MenuItem onClick={handleLogout}>
                   <ListItemIcon>
                     <LogoutIcon fontSize="small" />
@@ -249,6 +258,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
                   <ListItemText primary="Logout" />
                 </MenuItem>
               </Menu>
+              <ChangePasswordDialog open={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
             </>
           ) : (
             <Button
