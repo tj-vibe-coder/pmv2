@@ -130,6 +130,29 @@ Authorization: Bearer <base64_token>
 
 ---
 
+### POST /api/auth/change-password
+
+Signed-in user sets their own password (superadmins can still set anyone's via `PATCH /api/users/:id`). On success every *other* session of the user is ended; the session making the call stays valid. Not available to phone-scanner sessions.
+
+```
+POST /api/auth/change-password
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{ "currentPassword": "…", "newPassword": "…" }
+```
+
+Rules: both fields required; new password at least 8 characters and different from the current one. A wrong current password counts against the login lockout (5 in 15 minutes).
+
+**Response (200):**
+```json
+{ "success": true, "message": "Password changed. Your other devices have been signed out." }
+```
+
+**Error responses:** `400` with `error` (`Current password is incorrect`, length/sameness messages), `401` no session, `429` locked out (`Too many attempts. Try again in N minutes.`).
+
+---
+
 ## Users
 
 All user endpoints require `superadmin` role.

@@ -76,7 +76,7 @@
     "ai-assist:check": "node scripts/sync-ai-assist.mjs --check",
     "ai-assist:mcp": "node scripts/ai-assist-mcp.js",
     "test:ai-assist": "node --test server/aiAssist/*.test.js scripts/sync-ai-assist.test.mjs",
-    "test:api-access": "node --test server/apiAccess.test.js server/onedriveSystemGuard.test.js server/backups/backups.test.js server/passwords.test.js server/loginThrottle.test.js",
+    "test:api-access": "node --test server/apiAccess.test.js server/onedriveSystemGuard.test.js server/backups/backups.test.js server/passwords.test.js server/loginThrottle.test.js server/changePassword.test.js",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

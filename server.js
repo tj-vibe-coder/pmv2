@@ -18,6 +18,7 @@ const { createSoaRouter } = require('./server/soa/soaRouter');
 const { createApiAccessGate } = require('./server/apiAccess');
 const { hashPassword, verifyPassword } = require('./server/passwords');
 const { createLoginThrottle, clientAddress, retryMinutes } = require('./server/loginThrottle');
+const { createChangePasswordHandler } = require('./server/changePassword');
 
 // Production = Cloud Functions (K_SERVICE) or an explicit NODE_ENV; everything
 // else is a dev machine.
@@ -483,6 +484,11 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     res.json(generic); // never leak details on the public endpoint
   }
 });
+
+// Signed-in user changes their own password (see server/changePassword.js).
+app.post('/api/auth/change-password', createChangePasswordHandler({
+  db, getCurrentUser, verifyPassword, hashPassword, revokeUserSessions, bearerToken, loginThrottle, tooManyAttempts,
+}));
 
 // ========== USERS ROUTES ==========
 const usersRouter = express.Router();
