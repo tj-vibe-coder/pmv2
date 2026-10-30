@@ -13,6 +13,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TablePagination,
   TableSortLabel,
   Chip,
   TextField,
@@ -37,6 +38,8 @@ import {
   LinearProgress,
   Collapse,
   InputAdornment,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import {
   Download as DownloadIcon,
@@ -50,7 +53,6 @@ import {
   WarningAmber as WarningAmberIcon,
   Add as AddIcon,
   Search as SearchIcon,
-  ChevronRight as ChevronRightIcon,
 } from '@mui/icons-material';
 import { Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, ComposedChart, Line } from 'recharts';
 import { Project, ProjectFilters, YearSummary } from '../types/Project';
@@ -220,6 +222,7 @@ const SpendCell: React.FC<{ m: ProjectMonitor; spend?: ProjectSpend; color: stri
     : [];
   const tooltip = [
     `Spent ${dataService.formatCurrency(m.spent)}${m.budget > 0 ? ` of ${dataService.formatCurrency(m.budget)} budget` : ' (no budget set)'}`,
+    parts.length > 0 ? parts.join(' · ') : '',
     spend && spend.draftLiquidation > 0
       ? `+ ${dataService.formatCurrency(spend.draftLiquidation)} in ${spend.draftLines} draft liquidation line(s), not filed yet`
       : '',
@@ -234,22 +237,16 @@ const SpendCell: React.FC<{ m: ProjectMonitor; spend?: ProjectSpend; color: stri
     >
       {m.budgetUsedPct == null ? (
         <Typography className="spend-label" variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 600, color: m.spent > 0 ? 'text.primary' : 'text.disabled' }}>
-          {m.spent > 0 ? formatCompact(m.spent) : '₱0'}
-          <Typography component="span" variant="caption" color="text.disabled" sx={{ ml: 0.5 }}>no budget</Typography>
+          {m.spent > 0 ? formatCompact(m.spent) : '—'}
         </Typography>
       ) : (
         <Box className="spend-label">
           <MiniBar value={m.budgetUsedPct} color={color} label={formatCompact(m.spent)} caption={`${Math.round(m.budgetUsedPct)}% of ${formatCompact(m.budget)}`} />
         </Box>
       )}
-      {parts.length > 0 && (
-        <Typography variant="caption" color="text.secondary" component="div" sx={{ fontSize: '0.66rem', lineHeight: 1.3, mt: 0.25 }}>
-          {parts.join(' · ')}
-        </Typography>
-      )}
       {spend && spend.draftLiquidation > 0 && (
         <Typography variant="caption" component="div" sx={{ fontSize: '0.66rem', lineHeight: 1.3, color: 'warning.dark' }}>
-          +{formatCompact(spend.draftLiquidation)} in draft liquidations
+          +{formatCompact(spend.draftLiquidation)} draft
         </Typography>
       )}
     </Box>
@@ -271,6 +268,7 @@ type DashboardListPrefs = {
   filterActi: boolean;
   sortKey: string;
   sortDir: 'asc' | 'desc';
+  rowsPerPage: number;
 };
 
 function loadDashboardPrefs(): DashboardListPrefs {
@@ -287,6 +285,7 @@ function loadDashboardPrefs(): DashboardListPrefs {
     // Most urgent first: overdue / over budget, then warnings, then info.
     sortKey: 'alerts',
     sortDir: 'asc',
+    rowsPerPage: 25,
   };
   try {
     const raw = localStorage.getItem(DASHBOARD_PREFS_KEY);
@@ -309,6 +308,7 @@ function loadDashboardPrefs(): DashboardListPrefs {
       filterActi: !!parsed.filterActi,
       sortKey: typeof parsed.sortKey === 'string' && parsed.sortKey ? parsed.sortKey : 'project_no',
       sortDir: parsed.sortDir === 'asc' || parsed.sortDir === 'desc' ? parsed.sortDir : 'desc',
+      rowsPerPage: [25, 50, 100].includes(parsed.rowsPerPage) ? parsed.rowsPerPage : defaults.rowsPerPage,
     };
   } catch {
     return defaults;
@@ -338,7 +338,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
   const [attentionOnly, setAttentionOnly] = useState(initPrefs.attentionOnly);
   const [showDetails, setShowDetails] = useState(initPrefs.showDetails);
   const [showCharts, setShowCharts] = useState(initPrefs.showCharts);
-  const [attentionExpanded, setAttentionExpanded] = useState(false);
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(initPrefs.rowsPerPage);
+  const theme = useTheme();
+  const isPhone = useMediaQuery(theme.breakpoints.down('sm'));
   const [filterActi, setFilterActi] = useState(initPrefs.filterActi);
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
@@ -365,8 +368,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       filterActi,
       sortKey: sortConfig.key,
       sortDir: sortConfig.direction,
+      rowsPerPage,
     });
-  }, [filters.searchTerm, filters.year, filters.client, statusFilter, activeOnly, attentionOnly, showDetails, showCharts, filterActi, sortConfig]);
+  }, [filters.searchTerm, filters.year, filters.client, statusFilter, activeOnly, attentionOnly, showDetails, showCharts, filterActi, sortConfig, rowsPerPage]);
+
+  // Any filter change goes back to the first page.
+  useEffect(() => {
+    setPage(0);
+  }, [filters.searchTerm, filters.year, filters.client, statusFilter, activeOnly, attentionOnly, filterActi]);
 
   const handleSort = (key: string) => {
     setSortConfig((prev) => ({
@@ -611,6 +620,35 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
       return String(av).localeCompare(String(bv), undefined, { numeric: true }) * dir;
     });
   }, [scopedProjects, attentionOnly, monitorMap, sortConfig]);
+
+  // Clamp the page if a filter or delete shrinks the list under it.
+  const pageCount = Math.max(1, Math.ceil(filteredProjects.length / rowsPerPage));
+  const safePage = Math.min(page, pageCount - 1);
+  const pagedProjects = useMemo(
+    () => filteredProjects.slice(safePage * rowsPerPage, (safePage + 1) * rowsPerPage),
+    [filteredProjects, safePage, rowsPerPage],
+  );
+
+  // "7 overdue · 2 over budget · …" for the needs-attention strip.
+  const attentionBreakdown = useMemo(() => {
+    const groups: [string, string[]][] = [
+      ['overdue', ['overdue']],
+      ['due soon', ['due-soon']],
+      ['over budget', ['over-budget']],
+      ['budget at risk', ['budget-risk']],
+      ['price ≠ proposal', ['price']],
+      ['done but unbilled', ['unbilled']],
+      ['ready to close out', ['closeout']],
+    ];
+    return groups
+      .map(([label, keys]) => ({
+        label,
+        count: attentionList.filter((p) => monitorMap[String(p.id)]?.flags.some((f) => keys.includes(f.key))).length,
+      }))
+      .filter((g) => g.count > 0)
+      .map((g) => `${g.count} ${g.label}`)
+      .join(' · ');
+  }, [attentionList, monitorMap]);
 
   const showActiPoColumn = useMemo(
     () => showDetails && filteredProjects.some((p) => isActiInvolved(p)),
@@ -1291,7 +1329,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
     },
   ];
 
-  const attentionPreview = attentionExpanded ? attentionList : attentionList.slice(0, 5);
+  const mobileSortOptions: { key: string; dir: 'asc' | 'desc'; label: string }[] = [
+    { key: 'alerts', dir: 'asc', label: 'Most urgent' },
+    { key: 'target_date', dir: 'asc', label: 'Target date' },
+    { key: 'project_name', dir: 'asc', label: 'Name' },
+    { key: 'contract', dir: 'desc', label: 'Contract' },
+    { key: 'backlogs', dir: 'desc', label: 'Unbilled' },
+    { key: 'progress', dir: 'asc', label: 'Site progress' },
+  ];
 
   // Render dashboard
   return (
@@ -1374,19 +1419,19 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
         sx={{
           display: 'grid',
           gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(6, minmax(0, 1fr))' },
-          gap: 1.5,
+          gap: { xs: 1, sm: 1.5 },
           mb: 2,
         }}
       >
         {kpiCards.map((card) => {
           const textColor = card.dark ? '#2d3436' : 'white';
           const body = (
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9, color: textColor }}>{card.label}</Typography>
-              <Typography variant="h5" component="div" title={card.title} sx={{ fontWeight: 700, lineHeight: 1.1, color: textColor }}>
+            <CardContent sx={{ p: { xs: 1.25, sm: 2 }, '&:last-child': { pb: { xs: 1.25, sm: 2 } } }}>
+              <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.9, color: textColor, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>{card.label}</Typography>
+              <Typography variant="h5" component="div" title={card.title} sx={{ fontWeight: 700, lineHeight: 1.1, color: textColor, fontSize: { xs: '1.15rem', sm: '1.5rem' } }}>
                 {card.value}
               </Typography>
-              <Typography variant="caption" sx={{ opacity: 0.85, color: textColor, display: 'block', mt: 0.5 }}>
+              <Typography variant="caption" sx={{ opacity: 0.85, color: textColor, display: { xs: 'none', sm: 'block' }, mt: 0.5 }}>
                 {card.caption}
               </Typography>
             </CardContent>
@@ -1408,73 +1453,24 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
         })}
       </Box>
 
-      {/* Needs attention */}
+      {/* Needs attention — one line; the KPI card and the Alerts column carry the detail */}
       {attentionList.length > 0 && !attentionOnly && (
-        <Paper sx={{ p: 2, mb: 2, borderRadius: 2, border: '1px solid #f5c2c0', background: 'linear-gradient(135deg, #ffffff 0%, #fff8f8 100%)' }}>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1, justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <WarningAmberIcon sx={{ color: '#c62828' }} />
-              <Typography variant="h6" sx={{ fontWeight: 600, fontSize: '1.05rem', color: '#2d3436' }}>
-                Needs attention ({attentionList.length})
-              </Typography>
-            </Box>
-            <Button size="small" onClick={() => setAttentionOnly(true)} sx={{ color: NET_PACIFIC_COLORS.primary }}>
-              Show only these in the table
-            </Button>
-          </Box>
-          <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-            {attentionPreview.map((p) => {
-              const m = monitorMap[String(p.id)];
-              return (
-                <Box
-                  key={p.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onProjectSelect(p)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') onProjectSelect(p); }}
-                  sx={{
-                    display: 'flex',
-                    flexWrap: { xs: 'wrap', sm: 'nowrap' },
-                    alignItems: 'center',
-                    columnGap: 1.5,
-                    rowGap: 0.5,
-                    py: 0.75,
-                    px: 1,
-                    borderRadius: 1,
-                    cursor: 'pointer',
-                    borderTop: '1px solid #f1f1f1',
-                    '&:hover': { bgcolor: 'rgba(44, 90, 160, 0.05)' },
-                  }}
-                >
-                  <Box sx={{ flex: '1 1 220px', minWidth: 0 }}>
-                    <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.85rem' }} noWrap>
-                      {p.project_name}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary" noWrap component="div">
-                      {[p.project_no, p.account_name].filter(Boolean).join(' · ')}
-                    </Typography>
-                  </Box>
-                  <Box sx={{ width: { xs: '100%', sm: 130 }, flexShrink: 0 }}>
-                    <MiniBar value={m.progress} color={NET_PACIFIC_COLORS.primary} label={`${Math.round(m.progress)}%`} caption="site progress" />
-                  </Box>
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, flex: '0 1 auto', justifyContent: { sm: 'flex-end' }, minWidth: { sm: 220 } }}>
-                    {m.flags.map((f) => <FlagChip key={f.key} flag={f} />)}
-                  </Box>
-                  <ChevronRightIcon sx={{ color: 'text.disabled', display: { xs: 'none', sm: 'block' } }} />
-                </Box>
-              );
-            })}
-          </Box>
-          {attentionList.length > 5 && (
-            <Button
-              size="small"
-              onClick={() => setAttentionExpanded((v) => !v)}
-              endIcon={attentionExpanded ? <ArrowUpIcon /> : <ArrowDownIcon />}
-              sx={{ mt: 0.5, color: NET_PACIFIC_COLORS.primary }}
-            >
-              {attentionExpanded ? 'Show fewer' : `Show ${attentionList.length - 5} more`}
-            </Button>
-          )}
+        <Paper
+          sx={{
+            px: 2, py: 1, mb: 1.5, borderRadius: 2, border: '1px solid #f5c2c0', bgcolor: '#fff8f8',
+            display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 1.5, rowGap: 0.5,
+          }}
+        >
+          <WarningAmberIcon sx={{ color: '#c62828' }} fontSize="small" />
+          <Typography variant="body2" sx={{ fontWeight: 600, color: '#2d3436' }}>
+            {attentionList.length} need{attentionList.length === 1 ? 's' : ''} attention
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ flex: '1 1 200px', minWidth: 0 }}>
+            {attentionBreakdown}
+          </Typography>
+          <Button size="small" onClick={() => setAttentionOnly(true)} sx={{ color: NET_PACIFIC_COLORS.primary, whiteSpace: 'nowrap' }}>
+            Show them
+          </Button>
         </Paper>
       )}
 
@@ -1598,11 +1594,27 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
               />
             )}
           </Box>
-          <FormControlLabel
-            control={<Switch size="small" checked={showDetails} onChange={(e) => setShowDetails(e.target.checked)} />}
-            label={<Typography variant="body2">Show PO / ACTI details</Typography>}
-            sx={{ mr: 0 }}
-          />
+          {isPhone ? (
+            <FormControl size="small" sx={{ minWidth: 150 }}>
+              <InputLabel>Sort by</InputLabel>
+              <Select
+                label="Sort by"
+                value={mobileSortOptions.some((o) => o.key === sortConfig.key) ? sortConfig.key : ''}
+                onChange={(e) => {
+                  const opt = mobileSortOptions.find((o) => o.key === e.target.value);
+                  if (opt) setSortConfig({ key: opt.key, direction: opt.dir });
+                }}
+              >
+                {mobileSortOptions.map((o) => <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>)}
+              </Select>
+            </FormControl>
+          ) : (
+            <FormControlLabel
+              control={<Switch size="small" checked={showDetails} onChange={(e) => setShowDetails(e.target.checked)} />}
+              label={<Typography variant="body2">Show PO / ACTI details</Typography>}
+              sx={{ mr: 0 }}
+            />
+          )}
         </Box>
 
         {/* Bulk Actions */}
@@ -1643,8 +1655,59 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
           </Box>
         )}
 
-        <TableContainer sx={{ maxHeight: { xs: 'none', md: 'calc(100vh - 210px)' }, minHeight: 200 }}>
-          <Table stickyHeader size="small">
+        {isPhone && filteredProjects.length > 0 ? (
+          /* Phones: one tappable card per project instead of the wide table */
+          <Stack spacing={1} sx={{ p: 1 }}>
+            {pagedProjects.map((project) => {
+              const m = monitorMap[String(project.id)];
+              if (!m) return null;
+              const leftBorder = m.severityRank === 0 ? '#d32f2f' : m.severityRank === 1 ? '#ed6c02' : '#e0e0e0';
+              return (
+                <Card key={project.id} variant="outlined" sx={{ borderLeft: `3px solid ${leftBorder}`, opacity: m.closed ? 0.75 : 1 }}>
+                  <CardActionArea onClick={() => onProjectSelect(project)} sx={{ p: 1.25 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.3 }}>{project.project_name}</Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap component="div">
+                          {[project.project_no || (project.item_no ?? project.id), project.account_name, project.with_acti ? 'ACTI' : '']
+                            .filter(Boolean).join(' · ')}
+                        </Typography>
+                      </Box>
+                      <Chip
+                        label={project.project_status || '—'}
+                        size="small"
+                        sx={{ backgroundColor: dataService.getStatusColor(project.project_status || ''), color: 'white', fontSize: '0.62rem', height: 18, fontWeight: 600, flexShrink: 0 }}
+                      />
+                    </Box>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5, mt: 1 }}>
+                      <MiniBar value={m.progress} color={m.progress >= 100 ? NET_PACIFIC_COLORS.success : NET_PACIFIC_COLORS.primary}
+                        label={`${Math.round(m.progress)}%`} caption="progress" />
+                      <MiniBar value={m.billedPct} color={NET_PACIFIC_COLORS.success} label={`${Math.round(m.billedPct)}%`} caption="billed" />
+                    </Box>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, mt: 1 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        Contract <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }}>{formatCompact(m.contract)}</Box>
+                        {' · '}Unbilled <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }}>{formatCompact(m.unbilled)}</Box>
+                      </Typography>
+                      {m.targetMs && (
+                        <Typography variant="caption" sx={{ whiteSpace: 'nowrap', color: !m.closed && m.daysLeft != null && m.daysLeft < 0 && m.progress < 100 ? 'error.main' : 'text.secondary' }}>
+                          {dataService.formatDate(m.targetMs)}
+                        </Typography>
+                      )}
+                    </Box>
+                    {m.flags.length > 0 && (
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
+                        {m.flags.map((f) => <FlagChip key={f.key} flag={f} />)}
+                      </Box>
+                    )}
+                  </CardActionArea>
+                </Card>
+              );
+            })}
+          </Stack>
+        ) : (
+        <TableContainer sx={{ minHeight: 200 }}>
+          <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell padding="checkbox">
@@ -1687,7 +1750,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                   </TableCell>
                 </TableRow>
               )}
-              {filteredProjects.map((project) => {
+              {pagedProjects.map((project) => {
                 const m = monitorMap[String(project.id)];
                 if (!m) return null;
                 const statusColor = dataService.getStatusColor(project.project_status || '');
@@ -1714,12 +1777,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                         onChange={(e) => handleProjectSelection(String(project.id), e.target.checked)}
                       />
                     </TableCell>
-                    <TableCell sx={{ minWidth: 220, maxWidth: 340 }}>
-                      <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.82rem', lineHeight: 1.3 }}>
+                    <TableCell sx={{ width: '26%', maxWidth: 0, minWidth: 200 }}>
+                      <Typography variant="body2" noWrap title={project.project_name} sx={{ fontWeight: 600, fontSize: '0.82rem', lineHeight: 1.3 }}>
                         {project.project_name}
                       </Typography>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.25 }}>
-                        <Typography variant="caption" color="text.secondary">
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25, minWidth: 0 }}>
+                        <Typography variant="caption" color="text.secondary" noWrap>
                           {[project.project_no || (project.item_no ?? project.id), project.account_name].filter(Boolean).join(' · ')}
                         </Typography>
                         {project.with_acti && (
@@ -1729,7 +1792,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                             color="primary"
                             variant="outlined"
                             title={project.partner_name || 'Joint with ACTI'}
-                            sx={{ fontSize: '0.62rem', height: 16 }}
+                            sx={{ fontSize: '0.62rem', height: 16, flexShrink: 0 }}
                           />
                         )}
                       </Box>
@@ -1748,12 +1811,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
                         label={`${Math.round(m.progress)}%`}
                       />
                     </TableCell>
-                    <TableCell>
+                    <TableCell title={`Billed ${dataService.formatCurrency(m.billed)} of ${dataService.formatCurrency(m.contract)}`}>
                       <MiniBar
                         value={m.billedPct}
                         color={NET_PACIFIC_COLORS.success}
                         label={`${Math.round(m.billedPct)}%`}
-                        caption={formatCompact(m.billed)}
                       />
                     </TableCell>
                     <TableCell align="right" title={dataService.formatCurrency(m.contract)}>
@@ -1875,6 +1937,24 @@ const Dashboard: React.FC<DashboardProps> = ({ onProjectSelect, refreshTrigger: 
             </TableBody>
           </Table>
         </TableContainer>
+        )}
+
+        {filteredProjects.length > 0 && (
+          <TablePagination
+            component="div"
+            count={filteredProjects.length}
+            page={safePage}
+            onPageChange={(_, next) => setPage(next)}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={(e) => {
+              setRowsPerPage(parseInt(e.target.value, 10));
+              setPage(0);
+            }}
+            rowsPerPageOptions={[25, 50, 100]}
+            labelRowsPerPage={isPhone ? 'Per page' : 'Rows per page'}
+            sx={{ borderTop: '1px solid #e0e0e0' }}
+          />
+        )}
       </Paper>
 
       <UntaggedExpensesPanel ref={untaggedRef} monitor={spendMonitor} year={filters.year} error={spendError} />
