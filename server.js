@@ -4357,7 +4357,7 @@ function quotationGrandTotal(q) {
     const smallOrderFee = Number.isFinite(Number(q.smallOrderFee)) ? Number(q.smallOrderFee) : 5000;
     const surcharge = deliveryEnabled && subtotal < minOrderThreshold ? smallOrderFee : 0;
     const deliveryTotal = deliveryFee + surcharge;
-    return (afterDiscount + deliveryTotal) * (1 + num(q.vatPct) / 100);
+    return (afterDiscount + deliveryTotal) * (1 + (q.nonVat === true ? 0 : num(q.vatPct)) / 100);
   };
 
   if (q.formulaVersion === 'legacy') {
@@ -4455,7 +4455,7 @@ function quotationSalesAmount(q) {
     if (q.formulaVersion !== 'legacy') servicesSub *= 1 + num(q.ewtPct) / 100;
   }
 
-  return servicesSub * (1 - num(q.discountPct) / 100) * (1 + num(q.vatPct) / 100);
+  return servicesSub * (1 - num(q.discountPct) / 100) * (1 + (q.nonVat === true ? 0 : num(q.vatPct)) / 100);
 }
 
 // Spendable Project Budget seeded onto the Project List row at proposal→project
@@ -5242,6 +5242,8 @@ app.post('/api/calcsheet/quotations', async (req, res) => {
     // A duplicate of an awarded quotation is a new, unlocked revision.
     AWARD_LOCK_FIELDS.forEach((k) => { delete body[k]; });
     const data = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    // Non-VAT quotations never carry a VAT rate (keeps every reader of vatPct consistent).
+    if (data.nonVat === true) data.vatPct = 0;
     const timingError = validateQuotationPurchaseTiming(data);
     if (timingError) {
       res.status(400).json({ error: timingError });
@@ -5283,6 +5285,8 @@ app.put('/api/calcsheet/quotations/:id', async (req, res) => {
       return;
     }
     AWARD_LOCK_FIELDS.forEach((k) => { delete update[k]; });
+    // Judge the merged document: a PUT of only vatPct against a stored nonVat quotation must not set a rate.
+    if ({ ...prevData, ...body }.nonVat === true) update.vatPct = 0;
     const timingError = validateQuotationPurchaseTiming({ ...prevData, ...body });
     if (timingError) {
       res.status(400).json({ error: timingError });

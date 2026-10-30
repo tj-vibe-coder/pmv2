@@ -89,6 +89,9 @@ export function servicesSubtotal(
   return { subtotal, cost: subtotal };
 }
 
+/** VAT rate actually applied: a Non-VAT quotation is always 0, whatever `vatPct` holds. */
+export const effectiveVatPct = (q: { nonVat?: boolean; vatPct?: number }): number => (q.nonVat ? 0 : Number(q.vatPct) || 0);
+
 export function computeTotals(q: Quotation): QuotationTotals {
   if (q.formulaVersion === 'legacy') {
     if (q.legacyTotalsSnapshot) return q.legacyTotalsSnapshot;
@@ -189,7 +192,7 @@ export function computeTotals(q: Quotation): QuotationTotals {
   const smallOrderSurcharge = deliveryEnabled && subtotal < minOrderThreshold ? (q.smallOrderFee ?? 5000) : 0;
   const deliveryTotal = deliveryFee + smallOrderSurcharge;
 
-  const vat = q.nonVat ? 0 : (afterDiscount + deliveryTotal) * ((q.vatPct || 0) / 100);
+  const vat = (afterDiscount + deliveryTotal) * (effectiveVatPct(q) / 100);
   const grandTotal = afterDiscount + deliveryTotal + vat;
 
   return {
@@ -270,7 +273,7 @@ export function computeTotalsLegacy(q: Quotation): QuotationTotals {
   const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
   const discount = subtotal * ((q.discountPct || 0) / 100);
   const afterDiscount = subtotal - discount;
-  const vat = q.nonVat ? 0 : afterDiscount * ((q.vatPct || 0) / 100);
+  const vat = afterDiscount * (effectiveVatPct(q) / 100);
   const grandTotal = afterDiscount + vat;
 
   return {

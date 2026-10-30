@@ -38,6 +38,10 @@ function createMockDb() {
       ...query([]),
       add: async (data) => { const id = `d${++n}`; docs.set(id, { ...data }); return { id }; },
       doc: (id) => ({
+        create: async (data) => {
+          if (docs.has(id)) { const e = new Error('6 ALREADY_EXISTS'); e.code = 6; throw e; }
+          docs.set(id, { ...data });
+        },
         get: async () => ({ exists: docs.has(id), id, data: () => docs.get(id) }),
         update: async (patch) => { docs.set(id, { ...docs.get(id), ...patch }); },
         delete: async () => { docs.delete(id); },
@@ -46,12 +50,12 @@ function createMockDb() {
   };
 }
 
-async function withServer(db, fn) {
+async function withServer(db, fn, user = { username: 'tester', role: 'admin' }) {
   const express = require('express');
   const { createBlsRouter } = require('./blsRouter');
   const app = express();
   app.use(express.json());
-  app.use('/api/bls', createBlsRouter({ db, getCurrentUser: async () => ({ username: 'tester' }) }));
+  app.use('/api/bls', createBlsRouter({ db, getCurrentUser: async () => user }));
   const server = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}/api/bls`;
   const call = async (method, path, body) => {
@@ -109,4 +113,51 @@ test('computeSoaSummary: PAID rows are previous billings, DUE rows are the amoun
   assert.deepEqual(
     computeSoaSummary([{ amountBilled: 300, status: 'PAID' }, { amountBilled: 200, status: 'DUE' }], 1000),
     { contractValue: 1000, previousBillings: 300, thisBilling: 200, totalDue: 200, balanceAfter: 500 });
+});
+
+test('two simultaneous creates for one project get different numbers', async () => {
+  const db = createMockDb();
+  await withServer(db, async (call) => {
+    const [a, b] = await Promise.all([
+      call('POST', '/', { projectNo: 'IOCT2606009' }),
+      call('POST', '/', { projectNo: 'IOCT2606009' }),
+    ]);
+    assert.equal(a.status, 201);
+    assert.equal(b.status, 201);
+    assert.notEqual(a.json.data.docNo, b.json.data.docNo);
+    assert.equal(db.docs.size, 2);
+  });
+});
+
+test('create() collision on a supplied number is a 409, not an overwrite', async () => {
+  const db = createMockDb();
+  await withServer(db, async (call) => {
+    const first = { kind: 'SOA', docNo: 'SOA-2026-004_only', projectNo: 'IOCT2607003', source: 'imported', file: { onedrive_item_id: 'i1' } };
+    assert.equal((await call('POST', '/', first)).status, 201);
+    assert.equal((await call('POST', '/', { ...first, file: { onedrive_item_id: 'other' } })).status, 409);
+    assert.equal([...db.docs.values()][0].file.onedrive_item_id, 'i1');
+  });
+});
+
+test('PUT cannot move a document to another project', async () => {
+  const db = createMockDb();
+  await withServer(db, async (call) => {
+    const a = await call('POST', '/', { projectNo: 'IOCT2606003', projectId: 'p1' });
+    const res = await call('PUT', `/${a.json.id}`, { projectNo: 'IOCT9999999', projectId: 'p9', attention: 'x' });
+    assert.equal(res.json.data.projectNo, 'IOCT2606003');
+    assert.equal(res.json.data.projectId, 'p1');
+  });
+});
+
+test('only admin and superadmin may use the billing routes', async () => {
+  const db = createMockDb();
+  for (const role of ['user', 'viewer', 'tax_filer']) {
+    await withServer(db, async (call) => {
+      assert.equal((await call('GET', '/')).status, 403);
+      assert.equal((await call('POST', '/', { projectNo: 'IOCT2606003' })).status, 403);
+    }, { username: 'x', role });
+  }
+  await withServer(db, async (call) => {
+    assert.equal((await call('POST', '/', { projectNo: 'IOCT2606003' })).status, 201);
+  }, { username: 'x', role: 'superadmin' });
 });

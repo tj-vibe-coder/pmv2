@@ -402,11 +402,17 @@ function BlsImportDialog({ open, projects, existing, onClose, onImported, onErro
     try {
       const filename = `${docNo.trim().replace(/[\\/]/g, '-')}.pdf`;
       const uploaded = await fileToOneDrive(project, filename, file);
-      const saved = await createBillingStatement({
-        kind, docNo: docNo.trim(), date, source: 'imported',
-        projectId: String(project.id), projectNo: project.project_no, projectName: project.project_name,
-        file: uploaded,
-      });
+      let saved: BillingStatement;
+      try {
+        saved = await createBillingStatement({
+          kind, docNo: docNo.trim(), date, source: 'imported',
+          projectId: String(project.id), projectNo: project.project_no, projectName: project.project_name,
+          file: uploaded,
+        });
+      } catch (err: any) {
+        // The PDF is already in OneDrive but has no record: say where, so it isn't re-imported blindly.
+        throw new Error(`${err.message || 'Could not save the record'}. The file ${filename} was uploaded to the project's ${INVOICE_SUBFOLDER} folder (${uploaded.onedrive_web_url}) — delete it there before retrying.`);
+      }
       onImported(saved);
       onClose();
     } catch (err: any) {

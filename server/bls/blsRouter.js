@@ -4,6 +4,8 @@ const express = require('express');
 
 const BLS_COLLECTION = 'billing_statements';
 const KINDS = ['BLS', 'SOA'];
+// Same people the page is open to (the client sends user/viewer to the employee portal and tax_filer to its ledger).
+const ALLOWED_ROLES = ['superadmin', 'admin'];
 
 /**
  * Next document number for a project: `<ProjectNo>-BLS-NN` (cf. -PB-, -COC, -SR1).
@@ -21,6 +23,12 @@ function nextDocNo(projectNo, existingDocNos, kind = 'BLS') {
   // BLS-NN, but SOA-NNN (cf. IOCT2602001-SOA-001).
   return `${base}-${kind}-${String(max + 1).padStart(kind === 'SOA' ? 3 : 2, '0')}`;
 }
+
+// One document per (project, number): Firestore refuses a second create() with the same id,
+// so two people numbering at the same moment can't both get the same document number.
+const docIdFor = (projectNo, docNo) =>
+  `${projectNo}__${docNo}`.toUpperCase().replace(/[/\\\s]+/g, '_').slice(0, 200);
+const isAlreadyExists = (err) => err && (err.code === 6 || err.code === 'already-exists' || /already exists/i.test(err.message || ''));
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -54,6 +62,7 @@ function createBlsRouter(opts) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+      if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ success: false, error: 'Forbidden' });
       req.user = user;
       next();
     } catch (err) {
@@ -166,13 +175,13 @@ function createBlsRouter(opts) {
       if (data.docNo && nos.some((n) => String(n).toLowerCase() === data.docNo.toLowerCase())) {
         return res.status(409).json({ success: false, error: `${data.docNo} already exists` });
       }
-      if (!data.docNo) {
+      const supplied = !!data.docNo;
+      if (!supplied && data.source === 'imported') {
         // Generated documents are numbered here; imported files must bring their own number.
-        if (data.source === 'imported') return res.status(400).json({ success: false, error: 'docNo is required' });
-        data.docNo = nextDocNo(data.projectNo, nos, data.kind);
+        return res.status(400).json({ success: false, error: 'docNo is required' });
       }
       const now = new Date().toISOString();
-      const record = {
+      const base = {
         ...data,
         date: data.date || now.slice(0, 10),
         source: data.source || 'generated',
@@ -180,8 +189,21 @@ function createBlsRouter(opts) {
         updatedAt: now,
         createdBy: req.user.username || req.user.userId || 'system',
       };
-      const ref = await db.collection(BLS_COLLECTION).add(record);
-      res.status(201).json({ success: true, id: ref.id, data: withTotals({ ...record, id: ref.id }) });
+      // Auto-numbered: retry with the next number if someone else took it first.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const docNo = supplied ? data.docNo : nextDocNo(data.projectNo, nos, data.kind);
+        const id = docIdFor(data.projectNo, docNo);
+        const record = { ...base, docNo };
+        try {
+          await db.collection(BLS_COLLECTION).doc(id).create(record);
+          return res.status(201).json({ success: true, id, data: withTotals({ ...record, id }) });
+        } catch (err) {
+          if (!isAlreadyExists(err)) throw err;
+          if (supplied) return res.status(409).json({ success: false, error: `${docNo} already exists` });
+          nos.push(docNo);
+        }
+      }
+      return res.status(409).json({ success: false, error: 'Could not assign a document number, please retry' });
     } catch (err) {
       console.error('[BLS Router] POST / error:', err);
       res.status(500).json({ success: false, error: 'Failed to create billing statement' });
@@ -196,6 +218,8 @@ function createBlsRouter(opts) {
       const data = pick(req.body);
       delete data.kind;
       delete data.source;
+      delete data.projectNo;
+      delete data.projectId;
       if (data.docNo && data.docNo.toLowerCase() !== String(existing.data().docNo || '').toLowerCase()) {
         return res.status(400).json({ success: false, error: 'Document number cannot be changed' });
       }

@@ -2463,7 +2463,7 @@ export default function QuotationEditor() {
             <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(totals.smallOrderSurcharge ?? 0)}</Typography>
             <Box />
           </>}
-          {quotation.vatPct > 0 && <>
+          {!quotation.nonVat && quotation.vatPct > 0 && <>
             <Typography variant="body2">VAT ({quotation.vatPct}%)</Typography>
             <Typography variant="body2" sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(totals.vat)}</Typography>
             <Box />

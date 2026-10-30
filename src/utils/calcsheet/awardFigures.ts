@@ -1,5 +1,5 @@
 import type { Quotation } from '../../types/Quotation';
-import { computeTotals, ioctCostBasis } from './calc';
+import { computeTotals, effectiveVatPct, ioctCostBasis } from './calc';
 import { salesAccountedTotal } from './salesAccounting';
 
 export interface AwardFigures {
@@ -19,6 +19,7 @@ export function awardFigures(q: Quotation): AwardFigures {
   const cost = ioctCostBasis(t);
   const net = t.subtotal - t.discount;
   const budget = cost != null && cost > 0 ? cost : net > 0 ? net : t.grandTotal || 0;
-  const vatEx = q.vatPct ? price / (1 + q.vatPct / 100) : price;
+  const vat = effectiveVatPct(q);
+  const vatEx = vat ? price / (1 + vat / 100) : price;
   return { price, grandTotal: t.grandTotal, budget, margin: vatEx - budget };
 }
