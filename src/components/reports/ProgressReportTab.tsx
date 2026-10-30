@@ -61,6 +61,7 @@ import {
   migrateProgressSnapshotsFromLocalStorage,
 } from '../ProjectDetails';
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
+import { parseClientApprover } from '../../utils/clientApprover';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
 const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
@@ -316,9 +317,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     if (clientApprover?.name || clientApprover?.designation) {
       return [{ name: clientApprover.name, designation: clientApprover.designation, company: clientApprover.company }];
     }
-    const approverParts = (project.client_approver || '').split(/\s*[–-]\s*/);
-    const approverName = (approverParts[0] || '').trim();
-    const approverDesignation = (approverParts[1] || '').trim();
+    const { name: approverName, designation: approverDesignation } = parseClientApprover(project.client_approver);
     const approverCompany = (project.account_name || '').trim();
     if (approverName || approverDesignation || approverCompany) {
       return [{ name: approverName, designation: approverDesignation, company: approverCompany }];
@@ -1077,9 +1076,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           }
         }
       } else {
-        const approverParts = (project.client_approver || '').split(/\s*[–-]\s*/);
-        const approverName = (approverParts[0] || '').trim();
-        const approverDesignation = (approverParts[1] || '').trim();
+        const { name: approverName, designation: approverDesignation } = parseClientApprover(project.client_approver);
         const approverCompany = (project.account_name || '').trim();
         // One line before name for signature
         let approverY = rowY + sigLineHeight;

@@ -6,6 +6,16 @@
 
 ---
 
+## 2026-10-30 — DR/PO contact fixes: recipient comes from the client record (branch `rj/dr-po-client-contact`)
+
+Found by the Procurement tab while preparing Belmont DR `IOCT2610002-DR-1`: the DR page printed IOCT's own staff member as ATTN on a client DR.
+- **DR (`DeliveryPage.tsx`):** removed the hardcoded `REPORT_COMPANY_DR_CONTACT`; "Report as company" now changes only the letterhead/address. ATTN, email and phone are filled on project select and order prefill from `resolveContact(client, project.client_contact_id)` (client found via `project.client_id` in the Calcsheet store). Free-text `client_approver` is the fallback for ATTN only; email/phone clear when no client contact is linked.
+- **PO Ship To (`PurchaseOrderPage.tsx`):** new optional `shipToName/Address/Attn/Email/Phone` on a PO (create + edit dialogs). Blank = unchanged (issuer's own details). With **Deliver to** set, only the entered fields print; the issuer's staff contact, TIN and tel are suppressed so they never appear next to a client site.
+- **`client_approver` parsing:** new `utils/clientApprover.ts` (`parseClientApprover`) splits only on a *spaced* dash, replacing two dash-anywhere splits in `ProgressReportTab.tsx` that broke hyphenated names ("Jean-Paul Reyes" -> "Jean" / "Paul Reyes").
+- **Verified:** `tsc`, eslint, jest for the parser. **Not runtime-verified** in the browser (DR autofill, PO PDF with/without Ship To).
+
+---
+
 ## 2026-10-30 — Self-service "Change password" (branch `nylle/change-password`)
 
 **Why**: until now only a superadmin could set a password (User Management, or resolving a forgot-password request), so any teammate wanting a new password had to ask RJ. With the formerly-public default passwords still in circulation, people needed a way to change their own.
