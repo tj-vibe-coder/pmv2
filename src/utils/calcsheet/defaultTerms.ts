@@ -24,3 +24,9 @@ export function defaultDeliveryText(deliveryTerms?: string): string {
 
 export const DEFAULT_WARRANTY_EXCLUSION =
   '- Warranty excludes improper installation, unauthorized modifications, misuse, abnormal conditions, power surges, environmental damage, or force majeure events.';
+
+// Printed in bold as the first Terms and Conditions clause on non-VAT
+// quotations (`Quotation.nonVat`), so clients stop asking for VAT.
+export function defaultTaxStatusTerm(issuerName: string): string {
+  return `TAX STATUS: ${issuerName} is a NON-VAT registered taxpayer (subject to percentage tax). All prices quoted are final and inclusive of all applicable taxes. No VAT is added to this quotation or to the invoice.`;
+}

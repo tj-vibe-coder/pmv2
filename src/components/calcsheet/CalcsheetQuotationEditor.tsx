@@ -29,7 +29,7 @@ import {
   componentSellingUnit, lineGeneralTotal, manpowerCost, manpowerTotalCost, manpowerDailyRate,
   formatDiscountPct, discountPctFromAmount, discountPctFromTargetNet,
 } from '../../utils/calcsheet/calc';
-import { ISSUER_NAMES, DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from '../../utils/calcsheet/defaultTerms';
+import { ISSUER_NAMES, DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, defaultTaxStatusTerm, DEFAULT_WARRANTY_EXCLUSION } from '../../utils/calcsheet/defaultTerms';
 import { quotationRefNo } from '../../utils/calcsheet/codes';
 import { sanitizeNumericText, parseLenientFloat, parseLenientInt } from '../../utils/calcsheet/numberInput';
 import { FloatingTotalsWidget } from './FloatingTotalsWidget';
@@ -43,7 +43,7 @@ import CopyInclusionsDialog, { type CopiedInclusions } from './CopyInclusionsDia
 import ScopeLibraryDialog from './ScopeLibraryDialog';
 import LibraryAddIcon from '@mui/icons-material/LibraryAdd';
 import BookmarksIcon from '@mui/icons-material/Bookmarks';
-import { exportQuotationPdf } from '../../utils/calcsheet/pdfExport';
+import { exportQuotationPdf, findSalesContact } from '../../utils/calcsheet/pdfExport';
 import { compactLayoutAvailability, type QuotationPdfLayout } from '../../utils/calcsheet/quotationPdfLayout';
 import { exportQuotationXlsx } from '../../utils/calcsheet/xlsxExport';
 import { findInternalLookingText } from '../../utils/calcsheet/internalText';
@@ -1496,7 +1496,8 @@ export default function QuotationEditor() {
     !!to.exclusions ||
     (!!to.basisOfProposal && to.basisOfProposal !== defaultBasisOfProposal(ISSUER_NAMES[quotation.kind])) ||
     (!!to.deliveryLines && to.deliveryLines !== defaultDeliveryText(quotation.deliveryTerms)) ||
-    (!!to.warrantyExclusion && to.warrantyExclusion !== DEFAULT_WARRANTY_EXCLUSION)
+    (!!to.warrantyExclusion && to.warrantyExclusion !== DEFAULT_WARRANTY_EXCLUSION) ||
+    (!!to.taxStatus && to.taxStatus !== defaultTaxStatusTerm(ISSUER_NAMES[quotation.kind]))
   );
 
   return (
@@ -1820,7 +1821,7 @@ export default function QuotationEditor() {
               );
             };
             const helperFor = (name: string | undefined) => {
-              const c = name ? effectiveSalesContacts.find((x) => x.name === name) : undefined;
+              const c = findSalesContact(name, effectiveSalesContacts);
               return c ? [positionFor(c), c.phone, emailFor(c)].filter(Boolean).join(' · ') : ' ';
             };
             return (
@@ -1850,7 +1851,7 @@ export default function QuotationEditor() {
                     disabled={inputsLocked}
                     value={quotation.preparedByTitle ?? ''}
                     onChange={(e) => setField('preparedByTitle', e.target.value || undefined)}
-                    placeholder={(() => { const c = quotation.preparedBy ? effectiveSalesContacts.find((x) => x.name === quotation.preparedBy) : undefined; return positionFor(c) || 'e.g. Sales Engineer'; })()}
+                    placeholder={(() => { const c = findSalesContact(quotation.preparedBy, effectiveSalesContacts); return positionFor(c) || 'e.g. Sales Engineer'; })()}
                     helperText="Leave blank to auto-resolve from team member record"
                   />
                 </Tooltip>
@@ -1904,6 +1905,17 @@ export default function QuotationEditor() {
                 }
                 label={<Typography variant="caption">Start Terms on new PDF page</Typography>}
               />
+              {quotation.nonVat && (
+                <TextField
+                  label="Tax Status clause (printed first, bold)"
+                  multiline
+                  minRows={2}
+                  fullWidth
+                  value={quotation.termsOverrides?.taxStatus ?? defaultTaxStatusTerm(ISSUER_NAMES[quotation.kind])}
+                  onChange={(e) => setTermsOverride('taxStatus', e.target.value)}
+                  helperText="Shown because Non-VAT is on. Replaces the default Tax Status wording."
+                />
+              )}
               <TextField
                 label="Scope of Work"
                 multiline
@@ -1984,13 +1996,26 @@ export default function QuotationEditor() {
           <Stack direction="row" flexWrap="wrap" useFlexGap rowGap={1} columnGap={2} justifyContent="space-between" alignItems="center">
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Pricing Controls</Typography>
             <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} alignItems="center">
+              <Tooltip title="Issuer is NON-VAT (percentage tax). No VAT is added; the PDF/Excel show “VAT: N/A (Non-VAT)” and lead the terms with a bold Tax Status clause.">
+                <FormControlLabel
+                  control={
+                    <Switch
+                      size="small"
+                      checked={!!quotation.nonVat}
+                      onChange={(e) => setDraft((d) => d ? ({ ...d, nonVat: e.target.checked, ...(e.target.checked ? { vatPct: 0 } : {}) } as Quotation) : d)}
+                      disabled={inputsLocked}
+                    />
+                  }
+                  label={<Typography variant="body2">Non-VAT</Typography>}
+                />
+              </Tooltip>
               <FormControlLabel
                 control={
                   <Switch
                     size="small"
                     checked={quotation.vatPct > 0}
                     onChange={(e) => setField('vatPct', e.target.checked ? 12 : 0)}
-                    disabled={inputsLocked}
+                    disabled={inputsLocked || !!quotation.nonVat}
                   />
                 }
                 label={<Typography variant="body2">Include VAT</Typography>}
