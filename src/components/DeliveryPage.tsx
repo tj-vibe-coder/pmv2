@@ -25,6 +25,8 @@ import { useSearchParams } from 'react-router-dom';
 import dataService from '../services/dataService';
 import { useAuth } from '../contexts/AuthContext';
 import { Project } from '../types/Project';
+import { resolveContact } from '../types/Client';
+import { useQuotationStore } from '../store/quotationStore';
 import { REPORT_COMPANIES, type ReportCompanyKey } from './ProjectDetails';
 import { ORDER_TRACKER_STORAGE_KEY, type OrderRecord } from './OrderTrackerPage';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
@@ -32,12 +34,6 @@ import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
 const REPORT_COMPANY_ADDRESS: Record<ReportCompanyKey, string> = {
   ACT: 'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite 4117, Philippines',
   IOCT: 'B63, L7 Dynamism Jubilation Enclave, Santo Niño, City of Biñan, Laguna, Region IV-A (Calabarzon), 4024',
-};
-
-/** Default DR (Delivery Receipt) contact for Shipping To – ATTN, Email, Mobile. Fetched when report company is selected. */
-const REPORT_COMPANY_DR_CONTACT: Record<ReportCompanyKey, { attn: string; email: string; phone: string }> = {
-  ACT: { attn: '', email: '', phone: '' },
-  IOCT: { attn: 'Francis Porras', email: 'f.porras@iocontroltech.com', phone: '+63 977 015 2940' },
 };
 
 const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
@@ -135,6 +131,7 @@ function loadOrdersFromTracker(): OrderRecord[] {
 const DeliveryPage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const clients = useQuotationStore((s) => s.clients);
   const [reportCompany, setReportCompany] = useState<ReportCompanyKey>('ACT');
   const [deliveryNoteNo, setDeliveryNoteNo] = useState('');
   const [despatchDate, setDespatchDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -172,6 +169,16 @@ const DeliveryPage: React.FC = () => {
   }, []);
 
 
+  // Recipient ATTN / email / phone come from the project's linked client contact (Clients record);
+  // free-text client_approver is only a fallback when no client contact is linked.
+  const applyClientContact = (p: Project) => {
+    const client = p.client_id ? clients.find((c) => c.id === p.client_id) : undefined;
+    const contact = client ? resolveContact(client, p.client_contact_id) : null;
+    setShippingContactName(contact?.name || p.client_approver || '');
+    setShippingContactEmail(contact?.email || '');
+    setShippingContactPhone(contact?.phone || '');
+  };
+
   // Prefill from Order when "Link to Order" is selected or URL has ?orderId= (optional ?itemIds=id1,id2 for selected items only)
   const applyOrderPrefill = (order: OrderRecord, projectList: Project[], selectedItemIds?: string[]) => {
     const pid = order.projectId != null ? String(order.projectId) : '';
@@ -186,7 +193,7 @@ const DeliveryPage: React.FC = () => {
       setDeliveryNoteNo((prev) => (prev ? prev : `${projNo}-DR-${nextNum}`));
       setShippingName(p.account_name || '');
       setShippingAddress(p.project_location || '');
-      setShippingContactName(p.client_approver || '');
+      applyClientContact(p);
     }
     if (order.items && order.items.length > 0) {
       const sourceItems = selectedItemIds && selectedItemIds.length > 0
@@ -230,7 +237,7 @@ const DeliveryPage: React.FC = () => {
       setPoNumber(p.po_number || '');
       setShippingName(p.account_name || '');
       setShippingAddress(p.project_location || '');
-      setShippingContactName(p.client_approver || '');
+      applyClientContact(p);
     }
   };
 
@@ -578,10 +585,6 @@ const DeliveryPage: React.FC = () => {
                 onChange={(e) => {
                   const v = e.target.value as ReportCompanyKey;
                   setReportCompany(v);
-                  const contact = REPORT_COMPANY_DR_CONTACT[v];
-                  setShippingContactName(contact.attn);
-                  setShippingContactEmail(contact.email);
-                  setShippingContactPhone(contact.phone);
                 }}
               >
                 <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
