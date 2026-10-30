@@ -15,6 +15,7 @@ const { GoogleGenAI: AiAssistGoogleGenAI } = require('@google/genai');
 const { createFinanceTraceRouter } = require('./server/financeTraceRouter');
 const { createBackupsRouter } = require('./server/backups/router');
 const { createSoaRouter } = require('./server/soa/soaRouter');
+const { createBlsRouter } = require('./server/bls/blsRouter');
 const { createApiAccessGate } = require('./server/apiAccess');
 const { hashPassword, verifyPassword } = require('./server/passwords');
 const { createLoginThrottle, clientAddress, retryMinutes } = require('./server/loginThrottle');
@@ -8286,6 +8287,10 @@ app.use('/api/soa', createSoaRouter({
   ensureFolderByPath,
 }));
 // ========== END STATEMENTS OF ACCOUNT ==========
+
+// ========== BILLING STATEMENTS (BLS) + imported BLS/SOA files ==========
+app.use('/api/bls', createBlsRouter({ db, getCurrentUser }));
+// ========== END BILLING STATEMENTS ==========
 
 // ========== STATIC FILES & SPA FALLBACK ==========
 if (!process.env.K_SERVICE) {

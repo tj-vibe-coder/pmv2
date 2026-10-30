@@ -216,6 +216,11 @@ function mergeSalesContactsWithUsers(
   return merged;
 }
 
+// IOCT is a non-VAT taxpayer (percentage tax), so new IOCT quotations start with
+// Non-VAT on. Flip this to false when IOCT registers for VAT — the VAT-EX /
+// VAT-IN options stay available per quotation either way.
+const IOCT_NON_VAT_DEFAULT = true;
+
 const blankQuotation = (
   projectId: ID,
   kind: QuotationKind,
@@ -249,6 +254,8 @@ const blankQuotation = (
   globalContingencyPct: 0,
   discountPct: 0,
   vatPct: 0,
+  // ACTI quotations keep the existing VAT behaviour.
+  nonVat: kind === 'IOCT' && IOCT_NON_VAT_DEFAULT,
   // Any scope that can include physical goods (Supply only, or Both) defaults
   // the delivery fee + minimum-order surcharge on — the team can still switch
   // it off inline (this is just the starting value, not locked like the

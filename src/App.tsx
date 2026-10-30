@@ -44,6 +44,7 @@ import CompanyPnLPage from './components/finance/CompanyPnLPage';
 import TaxFilerLedgerPage from './components/finance/TaxFilerLedgerPage';
 import SalesEwtRegisterPage from './components/finance/SalesEwtRegisterPage';
 import SoaDashboardPage from './components/finance/soa/SoaDashboardPage';
+import BlsPage from './components/finance/bls/BlsPage';
 import SoaDetailView from './components/finance/soa/SoaDetailView';
 import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
@@ -616,6 +617,20 @@ function App() {
                     <TaxFilerBlock>
                       <AppLayout>
                         <SoaDashboardPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/bls"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <BlsPage />
                       </AppLayout>
                     </TaxFilerBlock>
                   </EmployeeGuard>
