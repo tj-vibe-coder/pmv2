@@ -97,9 +97,17 @@ const ITEMS = [...ROWS.map(toItem({})), ...EXPONENT_ROWS.map(toItem(EXPONENT))];
 
 async function importItems() {
   console.log(`Importing ${ITEMS.length} Siemens pricelist items...`);
+  // Items added through the app have random doc IDs — update those in place
+  // instead of creating a second item with the same part number.
+  const existing = new Map();
+  (await db.collection('pricelist_items').get()).docs.forEach((d) => {
+    const no = String(d.data().catalogNo || '').toUpperCase();
+    if (no && !existing.has(no)) existing.set(no, d.id);
+  });
   const batch = db.batch();
   for (const item of ITEMS) {
-    const id = `sie_${item.catalogNo.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
+    const id = existing.get(item.catalogNo.toUpperCase())
+      || `sie_${item.catalogNo.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
     batch.set(db.collection('pricelist_items').doc(id), {
       ...item,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
