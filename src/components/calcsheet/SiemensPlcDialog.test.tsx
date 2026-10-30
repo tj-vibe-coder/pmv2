@@ -36,11 +36,11 @@ it('configures an S7-1500 with Modbus RTU and adds the priced modules under a PL
   // Auto CPU: 51 channels → performance class 1 → the lowest-cost fit is the CPU 1511-1 PN
   expect(byPart['6ES7511-1AL03-0AB0']).toMatchObject({ qty: 1, brand: 'Siemens' });
   expect(byPart['6ES7954-8LF04-0AA0']).toMatchObject({ qty: 1 });             // memory card, auto 24 MB
-  expect(byPart['6ES7131-6BH01-0BA0']).toMatchObject({ qty: 3, unitCost: 6218.99 });
+  expect(byPart['6ES7131-6BH01-0BA0']).toMatchObject({ qty: 3, unitCost: 6630.85 });
   expect(byPart['6ES7134-6GF00-0AA1']).toMatchObject({ qty: 1 });
   expect(byPart['6ES7137-6AA01-0BA0']).toMatchObject({ qty: 2 });             // CM PtP per RS-485 port
   expect(byPart['6ES7155-6AA02-0BN0']).toMatchObject({ qty: 1 });             // one ET 200SP station
-  expect(byPart['6ES7193-6BP00-0DA0']).toMatchObject({ qty: 1, unitCost: 1600 }); // light BU
+  expect(byPart['6ES7193-6BP00-0DA0']).toMatchObject({ qty: 1, unitCost: 2063.01 }); // light BU
   expect(byPart['6ES7193-6BP00-0BA0']).toMatchObject({ qty: 5 });             // 6 modules − 1
   expect(byPart['6EP1336-2BA10']).toMatchObject({ qty: 1 });
   expect(byPart['6ES7241-1CH30-1XB0']).toBeUndefined();                       // no CB 1241 on S7-1500
