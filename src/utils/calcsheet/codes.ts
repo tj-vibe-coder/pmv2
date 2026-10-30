@@ -50,3 +50,11 @@ export function quotationRefNo(projectCode: string, recipientCode: string | unde
   const base = (projectCode || 'DRAFT').replace(/-[A-Z]{3}-\d{2}$/, '');
   return `${base}-${(recipientCode ?? 'XXX').slice(0, 3)}-${revision}`;
 }
+
+// What a client sees on an exported quotation (PDF/Excel reference and the
+// file name). PCS = "project calcsheet" is the internal project code; the
+// document itself is a quotation, so the leading PCS is shown as QTN.
+// Codes without a PCS prefix (legacy ACTI…, DRAFT) are left as they are.
+export function quotationExportRefNo(projectCode: string, recipientCode: string | undefined, revision: string): string {
+  return quotationRefNo(projectCode, recipientCode, revision).replace(/^PCS(?=\d)/, 'QTN');
+}

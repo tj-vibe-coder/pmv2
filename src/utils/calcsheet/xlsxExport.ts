@@ -7,7 +7,7 @@ import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, serviceLineAmount, manpowerCost,
   formatDiscountPct,
 } from './calc';
-import { quotationRefNo } from './codes';
+import { quotationExportRefNo } from './codes';
 import { subheaderBefore } from './subheaders';
 
 const PHP_FMT = '"₱" #,##0.00;[Red]"₱" -#,##0.00';
@@ -29,7 +29,7 @@ export async function exportQuotationXlsx(
   // IOCT-only pricing buffer folded into markup — never printed as its own
   // line/label. See Quotation.ewtPct.
   const ewtPct = quotation.ewtPct || 0;
-  const refNo = quotationRefNo(project.code, recipient?.code, quotation.revision);
+  const refNo = quotationExportRefNo(project.code, recipient?.code, quotation.revision);
   const generalReqtsExportQty = Math.max(1, quotation.generalReqtsExportQty || 1);
   const generalReqtsExportUnitPrice = totals.generalReqtsSubtotal / generalReqtsExportQty;
   const engineeringServicesQty = Math.max(1, quotation.engineeringServicesQty || 1);

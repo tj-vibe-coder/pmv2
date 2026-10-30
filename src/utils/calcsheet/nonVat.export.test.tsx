@@ -8,6 +8,7 @@ import ExcelJS from 'exceljs';
 import { exportQuotationPdf } from './pdfExport';
 import { exportQuotationXlsx } from './xlsxExport';
 import type { Project, Quotation } from '../../types/Quotation';
+import { computeTotals } from './calc';
 
 const mockSaved: { blob?: Blob } = {};
 jest.mock('file-saver', () => ({ saveAs: (blob: Blob) => { mockSaved.blob = blob; } }));
@@ -37,7 +38,6 @@ jest.mock('@react-pdf/renderer', () => {
   };
 });
 
-import { computeTotals } from './calc';
 
 const project = { id: 'p1', code: 'PCS2610164-MVC-00', name: 'Mabuhay Vinyl' } as unknown as Project;
 const baseQuotation = (over: Partial<Quotation>) => ({
@@ -100,4 +100,13 @@ it('prints the non-VAT totals block on the Excel export', async () => {
   expect(all).toContain('TOTAL AMOUNT PAYABLE');
   expect(all).toContain('23750');
   expect(all.toLowerCase()).not.toContain('vat-ex');
+});
+
+it('exports a PCS project as a QTN reference, in the PDF text and the file name', async () => {
+  const q = baseQuotation({ nonVat: true });
+  const { filename } = await exportQuotationPdf(q, project, null, null, [], { save: false });
+  expect(filename).toBe('QTN2610164-XXX-01.pdf');
+  const text = render(<>{mockCaptured.element}</>).container.textContent ?? '';
+  expect(text).toContain('QTN2610164-XXX-01');
+  expect(text).not.toContain('PCS2610164');
 });

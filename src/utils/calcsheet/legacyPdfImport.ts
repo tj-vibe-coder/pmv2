@@ -149,8 +149,10 @@ export async function parseLegacyPdf(file: File): Promise<ParsedLegacyPdf> {
   if (kind === 'unknown') warnings.push('Could not detect issuer (IOCT vs ACTI) from letterhead');
 
   // ── Header fields ─────────────────────────────────────────────────────────
-  const refCode = findAfterAnchor(items, /^Ref\s*No\.?:?$/i) ||
-    (items.find((t) => /^PCS\d{4}\d{3}-[A-Z&]{2,4}-\d{2}$/.test(t)) ?? '');
+  // Exports now print the project code as QTN… (see quotationExportRefNo); map it
+  // back to the internal PCS… code so re-importing an exported PDF still matches.
+  const refCode = (findAfterAnchor(items, /^Ref\s*No\.?:?$/i) ||
+    (items.find((t) => /^(PCS|QTN)\d{4}\d{3}-[A-Z&]{2,4}-\d{2}$/.test(t)) ?? '')).replace(/^QTN(?=\d)/, 'PCS');
   const m = refCode.match(/^(PCS\d{4}\d{3}-[A-Z&]{2,4})-(\d{2})$/);
   const baseCode = m ? m[1] : refCode.replace(/-\d{2}$/, '');
   const revision = m ? m[2] : '00';

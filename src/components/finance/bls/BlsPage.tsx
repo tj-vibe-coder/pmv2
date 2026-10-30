@@ -14,6 +14,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { API_BASE } from '../../../config/api';
 import type { BillingDocKind, BillingStatement, BlsLine, BlsRefRow } from '../../../types/BillingStatement';
+import type { ProjectInvoice } from '../../../types/Invoice';
 import { computeBlsTotals, DEFAULT_BLS_SUBTITLE, DEFAULT_BLS_TERMS, parseDocFilename } from '../../../types/BillingStatement';
 import {
   createBillingStatement, deleteBillingStatement, listBillingStatements, nextBlsNo, updateBillingStatement,
@@ -101,6 +102,37 @@ function BlsEditorDialog({ open, bls, projects, onClose, onSaved, onError }: Edi
   const [terms, setTerms] = useState(DEFAULT_BLS_TERMS);
   const [approverLabel, setApproverLabel] = useState('Verified / approved by');
   const [saving, setSaving] = useState(false);
+  const [invoices, setInvoices] = useState<ProjectInvoice[]>([]);
+  const [invoice, setInvoice] = useState<ProjectInvoice | null>(null);
+
+  // Invoices of the chosen project, for the optional "linked invoice" picker.
+  useEffect(() => {
+    if (!open || !project) { setInvoices([]); return; }
+    let cancelled = false;
+    fetch(`${API_BASE}/api/invoices?project_id=${encodeURIComponent(String(project.id))}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('netpacific_token') || ''}` },
+    })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: ProjectInvoice[]) => { if (!cancelled) setInvoices(Array.isArray(rows) ? rows : []); })
+      .catch(() => { if (!cancelled) setInvoices([]); });
+    return () => { cancelled = true; };
+  }, [open, project]);
+
+  // Re-select the saved invoice once the list has loaded.
+  useEffect(() => {
+    if (bls?.invoiceId) setInvoice(invoices.find((i) => i.id === bls.invoiceId) || null);
+  }, [bls, invoices]);
+
+  const pickInvoice = (inv: ProjectInvoice | null) => {
+    setInvoice(inv);
+    if (!inv) return;
+    const dated = inv.invoice_date ? ` dated ${inv.invoice_date}` : '';
+    const label = `SI ${inv.invoice_no}${dated}`;
+    // Add the matching reference row and supporting document once, without clobbering edits.
+    setRefRows((rs) => (rs.some((r) => r.label === 'Service Invoice') ? rs : [...rs, { label: 'Service Invoice', value: label }]));
+    setDocsText((t) => (t.includes(`Service Invoice ${inv.invoice_no}`) ? t : [t, `Service Invoice ${inv.invoice_no}${dated}`].filter(Boolean).join('\n')));
+    if (inv.bill_to_name && !billedToName) setBilledToName(inv.bill_to_name);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -119,8 +151,10 @@ function BlsEditorDialog({ open, bls, projects, onClose, onSaved, onError }: Edi
       setDocsText((bls.supportingDocs || []).join('\n'));
       setTerms(bls.terms || DEFAULT_BLS_TERMS);
       setApproverLabel(bls.approverLabel || 'Verified / approved by');
+      setInvoice(null);
     } else {
       setProject(null);
+      setInvoice(null);
       setDocNo('');
       setDate(todayISO());
       setBilledToName('');
@@ -183,6 +217,8 @@ function BlsEditorDialog({ open, bls, projects, onClose, onSaved, onError }: Edi
         whtPct,
         supportingDocs: docsText.split('\n').map((s) => s.trim()).filter(Boolean),
         terms, approverLabel,
+        invoiceId: invoice?.id || '',
+        invoiceNo: invoice?.invoice_no || '',
         preparedByName: bls?.preparedByName || user?.full_name || undefined,
       };
       const saved = bls ? await updateBillingStatement(bls.id, payload) : await createBillingStatement(payload);
@@ -218,6 +254,17 @@ function BlsEditorDialog({ open, bls, projects, onClose, onSaved, onError }: Edi
           <Grid size={{ xs: 6, md: 3 }}>
             <TextField size="small" fullWidth type="date" label="Date" value={date}
               onChange={(e) => setDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+          </Grid>
+          <Grid size={12}>
+            <Autocomplete
+              options={invoices}
+              value={invoice}
+              getOptionLabel={(i) => `${i.invoice_no} · ${i.invoice_date || ''} · ₱${NUM(i.amount)}`}
+              isOptionEqualToValue={(a, b) => a.id === b.id}
+              onChange={(_, v) => pickInvoice(v)}
+              noOptionsText={project ? 'No invoices recorded for this project' : 'Pick a project first'}
+              renderInput={(params) => <TextField {...params} label="Linked invoice (optional)" size="small" helperText="Adds the Service Invoice to the reference rows and supporting documents" />}
+            />
           </Grid>
           <Grid size={{ xs: 12, md: 6 }}>
             <TextField size="small" fullWidth label="Billed to" value={billedToName} onChange={(e) => setBilledToName(e.target.value)} />
@@ -555,6 +602,7 @@ export default function BlsPage() {
                 <TableCell>Type</TableCell>
                 <TableCell>Date</TableCell>
                 <TableCell>Project</TableCell>
+                <TableCell>Invoice</TableCell>
                 <TableCell>Billed to</TableCell>
                 <TableCell align="right">Amount due (₱)</TableCell>
                 <TableCell>OneDrive</TableCell>
@@ -563,9 +611,9 @@ export default function BlsPage() {
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={8} align="center"><CircularProgress size={22} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} align="center"><CircularProgress size={22} /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={8} align="center" sx={{ color: 'text.secondary', py: 3 }}>No billing documents yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} align="center" sx={{ color: 'text.secondary', py: 3 }}>No billing documents yet.</TableCell></TableRow>
               ) : filtered.map((r) => {
                 const generated = r.source !== 'imported';
                 return (
@@ -574,6 +622,7 @@ export default function BlsPage() {
                     <TableCell><Chip size="small" label={r.kind === 'SOA' ? 'SOA' : 'BLS'} color={r.kind === 'SOA' ? 'warning' : 'primary'} variant="outlined" /></TableCell>
                     <TableCell>{r.date}</TableCell>
                     <TableCell>{r.projectNo}{r.projectName ? ` · ${r.projectName}` : ''}</TableCell>
+                    <TableCell>{r.invoiceNo || '—'}</TableCell>
                     <TableCell>{r.billedToName || '—'}</TableCell>
                     <TableCell align="right">{r.totalNet != null ? NUM(r.totalNet) : '—'}</TableCell>
                     <TableCell>
