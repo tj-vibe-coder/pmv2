@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { nextDocNo, computeBlsTotals } = require('./blsRouter');
+const { nextDocNo, computeBlsTotals, computeSoaSummary } = require('./blsRouter');
 
 test('nextDocNo continues after the highest existing -BLS-NN for the project', () => {
   assert.equal(nextDocNo('IOCT2610002', []), 'IOCT2610002-BLS-01');
@@ -75,8 +75,12 @@ test('POST numbers new BLS sequentially and never duplicates an imported number'
     const imp = { kind: 'SOA', docNo: 'SOA-2026-004_only', projectNo: 'IOCT2606002', source: 'imported', file: { onedrive_item_id: 'i1' } };
     assert.equal((await call('POST', '/', imp)).status, 201);
     assert.equal((await call('POST', '/', imp)).status, 409);
-    // a SOA without a number can't be auto-generated
-    assert.equal((await call('POST', '/', { kind: 'SOA', projectNo: 'IOCT2606002' })).status, 400);
+    // an imported file without a number is refused; a generated SOA is numbered -SOA-NNN
+    assert.equal((await call('POST', '/', { kind: 'SOA', source: 'imported', projectNo: 'IOCT2606002' })).status, 400);
+    const soa = await call('POST', '/', { kind: 'SOA', projectNo: 'IOCT2606002', contractValue: 1000, txns: [{ amountBilled: 400, status: 'PAID' }, { amountBilled: 600, status: 'DUE' }] });
+    assert.equal(soa.json.data.docNo, 'IOCT2606002-SOA-001');
+    assert.equal(soa.json.data.totalNet, 600);
+    assert.equal(soa.json.data.balanceAfter, 0);
   });
 });
 
@@ -91,4 +95,18 @@ test('PUT refuses to change the document number or kind', async () => {
     assert.equal(ok.json.data.kind, 'BLS');
     assert.equal(ok.json.data.attention, 'Ms. Ja');
   });
+});
+
+test('SOA numbers are three digits and counted separately from BLS', () => {
+  assert.equal(nextDocNo('IOCT2602001', ['IOCT2602001-SOA-001', 'IOCT2602001-BLS-04'], 'SOA'), 'IOCT2602001-SOA-002');
+  assert.equal(nextDocNo('IOCT2602001', ['IOCT2602001-SOA-001'], 'BLS'), 'IOCT2602001-BLS-01');
+});
+
+test('computeSoaSummary: PAID rows are previous billings, DUE rows are the amount due', () => {
+  assert.deepEqual(
+    computeSoaSummary([{ amountBilled: 216258.41, status: 'DUE' }], 216258.41),
+    { contractValue: 216258.41, previousBillings: 0, thisBilling: 216258.41, totalDue: 216258.41, balanceAfter: 0 });
+  assert.deepEqual(
+    computeSoaSummary([{ amountBilled: 300, status: 'PAID' }, { amountBilled: 200, status: 'DUE' }], 1000),
+    { contractValue: 1000, previousBillings: 300, thisBilling: 200, totalDue: 200, balanceAfter: 500 });
 });

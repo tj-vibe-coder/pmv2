@@ -1,4 +1,4 @@
-import { computeBlsTotals, parseDocFilename, pesoInWords } from './BillingStatement';
+import { computeBlsTotals, computeSoaSummary, parseDocFilename, pesoInWords } from './BillingStatement';
 
 describe('Billing statement helpers', () => {
   it('computes gross / withholding / net', () => {
@@ -12,6 +12,12 @@ describe('Billing statement helpers', () => {
     expect(pesoInWords(294000)).toBe('Two Hundred Ninety-Four Thousand Pesos and 00/100 Only');
     expect(pesoInWords(216258.41)).toBe('Two Hundred Sixteen Thousand Two Hundred Fifty-Eight Pesos and 41/100 Only');
     expect(pesoInWords(1000000)).toBe('One Million Pesos and 00/100 Only');
+  });
+
+  it('summarises a running account (PAID = previous, DUE = amount due)', () => {
+    expect(computeSoaSummary([{ amountBilled: 216258.41, status: 'DUE' } as any], 216258.41))
+      .toEqual({ contractValue: 216258.41, previousBillings: 0, thisBilling: 216258.41, totalDue: 216258.41, balanceAfter: 0 });
+    expect(computeSoaSummary([{ amountBilled: 300, status: 'PAID' } as any, { amountBilled: 200, status: 'DUE' } as any], 1000).balanceAfter).toBe(500);
   });
 
   it('reads the doc number and kind from an existing filename', () => {

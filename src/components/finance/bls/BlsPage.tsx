@@ -20,6 +20,8 @@ import {
   createBillingStatement, deleteBillingStatement, listBillingStatements, nextBlsNo, updateBillingStatement,
 } from '../../../services/billingStatementService';
 import { generateBlsPdfBlob } from '../../../utils/bls/blsPdfExport';
+import { generateRunningSoaPdfBlob } from '../../../utils/bls/runningSoaPdfExport';
+import RunningSoaEditorDialog from './RunningSoaEditorDialog';
 import { getOrCreateChildFolderById, listChildrenById, uploadFileToFolderById } from '../../../services/onedriveFolderService';
 import { useAuth } from '../../../contexts/AuthContext';
 
@@ -72,6 +74,11 @@ async function fileToOneDrive(project: ProjectOption, filename: string, blob: Bl
 }
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
+
+/** A document the app can regenerate: a BLS, or a running-account SOA built here (not an imported PDF). */
+const isGenerated = (r: BillingStatement) => r.source !== 'imported';
+const isRunningSoa = (r: BillingStatement) => r.kind === 'SOA' && isGenerated(r);
+const buildPdf = (r: BillingStatement) => (isRunningSoa(r) ? generateRunningSoaPdfBlob(r) : generateBlsPdfBlob(r));
 
 // ─── Editor ──────────────────────────────────────────────────────────────────
 interface EditorProps {
@@ -461,6 +468,8 @@ export default function BlsPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<BillingStatement | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [soaEditorOpen, setSoaEditorOpen] = useState(false);
+  const [editingSoa, setEditingSoa] = useState<BillingStatement | null>(null);
   const [busyId, setBusyId] = useState('');
 
   const load = useCallback(async () => {
@@ -509,7 +518,7 @@ export default function BlsPage() {
     setBusyId(r.id);
     try {
       const { saveAs } = await import('file-saver');
-      saveAs(await generateBlsPdfBlob(r), `${r.docNo}.pdf`);
+      saveAs(await buildPdf(r), `${r.docNo}.pdf`);
     } catch (err: any) {
       setError(err.message || 'Failed to build PDF');
     } finally { setBusyId(''); }
@@ -520,7 +529,7 @@ export default function BlsPage() {
     if (!project) { setError('Project not found for this document.'); return; }
     setBusyId(r.id);
     try {
-      const uploaded = await fileToOneDrive(project, `${r.docNo}.pdf`, await generateBlsPdfBlob(r));
+      const uploaded = await fileToOneDrive(project, `${r.docNo}.pdf`, await buildPdf(r));
       upsert(await updateBillingStatement(r.id, { file: uploaded }));
       setToast(`${r.docNo} saved to the project's ${INVOICE_SUBFOLDER} folder`);
     } catch (err: any) {
@@ -588,6 +597,10 @@ export default function BlsPage() {
               sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.7)', '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' } }}>
               Import existing
             </Button>
+            <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={() => { setEditingSoa(null); setSoaEditorOpen(true); }}
+              sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.7)', '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' } }}>
+              New SOA
+            </Button>
             <Button size="small" variant="contained" startIcon={<AddIcon />} onClick={() => { setEditing(null); setEditorOpen(true); }}
               sx={{ bgcolor: '#ffffff', color: NET_PACIFIC_COLORS.primary, fontWeight: 700, '&:hover': { bgcolor: '#f0f4f8' } }}>
               New Billing Statement
@@ -615,7 +628,7 @@ export default function BlsPage() {
               ) : filtered.length === 0 ? (
                 <TableRow><TableCell colSpan={9} align="center" sx={{ color: 'text.secondary', py: 3 }}>No billing documents yet.</TableCell></TableRow>
               ) : filtered.map((r) => {
-                const generated = r.source !== 'imported';
+                const generated = isGenerated(r);
                 return (
                   <TableRow key={r.id} hover>
                     <TableCell sx={{ fontWeight: 600 }}>{r.docNo}</TableCell>
@@ -633,7 +646,7 @@ export default function BlsPage() {
                     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                       {generated && (
                         <>
-                          <Tooltip title="Edit"><IconButton size="small" onClick={() => { setEditing(r); setEditorOpen(true); }}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                          <Tooltip title="Edit"><IconButton size="small" onClick={() => { if (isRunningSoa(r)) { setEditingSoa(r); setSoaEditorOpen(true); } else { setEditing(r); setEditorOpen(true); } }}><EditIcon fontSize="small" /></IconButton></Tooltip>
                           <Tooltip title="Download PDF"><span><IconButton size="small" disabled={busyId === r.id} onClick={() => void download(r)}><DownloadIcon fontSize="small" /></IconButton></span></Tooltip>
                           <Tooltip title={r.file ? 'Already in OneDrive' : "Save PDF to the project's Sales Invoice folder"}>
                             <span><IconButton size="small" disabled={busyId === r.id || !!r.file} onClick={() => void fileToProject(r)}><CloudUploadIcon fontSize="small" /></IconButton></span>
@@ -651,6 +664,8 @@ export default function BlsPage() {
       </Paper>
 
       <BlsEditorDialog open={editorOpen} bls={editing} projects={projects} onClose={() => setEditorOpen(false)}
+        onSaved={(s) => { upsert(s); setToast(`${s.docNo} saved`); }} onError={setError} />
+      <RunningSoaEditorDialog open={soaEditorOpen} soa={editingSoa} projects={projects} onClose={() => setSoaEditorOpen(false)}
         onSaved={(s) => { upsert(s); setToast(`${s.docNo} saved`); }} onError={setError} />
       <BlsImportDialog open={importOpen} projects={projects} existing={rows} onClose={() => setImportOpen(false)}
         onImported={(s) => { upsert(s); setToast(`${s.docNo} imported and filed in OneDrive`); }} onError={setError} />
