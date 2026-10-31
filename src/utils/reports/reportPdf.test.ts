@@ -124,16 +124,22 @@ describe('report PDFs', () => {
       projectNo: 'IOCT-2610-014',
       client: 'Analog Devices Inc.',
       poNumber: '4500123987',
+      location: 'Gateway Business Park, General Trias, Cavite',
+      startDate: '2026-08-03',
       completionDate: '2026-10-28',
       approver: { name: 'Engr. Maria Cristina Dela Paz-Santos', designation: 'Senior Facilities and Utilities Engineering Manager', company: 'Analog Devices Inc.' },
       contractorRep: { name: 'Tyrone James Caballero', designation: 'General Manager' },
     });
     expect(filename).toBe('IOCT-2610-014-COC.pdf');
     expect(doc.getNumberOfPages()).toBe(1);
-    expectFramed(doc, 'CERTIFICATE');
     const text = pageText(doc, 1);
-    expect(text).toContain('PO Number:');
+    expect(text).toContain('Certificate of Project');
+    expect(text).toContain('PO No.:');
     expect(text).not.toContain('ACTI PO');
-    expect(text).toContain('Client Acceptance');
+    expect(text).not.toMatch(/payment|balance/i);
+    // Both signatures, with the dates list above them.
+    expect(text).toContain('Contractor:');
+    expect(text).toContain('Accepted by \\(Client\\):');
+    expect(text).toContain('Completion Date: ');
   });
 });

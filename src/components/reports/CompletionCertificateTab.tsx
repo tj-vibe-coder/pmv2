@@ -179,7 +179,9 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
       projectName: project.project_name || '—',
       projectNo: project.project_no || String(project.item_no ?? project.id) || '—',
       client: project.account_name || '—',
+      location: project.project_location || undefined,
       poNumber: project.po_number || '—',
+      startDate: completionDateToInputValue(project.start_date) || undefined,
       completionDate: completionDateDisplay,
       approver: {
         name: approverName.trim(),

@@ -434,6 +434,8 @@ export class ReportDoc {
     /** Small right-aligned lines under the title, e.g. "Doc. No. …", "Date: …". */
     meta: string[];
     docNo: string;
+    /** 'certificate': logo + company left, address right, no title band or rule (the title sits in the body). */
+    letterhead?: 'report' | 'certificate';
   }) {
     const { doc } = this;
     const total = doc.getNumberOfPages();
@@ -453,10 +455,18 @@ export class ReportDoc {
           // Missing/corrupt logo: keep the text letterhead.
         }
       }
+      const info = [...opts.issuer.addressLines, ...(opts.issuer.tin ? [opts.issuer.tin] : [])];
+      if (opts.letterhead === 'certificate') {
+        this.bold(13);
+        doc.text(opts.issuer.name, textX, top + 10.5);
+        this.prose(7.5);
+        info.forEach((l, i) => doc.text(l, right, top + 5 + i * 3.4, { align: 'right' }));
+        this.drawFooter(opts.issuer, opts.docNo, '');
+        continue;
+      }
       this.bold(11.5);
       doc.text(opts.issuer.name, textX, top + 4.5);
       this.prose(7.5);
-      const info = [...opts.issuer.addressLines, ...(opts.issuer.tin ? [opts.issuer.tin] : [])];
       info.forEach((l, i) => doc.text(l, textX, top + 9 + i * 3.4));
 
       // Document title (right). A title that would crowd the issuer name wraps to two lines.
@@ -480,16 +490,25 @@ export class ReportDoc {
       doc.setLineWidth(0.4);
       doc.line(PAGE.margin, 35, right, 35);
 
-      // Footer
-      const fy = PAGE.height - 11;
-      doc.setDrawColor(...REPORT_COLORS.rule);
-      doc.setLineWidth(0.25);
-      doc.line(PAGE.margin, fy - 4, right, fy - 4);
-      this.prose(7.5);
-      doc.text(`Doc. No.: ${opts.docNo}`, PAGE.margin, fy);
-      doc.text(opts.issuer.name, PAGE.width / 2, fy, { align: 'center' });
-      doc.text(`Page ${p} of ${total}`, right, fy, { align: 'right' });
+      this.drawFooter(opts.issuer, opts.docNo, `Page ${p} of ${total}`);
     }
     doc.setTextColor(0, 0, 0);
+  }
+
+  private drawFooter(issuer: ReportIssuer, docNo: string, pageLabel: string) {
+    const { doc } = this;
+    const right = PAGE.width - PAGE.margin;
+    const fy = PAGE.height - 11;
+    doc.setDrawColor(...REPORT_COLORS.rule);
+    doc.setLineWidth(0.25);
+    doc.line(PAGE.margin, fy - 4, right, fy - 4);
+    this.prose(7.5);
+    doc.text(`Doc. No.: ${docNo}`, PAGE.margin, fy);
+    if (pageLabel) {
+      doc.text(issuer.name, PAGE.width / 2, fy, { align: 'center' });
+      doc.text(pageLabel, right, fy, { align: 'right' });
+    } else {
+      doc.text(issuer.name, right, fy, { align: 'right' });
+    }
   }
 }
