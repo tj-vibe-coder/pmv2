@@ -62,7 +62,8 @@ import {
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
 import { parseClientApprover } from '../../utils/clientApprover';
 import { buildProgressReportPdf, type ProgressReportPhoto, type ProgressReportRow } from '../../utils/reports/progressReportPdf';
-import { fetchScheduleTasks, loadReportSchedule } from '../../utils/reports/scheduleAnnex';
+import { appendPdfs, fetchScheduleTasks, renderScheduleAttachment } from '../../utils/reports/scheduleAnnex';
+import { saveAs } from 'file-saver';
 import { REPORT_ISSUERS } from '../../utils/reports/reportPdfKit';
 import { loadReportLogo } from '../../utils/reports/reportLogo';
 
@@ -828,12 +829,6 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     const pbNumRaw = pbInput.trim() || '0';
     const pbNum = pbNumRaw === '—' || pbNumRaw === '' ? '01' : String(Number(pbNumRaw) || 1).padStart(2, '0');
 
-    // Work Schedule annexes: read the live schedule at export time.
-    const wantSchedule = hasSchedule && (scheduleAttach.gantt || scheduleAttach.sCurve);
-    const scheduleData = wantSchedule
-      ? await loadReportSchedule(String(project.id), (preparedBy.date || '').slice(0, 10) || new Date().toISOString().slice(0, 10)).catch(() => null)
-      : null;
-
     const { doc, filename } = buildProgressReportPdf({
       reportCompany,
       projectName: project.project_name || '—',
@@ -852,12 +847,19 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       },
       approvers: pdfApprovers,
       photos: pdfPhotos,
-      schedule: scheduleData ? { data: scheduleData, gantt: scheduleAttach.gantt, sCurve: scheduleAttach.sCurve } : null,
     }, { logoDataUrl: await loadReportLogo(issuer), bodyFontBase64: arialNarrowBase64 });
 
-    if (preview) return doc.output('blob') as Blob;
-    doc.save(filename);
-    return { blob: doc.output('blob') as Blob, filename, missingPhotos };
+    // Work Schedule attachment: the Gantt generator's own PDF (its saved export settings), appended after the report.
+    let blob = doc.output('blob') as Blob;
+    if (hasSchedule && (scheduleAttach.gantt || scheduleAttach.sCurve)) {
+      const attachment = await renderScheduleAttachment(String(project.id), { code: projectNo, name: project.project_name || '' }, scheduleAttach)
+        .catch((e) => { console.warn('[ProgressReport] Work Schedule attachment skipped:', e); return null; });
+      if (attachment) blob = new Blob([await appendPdfs(doc.output('arraybuffer'), [attachment])], { type: 'application/pdf' });
+    }
+
+    if (preview) return blob;
+    saveAs(blob, filename);
+    return { blob, filename, missingPhotos };
   };
 
   const handlePreview = async () => {
@@ -972,7 +974,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
               <TextField size="small" label="Date" type="date" value={preparedBy.date} onChange={(e) => setPreparedBy((p) => ({ ...p, date: e.target.value }))} sx={{ width: 160 }} InputLabelProps={{ shrink: true }} />
             </Box>
             <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 2, rowGap: 0.5 }}>
-              <Typography variant="body2" sx={{ fontWeight: 600, width: { xs: '100%', sm: 'auto' } }}>Work Schedule annexes</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600, width: { xs: '100%', sm: 'auto' } }}>Work Schedule attachment</Typography>
               <FormControlLabel
                 control={<Switch size="small" checked={hasSchedule && scheduleAttach.gantt} onChange={() => toggleScheduleAttach('gantt')} disabled={!hasSchedule} />}
                 label={<Typography variant="body2">Attach Gantt chart</Typography>}
@@ -983,7 +985,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
               />
               <Typography variant="caption" color="text.secondary" sx={{ width: { xs: '100%', sm: 'auto' } }}>
                 {scheduleTaskCount === null ? 'Checking the Work Schedule…'
-                  : hasSchedule ? `From the project's Work Schedule (${scheduleTaskCount} tasks), as of the report date.`
+                  : hasSchedule ? `Attached after the report, exactly as the Work Schedule's Export Gantt makes it (${scheduleTaskCount} tasks).`
                   : <>No Work Schedule yet. <Button size="small" sx={{ p: 0, minWidth: 0, verticalAlign: 'baseline', textTransform: 'none' }} onClick={() => navigate(`/projects/${project.id}/schedule`)}>Build one</Button> to attach it.</>}
               </Typography>
             </Box>

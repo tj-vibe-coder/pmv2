@@ -4,7 +4,6 @@ import {
   type ReportCompanyKey, type ReportSigner,
 } from './reportPdfKit';
 import type { ReportAssets } from './completionCertificatePdf';
-import { drawGanttAnnex, drawSCurveAnnex, type ReportSchedule } from './scheduleAnnex';
 
 export interface ProgressReportRow {
   code: string;
@@ -41,8 +40,6 @@ export interface ProgressReportData {
   preparedBy: { name: string; designation?: string };
   approvers: { name: string; designation?: string; company?: string }[];
   photos: ProgressReportPhoto[];
-  /** Work Schedule to attach as annexes (Gantt chart and/or S-Curve). */
-  schedule?: { data: ReportSchedule; gantt: boolean; sCurve: boolean } | null;
 }
 
 const fmt = (n: number) => (Number.isFinite(n) ? n : 0).toFixed(2);
@@ -152,20 +149,9 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
     const multiPageTable = r.pageCount > 1;
     const broke = r.signatures(signers, { perRow });
 
-    // Annexes, each from a fresh page and lettered in order: Gantt, S-Curve, Site Photos.
-    let annex = 0;
-    const annexTitle = (name: string) => `Annex ${String.fromCharCode(65 + annex++)}: ${name}`;
-    if (data.schedule?.gantt) {
-      r.addPage();
-      drawGanttAnnex(r, data.schedule.data, annexTitle('Gantt Chart'));
-    }
-    if (data.schedule?.sCurve) {
-      r.addPage();
-      drawSCurveAnnex(r, data.schedule.data, annexTitle('S-Curve'));
-    }
     if (data.photos.length > 0) {
       r.addPage();
-      r.heading(annexTitle('Site Photos'), 80);
+      r.heading('Annex A: Site Photos', 80);
       const gap = 6;
       const cols = 2;
       const colW = (CONTENT_WIDTH - gap * (cols - 1)) / cols;
