@@ -28,11 +28,9 @@ export function buildCompletionCertificatePdf(data: CompletionCertificateData, a
   const completion = formatLongDate(data.completionDate) || '—';
 
   r.heading('Project Information', 24);
-  type Row = [string, string] | [string, string, string, string];
-  const rows: Row[] = [['Project Title', data.projectName], ['Client', data.client]];
+  const rows: [string, string][] = [['Project Title', data.projectName], ['Project No.', data.projectNo], ['Client', data.client]];
   if (data.location?.trim()) rows.push(['Location', data.location.trim()]);
-  rows.push(['PO Number', data.poNumber, 'Project No.', data.projectNo]);
-  rows.push(['Contractor', issuer.name, 'Completion Date', completion]);
+  rows.push(['PO Number', data.poNumber], ['Contractor', issuer.name], ['Completion Date', completion]);
   r.details(rows);
 
   r.heading('Certification');

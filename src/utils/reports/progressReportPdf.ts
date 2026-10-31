@@ -74,9 +74,11 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
     r.heading('Project Details', 30);
     r.details([
       ['Project Name', data.projectName],
-      ['Project No.', data.projectNo, 'PO Number', data.poNumber],
-      ['Client', data.client, 'Report Date', reportDate],
+      ['Project No.', data.projectNo],
+      ['Client', data.client],
       ['Location', data.location],
+      ['PO Number', data.poNumber],
+      ['Report Date', reportDate],
     ]);
 
     r.heading('Project Status', 24);

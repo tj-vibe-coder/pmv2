@@ -46,10 +46,13 @@ export function buildDeliveryReceiptPdf(data: DeliveryReceiptData, assets: Repor
   const render = (tailRows: number) => {
     const r = new ReportDoc({ bodyFontBase64: assets.bodyFontBase64 });
 
+    r.heading('Delivery Details', 24);
     r.details([
-      ['DR Number', drNo, 'Dispatch Date', date],
-      ['PO Number', data.poNumber.trim() || '—', 'Delivery Method', data.deliveryMethod.trim() || 'Physical'],
-    ], 4);
+      ['DR Number', drNo],
+      ['PO Number', data.poNumber.trim() || '—'],
+      ['Dispatch Date', date],
+      ['Delivery Method', data.deliveryMethod.trim() || 'Physical'],
+    ]);
 
     // Ship To / Invoice To as two plain address blocks side by side.
     const ship = data.shipTo;

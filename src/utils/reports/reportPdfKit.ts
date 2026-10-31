@@ -187,7 +187,7 @@ export class ReportDoc {
   // ── Blocks ──────────────────────────────────────────────────────────────
   /** Bold section heading, kept with at least `keepWithNext` mm of what follows. */
   heading(text: string, keepWithNext = 18) {
-    const h = 7;
+    const h = 8;
     this.ensure(h + keepWithNext);
     this.bold(10.5);
     this.doc.text(text, PAGE.margin, this.y + 4);
@@ -313,30 +313,27 @@ export class ReportDoc {
   }
 
   /**
-   * Plain "Label: value" lines — no boxes. A row of four is two pairs side by
-   * side; a row of two spans the full width. Long values wrap under themselves.
+   * Plain "Label: value" lines — no boxes, one per line. Every value starts at
+   * the same x (just past the widest label) and long values wrap under themselves.
    */
-  details(rows: ([string, string] | [string, string, string, string])[], after = 5) {
+  details(rows: [string, string][], after = 6) {
     const size = 9.5;
     const lh = ReportDoc.lineHeight(size);
-    const labelW = 32;
-    const half = CONTENT_WIDTH / 2;
-    for (const r of rows) {
-      const pairs = r.length === 2 ? [{ x: 0, w: CONTENT_WIDTH, l: r[0], v: r[1] }]
-        : [{ x: 0, w: half - 4, l: r[0], v: r[1] }, { x: half, w: half, l: r[2], v: r[3] }];
+    const rowGap = 1.4;
+    this.bold(size);
+    // Same value column in every report; widens only for an unusually long label.
+    const labelW = Math.max(36, ...rows.map(([l]) => this.doc.getTextWidth(`${l}:`) + 5));
+    for (const [label, value] of rows) {
       this.prose(size);
-      const wrapped = pairs.map((p) => this.doc.splitTextToSize(p.v?.trim() || '—', p.w - labelW) as string[]);
-      const rowH = Math.max(...wrapped.map((w) => w.length)) * lh;
-      this.ensure(rowH);
-      pairs.forEach((p, i) => {
-        this.bold(size);
-        this.doc.text(`${p.l}:`, PAGE.margin + p.x, this.y + lh * 0.72);
-        this.prose(size);
-        wrapped[i].forEach((line, li) => this.doc.text(line, PAGE.margin + p.x + labelW, this.y + lh * 0.72 + li * lh));
-      });
-      this.y += rowH + 0.8;
+      const lines = this.doc.splitTextToSize(value?.trim() || '—', CONTENT_WIDTH - labelW) as string[];
+      this.ensure(lines.length * lh);
+      this.bold(size);
+      this.doc.text(`${label}:`, PAGE.margin, this.y + lh * 0.72);
+      this.prose(size);
+      lines.forEach((line, i) => this.doc.text(line, PAGE.margin + labelW, this.y + lh * 0.72 + i * lh));
+      this.y += lines.length * lh + rowGap;
     }
-    this.y += after;
+    this.y += after - rowGap;
   }
 
   // ── Signatures ──────────────────────────────────────────────────────────
