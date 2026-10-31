@@ -19,8 +19,6 @@ import {
   useMediaQuery,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, PictureAsPdf as PictureAsPdfIcon, Save as SaveIcon, History as HistoryIcon } from '@mui/icons-material';
-import jsPDF from 'jspdf';
-import { autoTable } from 'jspdf-autotable';
 import { useSearchParams } from 'react-router-dom';
 import dataService from '../services/dataService';
 import { useAuth } from '../contexts/AuthContext';
@@ -30,13 +28,9 @@ import { useQuotationStore } from '../store/quotationStore';
 import { REPORT_COMPANIES, type ReportCompanyKey } from './ProjectDetails';
 import { ORDER_TRACKER_STORAGE_KEY, type OrderRecord } from './OrderTrackerPage';
 import { arialNarrowBase64 } from '../fonts/arialNarrowBase64';
-
-const REPORT_COMPANY_ADDRESS: Record<ReportCompanyKey, string> = {
-  ACT: 'Blk. 13 Lot 5, Mindanao Ave., Gavino Maderan, General Mariano Alvarez, Cavite 4117, Philippines',
-  IOCT: 'B63, L7 Dynamism Jubilation Enclave, Santo Niño, City of Biñan, Laguna, Region IV-A (Calabarzon), 4024',
-};
-
-const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
+import { buildDeliveryReceiptPdf } from '../utils/reports/deliveryReceiptPdf';
+import { REPORT_ISSUERS } from '../utils/reports/reportPdfKit';
+import { loadReportLogo } from '../utils/reports/reportLogo';
 
 const UOM_OPTIONS = ['', 'pc', 'pcs', 'set', 'box', 'boxes', 'ea', 'unit', 'lot', 'kg', 'm', 'meters', 'liters', 'm²', 'roll', 'rolls', 'pair', 'dozen', 'carton', 'pack', 'bundle', 'other'];
 
@@ -360,212 +354,19 @@ const DeliveryPage: React.FC = () => {
   const invName = invoiceSameAsShipping ? shipName : (invoiceName.trim() || '—');
   const invAddr = invoiceSameAsShipping ? shipAddr : (invoiceAddress.trim() || '—');
 
-  const LINES_PER_PAGE = 20;
-
   const exportToPDF = async () => {
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const margin = 14;
-    const contentWidth = 210 - margin * 2;
-    const pageHeight = 297;
-    const lineHeight = 5;
-    const sectionGap = 5;
-
-    const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
-    if (hasArialNarrow) {
-      doc.addFileToVFS('ArialNarrow.ttf', arialNarrowBase64);
-      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'normal');
-    }
-    const fontTitle = () => doc.setFont('helvetica', 'bold');
-    const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
-
-    const companyName = REPORT_COMPANIES[reportCompany];
-    const companyAddress = REPORT_COMPANY_ADDRESS[reportCompany];
-
-    // Load logo once for reuse on continuation pages
-    let logoDataUrl: string | null = null;
-    let logoW = 0;
-    let logoH = 0;
-    if (reportCompany === 'ACT') {
-      try {
-        const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
-        logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-        logoW = ACT_LOGO_PDF_WIDTH;
-        logoH = ACT_LOGO_PDF_HEIGHT;
-      } catch (_) {}
-    } else if (reportCompany === 'IOCT') {
-      try {
-        const { loadLogoTransparentBackground, IOCT_LOGO_PDF_WIDTH, IOCT_LOGO_PDF_HEIGHT } = await import('../utils/logoUtils');
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct.png`;
-        logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-        logoW = IOCT_LOGO_PDF_WIDTH;
-        logoH = IOCT_LOGO_PDF_HEIGHT;
-      } catch (_) {}
-    }
-
-    /** Draw full header (company, address, Delivery Receipt title, DR details, Shipping/Invoice addresses, PO). Returns y after header. */
-    const drawHeader = (startY: number): number => {
-      let y = startY;
-      const headerY = y;
-      let leftY = headerY;
-      if (logoDataUrl && logoW && logoH) {
-        doc.addImage(logoDataUrl, 'PNG', margin, headerY, logoW, logoH);
-        leftY = headerY + logoH + 4;
-      }
-      fontTitle();
-      doc.setFontSize(11);
-      doc.text(companyName, margin, leftY + 4);
-      fontBody();
-      doc.setFontSize(8);
-      const addrLines = doc.splitTextToSize(companyAddress, 75);
-      doc.text(addrLines, margin, leftY + 4 + lineHeight);
-      const leftHeaderBottom = leftY + 4 + lineHeight + addrLines.length * lineHeight;
-
-      const rightX = 110;
-      fontTitle();
-      doc.setFontSize(14);
-      doc.text('Delivery Receipt', rightX, y + 6);
-      fontBody();
-      doc.setFontSize(8);
-      const detailLabels = ['DR Number', 'Dispatch Date', 'Delivery Method'];
-      const detailValues = [
-        deliveryNoteNo.trim() || '—',
-        despatchDate || '—',
-        deliveryMethod.trim() || 'Physical',
-      ];
-      let detailY = y + 12;
-      for (let i = 0; i < detailLabels.length; i++) {
-        doc.text(detailLabels[i], rightX, detailY + 0.5);
-        doc.text(detailValues[i], rightX + 38, detailY + 0.5);
-        detailY += 6;
-      }
-      y = Math.max(leftHeaderBottom, detailY) + sectionGap;
-
-      const blockWidth = (contentWidth - 8) / 2;
-      const blockHeight = 36;
-      doc.setFillColor(...DR_HEADER_BLUE);
-      doc.rect(margin, y, blockWidth, 7, 'F');
-      doc.rect(margin + blockWidth + 8, y, blockWidth, 7, 'F');
-      doc.setTextColor(255, 255, 255);
-      fontTitle();
-      doc.setFontSize(9);
-      doc.text('Shipping to', margin + 3, y + 4.8);
-      doc.text('Invoice Address', margin + blockWidth + 11, y + 4.8);
-      doc.setTextColor(0, 0, 0);
-      fontBody();
-      doc.setFontSize(8);
-      y += 7;
-      const shipParts: string[] = [
-        shipName,
-        shipAddr,
-        '',
-        `ATTN: ${shipContact || ''}`,
-        `Email: ${shipEmail || ''}`,
-        `Mobile No: ${shipPhone || ''}`,
-      ];
-      const shipAddrLines = doc.splitTextToSize(shipParts.join('\n'), blockWidth - 6);
-      doc.text(shipAddrLines, margin + 3, y + 4);
-      const invAddrLines = doc.splitTextToSize(`${invName}\n${invAddr}`, blockWidth - 6);
-      doc.text(invAddrLines, margin + blockWidth + 11, y + 4);
-      y += blockHeight;
-
-      fontTitle();
-      doc.setFontSize(10);
-      doc.text(`PO: ${poNumber.trim() || '—'}`, margin, y + 4);
-      fontBody();
-      y += 10;
-      return y;
-    };
-
-    const tableCols = [12, 110, 28, 32];
-    const headers = ['Item #', 'Description', 'QTY', 'UOM'];
-    const bodyRows = items.map((it) => [
-      String(it.itemNo),
-      it.description.trim() || '—',
-      String(Number(it.delivered) || 0),
-      it.unit.trim() || '—',
-    ]);
-
-    // Split items into chunks of LINES_PER_PAGE (20); items beyond 20 move to page 2, etc.
-    const itemChunks: string[][][] = [];
-    for (let i = 0; i < bodyRows.length; i += LINES_PER_PAGE) {
-      itemChunks.push(bodyRows.slice(i, i + LINES_PER_PAGE));
-    }
-    if (itemChunks.length === 0) itemChunks.push([]);
-
-    let y = 14;
-    for (let pageIdx = 0; pageIdx < itemChunks.length; pageIdx++) {
-      if (pageIdx > 0) {
-        doc.addPage();
-        y = 14;
-      }
-      y = drawHeader(y);
-      const chunk = itemChunks[pageIdx];
-      autoTable(doc, {
-        head: [headers],
-        body: chunk.length > 0 ? chunk : [['—', '—', '—', '—']],
-        startY: y,
-        margin: { left: margin, right: margin },
-        tableWidth: contentWidth,
-        columnStyles: {
-          0: { cellWidth: tableCols[0] },
-          1: { cellWidth: tableCols[1] },
-          2: { cellWidth: tableCols[2] },
-          3: { cellWidth: tableCols[3] },
-        },
-        styles: { fontSize: 6, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
-        headStyles: { fillColor: DR_HEADER_BLUE, textColor: [255, 255, 255], fontStyle: 'bold', font: 'helvetica', fontSize: 6 },
-      });
-    }
-
-    // Dispatched By / Received By on last page only
-    const sigBlockHeight = 50;
-    const footerMargin = 12;
-    doc.setPage(doc.getNumberOfPages());
-    let ySig = pageHeight - sigBlockHeight - footerMargin;
-
-    const sigLeftX = margin;
-    const sigRightX = margin + 95;
-    const sigLineW = 52;
-    fontTitle();
-    doc.setFontSize(10);
-    doc.text('Dispatched By', sigLeftX, ySig + 4);
-    doc.text('Received By', sigRightX, ySig + 4);
-    fontBody();
-    doc.setFontSize(8);
-    ySig += 7;
-    doc.text('Name:', sigLeftX, ySig + 4);
-    if (dispatchedByName) doc.text(dispatchedByName, sigLeftX + 22, ySig + 4);
-    doc.setDrawColor(180, 180, 180);
-    doc.line(sigLeftX + 20, ySig + 6, sigLeftX + 20 + sigLineW, ySig + 6);
-    doc.text('Name:', sigRightX, ySig + 4);
-    if (receivedByName) doc.text(receivedByName, sigRightX + 22, ySig + 4);
-    doc.line(sigRightX + 20, ySig + 6, sigRightX + 20 + sigLineW, ySig + 6);
-    ySig += lineHeight + 2;
-    doc.text('Date:', sigLeftX, ySig + 4);
-    if (dispatchedByDate) doc.text(dispatchedByDate, sigLeftX + 22, ySig + 4);
-    doc.line(sigLeftX + 20, ySig + 6, sigLeftX + 20 + sigLineW, ySig + 6);
-    doc.text('Date:', sigRightX, ySig + 4);
-    if (receivedByDate) doc.text(receivedByDate, sigRightX + 22, ySig + 4);
-    doc.line(sigRightX + 20, ySig + 6, sigRightX + 20 + sigLineW, ySig + 6);
-    ySig += lineHeight + 2;
-    doc.text('Place:', sigRightX, ySig + 4);
-    if (receivedByPlace) doc.text(receivedByPlace, sigRightX + 22, ySig + 4);
-    doc.line(sigRightX + 20, ySig + 6, sigRightX + 20 + sigLineW, ySig + 6);
-
-    // Footer on all pages
-    const docNumber = `Doc. No.: ${(deliveryNoteNo || 'DR').trim().replace(/\s/g, '-')}`;
-    const totalPages = doc.getNumberOfPages();
-    const footerY = pageHeight - 10;
-    fontBody();
-    doc.setFontSize(8);
-    for (let p = 1; p <= totalPages; p++) {
-      doc.setPage(p);
-      doc.text(docNumber, margin, footerY);
-      doc.text(`Page ${p} of ${totalPages}`, 210 - margin, footerY, { align: 'right' });
-    }
-
-    const filename = `${(deliveryNoteNo || 'DR').replace(/\s/g, '_')}.pdf`;
+    const { doc, filename } = buildDeliveryReceiptPdf({
+      reportCompany,
+      deliveryNoteNo,
+      despatchDate,
+      deliveryMethod,
+      poNumber,
+      shipTo: { name: shipName, address: shipAddr, contactName: shipContact, phone: shipPhone, email: shipEmail },
+      invoiceTo: { name: invName, address: invAddr },
+      items: items.map((it) => ({ itemNo: it.itemNo, description: it.description, delivered: it.delivered, unit: it.unit })),
+      dispatchedBy: { name: dispatchedByName, date: dispatchedByDate },
+      receivedBy: { name: receivedByName, date: receivedByDate, place: receivedByPlace },
+    }, { logoDataUrl: await loadReportLogo(REPORT_ISSUERS[reportCompany]), bodyFontBase64: arialNarrowBase64 });
     doc.save(filename);
   };
 

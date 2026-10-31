@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Alert, Box, Chip, CircularProgress, Paper, Typography, Button, TextField, FormControl, InputLabel, Select, MenuItem, Grid, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton } from '@mui/material';
 import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, CloudUpload as CloudUploadIcon, CheckCircle as CheckCircleIcon, Save as SaveIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
-import jsPDF from 'jspdf';
 import {
   REPORT_COMPANIES,
   type ReportCompanyKey,
@@ -17,36 +16,11 @@ import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { resolveCorporateDriveId, uploadFileToFolderById, ensureExecutionFolder } from '../../services/onedriveFolderService';
 import dataService from '../../services/dataService';
+import { buildCompletionCertificatePdf } from '../../utils/reports/completionCertificatePdf';
+import { REPORT_ISSUERS } from '../../utils/reports/reportPdfKit';
+import { loadReportLogo } from '../../utils/reports/reportLogo';
 
 const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
-
-// Mirror of ISSUER_INFO from pdfExport.tsx — same branding data for report headers.
-const COC_ISSUER = {
-  IOCT: {
-    addressLines: [
-      'B63, L7 Dynamism Jubilation Enclave,',
-      'Santo Niño, City of Biñan, Laguna,',
-      'Region IV-A (Calabarzon), 4024',
-    ],
-    tin: 'TIN: 697-029-976-00000',
-    logoFile: '/logo-ioct-only.png',
-    logoW: 20,
-    logoH: 20,
-    useDirectLoad: true as const,
-  },
-  ACT: {
-    addressLines: [
-      'Blk. 13 Lot 5, Mindanao Ave.,',
-      'Gavino Maderan, General Mariano Alvarez,',
-      'Cavite 4117, Philippines',
-    ],
-    tin: '',
-    logoFile: '/logo-acti.png',
-    logoW: 22,
-    logoH: 13.6,
-    useDirectLoad: false as const,
-  },
-};
 
 export interface CompletionCertificateTabProps {
   project: Project;
@@ -199,225 +173,30 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
   };
 
   const buildPdf = async (preview: boolean): Promise<Blob | { blob: Blob; filename: string } | void> => {
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const margin = 16;
-    const pageWidth = 210;
-    const contentWidth = pageWidth - margin * 2;
-    const pageHeight = 297;
-    let y = 18;
-    const lineHeight = 5.8;
-    const sectionGap = 7;
-    const afterHeading = 5;
-
-    const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
-    if (hasArialNarrow) {
-      doc.addFileToVFS('ArialNarrow.ttf', arialNarrowBase64);
-      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'normal');
-    }
-    const fontTitle = () => doc.setFont('helvetica', 'bold');
-    const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
-
-    // Our company (contractor) – from report company selection
-    const companyName = REPORT_COMPANIES[reportCompany];
-    const projectTitle = project.project_name || '—';
-    const poNumber = project.po_number || '—';
-    const clientName = project.account_name || '—';
-    const completionDate = completionDateDisplay;
-
-    // ── Header: logo + company info (left) | document title (right) ───────────
-    const issuerInfo = COC_ISSUER[reportCompany];
-    const rightX = pageWidth - margin;
-    const headerStartY = y;
-
-    // Logo (top-left)
-    let logoBottomY = headerStartY;
-    try {
-      const logoUrl = `${process.env.PUBLIC_URL || ''}${issuerInfo.logoFile}`;
-      let logoDataUrl: string;
-      if (issuerInfo.useDirectLoad) {
-        const { loadImageDataUrl } = await import('../../utils/logoUtils');
-        logoDataUrl = await loadImageDataUrl(logoUrl);
-      } else {
-        const { loadLogoTransparentBackground } = await import('../../utils/logoUtils');
-        logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-      }
-      doc.addImage(logoDataUrl, 'PNG', margin, headerStartY, issuerInfo.logoW, issuerInfo.logoH);
-      logoBottomY = headerStartY + issuerInfo.logoH;
-    } catch (_) {}
-
-    // Document title (right column, large, blue)
-    doc.setTextColor(44, 90, 160);
-    fontTitle();
-    doc.setFontSize(20);
-    doc.text('Certificate of', rightX, headerStartY + 7, { align: 'right' });
-    doc.text('Completion', rightX, headerStartY + 15, { align: 'right' });
-    doc.setTextColor(0, 0, 0);
-
-    // Company name (below logo, left column)
-    let infoY = logoBottomY + 2;
-    doc.setTextColor(44, 90, 160);
-    fontTitle();
-    doc.setFontSize(10);
-    doc.text(companyName, margin, infoY);
-    infoY += 4.5;
-    doc.setTextColor(0, 0, 0);
-
-    // Horizontal divider below header
-    y = Math.max(infoY, headerStartY + 22) + 3;
-    doc.setDrawColor(180, 180, 180);
-    doc.setLineWidth(0.5);
-    doc.line(margin, y, rightX, y);
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.2);
-    y += 8;
-
-    // Project information block (left-aligned)
-    fontBody();
-    doc.setFontSize(11);
-    doc.text(`Project Title: ${projectTitle}`, margin, y);
-    y += lineHeight;
-    const actiTrail = project.with_acti || /advance controle|\bacti\b/i.test(project.partner_name || '');
-    if (actiTrail) {
-      doc.text(`Customer PO (to ACTI): ${poNumber}`, margin, y);
-      y += lineHeight;
-      const actiPo = project.commercial_trail?.acti_to_ioct_po_number || 'Pending';
-      doc.text(`ACTI PO (to IOCT): ${actiPo}`, margin, y);
-    } else {
-      doc.text(`PO Number: ${poNumber}`, margin, y);
-    }
-    y += lineHeight;
-    doc.text(`Client: ${clientName}`, margin, y);
-    y += lineHeight;
-    doc.text(`Contractor: ${companyName}`, margin, y);
-    y += lineHeight;
-    doc.text(`Date of Completion: ${completionDate}`, margin, y);
-    y += lineHeight + sectionGap;
-
-    // Certification statement (sub-heading + paragraph)
-    fontTitle();
-    doc.setFontSize(12);
-    doc.text('Certificate of Completion', margin, y);
-    fontBody();
-    y += lineHeight + afterHeading;
-    doc.setFontSize(10);
-    let certX = margin;
-    const certParts: { text: string }[] = [
-      { text: `This is to certify that ${companyName} has completed the services for the project: ` },
-      { text: projectTitle },
-      { text: ` under PO number: ` },
-      { text: poNumber },
-      { text: ' in accordance with the project requirement.' },
-    ];
-    certParts.forEach(({ text }) => {
-      fontBody();
-      const words = text.split(/(\s+)/);
-      words.forEach((word) => {
-        const w = doc.getTextWidth(word);
-        if (certX + w > margin + contentWidth && certX > margin) {
-          y += lineHeight;
-          certX = margin;
-        }
-        doc.text(word, certX, y);
-        certX += w;
-      });
-    });
-    y += lineHeight + sectionGap;
-
-    // Quality Assurance
-    fontTitle();
-    doc.setFontSize(12);
-    doc.text('Quality Assurance:', margin, y);
-    fontBody();
-    y += lineHeight + 2;
-    doc.setFontSize(10);
-    const qaText = 'All work has been completed to the highest standards of quality and in compliance with all relevant codes, regulations, and standards. Inspections and tests have been conducted to verify that all systems are functioning correctly and efficiently.';
-    const qaLines = doc.splitTextToSize(qaText, contentWidth);
-    doc.text(qaLines, margin, y);
-    y += qaLines.length * lineHeight + sectionGap;
-
-    // Client Acceptance
-    fontTitle();
-    doc.setFontSize(12);
-    doc.text('Client Acceptance:', margin, y);
-    fontBody();
-    y += lineHeight + 2;
-    doc.setFontSize(10);
-    const acceptText = 'By signing below, the client acknowledges that the project has been completed to their satisfaction and that all deliverables have been received and accepted.';
-    const acceptLines = doc.splitTextToSize(acceptText, contentWidth);
-    doc.text(acceptLines, margin, y);
-    y += acceptLines.length * lineHeight + sectionGap;
-
-    // Signatures
-    fontTitle();
-    doc.setFontSize(12);
-    doc.text('Signatures:', margin, y);
-    y += lineHeight + 4;
-
-    const signatureSpace = 2 * lineHeight; // 2-line space for signature below each label
-    const sigBlockHeight = 34 + signatureSpace;
-    if (y > pageHeight - sigBlockHeight - 12) {
-      doc.addPage();
-      y = 20;
-    }
-    const leftColX = margin;
-    const rightColX = margin + 95;
-    const lineWidth = 55;
-    const sigLineHeight = 5.5;
-    // Left: Approved by (client)
-    fontTitle();
-    doc.setFontSize(11);
-    doc.text('Approved by:', leftColX, y);
-    let rowY = y + signatureSpace; // 2-line space for signature
-    fontBody();
-    doc.setFontSize(10);
-    // Use editable state (pre-filled from client DB, overridable by user)
-    const approverNamePdf = approverName.trim() || (project.account_name || '—');
-    const approverDesignationPdf = approverDesignation.trim() || '—';
-    const approverCompanyPdf = approverCompany.trim() || project.account_name || '—';
-    doc.setDrawColor(180, 180, 180);
-    doc.line(leftColX, rowY + 2, leftColX + lineWidth, rowY + 2);
-    doc.text(approverNamePdf, leftColX, rowY);
-    rowY += sigLineHeight;
-    doc.line(leftColX, rowY + 2, leftColX + lineWidth, rowY + 2);
-    doc.text(approverDesignationPdf, leftColX, rowY);
-    rowY += sigLineHeight;
-    doc.line(leftColX, rowY + 2, leftColX + lineWidth, rowY + 2);
-    doc.text(approverCompanyPdf, leftColX, rowY);
-    // Right: Contractor Representative (our company)
-    rowY = y + signatureSpace; // 2-line space for signature
-    fontTitle();
-    doc.setFontSize(11);
-    doc.text('Contractor Representative:', rightColX, y);
-    fontBody();
-    doc.setFontSize(10);
-    const repName = (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
-    const repDesignation = (preparedBy.designation || '').trim() || '—';
-    doc.line(rightColX, rowY + 2, rightColX + lineWidth, rowY + 2);
-    doc.text(repName, rightColX, rowY);
-    rowY += sigLineHeight;
-    doc.line(rightColX, rowY + 2, rightColX + lineWidth, rowY + 2);
-    doc.text(repDesignation, rightColX, rowY);
-    rowY += sigLineHeight;
-    doc.line(rightColX, rowY + 2, rightColX + lineWidth, rowY + 2);
-    doc.text(companyName, rightColX, rowY);
-
-    // Footer – Doc. No. (one COC per project, no number)
-    const projectNo = project.project_no || String(project.item_no ?? project.id) || '—';
-    const docNumber = `Doc. No.: ${projectNo}-COC`;
-    const totalPages = doc.getNumberOfPages();
-    const footerY = pageHeight - 10;
-    fontBody();
-    doc.setFontSize(9);
-    for (let p = 1; p <= totalPages; p++) {
-      doc.setPage(p);
-      doc.text(docNumber, margin, footerY);
-      doc.text(`Page ${p} of ${totalPages}`, pageWidth - margin, footerY, { align: 'right' });
-    }
+    const issuer = REPORT_ISSUERS[reportCompany];
+    const { doc, filename } = buildCompletionCertificatePdf({
+      reportCompany,
+      projectName: project.project_name || '—',
+      projectNo: project.project_no || String(project.item_no ?? project.id) || '—',
+      client: project.account_name || '—',
+      location: project.project_location || undefined,
+      poNumber: project.po_number || '—',
+      startDate: completionDateToInputValue(project.start_date) || undefined,
+      completionDate: completionDateDisplay,
+      approver: {
+        name: approverName.trim(),
+        designation: approverDesignation.trim() || undefined,
+        company: approverCompany.trim() || project.account_name || undefined,
+      },
+      contractorRep: {
+        name: (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim(),
+        designation: (preparedBy.designation || '').trim() || undefined,
+      },
+    }, { logoDataUrl: await loadReportLogo(issuer), bodyFontBase64: arialNarrowBase64 });
 
     if (preview) return doc.output('blob') as Blob;
-    const docNoFilename = `${(projectNo === '—' ? 'COC' : String(projectNo).replace(/[/\\?%*:|"<>]/g, '-'))}-COC.pdf`;
-    doc.save(docNoFilename);
-    return { blob: doc.output('blob') as Blob, filename: docNoFilename };
+    doc.save(filename);
+    return { blob: doc.output('blob') as Blob, filename };
   };
 
   const handlePreview = async () => {
