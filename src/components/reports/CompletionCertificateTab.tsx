@@ -174,14 +174,12 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
 
   const buildPdf = async (preview: boolean): Promise<Blob | { blob: Blob; filename: string } | void> => {
     const issuer = REPORT_ISSUERS[reportCompany];
-    const actiTrail = project.with_acti || /advance controle|\bacti\b/i.test(project.partner_name || '');
     const { doc, filename } = buildCompletionCertificatePdf({
       reportCompany,
       projectName: project.project_name || '—',
       projectNo: project.project_no || String(project.item_no ?? project.id) || '—',
       client: project.account_name || '—',
       poNumber: project.po_number || '—',
-      actiPoNumber: actiTrail ? (project.commercial_trail?.acti_to_ioct_po_number || 'Pending') : undefined,
       completionDate: completionDateDisplay,
       approver: {
         name: approverName.trim(),

@@ -124,7 +124,6 @@ describe('report PDFs', () => {
       projectNo: 'IOCT-2610-014',
       client: 'Analog Devices Inc.',
       poNumber: '4500123987',
-      actiPoNumber: '',
       completionDate: '2026-10-28',
       approver: { name: 'Engr. Maria Cristina Dela Paz-Santos', designation: 'Senior Facilities and Utilities Engineering Manager', company: 'Analog Devices Inc.' },
       contractorRep: { name: 'Tyrone James Caballero', designation: 'General Manager' },
@@ -133,8 +132,8 @@ describe('report PDFs', () => {
     expect(doc.getNumberOfPages()).toBe(1);
     expectFramed(doc, 'CERTIFICATE');
     const text = pageText(doc, 1);
-    expect(text).toContain('ACTI PO \\(to IOCT\\)');
-    expect(text).toContain('Pending');
+    expect(text).toContain('PO Number:');
+    expect(text).not.toContain('ACTI PO');
     expect(text).toContain('Client Acceptance');
   });
 });

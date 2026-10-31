@@ -6,10 +6,8 @@ export interface CompletionCertificateData {
   projectNo: string;
   client: string;
   location?: string;
-  /** Customer → (ACTI or IOCT) PO number. */
+  /** The customer's PO number. */
   poNumber: string;
-  /** Set when the project runs through ACTI: the ACTI → IOCT PO (or "Pending"). */
-  actiPoNumber?: string;
   completionDate: string;
   approver: { name: string; designation?: string; company?: string };
   contractorRep: { name: string; designation?: string };
@@ -31,17 +29,10 @@ export function buildCompletionCertificatePdf(data: CompletionCertificateData, a
 
   r.heading('Project Information', 24);
   type Row = [string, string] | [string, string, string, string];
-  const acti = data.actiPoNumber !== undefined;
   const rows: Row[] = [['Project Title', data.projectName], ['Client', data.client]];
   if (data.location?.trim()) rows.push(['Location', data.location.trim()]);
-  if (acti) {
-    rows.push(['Customer PO (to ACTI)', data.poNumber, 'ACTI PO (to IOCT)', data.actiPoNumber || 'Pending']);
-    rows.push(['Project No.', data.projectNo, 'Completion Date', completion]);
-    rows.push(['Contractor', issuer.name]);
-  } else {
-    rows.push(['PO Number', data.poNumber, 'Project No.', data.projectNo]);
-    rows.push(['Contractor', issuer.name, 'Completion Date', completion]);
-  }
+  rows.push(['PO Number', data.poNumber, 'Project No.', data.projectNo]);
+  rows.push(['Contractor', issuer.name, 'Completion Date', completion]);
   r.details(rows);
 
   r.heading('Certification');
