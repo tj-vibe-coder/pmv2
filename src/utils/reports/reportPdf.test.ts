@@ -3,6 +3,8 @@ import { buildDeliveryReceiptPdf, type DeliveryReceiptData } from './deliveryRec
 import { buildProgressReportPdf, type ProgressReportData } from './progressReportPdf';
 import { buildCompletionCertificatePdf } from './completionCertificatePdf';
 import { formatLongDate } from './reportPdfKit';
+import { prepareReportSchedule } from './scheduleAnnex';
+import type { ScheduleTask } from '../../types/ScheduleTask';
 
 // Without a body font every string is drawn in Helvetica, so it shows up as
 // plain "(text) Tj" operators in the page content stream.
@@ -114,6 +116,53 @@ describe('report PDFs', () => {
     expect(total).toBeGreaterThanOrEqual(annexPage);
     expect(total === sigPage).toBe(photos === 0);
     expect(pageText(doc, annexPage).includes('Annex A')).toBe(photos > 0);
+  });
+
+  describe('Work Schedule annexes', () => {
+    const task = (id: string, name: string, start: string, end: string, progressPct: number, parentId: string | null = null, isMilestone = false): ScheduleTask =>
+      ({ id, projectId: 'p', name, startDate: start, endDate: end, progressPct, isMilestone, order: 0, parentId, manpower: 2 });
+    const tasks: ScheduleTask[] = [
+      task('a', 'Engineering', '2026-09-01', '2026-09-01', 0),
+      task('a1', 'Design', '2026-09-01', '2026-09-30', 100, 'a'),
+      task('a2', 'Approval', '2026-10-01', '2026-10-01', 100, 'a', true),
+      task('b', 'Installation', '2026-10-01', '2026-10-01', 0),
+      task('b1', 'Cabling', '2026-10-01', '2026-11-30', 40, 'b'),
+    ];
+    const snapshots = [{ date: '2026-09-15', tasks: tasks.map((t) => (t.id === 'a1' ? { ...t, progressPct: 50 } : t.id === 'b1' ? { ...t, progressPct: 0 } : t)) }];
+
+    it('rolls the schedule up into Gantt rows and planned/actual figures', () => {
+      const sched = prepareReportSchedule(tasks, snapshots, false, '2026-10-31')!;
+      expect(sched.rows.map((r) => [r.name, r.depth, r.isSummary])).toEqual([
+        ['Engineering', 0, true], ['Design', 1, false], ['Approval', 1, false], ['Installation', 0, true], ['Cabling', 1, false],
+      ]);
+      expect(sched.rows[0].end).toBe('2026-10-01'); // summary dates roll up from children
+      expect(sched.rows[2].isMilestone).toBe(true);
+      expect(sched.start).toBe('2026-09-01');
+      expect(sched.end).toBe('2026-11-30');
+      expect(sched.plannedAtReport).toBeGreaterThan(0);
+      expect(sched.plannedAtReport).toBeLessThan(100);
+      expect(sched.actual[0].date).toBe('2026-09-15');
+      expect(prepareReportSchedule([], [], true, '2026-10-31')).toBeNull();
+    });
+
+    it.each([
+      [true, true, 2, ['Annex A: Gantt Chart', 'Annex B: S-Curve', 'Annex C: Site Photos']],
+      [false, true, 0, ['Annex A: S-Curve']],
+      [true, false, 1, ['Annex A: Gantt Chart', 'Annex B: Site Photos']],
+    ])('gantt=%s sCurve=%s photos=%i: annexes lettered in order, each on its own page', (gantt, sCurve, photos, expected) => {
+      const sched = prepareReportSchedule(tasks, snapshots, false, '2026-10-31')!;
+      const { doc } = buildProgressReportPdf({ ...prData(2, 3, 1, photos), schedule: { data: sched, gantt, sCurve } });
+      expectFramed(doc, 'PROGRESS REPORT');
+      const titles = ['Gantt Chart', 'S-Curve', 'Site Photos'].flatMap((n) => 'ABC'.split('').map((l) => `Annex ${l}: ${n}`));
+      const annexPages: string[] = [];
+      for (let p = 1; p <= doc.getNumberOfPages(); p++) {
+        const found = titles.filter((t) => pageText(doc, p).includes(t));
+        expect(found.length).toBeLessThanOrEqual(1);
+        annexPages.push(...found);
+      }
+      expect(annexPages).toEqual(expected);
+      if (sCurve) expect(pageText(doc, doc.getNumberOfPages() - (photos > 0 ? 1 : 0))).toContain('Planned to date:');
+    });
   });
 
   it('Certificate of Completion fits one page even with long text', () => {

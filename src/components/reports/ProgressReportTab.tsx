@@ -36,6 +36,8 @@ import {
   MenuItem,
   CircularProgress,
   Tooltip,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, CameraAlt as CameraAltIcon, OpenInNew as OpenInNewIcon, DragIndicator as DragIndicatorIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
@@ -60,6 +62,7 @@ import {
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
 import { parseClientApprover } from '../../utils/clientApprover';
 import { buildProgressReportPdf, type ProgressReportPhoto, type ProgressReportRow } from '../../utils/reports/progressReportPdf';
+import { fetchScheduleTasks, loadReportSchedule } from '../../utils/reports/scheduleAnnex';
 import { REPORT_ISSUERS } from '../../utils/reports/reportPdfKit';
 import { loadReportLogo } from '../../utils/reports/reportLogo';
 
@@ -302,6 +305,31 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   }, [project.id]);
 
   const [wbsItems, setWbsItems] = useState<WBSItem[]>([]);
+
+  // Work Schedule annexes (Gantt chart / S-Curve) — remembered per project.
+  const scheduleAttachKey = `progressReportScheduleAttach-${project.id}`;
+  const [scheduleAttach, setScheduleAttach] = useState<{ gantt: boolean; sCurve: boolean }>({ gantt: false, sCurve: false });
+  const [scheduleTaskCount, setScheduleTaskCount] = useState<number | null>(null);
+  useEffect(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(scheduleAttachKey) || 'null');
+      setScheduleAttach({ gantt: !!v?.gantt, sCurve: !!v?.sCurve });
+    } catch {
+      setScheduleAttach({ gantt: false, sCurve: false });
+    }
+    setScheduleTaskCount(null);
+    let cancelled = false;
+    fetchScheduleTasks(String(project.id))
+      .then((tasks) => { if (!cancelled) setScheduleTaskCount(tasks.length); })
+      .catch(() => { if (!cancelled) setScheduleTaskCount(0); });
+    return () => { cancelled = true; };
+  }, [project.id, scheduleAttachKey]);
+  const toggleScheduleAttach = (key: 'gantt' | 'sCurve') => setScheduleAttach((prev) => {
+    const next = { ...prev, [key]: !prev[key] };
+    try { localStorage.setItem(scheduleAttachKey, JSON.stringify(next)); } catch { /* per-device convenience only */ }
+    return next;
+  });
+  const hasSchedule = (scheduleTaskCount ?? 0) > 0;
   const [pbInput, setPbInput] = useState(initialPb ?? '');
   const [showBillingHint, setShowBillingHint] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -800,6 +828,12 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     const pbNumRaw = pbInput.trim() || '0';
     const pbNum = pbNumRaw === '—' || pbNumRaw === '' ? '01' : String(Number(pbNumRaw) || 1).padStart(2, '0');
 
+    // Work Schedule annexes: read the live schedule at export time.
+    const wantSchedule = hasSchedule && (scheduleAttach.gantt || scheduleAttach.sCurve);
+    const scheduleData = wantSchedule
+      ? await loadReportSchedule(String(project.id), (preparedBy.date || '').slice(0, 10) || new Date().toISOString().slice(0, 10)).catch(() => null)
+      : null;
+
     const { doc, filename } = buildProgressReportPdf({
       reportCompany,
       projectName: project.project_name || '—',
@@ -818,6 +852,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
       },
       approvers: pdfApprovers,
       photos: pdfPhotos,
+      schedule: scheduleData ? { data: scheduleData, gantt: scheduleAttach.gantt, sCurve: scheduleAttach.sCurve } : null,
     }, { logoDataUrl: await loadReportLogo(issuer), bodyFontBase64: arialNarrowBase64 });
 
     if (preview) return doc.output('blob') as Blob;
@@ -935,6 +970,22 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
             <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5 }}>
               <TextField size="small" label="PB #" placeholder="e.g. 1" value={pbInput} onChange={(e) => setPbInput(e.target.value)} sx={{ width: 80 }} />
               <TextField size="small" label="Date" type="date" value={preparedBy.date} onChange={(e) => setPreparedBy((p) => ({ ...p, date: e.target.value }))} sx={{ width: 160 }} InputLabelProps={{ shrink: true }} />
+            </Box>
+            <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 2, rowGap: 0.5 }}>
+              <Typography variant="body2" sx={{ fontWeight: 600, width: { xs: '100%', sm: 'auto' } }}>Work Schedule annexes</Typography>
+              <FormControlLabel
+                control={<Switch size="small" checked={hasSchedule && scheduleAttach.gantt} onChange={() => toggleScheduleAttach('gantt')} disabled={!hasSchedule} />}
+                label={<Typography variant="body2">Attach Gantt chart</Typography>}
+              />
+              <FormControlLabel
+                control={<Switch size="small" checked={hasSchedule && scheduleAttach.sCurve} onChange={() => toggleScheduleAttach('sCurve')} disabled={!hasSchedule} />}
+                label={<Typography variant="body2">Attach S-Curve</Typography>}
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ width: { xs: '100%', sm: 'auto' } }}>
+                {scheduleTaskCount === null ? 'Checking the Work Schedule…'
+                  : hasSchedule ? `From the project's Work Schedule (${scheduleTaskCount} tasks), as of the report date.`
+                  : <>No Work Schedule yet. <Button size="small" sx={{ p: 0, minWidth: 0, verticalAlign: 'baseline', textTransform: 'none' }} onClick={() => navigate(`/projects/${project.id}/schedule`)}>Build one</Button> to attach it.</>}
+              </Typography>
             </Box>
           </AccordionDetails>
         </Accordion>
