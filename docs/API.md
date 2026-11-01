@@ -961,7 +961,7 @@ The project page opens Post update directly with `/projects/:id?update=1`.
 
 ## Agent API keys
 
-For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET /api/agent/projects/:id`, `GET /api/agent/projects/:id/schedule`, `GET /api/agent/projects/:id/invoices`, `POST /api/agent/projects/:id/billing`, `POST /api/agent/projects/:id/payments`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
+For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET /api/agent/projects/:id`, `GET /api/agent/projects/:id/schedule`, `GET /api/agent/projects/:id/invoices`, `POST /api/agent/projects/:id/billing`, `POST /api/agent/projects/:id/payments`, `GET /api/agent/clients`, `GET|POST /api/agent/calcsheet/projects`, `GET|PUT /api/agent/calcsheet/projects/:id`, `POST /api/agent/calcsheet/projects/:id/quotations`, `PUT /api/agent/calcsheet/quotations/:id`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
 
 ### GET /api/agent/projects
 Compact project list: `id, ovp_number, po_number, po_date, project_name, account_name, with_acti, project_status, actual_site_progress_percent, start_date, completion_date, updated_completion_date, updated_contract_amount, contract_billed, project_director, remarks, latest_update, updated_at`. `?active=1` drops closed projects, except completed ones that are not fully billed.
@@ -980,6 +980,35 @@ Records an invoice in `invoices` (what Collections & AR reads). Body: `{ invoice
 
 ### POST /api/agent/projects/:id/payments
 Records a payment received. Body: `{ invoice_no (required, must already exist on the project), amount (required, > 0), date? (default today), payment_ref? (max 80) }`. Adds to `amount_collected`, sets `collection_date`, and appends to the invoice's `payments` list. Re-posting the same `payment_ref` is a no-op (`duplicate: true`). A payment above the unpaid balance is a 400. Returns 201 with the updated `invoice` (its `status` becomes `partial` or `paid`).
+
+### Proposals and calcsheets (agent)
+Code: `server/agentCalcsheet.js`. Agents work on proposals in `draft` or `for_review` only; sent/won/lost and awarding stay with people (409 otherwise). The OneDrive proposal folder is not created; open the proposal in the app to create or link it. Responses carry a `url` to the page in the app.
+
+#### GET /api/agent/clients
+`{ success, clients: [{ id, code, name }] }` — no contact details. Use `id` or the 3-letter `code` as `customerId`.
+
+#### GET /api/agent/calcsheet/projects · GET /api/agent/calcsheet/projects/:id
+List of proposals (`id, code, name, location, date, customerId, status, opportunityGrade, notes, mainProjectId, createdByName, createdAt, updatedAt, url`), newest first. The single view adds `quotations` (full documents plus a computed `grandTotal` and `url`).
+
+#### POST /api/agent/calcsheet/projects
+Creates a proposal. Body: `{ name (required, max 200), customerId (required: client id or code), date? (YYYY-MM-DD, default today), location?, notes? (max 4000), status? (draft|for_review, default draft), opportunityGrade? (A|B|C) }`. The PCS code (`PCS{YYMM}{SEQ}-{CLI}-00`) comes from the shared `calcsheet_meta/seq` counter, as the app's New project does. 201 `{ project }`.
+
+#### PUT /api/agent/calcsheet/projects/:id
+`{ name?, location?, notes?, status? (draft|for_review), opportunityGrade? }`.
+
+#### POST /api/agent/calcsheet/projects/:id/quotations
+Creates a quotation seeded with the app's new-quotation defaults (30% product markup, 100% labor markup, IOCT: 5% EWT and Non-VAT, starter General Requirements rows unless `scopeCategory` is `supply`), then applies the body:
+- `kind?` (IOCT|ACTI, default IOCT), `scopeCategory?` (supply|services|both, default both), `recipientId?` (default the proposal's customer), `revision?` (default `00`)
+- Settings: `productMarkupPct, laborMarkupPct, generalReqMarkupPct, productContingencyPct, globalContingencyPct, ewtPct, discountPct, vatPct, nonVat, deliveryTermsEnabled, deliveryFee, validityDays, warrantyMonths, paymentTerms, deliveryTerms, preparedBy, preparedByTitle, authorizedBy, notes, dateSent, expectedPurchaseDate`, `terms: { scopeOfWork, exclusions, basisOfProposal, deliveryLines, warrantyExclusion }`
+- `generalReqts[]`: `{ description, unitPrice, qty, uom, markupPct? }` (replaces the starter rows)
+- `components[]`: `{ description, brand?, partNo?, qty, uom?, unitCost, forex? (default 1), contingencyPct?, discountPct?, markupPct?, leadTimeDays?, group?, subheader?, internalNote?, optional?, isHeader?, isChildHeader? }`
+- `services[]`: `{ description, qty?, uom?, unitPrice?, amount? (default qty × unitPrice; the final price of the line), group?, subheader?, internalNote?, isHeader? }`
+- `manpower[]`: `{ role, group (engineering|labor), headcount, mandays, dailyRate, allowance }`. When manpower is given, Engineering Services price from manpower; otherwise from the service lines' amounts.
+
+Line ids and codes (`A-0010`, `B-0010`, `C-0010` …) are assigned by the server; at most 500 lines per section. 201 `{ quotation }` with `grandTotal`.
+
+#### PUT /api/agent/calcsheet/quotations/:id
+Same settings and line arrays as above; a line array that is sent replaces that whole section. `remarks?` is the change note. The prior state is saved to `calcsheet_quotation_versions` as an editor save is. 409 when the quotation is awarded (price-locked) or its proposal is past `for_review`.
 
 ### POST /api/agent-keys · GET /api/agent-keys · DELETE /api/agent-keys/:id
 Superadmin login session only (never an agent key). POST `{ name }` returns the plain key once, plus a 12-character `id`. GET lists keys without the key itself. DELETE `:id` (that 12-character id) revokes the key; it stops working at once.

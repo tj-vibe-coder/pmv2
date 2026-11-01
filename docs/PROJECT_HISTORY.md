@@ -1058,3 +1058,8 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
 
 - **Why:** the Projects Agent could only post invoices/payments as update notes, so billed and collected amounts never changed. `server/agentBilling.js` adds `GET /api/agent/projects/:id/invoices`, `POST .../billing` (idempotent by `invoice_no`; moves project `contract_billed` / `amount_contract_billed_net` by the amount delta) and `POST .../payments` (dedupe by `payment_ref`, no overpay). Routes added to `AGENT_ROUTES`; documented in `docs/API.md`.
 - **Verified:** `npm run test:api-access` (in-memory Firestore fake). Not run against the emulator or prod; not deployed.
+
+## 2026-11-01 Agent proposals and calcsheets (branch `feat/agent-billing-api`)
+
+- **Why:** TJ's agent needed to open proposals and build quotations. `server/agentCalcsheet.js` adds `GET /api/agent/clients` (id/code/name only), `GET|POST /api/agent/calcsheet/projects`, `GET|PUT /api/agent/calcsheet/projects/:id`, `POST .../:id/quotations` and `PUT /api/agent/calcsheet/quotations/:id`. Codes come from the shared seq counter (`incrementProjectSeq()` in server.js, now also behind `/api/calcsheet/seq/increment`); quotations start from the app's blank-quotation defaults (duplicated from `quotationStore.ts`, keep in step); updates snapshot a version; agents stay on draft/for_review proposals and never touch awarded quotations. No OneDrive folder is created.
+- **Verified:** `npm run test:api-access` (in-memory fake, stub grand total). Not run against the emulator or prod.

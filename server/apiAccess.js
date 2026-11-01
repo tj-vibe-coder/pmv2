@@ -34,6 +34,13 @@ const AGENT_ROUTES = [
   ['GET', /^\/api\/agent\/projects\/[^/]+\/invoices$/],
   ['POST', /^\/api\/agent\/projects\/[^/]+\/billing$/],
   ['POST', /^\/api\/agent\/projects\/[^/]+\/payments$/],
+  ['GET', /^\/api\/agent\/clients$/],
+  ['GET', /^\/api\/agent\/calcsheet\/projects$/],
+  ['POST', /^\/api\/agent\/calcsheet\/projects$/],
+  ['GET', /^\/api\/agent\/calcsheet\/projects\/[^/]+$/],
+  ['PUT', /^\/api\/agent\/calcsheet\/projects\/[^/]+$/],
+  ['POST', /^\/api\/agent\/calcsheet\/projects\/[^/]+\/quotations$/],
+  ['PUT', /^\/api\/agent\/calcsheet\/quotations\/[^/]+$/],
   ['GET', /^\/api\/projects\/[^/]+\/updates$/],
   ['POST', /^\/api\/projects\/[^/]+\/updates$/],
 ];
