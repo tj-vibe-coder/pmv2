@@ -86,6 +86,10 @@ describe('report PDFs', () => {
     expectFramed(doc, 'DELIVERY RECEIPT');
     const last = doc.getNumberOfPages();
     expect(pageText(doc, last)).toContain('Dispatched by:');
+    // DR number in the footer of every page, without labels in the header.
+    for (let p = 1; p <= last; p++) expect(pageText(doc, p)).toContain('DR-0042');
+    expect(pageText(doc, 1)).not.toContain('DR No.:');
+    expect(pageText(doc, 1)).toContain('DELIVERY RECEIPT October 30, 2026');
     // The signature page always carries line items (at least the last 3, or all of them).
     expect(rowsOn(doc, last, /Item \d+ /g)).toBeGreaterThanOrEqual(Math.min(3, n));
     expect(pageText(doc, last)).toContain(`Item ${n} `);

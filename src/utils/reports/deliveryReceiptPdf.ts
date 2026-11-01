@@ -106,8 +106,8 @@ export function buildDeliveryReceiptPdf(data: DeliveryReceiptData, assets: Repor
       issuer,
       logoDataUrl: assets.logoDataUrl,
       title: 'Delivery Receipt',
-      corner: `DR No.: ${drNo}`,
-      meta: [`Date: ${date}`],
+      meta: [date],
+      footer: drNo,
     });
     return { doc: r.doc, signatureOrphaned: broke || (multiPageTable && tailOnPage < 3) };
   };

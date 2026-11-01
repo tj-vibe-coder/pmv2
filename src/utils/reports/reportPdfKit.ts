@@ -426,9 +426,7 @@ export class ReportDoc {
     title: string;
     /** Small right-aligned lines under the title, e.g. the report date. */
     meta: string[];
-    /** Optional line in the top-right corner, above the title (e.g. the DR number). */
-    corner?: string;
-    /** Footer text on the left, beside "Page X of Y" (default: the company name). */
+    /** Footer text on the left, beside "Page X of Y": the doc number (default: the company name). */
     footer?: string;
   }) {
     const { doc } = this;
@@ -469,7 +467,6 @@ export class ReportDoc {
       }
       titleLines.forEach((l, i) => doc.text(l, right, top + 5.5 + i * 5.6, { align: 'right' }));
       this.prose(8);
-      if (opts.corner) doc.text(opts.corner, right, 8, { align: 'right' });
       const metaTop = top + 11 + Math.max(0, titleLines.length - 1) * 5.6;
       opts.meta.forEach((m, i) => doc.text(m, right, metaTop + i * 3.8, { align: 'right' }));
 
