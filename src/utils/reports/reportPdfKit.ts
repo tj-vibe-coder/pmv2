@@ -422,6 +422,7 @@ export class ReportDoc {
   finish(opts: {
     issuer: ReportIssuer;
     logoDataUrl?: string | null;
+    /** Document title on the right; leave empty when the title sits in the body (COC). */
     title: string;
     /** Small right-aligned lines under the title, e.g. the report date. */
     meta: string[];
@@ -429,10 +430,6 @@ export class ReportDoc {
     corner?: string;
     /** Footer text on the left, beside "Page X of Y" (default: the company name). */
     footer?: string;
-    /** Certificate only: the doc number in its footer. */
-    docNo?: string;
-    /** 'certificate': logo + company left, address right, no title band (the title sits in the body). */
-    letterhead?: 'report' | 'certificate';
   }) {
     const { doc } = this;
     const total = doc.getNumberOfPages();
@@ -453,14 +450,6 @@ export class ReportDoc {
         }
       }
       const info = [...opts.issuer.addressLines, ...(opts.issuer.tin ? [opts.issuer.tin] : [])];
-      if (opts.letterhead === 'certificate') {
-        this.bold(13);
-        doc.text(opts.issuer.name, textX, top + 10.5);
-        this.prose(7.5);
-        info.forEach((l, i) => doc.text(l, right, top + 5 + i * 3.4, { align: 'right' }));
-        this.drawFooter(opts.docNo ? `Doc. No.: ${opts.docNo}` : '', opts.issuer.name);
-        continue;
-      }
       this.bold(11.5);
       doc.text(opts.issuer.name, textX, top + 4.5);
       this.prose(7.5);
@@ -471,8 +460,8 @@ export class ReportDoc {
       const free = right - (textX + doc.getTextWidth(opts.issuer.name) + 8);
       const title = opts.title.toUpperCase();
       this.bold(15);
-      let titleLines = [title];
-      if (doc.getTextWidth(title) > free) {
+      let titleLines = title ? [title] : [];
+      if (title && doc.getTextWidth(title) > free) {
         const words = title.split(' ');
         const cut = Math.ceil(words.length / 2);
         titleLines = [words.slice(0, cut).join(' '), words.slice(cut).join(' ')].filter(Boolean);
@@ -481,7 +470,7 @@ export class ReportDoc {
       titleLines.forEach((l, i) => doc.text(l, right, top + 5.5 + i * 5.6, { align: 'right' }));
       this.prose(8);
       if (opts.corner) doc.text(opts.corner, right, 8, { align: 'right' });
-      const metaTop = top + 11 + (titleLines.length - 1) * 5.6;
+      const metaTop = top + 11 + Math.max(0, titleLines.length - 1) * 5.6;
       opts.meta.forEach((m, i) => doc.text(m, right, metaTop + i * 3.8, { align: 'right' }));
 
       this.drawFooter(opts.footer ?? opts.issuer.name, `Page ${p} of ${total}`);
