@@ -1068,3 +1068,8 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
 
 - **Why:** TJ's agent reads project emails and should log them and turn them into to-dos the team sees. `server/agentProjectLog.js` adds `GET|POST /api/agent/projects/:id/emails` (new `project_emails` collection, deduped by project + message_id) and `GET|POST /api/agent/projects/:id/action-items` + `PUT /api/agent/action-items/:id`, which write ordinary `whiteboard_items` (General board, Project category, linked to the project) so they show on the Whiteboard with no UI change. Owner is a text tag ([RPP] …) because General items have no assignee. There is no app screen for `project_emails` yet.
 - **Verified:** `npm run test:api-access` (in-memory fake). Not run against the emulator or prod.
+
+## 2026-11-01 Project Activity page (branch `feat/agent-billing-api`)
+
+- **Why:** one place to see everything the agents (and people) log against projects. New page `src/components/ProjectActivityPage.tsx` at `/projects/activity` (sidebar: Project Activity): KPI cards (open / overdue / updates / emails), filters (search, project, period, owner, agents vs people) and tabs By project, Action items (tick done in place), Updates, Emails (expand for summary, open in Outlook). Data from `GET /api/project-activity` (`server/projectActivity.js`).
+- **Verified:** `npm run test:api-access`; `tsc --noEmit`, eslint and `ProjectActivityPage.test.tsx` (mocked fetch). Not opened in a browser or run against prod data.

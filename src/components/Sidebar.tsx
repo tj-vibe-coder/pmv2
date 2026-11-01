@@ -41,6 +41,7 @@ import {
   Build as BuildIcon,
   Backup as BackupIcon,
   AutoAwesome as AutoAwesomeIcon,
+  FactCheck as ActivityIcon,
 } from '@mui/icons-material';
 import FinanceNavList from './finance/FinanceNavList';
 import SalesNavList from './sales/SalesNavList';
@@ -325,6 +326,29 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
           </ListItem>
 
 
+
+          {/* Project Activity — action items, updates and logged emails */}
+          <ListItem disablePadding sx={{ mb: 0.5 }}>
+            <Tooltip title={isExpanded ? '' : 'Project Activity'} placement="right" arrow>
+              <ListItemButton
+                selected={location.pathname === '/projects/activity'}
+                onClick={() => navigate('/projects/activity')}
+                sx={navBtnSx(location.pathname === '/projects/activity')}
+              >
+                <ListItemIcon sx={iconSx()}>
+                  <ActivityIcon />
+                </ListItemIcon>
+                {isExpanded && (
+                  <ListItemText
+                    primary="Project Activity"
+                    secondary="Action items, updates & emails"
+                    secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                    sx={{ color: 'white' }}
+                  />
+                )}
+              </ListItemButton>
+            </Tooltip>
+          </ListItem>
 
           {/* Clients */}
           <ListItem disablePadding sx={{ mb: 0.5 }}>

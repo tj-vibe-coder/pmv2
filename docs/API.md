@@ -961,7 +961,7 @@ The project page opens Post update directly with `/projects/:id?update=1`.
 
 ## Agent API keys
 
-For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET /api/agent/projects/:id`, `GET /api/agent/projects/:id/schedule`, `GET /api/agent/projects/:id/invoices`, `POST /api/agent/projects/:id/billing`, `POST /api/agent/projects/:id/payments`, `GET /api/agent/clients`, `GET|POST /api/agent/calcsheet/projects`, `GET|PUT /api/agent/calcsheet/projects/:id`, `POST /api/agent/calcsheet/projects/:id/quotations`, `PUT /api/agent/calcsheet/quotations/:id`, `GET|POST /api/agent/projects/:id/emails`, `GET|POST /api/agent/projects/:id/action-items`, `PUT /api/agent/action-items/:id`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
+For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET /api/agent/projects/:id`, `GET /api/agent/projects/:id/schedule`, `GET /api/agent/projects/:id/invoices`, `POST /api/agent/projects/:id/billing`, `POST /api/agent/projects/:id/payments`, `GET /api/agent/clients`, `GET|POST /api/agent/calcsheet/projects`, `GET|PUT /api/agent/calcsheet/projects/:id`, `POST /api/agent/calcsheet/projects/:id/quotations`, `PUT /api/agent/calcsheet/quotations/:id`, `GET|POST /api/agent/projects/:id/emails`, `GET|POST /api/agent/projects/:id/action-items`, `PUT /api/agent/action-items/:id`, `GET /api/project-activity`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
 
 ### GET /api/agent/projects
 Compact project list: `id, ovp_number, po_number, po_date, project_name, account_name, with_acti, project_status, actual_site_progress_percent, start_date, completion_date, updated_completion_date, updated_contract_amount, contract_billed, project_director, remarks, latest_update, updated_at`. `?active=1` drops closed projects, except completed ones that are not fully billed.
@@ -1027,6 +1027,15 @@ Every General to-do linked to the project, including ones people made: `id, text
 
 #### PUT /api/agent/action-items/:id
 `{ done? (true|false), note? (adds a status note), progress? (0-100, with a note), text?, due_date? (null clears) }`. Any project to-do may be ticked or noted, as on the board; `text` and `due_date` only on items this key posted (403 otherwise). Repeating to-dos answer 409 (tick those on the Whiteboard so the next copy is made). Private items and items not linked to a project are 404.
+
+### GET /api/project-activity
+The Project Activity page's data (`/projects/activity`, `server/projectActivity.js`); staff sessions (superadmin/admin/user/viewer) and agent keys. `?days=` 7|14|30|90|365 (default 30; the window counts today, Philippine time). Returns `{ days, since, today, totals: { open_items, overdue_items, due_this_week, done_items, updates, emails, projects_active }, by_project, action_items, updates, emails }`:
+- `action_items`: every open project to-do on the General board, plus ones ticked inside the window.
+- `updates`: project updates dated inside the window (read only from projects whose `latest_update` is in the window), newest first, max 500.
+- `emails`: logged emails inside the window without their bodies, newest first, max 500.
+- `by_project`: one row per project with anything above (`open_items, overdue_items, done_items, next_due, updates, emails, last_activity, latest_update`), most overdue first, then most recently active.
+
+The page ticks action items through `PUT /api/agent/action-items/:id`, which staff sessions may also call.
 
 ### POST /api/agent-keys · GET /api/agent-keys · DELETE /api/agent-keys/:id
 Superadmin login session only (never an agent key). POST `{ name }` returns the plain key once, plus a 12-character `id`. GET lists keys without the key itself. DELETE `:id` (that 12-character id) revokes the key; it stops working at once.

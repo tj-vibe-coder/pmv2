@@ -8,6 +8,7 @@ import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
 import AiAssistHost from './components/ai/AiAssistHost';
 import AiAssistPage from './components/ai/AiAssistPage';
 import AnalyticsStudioPage from './components/analytics/AnalyticsStudioPage';
+import ProjectActivityPage from './components/ProjectActivityPage';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
@@ -342,6 +343,20 @@ function App() {
                     <TaxFilerBlock>
                       <AppLayout>
                         <AnalyticsStudioPage domainScope="projects" />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/projects/activity"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ProjectActivityPage />
                       </AppLayout>
                     </TaxFilerBlock>
                   </EmployeeGuard>

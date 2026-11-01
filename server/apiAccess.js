@@ -46,6 +46,7 @@ const AGENT_ROUTES = [
   ['GET', /^\/api\/agent\/projects\/[^/]+\/action-items$/],
   ['POST', /^\/api\/agent\/projects\/[^/]+\/action-items$/],
   ['PUT', /^\/api\/agent\/action-items\/[^/]+$/],
+  ['GET', /^\/api\/project-activity$/],
   ['GET', /^\/api\/projects\/[^/]+\/updates$/],
   ['POST', /^\/api\/projects\/[^/]+\/updates$/],
 ];
