@@ -50,7 +50,6 @@ export interface SavedDeliveryReceipt {
   reportCompany: ReportCompanyKey;
   deliveryNoteNo: string;
   despatchDate: string;
-  deliveryMethod: string;
   projectId: string | '';
   poNumber: string;
   shippingName: string;
@@ -66,7 +65,6 @@ export interface SavedDeliveryReceipt {
   dispatchedByDate: string;
   receivedByName: string;
   receivedByDate: string;
-  receivedByPlace: string;
   orderId?: string; // link to Order Tracker
   materialRequestId?: string; // link to Material Request (via order)
 }
@@ -129,7 +127,6 @@ const DeliveryPage: React.FC = () => {
   const [reportCompany, setReportCompany] = useState<ReportCompanyKey>('ACT');
   const [deliveryNoteNo, setDeliveryNoteNo] = useState('');
   const [despatchDate, setDespatchDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [deliveryMethod, setDeliveryMethod] = useState('Physical');
   const [projectId, setProjectId] = useState<string | ''>('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [poNumber, setPoNumber] = useState('');
@@ -148,7 +145,6 @@ const DeliveryPage: React.FC = () => {
   const [dispatchedByDate, setDispatchedByDate] = useState('');
   const [receivedByName, setReceivedByName] = useState('');
   const [receivedByDate, setReceivedByDate] = useState('');
-  const [receivedByPlace, setReceivedByPlace] = useState('');
   const [savedList, setSavedList] = useState<SavedDeliveryReceipt[]>(() => loadSavedDRs());
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [linkedOrderId, setLinkedOrderId] = useState<string>('');
@@ -257,7 +253,6 @@ const DeliveryPage: React.FC = () => {
       reportCompany,
       deliveryNoteNo,
       despatchDate,
-      deliveryMethod,
       projectId,
       poNumber,
       shippingName,
@@ -273,7 +268,6 @@ const DeliveryPage: React.FC = () => {
       dispatchedByDate,
       receivedByName,
       receivedByDate,
-      receivedByPlace,
       orderId: linkedOrderId || undefined,
       materialRequestId: linkedOrder?.materialRequestId,
     };
@@ -291,7 +285,6 @@ const DeliveryPage: React.FC = () => {
     setReportCompany(dr.reportCompany);
     setDeliveryNoteNo(dr.deliveryNoteNo);
     setDespatchDate(dr.despatchDate);
-    setDeliveryMethod(dr.deliveryMethod);
     setProjectId(dr.projectId);
     setPoNumber(dr.poNumber);
     setShippingName(dr.shippingName);
@@ -307,7 +300,6 @@ const DeliveryPage: React.FC = () => {
     setDispatchedByDate(dr.dispatchedByDate);
     setReceivedByName(dr.receivedByName);
     setReceivedByDate(dr.receivedByDate);
-    setReceivedByPlace(dr.receivedByPlace);
     setLinkedOrderId(dr.orderId || '');
   };
 
@@ -318,7 +310,6 @@ const DeliveryPage: React.FC = () => {
   const handleClearDR = () => {
     setDeliveryNoteNo('');
     setDespatchDate(new Date().toISOString().slice(0, 10));
-    setDeliveryMethod('Physical');
     setProjectId('');
     setPoNumber('');
     setShippingName('');
@@ -334,7 +325,6 @@ const DeliveryPage: React.FC = () => {
     setDispatchedByDate('');
     setReceivedByName('');
     setReceivedByDate('');
-    setReceivedByPlace('');
     setLinkedOrderId('');
   };
 
@@ -359,13 +349,12 @@ const DeliveryPage: React.FC = () => {
       reportCompany,
       deliveryNoteNo,
       despatchDate,
-      deliveryMethod,
       poNumber,
       shipTo: { name: shipName, address: shipAddr, contactName: shipContact, phone: shipPhone, email: shipEmail },
       invoiceTo: { name: invName, address: invAddr },
       items: items.map((it) => ({ itemNo: it.itemNo, description: it.description, delivered: it.delivered, unit: it.unit })),
       dispatchedBy: { name: dispatchedByName, date: dispatchedByDate },
-      receivedBy: { name: receivedByName, date: receivedByDate, place: receivedByPlace },
+      receivedBy: { name: receivedByName, date: receivedByDate },
     }, { logoDataUrl: await loadReportLogo(REPORT_ISSUERS[reportCompany]), bodyFontBase64: arialNarrowBase64 });
     doc.save(filename);
   };
@@ -415,15 +404,6 @@ const DeliveryPage: React.FC = () => {
             />
           </Box>
           <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
-            <TextField
-              fullWidth
-              size="small"
-              label="Delivery Method"
-              value={deliveryMethod}
-              onChange={(e) => setDeliveryMethod(e.target.value)}
-            />
-          </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
             <FormControl fullWidth size="small">
               <InputLabel>Project (optional)</InputLabel>
               <Select
@@ -457,7 +437,7 @@ const DeliveryPage: React.FC = () => {
               </Select>
             </FormControl>
           </Box>
-          <Box sx={{ width: '100%' }}>
+          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
             <TextField
               fullWidth
               size="small"
@@ -693,7 +673,7 @@ const DeliveryPage: React.FC = () => {
             </Button>
           </Box>
 
-          <Box sx={{ width: { xs: '100%', md: 'calc(33.333% - 16px)' } }}>
+          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
             <TextField
               fullWidth
               size="small"
@@ -702,7 +682,7 @@ const DeliveryPage: React.FC = () => {
               onChange={(e) => setDispatchedByName(e.target.value)}
             />
           </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(33.333% - 16px)' } }}>
+          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
             <TextField
               fullWidth
               size="small"
@@ -713,7 +693,7 @@ const DeliveryPage: React.FC = () => {
               InputLabelProps={{ shrink: true }}
             />
           </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(33.333% - 16px)' } }}>
+          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
             <TextField
               fullWidth
               size="small"
@@ -722,7 +702,7 @@ const DeliveryPage: React.FC = () => {
               onChange={(e) => setReceivedByName(e.target.value)}
             />
           </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(33.333% - 16px)' } }}>
+          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
             <TextField
               fullWidth
               size="small"
@@ -731,15 +711,6 @@ const DeliveryPage: React.FC = () => {
               value={receivedByDate}
               onChange={(e) => setReceivedByDate(e.target.value)}
               InputLabelProps={{ shrink: true }}
-            />
-          </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(33.333% - 16px)' } }}>
-            <TextField
-              fullWidth
-              size="small"
-              label="Received By – Place"
-              value={receivedByPlace}
-              onChange={(e) => setReceivedByPlace(e.target.value)}
             />
           </Box>
           <Box sx={{ width: '100%', display: 'flex', gap: 2, flexWrap: 'wrap' }}>

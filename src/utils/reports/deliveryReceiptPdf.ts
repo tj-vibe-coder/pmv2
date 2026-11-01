@@ -6,13 +6,12 @@ export interface DeliveryReceiptData {
   reportCompany: ReportCompanyKey;
   deliveryNoteNo: string;
   despatchDate: string;
-  deliveryMethod: string;
   poNumber: string;
   shipTo: { name: string; address: string; contactName?: string; phone?: string; email?: string };
   invoiceTo: { name: string; address: string };
   items: { itemNo: number; description: string; delivered: number; unit: string }[];
   dispatchedBy: { name?: string; date?: string };
-  receivedBy: { name?: string; date?: string; place?: string };
+  receivedBy: { name?: string; date?: string };
 }
 
 const ACKNOWLEDGEMENT = 'Received the above items in good order and condition.';
@@ -35,11 +34,7 @@ export function buildDeliveryReceiptPdf(data: DeliveryReceiptData, assets: Repor
 
   const signers: ReportSigner[] = [
     { label: 'Dispatched by', name: data.dispatchedBy.name, fields: [{ label: 'Date', value: formatLongDate(data.dispatchedBy.date) }] },
-    {
-      label: 'Received by',
-      name: data.receivedBy.name,
-      fields: [{ label: 'Date', value: formatLongDate(data.receivedBy.date) }, { label: 'Place', value: data.receivedBy.place }],
-    },
+    { label: 'Received by', name: data.receivedBy.name, fields: [{ label: 'Date', value: formatLongDate(data.receivedBy.date) }] },
   ];
 
   // tailRows > 0 forces the last N line items onto the signature page.
@@ -51,7 +46,6 @@ export function buildDeliveryReceiptPdf(data: DeliveryReceiptData, assets: Repor
       ['DR Number', drNo],
       ['PO Number', data.poNumber.trim() || '—'],
       ['Dispatch Date', date],
-      ['Delivery Method', data.deliveryMethod.trim() || 'Physical'],
     ]);
 
     // Ship To / Invoice To as two plain address blocks side by side.

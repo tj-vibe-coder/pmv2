@@ -1021,3 +1021,4 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
   - `ReportDoc.details` takes an optional font size; the COC uses the body size.
   - Title renamed to "Certificate of Completion" (TJ).
   - No signature or Date/Place underlines on any report (COC, DR, Progress Report), at TJ's request. The signing space above each name stays.
+  - DR: dropped the Delivery Method line and the receiver's Place field, at TJ's request (removed from the PDF and from the Delivery page form; old saved DRs that still carry them load fine). PO Number now sits beside Link to Order, and the four signer fields go two per row.

@@ -19,7 +19,6 @@ const drData = (n: number, longEvery = 0): DeliveryReceiptData => ({
   reportCompany: 'IOCT',
   deliveryNoteNo: 'DR-0042',
   despatchDate: '2026-10-30',
-  deliveryMethod: 'Company vehicle',
   poNumber: '4500123987',
   shipTo: { name: 'Analog Devices Inc.', address: 'Gateway Business Park, General Trias, Cavite', contactName: 'Maria Santos' },
   invoiceTo: { name: 'Analog Devices Inc.', address: 'Gateway Business Park, General Trias, Cavite' },
