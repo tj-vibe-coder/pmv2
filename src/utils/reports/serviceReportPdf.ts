@@ -114,20 +114,24 @@ export function buildServiceReportPdf(data: ServiceReportData, assets: ReportAss
     // Activity numbers follow the printed table, which skips blank rows.
     rows.forEach((a, i) => {
       const src = data.activities.indexOf(a);
-      const label = a.activity.trim();
-      photoGroup(`Photos: Activity ${i + 1}${label ? ` (${label.length > 60 ? `${label.slice(0, 59)}…` : label})` : ''}`,
-        data.photos.filter((p) => p.activityIndex === src));
+      photoGroup(`Photos: Activity ${i + 1}`, data.photos.filter((p) => p.activityIndex === src));
     });
     photoGroup('Site Photos', data.photos.filter((p) => p.activityIndex === undefined || (p.activityIndex >= 0 && !rows.includes(data.activities[p.activityIndex]))));
   }
 
-  const remarks = data.recommendations.trim();
-  const remarksH = remarks ? r.measureParagraph(remarks, 9.5) + 7 : 22;
+  // Each typed line is its own paragraph, so numbered lists keep their line breaks.
+  const remarks = data.recommendations.split('\n').map((l) => l.trim()).filter(Boolean);
+  const remarksH = remarks.length > 0
+    ? remarks.reduce((h, l) => h + r.measureParagraph(l, 9.5) + 1.5, 0) + 5.5
+    : 22;
   const recPhotos = inline ? data.photos.filter((p) => p.activityIndex === -1) : [];
-  // Without photos in between, the remarks and the signatures share a page so neither is left alone.
-  if (recPhotos.length === 0) r.ensure(8 + remarksH + r.measureSignatures(signers) + 2);
+  // Keep the remarks, their first row of photos (if any) and the signatures on one page,
+  // so the signatures are never left alone and the remarks never split from their photos.
+  const photoRowH = recPhotos.length > 0 ? 8 + 84 + 2 : 0;
+  const sigH = recPhotos.length > 2 ? 0 : r.measureSignatures(signers) + 2;
+  r.ensure(8 + remarksH + photoRowH + sigH);
   r.heading('Recommendations and Remarks', 14);
-  if (remarks) r.paragraph(remarks, 9.5, { after: 7 });
+  if (remarks.length > 0) remarks.forEach((l, i) => r.paragraph(l, 9.5, { after: i === remarks.length - 1 ? 7 : 1.5 }));
   else r.gap(22); // left blank to write in by hand
   photoGroup('Photos: Recommendations and Remarks', recPhotos);
 
