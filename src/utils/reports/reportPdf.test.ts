@@ -27,6 +27,7 @@ const drData = (n: number, longEvery = 0): DeliveryReceiptData => ({
     description: longEvery && i % longEvery === 0
       ? `Item ${i + 1} — panel component delivered complete with manufacturer's test certificate, installation manual and calibration report`
       : `Item ${i + 1} — terminal block 2.5 mm2 feed-through`,
+    partNo: i === 0 ? '6ES7515-2AM02-0AB0' : undefined,
     delivered: 2,
     unit: 'pcs',
   })),
@@ -100,6 +101,9 @@ describe('report PDFs', () => {
     for (let p = 1; p <= last; p++) expect(pageText(doc, p)).toContain('DR-0042');
     expect(pageText(doc, 1)).not.toContain('DR No.:');
     expect(pageText(doc, 1)).toContain('DELIVERY RECEIPT October 30, 2026');
+    // A part number prints under its item's description.
+    expect(pageText(doc, 1)).toContain('6ES7515-2AM02-0AB0');
+    expect(pageText(doc, 1)).not.toContain('Part No.');
   });
 
   it.each([

@@ -9,7 +9,7 @@ export interface DeliveryReceiptData {
   poNumber: string;
   shipTo: { name: string; address: string; contactName?: string; phone?: string; email?: string };
   invoiceTo: { name: string; address: string };
-  items: { itemNo: number; description: string; delivered: number; unit: string }[];
+  items: { itemNo: number; description: string; partNo?: string; delivered: number; unit: string }[];
   dispatchedBy: { name?: string; date?: string };
   receivedBy: { name?: string; date?: string };
 }
@@ -28,7 +28,8 @@ export function buildDeliveryReceiptPdf(data: DeliveryReceiptData, assets: Repor
   const date = formatLongDate(data.despatchDate) || '—';
   const rows = data.items.map((it) => [
     String(it.itemNo),
-    it.description.trim() || '—',
+    // A part number, when given, goes on its own line under the description (no label).
+    [it.description.trim() || '—', it.partNo?.trim() || ''].filter(Boolean).join('\n'),
     String(Number(it.delivered) || 0),
     it.unit.trim() || '—',
   ]);

@@ -38,6 +38,8 @@ export interface DeliveryLineItem {
   id: string;
   itemNo: number;
   description: string;
+  /** Optional; printed under the description on the DR. */
+  partNo?: string;
   delivered: number;
   unit: string;
 }
@@ -73,6 +75,7 @@ const emptyItem = (): DeliveryLineItem => ({
   id: Math.random().toString(36).slice(2),
   itemNo: 0,
   description: '',
+  partNo: '',
   delivered: 0,
   unit: '',
 });
@@ -194,6 +197,7 @@ const DeliveryPage: React.FC = () => {
           id: Math.random().toString(36).slice(2),
           itemNo: idx + 1,
           description: it.description || '',
+          partNo: it.partNo || '',
           delivered: Number(it.quantity) || 0,
           unit: it.unit && UOM_OPTIONS.includes(it.unit) ? it.unit : (it.unit || ''),
         }))
@@ -352,7 +356,7 @@ const DeliveryPage: React.FC = () => {
       poNumber,
       shipTo: { name: shipName, address: shipAddr, contactName: shipContact, phone: shipPhone, email: shipEmail },
       invoiceTo: { name: invName, address: invAddr },
-      items: items.map((it) => ({ itemNo: it.itemNo, description: it.description, delivered: it.delivered, unit: it.unit })),
+      items: items.map((it) => ({ itemNo: it.itemNo, description: it.description, partNo: it.partNo, delivered: it.delivered, unit: it.unit })),
       dispatchedBy: { name: dispatchedByName, date: dispatchedByDate },
       receivedBy: { name: receivedByName, date: receivedByDate },
     }, { logoDataUrl: await loadReportLogo(REPORT_ISSUERS[reportCompany]), bodyFontBase64: arialNarrowBase64 });
@@ -558,6 +562,10 @@ const DeliveryPage: React.FC = () => {
                         onChange={(e) => updateItem(it.id, 'description', e.target.value)}
                       />
                       <TextField
+                        size="small" label="Part No. (optional)" value={it.partNo || ''} sx={{ gridColumn: '1 / -1' }}
+                        onChange={(e) => updateItem(it.id, 'partNo', e.target.value)}
+                      />
+                      <TextField
                         size="small" type="number" label="QTY" value={it.delivered || ''}
                         onChange={(e) => updateItem(it.id, 'delivered', parseInt(e.target.value, 10) || 0)}
                         inputProps={{ min: 0, inputMode: 'numeric' }}
@@ -582,7 +590,7 @@ const DeliveryPage: React.FC = () => {
                 size="small"
                 sx={{
                   tableLayout: 'fixed',
-                  minWidth: 640,
+                  minWidth: 800,
                   '& .MuiTableCell-root': { py: 0.75 },
                   '& .MuiInputBase-input': {
                     color: 'rgba(0, 0, 0, 0.87)',
@@ -599,6 +607,7 @@ const DeliveryPage: React.FC = () => {
                   <TableRow sx={{ bgcolor: 'primary.main', color: 'white' }}>
                     <TableCell sx={{ color: 'white', fontWeight: 600, width: 56 }}>Item #</TableCell>
                     <TableCell sx={{ color: 'white', fontWeight: 600 }}>Description</TableCell>
+                    <TableCell sx={{ color: 'white', fontWeight: 600, width: 160 }}>Part No.</TableCell>
                     <TableCell sx={{ color: 'white', fontWeight: 600, width: 80 }} align="right">QTY</TableCell>
                     <TableCell sx={{ color: 'white', fontWeight: 600, width: 72 }}>UOM</TableCell>
                     <TableCell sx={{ color: 'white', width: 48 }} />
@@ -623,6 +632,15 @@ const DeliveryPage: React.FC = () => {
                           value={it.description}
                           onChange={(e) => updateItem(it.id, 'description', e.target.value)}
                           placeholder="Description"
+                          fullWidth
+                        />
+                      </TableCell>
+                      <TableCell sx={{ width: 160, verticalAlign: 'middle' }}>
+                        <TextField
+                          size="small"
+                          value={it.partNo || ''}
+                          onChange={(e) => updateItem(it.id, 'partNo', e.target.value)}
+                          placeholder="Optional"
                           fullWidth
                         />
                       </TableCell>
