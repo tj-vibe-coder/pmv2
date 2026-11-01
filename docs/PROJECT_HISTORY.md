@@ -1053,3 +1053,8 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
 - **Why:** TJ brought a separate `apiKeys.js` design (`pmk_` keys in an `X-API-Key` header, agent PUTs straight to `/api/projects/:id`) for the Projects Agent to read schedules and set the PO number/date. It duplicated the `agk_` system, would have been blocked by the /api gate, and its `'In Progress'` status spelling doesn't match the app's `'IN PROGRESS'`. Its extra abilities were added to the existing agent keys instead (now on the shared updates log, see the PR #167 entry above).
 - **Verified:** `npm run test:api-access`, `node --check server.js`. Not run against the emulator or prod.
 
+
+## 2026-11-01 Agent billing endpoints (branch `feat/agent-billing-api`)
+
+- **Why:** the Projects Agent could only post invoices/payments as update notes, so billed and collected amounts never changed. `server/agentBilling.js` adds `GET /api/agent/projects/:id/invoices`, `POST .../billing` (idempotent by `invoice_no`; moves project `contract_billed` / `amount_contract_billed_net` by the amount delta) and `POST .../payments` (dedupe by `payment_ref`, no overpay). Routes added to `AGENT_ROUTES`; documented in `docs/API.md`.
+- **Verified:** `npm run test:api-access` (in-memory Firestore fake). Not run against the emulator or prod; not deployed.

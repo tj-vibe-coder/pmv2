@@ -2487,6 +2487,7 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
 app.use('/api/liquidations', require('./server/liquidationItemSearchRouter').createLiquidationItemSearchRouter({ db, requireActiveUser }));
 app.use('/api/projects-monitor', require('./server/projectSpendMonitorRouter').createProjectSpendMonitorRouter({ db, requireActiveUser }));
 app.use(agentAccess.createAgentRouter({ db, getCurrentUser, isActiveUser }));
+app.use(require('./server/agentBilling').createAgentBillingRouter({ db, getCurrentUser, isActiveUser }));
 app.use(require('./server/projectUpdates').createProjectUpdatesRouter({ db, getCurrentUser, isActiveUser, syncOperationsStatusToCalcsheet }));
 app.use('/api/liquidations', require('./server/liquidationItemNumbersRouter').createLiquidationItemNumbersRouter({ db, requireActiveUser }));
 app.use('/api/liquidations', require('./server/liquidationReceiptReviewRouter').createLiquidationReceiptReviewRouter({ db, requireActiveUser }));

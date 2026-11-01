@@ -961,7 +961,7 @@ The project page opens Post update directly with `/projects/:id?update=1`.
 
 ## Agent API keys
 
-For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET /api/agent/projects/:id`, `GET /api/agent/projects/:id/schedule`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
+For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET /api/agent/projects/:id`, `GET /api/agent/projects/:id/schedule`, `GET /api/agent/projects/:id/invoices`, `POST /api/agent/projects/:id/billing`, `POST /api/agent/projects/:id/payments`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
 
 ### GET /api/agent/projects
 Compact project list: `id, ovp_number, po_number, po_date, project_name, account_name, with_acti, project_status, actual_site_progress_percent, start_date, completion_date, updated_completion_date, updated_contract_amount, contract_billed, project_director, remarks, latest_update, updated_at`. `?active=1` drops closed projects, except completed ones that are not fully billed.
@@ -971,6 +971,15 @@ One project in the same compact view.
 
 ### GET /api/agent/projects/:id/schedule
 The project's schedule tasks (`calcsheet_schedule_tasks` where `projectId` = `:id`), sorted as `GET /api/schedule-tasks` sorts them.
+
+### GET /api/agent/projects/:id/invoices
+`{ success, invoices }`, newest first: `id, project_id, invoice_no, type, pb_number, invoice_date, due_date, amount, amount_collected, collection_date, status (paid|partial|overdue|unpaid, computed), notes`.
+
+### POST /api/agent/projects/:id/billing
+Records an invoice in `invoices` (what Collections & AR reads). Body: `{ invoice_no (required, max 60), type (required: down payment|progress|final|retention), amount (required, > 0), date? (YYYY-MM-DD, default today), payment_terms_days? (0-365, default 30), due_date? (default date + terms), pb_number?, notes? (max 500), amount_collected?, collection_date? }`. Posting an `invoice_no` that already exists on the project (case-insensitive) updates that invoice instead of adding another, so retries are safe. The project's `contract_billed` and `amount_contract_billed_net` move by the change in invoice amount (hand-entered billing is preserved), and the billed percents and balance fields follow. Returns 201 (`created: true`) or 200 (`created: false`) with `{ invoice, project: { contract_billed, amount_contract_billed_net, updated_contract_balance_net } }`. 400 for bad input, 404 for an unknown project.
+
+### POST /api/agent/projects/:id/payments
+Records a payment received. Body: `{ invoice_no (required, must already exist on the project), amount (required, > 0), date? (default today), payment_ref? (max 80) }`. Adds to `amount_collected`, sets `collection_date`, and appends to the invoice's `payments` list. Re-posting the same `payment_ref` is a no-op (`duplicate: true`). A payment above the unpaid balance is a 400. Returns 201 with the updated `invoice` (its `status` becomes `partial` or `paid`).
 
 ### POST /api/agent-keys · GET /api/agent-keys · DELETE /api/agent-keys/:id
 Superadmin login session only (never an agent key). POST `{ name }` returns the plain key once, plus a 12-character `id`. GET lists keys without the key itself. DELETE `:id` (that 12-character id) revokes the key; it stops working at once.
