@@ -43,6 +43,15 @@ function fakeDb(seed = {}) {
         .map((p) => ({ id: p.split('/').pop(), ref: docRef(p), data: () => ({ ...store.get(p) }) }));
       return { docs };
     },
+    where(field, op, value) {
+      assert.equal(op, '==');
+      return {
+        get: async () => {
+          const { docs } = await collRef(path).get();
+          return { docs: docs.filter((d) => d.data()[field] === value) };
+        },
+      };
+    },
   });
   return { collection: (name) => collRef(name), store };
 }
@@ -54,6 +63,9 @@ function seededDb() {
     [`agent_keys/${hash}`]: { name: 'Projects Agent', createdAt: '2026-11-01T00:00:00Z', revokedAt: null, lastUsedAt: null },
     [`agent_keys/${revoked.hash}`]: { name: 'Old', createdAt: '2026-10-01T00:00:00Z', revokedAt: '2026-10-02T00:00:00Z' },
     'projects/p1': { ovp_number: 'IOCT2610005', project_name: 'MDLZ Diverter System', project_status: 'NOT STARTED', actual_site_progress_percent: 0, updated_contract_amount: 5490000, contract_billed: 0, calcsheet_project_id: 'c1' },
+    'calcsheet_schedule_tasks/t2': { projectId: 'p1', name: 'FAT', order: 2, startDate: '2026-11-10', endDate: '2026-11-11', progressPct: 0 },
+    'calcsheet_schedule_tasks/t1': { projectId: 'p1', name: 'Panel fabrication', order: 1, startDate: '2026-11-02', endDate: '2026-11-09', progressPct: 30 },
+    'calcsheet_schedule_tasks/t9': { projectId: 'p2', name: 'Other project', order: 1 },
     'projects/p2': { ovp_number: 'IOCT2512001', project_name: 'Tann SCADA', project_status: 'COMPLETED', actual_site_progress_percent: 100, updated_contract_amount: 161300, contract_billed: 161300 },
   });
   return { db, key, revokedKey: revoked.key };
@@ -128,6 +140,17 @@ test('parseAgentUpdate validates and limits what an agent can change', () => {
   assert.equal(ok.update.contract_billed, undefined);
 });
 
+test('parseAgentUpdate accepts a PO number and a PO date as YYYY-MM-DD or Unix seconds', () => {
+  const nov3 = Date.UTC(2026, 10, 3) / 1000;
+  const iso = agentAccess.parseAgentUpdate({ note: 'PO received', po_number: ' 4500123456 ', po_date: '2026-11-03' });
+  assert.deepEqual(iso.projectPatch, { po_number: '4500123456', po_date: nov3, start_date: nov3 });
+  assert.equal(agentAccess.parseAgentUpdate({ note: 'x', po_date: String(nov3) }).projectPatch.po_date, nov3);
+  assert.equal(agentAccess.parseAgentUpdate({ note: 'x', po_date: nov3 }).projectPatch.po_date, nov3);
+  assert.match(agentAccess.parseAgentUpdate({ note: 'x', po_date: '03/11/2026' }).error, /po_date/);
+  assert.match(agentAccess.parseAgentUpdate({ note: 'x', po_date: nov3 * 1000 }).error, /po_date/); // milliseconds
+  assert.match(agentAccess.parseAgentUpdate({ note: 'x', po_number: '   ' }).error, /po_number/);
+});
+
 test('an agent key reaches only the agent routes', async () => {
   const { db, key } = seededDb();
   await withApp(db, {}, async (call) => {
@@ -135,6 +158,9 @@ test('an agent key reaches only the agent routes', async () => {
     assert.equal((await call('GET', '/api/projects', key)).status, 403);
     assert.equal((await call('DELETE', '/api/projects', key, { ids: ['p1'] })).status, 403);
     assert.equal((await call('POST', '/api/agent-keys', key, { name: 'x' })).status, 403);
+    assert.equal((await call('GET', '/api/agent/projects/p1', key)).status, 200);
+    assert.equal((await call('GET', '/api/agent/projects/p1/schedule', key)).status, 200);
+    assert.equal((await call('PUT', '/api/agent/projects/p1', key, { po_number: 'x' })).status, 403);
     assert.equal((await call('GET', '/api/agent/projects')).status, 401);
   });
 });
@@ -154,6 +180,35 @@ test('agents list projects in the compact view, optionally active only', async (
     assert.equal(all.body.projects[0].calcsheet_project_id, undefined);
     const active = await call('GET', '/api/agent/projects?active=1', key);
     assert.deepEqual(active.body.projects.map((p) => p.id), ['p1']);
+  });
+});
+
+test('agents read one project and its schedule', async () => {
+  const { db, key } = seededDb();
+  await withApp(db, {}, async (call) => {
+    const one = await call('GET', '/api/agent/projects/p1', key);
+    assert.equal(one.body.project.project_name, 'MDLZ Diverter System');
+    assert.equal(one.body.project.calcsheet_project_id, undefined);
+    assert.equal((await call('GET', '/api/agent/projects/nope', key)).status, 404);
+    const sched = await call('GET', '/api/agent/projects/p1/schedule', key);
+    assert.deepEqual(sched.body.tasks.map((t) => [t.id, t.name]), [['t1', 'Panel fabrication'], ['t2', 'FAT']]);
+    assert.equal((await call('GET', '/api/agent/projects/nope/schedule', key)).status, 404);
+  });
+});
+
+test('posting a PO number and date updates the project and logs the old values', async () => {
+  const { db, key } = seededDb();
+  await withApp(db, {}, async (call) => {
+    const res = await call('POST', '/api/agent/projects/p1/updates', key, { note: 'PO received by mail', po_number: '4500123456', po_date: '2026-11-03' });
+    assert.equal(res.status, 201);
+    const project = db.store.get('projects/p1');
+    assert.equal(project.po_number, '4500123456');
+    assert.equal(project.po_date, Date.UTC(2026, 10, 3) / 1000);
+    assert.equal(project.start_date, project.po_date);
+    assert.equal(project.project_status, 'NOT STARTED');
+    assert.equal(res.body.update.previous_po_number, '');
+    assert.equal(res.body.update.previous_po_date, null);
+    assert.equal((await call('GET', '/api/agent/projects/p1', key)).body.project.po_number, '4500123456');
   });
 });
 
