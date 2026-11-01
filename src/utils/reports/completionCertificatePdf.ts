@@ -54,7 +54,7 @@ export function buildCompletionCertificatePdf(data: CompletionCertificateData, a
     const { doc } = r;
 
     r.y = 52 + spread;
-    r.prose(24);
+    r.bold(24);
     const title = doc.splitTextToSize('Certificate of Completion', CONTENT_WIDTH) as string[];
     title.forEach((l, i) => doc.text(l, PAGE.width / 2, r.y + i * 10, { align: 'center' }));
     r.y += (title.length - 1) * 10 + 14 + spread;

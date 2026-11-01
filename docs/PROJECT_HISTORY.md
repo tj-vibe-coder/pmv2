@@ -1029,3 +1029,4 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
   - Bigger letterhead logo on all reports (TJ): IOCT 18 → 26 mm box, ACTI 24×14.8 → 30×18.5 mm.
   - Progress Report tables show top-level codes as "1.0", "2.0"… (sub-codes like "1.1" unchanged; PDF only, the stored WBS codes are not touched).
   - COC now uses the Progress Report letterhead (logo, company name, address and TIN stacked on the left; no title on the right since the title is in the body) and footer (bare doc number left, "Page 1 of 1" right). The "Certificate No. …" line under the title is gone. The separate certificate letterhead mode and `docNo` option were removed from `ReportDoc.finish`.
+  - COC title "Certificate of Completion" set in bold (TJ).
