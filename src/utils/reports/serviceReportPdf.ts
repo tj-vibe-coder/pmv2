@@ -97,7 +97,7 @@ export function buildServiceReportPdf(data: ServiceReportData, assets: ReportAss
     : [[{ content: 'No activities listed', colSpan: 3, styles: { halign: 'center', textColor: REPORT_COLORS.ink } }]];
   r.heading('Activities Performed', 16);
   r.table({
-    head: [['No.', 'Activity / Description', 'Finding / Outcome']],
+    head: [['No.', 'Activity / Description', 'Findings / Results']],
     body,
     columnStyles: {
       0: { cellWidth: 12, halign: 'center' },

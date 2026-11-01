@@ -906,7 +906,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
                     <TableRow>
                       <TableCell sx={{ ...headSx, width: 48 }}>No.</TableCell>
                       <TableCell sx={headSx}>Activity</TableCell>
-                      <TableCell sx={headSx}>Finding / Outcome</TableCell>
+                      <TableCell sx={headSx}>Findings / Results</TableCell>
                       <TableCell sx={{ ...headSx, width: 80 }}>Photos</TableCell>
                       <TableCell sx={{ ...headSx, width: 48 }} />
                     </TableRow>
@@ -921,7 +921,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
                             <TextField size="small" fullWidth multiline minRows={1} placeholder="Activity" value={row.activity} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, activity: e.target.value } : r)))} />
                           </TableCell>
                           <TableCell sx={{ py: 0.5, px: 1 }}>
-                            <TextField size="small" fullWidth multiline minRows={1} placeholder="Finding / Outcome" value={row.findingOutcome} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, findingOutcome: e.target.value } : r)))} />
+                            <TextField size="small" fullWidth multiline minRows={1} placeholder="Findings / Results" value={row.findingOutcome} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, findingOutcome: e.target.value } : r)))} />
                           </TableCell>
                           <TableCell sx={{ verticalAlign: 'top', pt: 0.5, px: 0.5 }}>
                             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
