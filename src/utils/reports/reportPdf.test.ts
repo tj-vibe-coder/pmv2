@@ -80,23 +80,26 @@ describe('report PDFs', () => {
     expect(formatLongDate('not a date')).toBe('not a date');
   });
 
-  it.each([3, 18, 26, 30, 64])('Delivery Receipt with %i items: framed pages, signatures never orphaned', (n) => {
+  it.each([3, 18, 26, 30, 64])('Delivery Receipt with %i items: framed pages, every page signed', (n) => {
     const { doc, filename } = buildDeliveryReceiptPdf(drData(n, 7));
     expect(filename).toBe('DR-0042.pdf');
     expectFramed(doc, 'DELIVERY RECEIPT');
     const last = doc.getNumberOfPages();
-    expect(pageText(doc, last)).toContain('Dispatched by:');
-    // DR number in the footer of every page, without labels in the header.
-    for (let p = 1; p <= last; p++) expect(pageText(doc, p)).toContain('DR-0042');
-    expect(pageText(doc, 1)).not.toContain('DR No.:');
-    expect(pageText(doc, 1)).toContain('DELIVERY RECEIPT October 30, 2026');
-    // The signature page always carries line items (at least the last 3, or all of them).
-    expect(rowsOn(doc, last, /Item \d+ /g)).toBeGreaterThanOrEqual(Math.min(3, n));
+    // Each page carries the acknowledgement and both signatures, plus line items.
+    for (let p = 1; p <= last; p++) {
+      expect(pageText(doc, p)).toContain('Dispatched by:');
+      expect(pageText(doc, p)).toContain('Received by:');
+      expect(rowsOn(doc, p, /Item \d+ /g)).toBeGreaterThan(0);
+    }
     expect(pageText(doc, last)).toContain(`Item ${n} `);
     // Every item appears exactly once across the document.
     let seen = 0;
     for (let p = 1; p <= last; p++) seen += rowsOn(doc, p, /Item \d+ /g);
     expect(seen).toBe(n);
+    // DR number in the footer of every page, without labels in the header.
+    for (let p = 1; p <= last; p++) expect(pageText(doc, p)).toContain('DR-0042');
+    expect(pageText(doc, 1)).not.toContain('DR No.:');
+    expect(pageText(doc, 1)).toContain('DELIVERY RECEIPT October 30, 2026');
   });
 
   it.each([
