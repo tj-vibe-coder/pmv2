@@ -767,3 +767,9 @@ Reimbursement GET retains pending-only default and adds `scope=open|closed|all`,
 Physical return metadata additionally includes optional `returnedByName`, captured from the authenticated RJ account at return time. Older records retain `returnedBy` as the identity fallback. Return reason/actor/time are displayed separately from `submittedDate`/submitter/note. Schema migration 003 remains additive with no historical writes.
 
 When no reimbursement document exists, workflow closure requires explicit reimbursed status or valid zero-due accounting provenance (zero total or matching recorded CA coverage). Unknown/inconsistent settlement stays `source_review_required`; it is never coerced to zero. Existing paid claims remain paid.
+
+### Agent API keys and agent updates (2026-11-01)
+
+- `agent_keys/{sha256 of key}`: `{ name, createdAt, createdBy, lastUsedAt (written at most hourly), revokedAt, revokedBy? }`. The plain key is never stored.
+- `projects/{id}/agent_updates/{auto}`: `{ note, status?, progress?, next_milestone?, next_milestone_date?, risk?, source?, previous_status, previous_progress, posted_by, posted_by_agent, created_at }`.
+- `projects/{id}.agent_last_update`: `{ id, note, at, by, next_milestone?, next_milestone_date?, risk? }`, the newest agent update.

@@ -17,6 +17,7 @@ const { createBackupsRouter } = require('./server/backups/router');
 const { createSoaRouter } = require('./server/soa/soaRouter');
 const { createBlsRouter } = require('./server/bls/blsRouter');
 const { createApiAccessGate } = require('./server/apiAccess');
+const agentAccess = require('./server/agentAccess');
 const { hashPassword, verifyPassword } = require('./server/passwords');
 const { createLoginThrottle, clientAddress, retryMinutes } = require('./server/loginThrottle');
 const { createChangePasswordHandler } = require('./server/changePassword');
@@ -179,6 +180,8 @@ async function lookupCurrentUser(req) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.substring(7);
   try {
+    // Agent API keys ('agk_'): limited to AGENT_ROUTES by the /api gate.
+    if (agentAccess.isAgentKey(token)) return await agentAccess.lookupAgentKey(db, token);
     // Scanner (QR-paired) sessions use 'scan_'-prefixed tokens; everything
     // else is a login session minted by mintAuthSession.
     if (token.startsWith('scan_')) {
@@ -2483,6 +2486,7 @@ app.delete('/api/cash-advances/:id', async (req, res) => {
 // ========== LIQUIDATIONS ==========
 app.use('/api/liquidations', require('./server/liquidationItemSearchRouter').createLiquidationItemSearchRouter({ db, requireActiveUser }));
 app.use('/api/projects-monitor', require('./server/projectSpendMonitorRouter').createProjectSpendMonitorRouter({ db, requireActiveUser }));
+app.use(agentAccess.createAgentRouter({ db, getCurrentUser, isActiveUser, syncOperationsStatusToCalcsheet }));
 app.use('/api/liquidations', require('./server/liquidationItemNumbersRouter').createLiquidationItemNumbersRouter({ db, requireActiveUser }));
 app.use('/api/liquidations', require('./server/liquidationReceiptReviewRouter').createLiquidationReceiptReviewRouter({ db, requireActiveUser }));
 app.get('/api/liquidations', async (req, res) => {

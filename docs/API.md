@@ -944,6 +944,22 @@ Delete an invoice. Requires active user session.
 
 ---
 
+## Agent API keys
+
+For TJ's scheduled agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to the three agent routes below; every other route answers 403. Code: `server/agentAccess.js`.
+
+### GET /api/agent/projects
+Compact project list: `id, ovp_number, po_number, project_name, account_name, with_acti, project_status, actual_site_progress_percent, start_date, completion_date, updated_completion_date, updated_contract_amount, contract_billed, project_director, remarks, agent_last_update, updated_at`. `?active=1` drops closed projects, except completed ones that are not fully billed.
+
+### GET /api/agent/projects/:id/updates
+Latest 50 entries from `projects/{id}/agent_updates`, newest first.
+
+### POST /api/agent/projects/:id/updates
+Body: `{ note (required, max 1000), status?, progress?, next_milestone?, next_milestone_date? (YYYY-MM-DD), risk? (low|medium|high), source? }`. `status` must be one of NOT STARTED, IN PROGRESS, ON HOLD, SUSPENDED, COMPLETED (closing or cancelling stays with people). Only `project_status` and `actual_site_progress_percent` change on the project; the full entry (with the previous status/progress) goes to `agent_updates`, and `agent_last_update` on the project shows the latest one. Calcsheet status sync runs as for a normal edit. Also callable by staff sessions.
+
+### POST /api/agent-keys · GET /api/agent-keys · DELETE /api/agent-keys/:id
+Superadmin login session only (never an agent key). POST `{ name }` returns the plain key once, plus a 12-character `id`. GET lists keys without the key itself. DELETE `:id` (that 12-character id) revokes the key; it stops working at once.
+
 ## Authorization Matrix
 
 | Role | Projects | Clients | CA | Liquidation | Users | Suppliers | Payroll |
