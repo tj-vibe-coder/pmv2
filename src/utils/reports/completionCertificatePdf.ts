@@ -1,4 +1,4 @@
-import { ReportDoc, REPORT_ISSUERS, PAGE, CONTENT_WIDTH, formatLongDate, safeFileName, type ReportCompanyKey, type ReportSigner, type TextRun } from './reportPdfKit';
+import { ReportDoc, REPORT_ISSUERS, PAGE, CONTENT_WIDTH, formatLongDate, safeFileName, type ReportCompanyKey, type ReportSigner } from './reportPdfKit';
 
 export interface CompletionCertificateData {
   reportCompany: ReportCompanyKey;
@@ -23,92 +23,78 @@ export interface ReportAssets {
 const BODY = 10.5;
 
 /**
- * Certificate of Project Completion: a one-page letter — centred title, the
- * certification in prose with the key facts in bold, a dates list, and the
- * contractor and client signatures at the foot of the page.
+ * Certificate of Project Completion: a one-page letter — centred title and
+ * certificate number, the certification, the project facts as aligned
+ * "Label: value" lines, and the client's acceptance with both signatures at
+ * the foot of the page. Spacing opens up on short certificates so the page
+ * reads balanced rather than leaving a hole above the signatures.
  */
 export function buildCompletionCertificatePdf(data: CompletionCertificateData, assets: ReportAssets = {}) {
   const issuer = REPORT_ISSUERS[data.reportCompany];
-  const r = new ReportDoc({ bodyFontBase64: assets.bodyFontBase64 });
-  const { doc } = r;
   const docNo = `${data.projectNo || 'COC'}-COC`;
   const completion = formatLongDate(data.completionDate) || '—';
   const start = formatLongDate(data.startDate);
   const po = data.poNumber.trim() || '—';
   const location = data.location?.trim();
 
-  // Title
-  r.y = 50;
-  r.prose(22);
-  const title = doc.splitTextToSize('Certificate of Project Completion', 120) as string[];
-  title.forEach((l, i) => doc.text(l, PAGE.width / 2, r.y + i * 9.5, { align: 'center' }));
-  r.y += (title.length - 1) * 9.5 + 15;
+  const details: [string, string][] = [['Project', data.projectName.trim() || '—'], ['Project No.', data.projectNo || '—'], ['Client', data.client.trim() || '—']];
+  if (location) details.push(['Location', location]);
+  details.push(['PO No.', po]);
+  if (start) details.push(['Start Date', start]);
+  details.push(['Completion Date', completion]);
 
-  // Reference line: PO (left), timeline (right) — stacked when they don't fit side by side.
-  const pairWidth = (label: string, value: string) => {
-    r.prose(BODY);
-    const lw = doc.getTextWidth(`${label} `);
-    r.bold(BODY);
-    return { lw, w: lw + doc.getTextWidth(value) };
-  };
-  const pair = (label: string, value: string, x: number) => {
-    const { lw } = pairWidth(label, value);
-    r.prose(BODY);
-    doc.text(`${label} `, x, r.y);
-    r.bold(BODY);
-    doc.text(value, x + lw, r.y);
-  };
-  const left: [string, string] = ['PO No.:', po];
-  const right: [string, string] = start ? ['Project Timeline:', `${start} – ${completion}`] : ['Project No.:', data.projectNo || '—'];
-  const leftW = pairWidth(...left).w;
-  const rightW = pairWidth(...right).w;
-  if (leftW + rightW + 10 <= CONTENT_WIDTH) {
-    pair(...left, PAGE.margin);
-    pair(...right, PAGE.width - PAGE.margin - rightW);
-  } else {
-    pair(...left, PAGE.margin);
-    r.y += ReportDoc.lineHeight(BODY);
-    pair(...right, PAGE.margin);
-  }
-  r.y += 12;
-
-  const para = (runs: TextRun[] | string) => r.paragraph(runs, BODY, { after: 4.5 });
-  para([
-    { text: 'This Certificate of Project Completion is issued on ' },
-    { text: completion, bold: true },
-    { text: ' to confirm that ' },
-    { text: issuer.name, bold: true },
-    { text: ' has fully executed all the work required under Purchase Order No. ' },
-    { text: po, bold: true },
-    { text: ' for ' },
-    { text: data.projectName, bold: true },
-    ...(location ? [{ text: ', located at ' }, { text: location, bold: true }] : []),
-    { text: ', for ' },
-    { text: data.client, bold: true },
-    { text: ', in accordance with all specified terms and conditions.' },
-  ]);
-  para([
-    { text: issuer.name, bold: true },
-    { text: ' has completed every aspect of the work and met all project requirements. The work was carried out in compliance with all relevant codes, regulations and standards, and inspections and tests have verified that all systems are functioning correctly and efficiently.' },
-  ]);
-  para('This certificate serves as official documentation that the project is complete and that all deliverables have been received and accepted by the client.');
-  para('Issued as evidence of the project\'s completion.');
-
-  r.gap(4);
-  const dates: [string, string][] = [['Project No.', data.projectNo || '—']];
-  if (start) dates.push(['Start Date', start]);
-  dates.push(['Completion Date', completion]);
-  dates.forEach(([label, value]) => r.paragraph([{ text: `${label}: ` }, { text: value, bold: true }], BODY, { after: 0.6 }));
-
-  // Signatures sit at the foot of the page, as on a printed certificate.
   const signers: ReportSigner[] = [
     { label: 'Contractor', name: data.contractorRep.name, designation: data.contractorRep.designation, company: issuer.name, fields: [{ label: 'Date' }] },
     { label: 'Accepted by (Client)', name: data.approver.name, designation: data.approver.designation, company: data.approver.company, fields: [{ label: 'Date' }] },
   ];
-  const sigH = r.measureSignatures(signers);
-  r.y = Math.max(r.y + 10, PAGE.contentBottom - sigH - 2);
-  r.signatures(signers);
 
-  r.finish({ issuer, logoDataUrl: assets.logoDataUrl, title: 'Certificate of Project Completion', meta: [], docNo, letterhead: 'certificate' });
-  return { doc: r.doc, filename: `${safeFileName(docNo)}.pdf` };
+  // `spread` = extra mm added at each of the gaps between blocks.
+  const GAPS = 5;
+  const render = (spread: number) => {
+    const r = new ReportDoc({ bodyFontBase64: assets.bodyFontBase64 });
+    const { doc } = r;
+
+    r.y = 52 + spread;
+    r.prose(24);
+    const title = doc.splitTextToSize('Certificate of Project Completion', CONTENT_WIDTH) as string[];
+    title.forEach((l, i) => doc.text(l, PAGE.width / 2, r.y + i * 10, { align: 'center' }));
+    r.y += (title.length - 1) * 10 + 8;
+    r.prose(9.5);
+    doc.text(`Certificate No. ${docNo}`, PAGE.width / 2, r.y, { align: 'center' });
+    r.y += 12 + spread;
+
+    r.paragraph([
+      { text: 'This is to certify that ' },
+      { text: issuer.name, bold: true },
+      { text: ' has completed all the work required under Purchase Order No. ' },
+      { text: po, bold: true },
+      { text: ' for the project below, in accordance with the agreed scope, technical specifications, and terms and conditions.' },
+    ], BODY, { after: 5 + spread });
+
+    r.details(details, 5 + spread, BODY);
+
+    r.paragraph('All work was carried out in compliance with the relevant codes, regulations and standards. Inspections and tests have verified that all systems are functioning correctly and as intended.', BODY, { after: 4.5 });
+    r.paragraph([
+      { text: 'This certificate is issued on ' },
+      { text: completion, bold: true },
+      { text: ' as official documentation of the completion of the project.' },
+    ], BODY, { after: 0 });
+    const contentEnd = r.y;
+
+    // Client acceptance + signatures sit at the foot of the page, as on a printed certificate.
+    const leadIn = 'By signing below, the client confirms that the work is complete and that all deliverables have been received and accepted.';
+    const footH = r.measureParagraph(leadIn, 9.5) + 3 + r.measureSignatures(signers);
+    const sigTop = Math.max(r.y + 10 + spread, PAGE.contentBottom - footH - 2);
+    r.y = sigTop;
+    r.signatures(signers, { leadIn });
+
+    r.finish({ issuer, logoDataUrl: assets.logoDataUrl, title: 'Certificate of Project Completion', meta: [], docNo, letterhead: 'certificate' });
+    return { doc: r.doc, free: sigTop - contentEnd };
+  };
+
+  let out = render(0);
+  // Share most of the empty space between the blocks; keep ~14 mm above the acceptance.
+  const spread = Math.min(7, Math.max(0, (out.free - 14) / GAPS));
+  if (spread > 0.5) out = render(spread);
+  return { doc: out.doc, filename: `${safeFileName(docNo)}.pdf` };
 }

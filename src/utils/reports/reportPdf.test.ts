@@ -154,6 +154,8 @@ describe('report PDFs', () => {
     // Both signatures, with the dates list above them.
     expect(text).toContain('Contractor:');
     expect(text).toContain('Accepted by \\(Client\\):');
-    expect(text).toContain('Completion Date: ');
+    expect(text).toContain('Certificate No. IOCT-2610-014-COC');
+    expect(text).toContain('Completion Date:');
+    expect(text).toContain('By signing below, the client confirms');
   });
 });

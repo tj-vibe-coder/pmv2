@@ -316,8 +316,7 @@ export class ReportDoc {
    * Plain "Label: value" lines — no boxes, one per line. Every value starts at
    * the same x (just past the widest label) and long values wrap under themselves.
    */
-  details(rows: [string, string][], after = 6) {
-    const size = 9.5;
+  details(rows: [string, string][], after = 6, size = 9.5) {
     const lh = ReportDoc.lineHeight(size);
     const rowGap = 1.4;
     this.bold(size);
