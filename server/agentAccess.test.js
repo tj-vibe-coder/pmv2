@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const agentAccess = require('./agentAccess');
 const { createApiAccessGate } = require('./apiAccess');
+const { createProjectUpdatesRouter } = require('./projectUpdates');
 
 // Minimal in-memory Firestore: collections, docs, one level of subcollections.
 function fakeDb(seed = {}) {
@@ -21,6 +22,7 @@ function fakeDb(seed = {}) {
         return { id, exists: !!data, ref: docRef(path), data: () => (data ? { ...data } : undefined) };
       },
       async set(data) { store.set(path, { ...data }); },
+      async delete() { store.delete(path); },
       async update(patch) {
         if (!store.has(path)) throw new Error('NOT_FOUND');
         store.set(path, { ...store.get(path), ...patch });
@@ -82,7 +84,8 @@ async function withApp(db, users, fn) {
   const app = express();
   app.use(express.json());
   app.use(createApiAccessGate({ getCurrentUser, isActiveUser }));
-  app.use(agentAccess.createAgentRouter({
+  app.use(agentAccess.createAgentRouter({ db, getCurrentUser, isActiveUser }));
+  app.use(createProjectUpdatesRouter({
     db, getCurrentUser, isActiveUser,
     syncOperationsStatusToCalcsheet: async (id, data) => { synced.push([id, data.project_status]); },
   }));
@@ -124,38 +127,13 @@ test('lookupAgentKey resolves active keys only', async () => {
   assert.equal(await agentAccess.lookupAgentKey(db, agentAccess.mintAgentKey().key), null);
 });
 
-test('parseAgentUpdate validates and limits what an agent can change', () => {
-  assert.match(agentAccess.parseAgentUpdate({}).error, /note/);
-  assert.match(agentAccess.parseAgentUpdate({ note: 'x', status: 'CLOSED' }).error, /status/);
-  assert.match(agentAccess.parseAgentUpdate({ note: 'x', progress: 150 }).error, /progress/);
-  assert.match(agentAccess.parseAgentUpdate({ note: 'x', next_milestone_date: '11/04/2026' }).error, /YYYY-MM-DD/);
-  assert.match(agentAccess.parseAgentUpdate({ note: 'x', risk: 'extreme' }).error, /risk/);
-  const ok = agentAccess.parseAgentUpdate({
-    note: ' Panel delivered ', status: 'in progress', progress: '40', next_milestone: 'FAT', next_milestone_date: '2026-11-10',
-    risk: 'Medium', contract_billed: 999, project_name: 'hacked',
-  });
-  assert.deepEqual(ok.projectPatch, { project_status: 'IN PROGRESS', actual_site_progress_percent: 40 });
-  assert.equal(ok.update.note, 'Panel delivered');
-  assert.equal(ok.update.risk, 'medium');
-  assert.equal(ok.update.contract_billed, undefined);
-});
-
-test('parseAgentUpdate accepts a PO number and a PO date as YYYY-MM-DD or Unix seconds', () => {
-  const nov3 = Date.UTC(2026, 10, 3) / 1000;
-  const iso = agentAccess.parseAgentUpdate({ note: 'PO received', po_number: ' 4500123456 ', po_date: '2026-11-03' });
-  assert.deepEqual(iso.projectPatch, { po_number: '4500123456', po_date: nov3, start_date: nov3 });
-  assert.equal(agentAccess.parseAgentUpdate({ note: 'x', po_date: String(nov3) }).projectPatch.po_date, nov3);
-  assert.equal(agentAccess.parseAgentUpdate({ note: 'x', po_date: nov3 }).projectPatch.po_date, nov3);
-  assert.match(agentAccess.parseAgentUpdate({ note: 'x', po_date: '03/11/2026' }).error, /po_date/);
-  assert.match(agentAccess.parseAgentUpdate({ note: 'x', po_date: nov3 * 1000 }).error, /po_date/); // milliseconds
-  assert.match(agentAccess.parseAgentUpdate({ note: 'x', po_number: '   ' }).error, /po_number/);
-});
-
 test('an agent key reaches only the agent routes', async () => {
   const { db, key } = seededDb();
   await withApp(db, {}, async (call) => {
     assert.equal((await call('GET', '/api/agent/projects', key)).status, 200);
+    assert.equal((await call('GET', '/api/projects/p1/updates', key)).status, 200);
     assert.equal((await call('GET', '/api/projects', key)).status, 403);
+    assert.equal((await call('DELETE', '/api/projects/p1/updates/x', key)).status, 403);
     assert.equal((await call('DELETE', '/api/projects', key, { ids: ['p1'] })).status, 403);
     assert.equal((await call('POST', '/api/agent-keys', key, { name: 'x' })).status, 403);
     assert.equal((await call('GET', '/api/agent/projects/p1', key)).status, 200);
@@ -196,10 +174,10 @@ test('agents read one project and its schedule', async () => {
   });
 });
 
-test('posting a PO number and date updates the project and logs the old values', async () => {
+test('an agent posting a PO number and date updates the project and logs the old values', async () => {
   const { db, key } = seededDb();
   await withApp(db, {}, async (call) => {
-    const res = await call('POST', '/api/agent/projects/p1/updates', key, { note: 'PO received by mail', po_number: '4500123456', po_date: '2026-11-03' });
+    const res = await call('POST', '/api/projects/p1/updates', key, { note: 'PO received by mail', type: 'Client', po_number: '4500123456', po_date: '2026-11-03' });
     assert.equal(res.status, 201);
     const project = db.store.get('projects/p1');
     assert.equal(project.po_number, '4500123456');
@@ -212,25 +190,23 @@ test('posting a PO number and date updates the project and logs the old values',
   });
 });
 
-test('posting an update logs it and applies only status and progress', async () => {
+test('an agent posts to the shared updates log; only status and progress change', async () => {
   const { db, key } = seededDb();
   await withApp(db, {}, async (call, synced) => {
-    const res = await call('POST', '/api/agent/projects/p1/updates', key, {
-      note: 'Mobilized, panel fabrication started', status: 'IN PROGRESS', progress: 15, risk: 'high', contract_billed: 1,
+    const res = await call('POST', '/api/projects/p1/updates', key, {
+      note: 'Mobilized, panel fabrication started', type: 'site work', status: 'IN PROGRESS', progress: 15, contract_billed: 1,
     });
     assert.equal(res.status, 201);
     const project = db.store.get('projects/p1');
     assert.equal(project.project_status, 'IN PROGRESS');
     assert.equal(project.actual_site_progress_percent, 15);
     assert.equal(project.contract_billed, 0);
-    assert.equal(project.agent_last_update.note, 'Mobilized, panel fabrication started');
-    assert.equal(project.agent_last_update.by, 'agent:Projects Agent');
+    assert.equal(project.latest_update.by, 'Projects Agent');
+    assert.equal(project.latest_update.via, 'agent');
     assert.deepEqual(synced, [['p1', 'IN PROGRESS']]);
-    const log = await call('GET', '/api/agent/projects/p1/updates', key);
-    assert.equal(log.body.updates.length, 1);
-    assert.equal(log.body.updates[0].previous_status, 'NOT STARTED');
-    assert.equal((await call('POST', '/api/agent/projects/nope/updates', key, { note: 'x' })).status, 404);
-    assert.equal((await call('POST', '/api/agent/projects/p1/updates', key, { status: 'CLOSED', note: 'x' })).status, 400);
+    const list = await call('GET', '/api/agent/projects', key);
+    assert.equal(list.body.projects.find((p) => p.id === 'p1').latest_update.type, 'Site work');
+    assert.equal((await call('POST', '/api/projects/p1/updates', key, { status: 'CLOSED', note: 'x' })).status, 400);
   });
 });
 

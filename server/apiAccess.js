@@ -31,8 +31,8 @@ const AGENT_ROUTES = [
   ['GET', /^\/api\/agent\/projects$/],
   ['GET', /^\/api\/agent\/projects\/[^/]+$/],
   ['GET', /^\/api\/agent\/projects\/[^/]+\/schedule$/],
-  ['GET', /^\/api\/agent\/projects\/[^/]+\/updates$/],
-  ['POST', /^\/api\/agent\/projects\/[^/]+\/updates$/],
+  ['GET', /^\/api\/projects\/[^/]+\/updates$/],
+  ['POST', /^\/api\/projects\/[^/]+\/updates$/],
 ];
 
 // Express routes case-insensitively and tolerates a trailing slash, so compare

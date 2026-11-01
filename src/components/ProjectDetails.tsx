@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Box,
   Container,
@@ -51,6 +51,9 @@ import { getInvoiceStatus, computeDueDate, PAYMENT_TERMS_OPTIONS, BILL_TO_OPTION
 import dataService from '../services/dataService';
 import EditProjectDialog from './EditProjectDialog';
 import UpdateProgressDialog from './UpdateProgressDialog';
+import ProjectUpdatesCard from './ProjectUpdatesCard';
+import type { ProjectUpdate } from '../services/projectUpdatesService';
+import { useAuth } from '../contexts/AuthContext';
 import { getBudget, setBudget } from '../utils/projectBudgetStorage';
 import { resolveCalcsheetBudget } from '../utils/calcsheetBudget';
 import { useQuotationStore } from '../store/quotationStore';
@@ -547,6 +550,19 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [progressDialogOpen, setProgressDialogOpen] = useState(false);
   const [budgetAmount, setBudgetAmount] = useState(0);
+  const { user: currentUser } = useAuth();
+  const location = useLocation();
+  // ?update=1 opens Post update straight away (link from a phone shortcut or reminder).
+  const openUpdateOnLoad = new URLSearchParams(location.search).get('update') === '1';
+  const [projectUpdates, setProjectUpdates] = useState<ProjectUpdate[]>([]);
+  const handleUpdatesChanged = async (rows: ProjectUpdate[], reason: 'load' | 'post' | 'delete') => {
+    setProjectUpdates(rows);
+    if (reason === 'post') {
+      // An update may have moved status / site progress; pick up the saved project.
+      const fresh = await dataService.getProject(project.id);
+      if (fresh) onProjectUpdated?.(fresh);
+    }
+  };
   const csProjects = useQuotationStore((s) => s.projects);
   const quotations = useQuotationStore((s) => s.quotations);
   const calcsheetBudget = useMemo(
@@ -896,7 +912,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
 
 
   const timelineEvents = useMemo(() => {
-    const events: { date: string; sortKey: string; type: 'order' | 'mrf' | 'expense' | 'milestone'; label: string; detail?: string; color: string }[] = [];
+    const events: { date: string; sortKey: string; type: 'order' | 'mrf' | 'expense' | 'milestone' | 'update'; label: string; detail?: string; color: string }[] = [];
     const poDate = project.po_date || project.start_date;
     if (poDate) {
       const d = typeof poDate === 'number' ? new Date(poDate * 1000).toISOString().slice(0, 10) : String(poDate).slice(0, 10);
@@ -916,6 +932,12 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
       const amt = dataService.formatCurrency(e.amount);
       events.push({ date: e.date!, sortKey: e.date! + 'E', type: 'expense', label: `Expense: ${desc}`, detail: amt, color: 'primary.main' });
     });
+    projectUpdates.forEach((u) => {
+      const d = String(u.date || u.created_at || '').slice(0, 10);
+      if (!d) return;
+      const note = u.note.length > 80 ? `${u.note.slice(0, 80)}…` : u.note;
+      events.push({ date: d, sortKey: d + 'U' + (u.created_at || ''), type: 'update', label: `${u.type}: ${note}`, detail: u.posted_by, color: 'secondary.main' });
+    });
     if (project.completion_date) {
       const d = typeof project.completion_date === 'number' ? new Date(project.completion_date * 1000).toISOString().slice(0, 10) : String(project.completion_date).slice(0, 10);
       const today = new Date().toISOString().slice(0, 10);
@@ -925,7 +947,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     }
     events.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
     return events;
-  }, [project.id, project.po_date, project.start_date, project.completion_date]);
+  }, [project.id, project.po_date, project.start_date, project.completion_date, projectUpdates]);
 
   return (
     <Container maxWidth="xl" sx={{ py: { xs: 1, sm: 4 }, px: { xs: 0.5, sm: 2, md: 3 } }}>
@@ -1288,6 +1310,14 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
               )}
             </Grid>
           </Paper>
+          <ProjectUpdatesCard
+            projectId={project.id}
+            currentUserId={currentUser?.id ?? null}
+            isSuperadmin={currentUser?.role === 'superadmin'}
+            canPost={['superadmin', 'admin', 'user'].includes(currentUser?.role || '')}
+            openOnLoad={openUpdateOnLoad}
+            onChanged={(rows, reason) => { void handleUpdatesChanged(rows, reason); }}
+          />
         </Grid>
 
         {/* Financial Summary and Billing Progress Cards - Beside Overview */}
@@ -2086,7 +2116,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
             Project Timeline & Activity
           </Typography>
           <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-            Milestones, orders (Order Tracker), MRF (Material Request), and expenses (Expense Monitoring) by date.
+            Milestones, project updates, orders (Order Tracker), MRF (Material Request), and expenses (Expense Monitoring) by date.
           </Typography>
           
           <Box sx={{ pl: 2, borderLeft: '2px solid #e0e0e0' }}>

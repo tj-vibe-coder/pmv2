@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { postProjectUpdate } from '../services/projectUpdatesService';
 import {
   Dialog,
   DialogTitle,
@@ -77,6 +78,15 @@ const UpdateProgressDialog: React.FC<UpdateProgressDialogProps> = ({
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to update project');
+      }
+
+      // The Notes box used to be discarded; it now goes to the project's updates log.
+      if (notes.trim()) {
+        try {
+          await postProjectUpdate(project.id, { note: notes.trim(), type: 'Progress', progress });
+        } catch (e) {
+          console.warn('[progress] note not saved to project updates:', e);
+        }
       }
 
       const pbNumber = detectPbNumber(progress);
