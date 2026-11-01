@@ -771,5 +771,5 @@ When no reimbursement document exists, workflow closure requires explicit reimbu
 ### Agent API keys and agent updates (2026-11-01)
 
 - `agent_keys/{sha256 of key}`: `{ name, createdAt, createdBy, lastUsedAt (written at most hourly), revokedAt, revokedBy? }`. The plain key is never stored.
-- `projects/{id}/agent_updates/{auto}`: `{ note, status?, progress?, next_milestone?, next_milestone_date?, risk?, source?, previous_status, previous_progress, posted_by, posted_by_agent, created_at }`.
+- `projects/{id}/agent_updates/{auto}`: `{ note, status?, progress?, po_number?, po_date? (Unix seconds), next_milestone?, next_milestone_date?, risk?, source?, previous_status, previous_progress, previous_po_number?, previous_po_date?, posted_by, posted_by_agent, created_at }`.
 - `projects/{id}.agent_last_update`: `{ id, note, at, by, next_milestone?, next_milestone_date?, risk? }`, the newest agent update.

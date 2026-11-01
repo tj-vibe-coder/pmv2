@@ -11,7 +11,8 @@
 //   AGENT_ROUTES, and no role check in the app grants anything to 'agent'.
 // - Agents never edit project fields directly. They post an update through
 //   POST /api/agent/projects/:id/updates, which logs the update in
-//   `projects/{id}/agent_updates` and applies only status / site progress.
+//   `projects/{id}/agent_updates` and applies only status / site progress /
+//   PO number / PO date.
 // - Superadmins mint, list and revoke keys through /api/agent-keys from a
 //   normal login session.
 
@@ -29,6 +30,7 @@ const AGENT_STATUSES = ['NOT STARTED', 'IN PROGRESS', 'ON HOLD', 'SUSPENDED', 'C
 
 const NOTE_MAX = 1000;
 const SHORT_MAX = 200;
+const PO_NUMBER_MAX = 80;
 
 function hashAgentKey(key) {
   return crypto.createHash('sha256').update(String(key)).digest('hex');
@@ -77,6 +79,21 @@ function cleanText(value, max) {
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+// po_date is stored as Unix seconds (EditProjectDialog); accept that or YYYY-MM-DD.
+const PO_DATE_MIN = Date.UTC(2000, 0, 1) / 1000;
+const PO_DATE_MAX = Date.UTC(2100, 0, 1) / 1000;
+
+function parsePoDate(value) {
+  const s = String(value).trim();
+  let secs = null;
+  if (ISO_DATE.test(s)) {
+    const ms = Date.parse(s);
+    if (!Number.isNaN(ms)) secs = Math.floor(ms / 1000);
+  } else if (/^\d+$/.test(s)) {
+    secs = Number(s);
+  }
+  return secs !== null && secs >= PO_DATE_MIN && secs < PO_DATE_MAX ? secs : null;
+}
 
 // Validate an agent's update body. Returns { error } or { update, projectPatch }.
 function parseAgentUpdate(body) {
@@ -105,6 +122,22 @@ function parseAgentUpdate(body) {
     projectPatch.actual_site_progress_percent = update.progress;
   }
 
+  if (b.po_number !== undefined && b.po_number !== null && b.po_number !== '') {
+    const po = cleanText(b.po_number, PO_NUMBER_MAX);
+    if (!po) return { error: 'po_number must not be blank' };
+    update.po_number = po;
+    projectPatch.po_number = po;
+  }
+
+  if (b.po_date !== undefined && b.po_date !== null && b.po_date !== '') {
+    const secs = parsePoDate(b.po_date);
+    if (secs === null) return { error: 'po_date must be YYYY-MM-DD or Unix seconds' };
+    update.po_date = secs;
+    projectPatch.po_date = secs;
+    // The project edit dialog sets the start date to the PO date; do the same.
+    projectPatch.start_date = secs;
+  }
+
   if (b.next_milestone !== undefined && b.next_milestone !== null && b.next_milestone !== '') {
     update.next_milestone = cleanText(b.next_milestone, SHORT_MAX);
   }
@@ -130,6 +163,7 @@ function agentProjectView(id, p) {
     id,
     ovp_number: p.ovp_number || '',
     po_number: p.po_number || '',
+    po_date: p.po_date || null,
     project_name: p.project_name || '',
     account_name: p.account_name || '',
     with_acti: !!p.with_acti,
@@ -195,6 +229,35 @@ function createAgentRouter({ db, getCurrentUser, isActiveUser, syncOperationsSta
     }
   });
 
+  router.get('/api/agent/projects/:id', async (req, res) => {
+    try {
+      if (!(await requireAgentOrStaff(req, res))) return;
+      const doc = await db.collection('projects').doc(String(req.params.id)).get();
+      if (!doc.exists) return res.status(404).json({ success: false, error: 'Project not found' });
+      res.json({ success: true, project: agentProjectView(doc.id, doc.data() || {}) });
+    } catch (err) {
+      console.error('[agent] get project failed:', err);
+      res.status(500).json({ success: false, error: 'Database error' });
+    }
+  });
+
+  // The project's schedule, as GET /api/schedule-tasks?projectId= returns it.
+  router.get('/api/agent/projects/:id/schedule', async (req, res) => {
+    try {
+      if (!(await requireAgentOrStaff(req, res))) return;
+      const id = String(req.params.id);
+      const doc = await db.collection('projects').doc(id).get();
+      if (!doc.exists) return res.status(404).json({ success: false, error: 'Project not found' });
+      const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', id).get();
+      const tasks = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+      tasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.startDate || '').localeCompare(String(b.startDate || '')));
+      res.json({ success: true, tasks });
+    } catch (err) {
+      console.error('[agent] get schedule failed:', err);
+      res.status(500).json({ success: false, error: 'Database error' });
+    }
+  });
+
   router.get('/api/agent/projects/:id/updates', async (req, res) => {
     try {
       if (!(await requireAgentOrStaff(req, res))) return;
@@ -229,6 +292,8 @@ function createAgentRouter({ db, getCurrentUser, isActiveUser, syncOperationsSta
         ...parsed.update,
         previous_status: before.project_status || '',
         previous_progress: Number(before.actual_site_progress_percent || 0),
+        ...(parsed.update.po_number ? { previous_po_number: before.po_number || '' } : {}),
+        ...(parsed.update.po_date ? { previous_po_date: before.po_date || null } : {}),
         posted_by: user.username || user.name || String(user.id),
         posted_by_agent: !!user.agentScope,
         created_at: now,
