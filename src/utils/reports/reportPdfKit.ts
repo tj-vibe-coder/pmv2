@@ -423,11 +423,11 @@ export class ReportDoc {
     issuer: ReportIssuer;
     logoDataUrl?: string | null;
     title: string;
-    /** Small right-aligned lines under the title, e.g. "Doc. No. …", "Date: …". */
+    /** Small right-aligned lines: the first (the doc number) in the top-right corner, the rest under the title. */
     meta: string[];
     /** Footer doc number on the certificate; the other reports show it in `meta` instead. */
     docNo: string;
-    /** 'certificate': logo + company left, address right, no title band or rule (the title sits in the body). */
+    /** 'certificate': logo + company left, address right, no title band (the title sits in the body). */
     letterhead?: 'report' | 'certificate';
   }) {
     const { doc } = this;
@@ -475,13 +475,12 @@ export class ReportDoc {
         this.bold(13.5);
       }
       titleLines.forEach((l, i) => doc.text(l, right, top + 5.5 + i * 5.6, { align: 'right' }));
+      // The document number sits in the top-right corner; the other lines go under the title.
       this.prose(8);
+      const [docLine, ...rest] = opts.meta;
+      if (docLine) doc.text(docLine, right, 8, { align: 'right' });
       const metaTop = top + 11 + (titleLines.length - 1) * 5.6;
-      opts.meta.forEach((m, i) => doc.text(m, right, metaTop + i * 3.8, { align: 'right' }));
-
-      doc.setDrawColor(...REPORT_COLORS.ink);
-      doc.setLineWidth(0.4);
-      doc.line(PAGE.margin, 35, right, 35);
+      rest.forEach((m, i) => doc.text(m, right, metaTop + i * 3.8, { align: 'right' }));
 
       // The doc number is already in the header on every page, so the footer leaves it out.
       this.drawFooter(opts.issuer, '', `Page ${p} of ${total}`);
@@ -493,9 +492,6 @@ export class ReportDoc {
     const { doc } = this;
     const right = PAGE.width - PAGE.margin;
     const fy = PAGE.height - 11;
-    doc.setDrawColor(...REPORT_COLORS.rule);
-    doc.setLineWidth(0.25);
-    doc.line(PAGE.margin, fy - 4, right, fy - 4);
     this.prose(7.5);
     if (docNo) doc.text(`Doc. No.: ${docNo}`, PAGE.margin, fy);
     if (!docNo) doc.text(issuer.name, PAGE.margin, fy);
