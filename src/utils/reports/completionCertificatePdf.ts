@@ -86,7 +86,7 @@ export function buildCompletionCertificatePdf(data: CompletionCertificateData, a
     const footH = r.measureParagraph(leadIn, 9.5) + 3 + r.measureSignatures(signers);
     const sigTop = Math.max(r.y + 10 + spread, PAGE.contentBottom - footH - 2);
     r.y = sigTop;
-    r.signatures(signers, { leadIn });
+    r.signatures(signers, { leadIn, lines: false });
 
     r.finish({ issuer, logoDataUrl: assets.logoDataUrl, title: 'Certificate of Completion', meta: [], docNo, letterhead: 'certificate' });
     return { doc: r.doc, free: sigTop - contentEnd };
