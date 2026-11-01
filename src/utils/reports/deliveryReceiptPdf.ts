@@ -20,7 +20,7 @@ const ACKNOWLEDGEMENT = 'Received the above items in good order and condition.';
  * Delivery Receipt. Line items paginate with the column header repeated and
  * rows never split. The acknowledgement + signatures sit at a fixed spot at the
  * foot of every page, so each page is signed and none can be swapped out later;
- * the table ends in blank rows down to that block, for items written in by hand.
+ * the space between the last item and that block is left blank for items written in by hand.
  */
 export function buildDeliveryReceiptPdf(data: DeliveryReceiptData, assets: ReportAssets = {}) {
   const issuer = REPORT_ISSUERS[data.reportCompany];
@@ -97,13 +97,6 @@ export function buildDeliveryReceiptPdf(data: DeliveryReceiptData, assets: Repor
       if (h.section === 'head' && h.column.index !== 1) h.cell.styles.halign = h.column.index === 2 ? 'right' : 'center';
     },
   }, 0);
-
-  // Blank rows fill the rest of the last page, for items written in by hand.
-  const BLANK_ROW = 7;
-  const blanks = Math.floor((tableBottom - r.y) / BLANK_ROW);
-  if (blanks > 0) {
-    r.table({ showHead: 'never', body: Array.from({ length: blanks }, () => ['', '', '', '']), margin, columnStyles, styles: { minCellHeight: BLANK_ROW } }, 0);
-  }
 
   for (let p = 1; p <= r.pageCount; p++) {
     r.doc.setPage(p);
