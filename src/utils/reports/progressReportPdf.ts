@@ -127,7 +127,7 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
     const body = data.rows.length > 0 ? [...detail, totalRow] : detail;
     const split = Math.max(0, body.length - tailRows);
     if (tailRows > 0 && split === 0) r.addPage();
-    r.heading('Progress by Deliverable', 22);
+    r.ensure(30); // no heading: keep the table header with its first rows
     const wbsTable = (rows: RowInput[]) => r.table({
       head: [['Code', 'Deliverables', 'Weight %', 'Progress %']],
       body: rows,
