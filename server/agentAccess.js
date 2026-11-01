@@ -9,9 +9,9 @@
 // - A key resolves to a synthetic user with `agentScope: true` and role
 //   'agent'. The /api gate (server/apiAccess.js) limits such users to
 //   AGENT_ROUTES, and no role check in the app grants anything to 'agent'.
-// - Agents never edit project fields directly. They post an update through
-//   POST /api/agent/projects/:id/updates, which logs the update in
-//   `projects/{id}/agent_updates` and applies only status / site progress.
+// - Agents never edit project fields directly. They read the compact list at
+//   GET /api/agent/projects and post to the shared project updates log
+//   (server/projectUpdates.js), which applies only status / site progress.
 // - Superadmins mint, list and revoke keys through /api/agent-keys from a
 //   normal login session.
 
@@ -20,15 +20,7 @@ const express = require('express');
 
 const AGENT_KEY_PREFIX = 'agk_';
 const KEY_COLLECTION = 'agent_keys';
-const UPDATES_SUBCOLLECTION = 'agent_updates';
 const LAST_USED_WRITE_INTERVAL_MS = 60 * 60 * 1000;
-
-// Statuses an agent may set, matching the operations dashboard vocabulary
-// (dataService.getStatusColor). CLOSED/CANCELLED/TERMINATED stay human-only.
-const AGENT_STATUSES = ['NOT STARTED', 'IN PROGRESS', 'ON HOLD', 'SUSPENDED', 'COMPLETED'];
-
-const NOTE_MAX = 1000;
-const SHORT_MAX = 200;
 
 function hashAgentKey(key) {
   return crypto.createHash('sha256').update(String(key)).digest('hex');
@@ -76,53 +68,6 @@ function cleanText(value, max) {
   return String(value).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, max);
 }
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-// Validate an agent's update body. Returns { error } or { update, projectPatch }.
-function parseAgentUpdate(body) {
-  const b = body && typeof body === 'object' ? body : {};
-  const note = cleanText(b.note, NOTE_MAX);
-  if (!note) return { error: 'note is required' };
-
-  const update = { note };
-  const projectPatch = {};
-
-  if (b.status !== undefined && b.status !== null && b.status !== '') {
-    const status = String(b.status).trim().toUpperCase();
-    if (!AGENT_STATUSES.includes(status)) {
-      return { error: `status must be one of: ${AGENT_STATUSES.join(', ')}` };
-    }
-    update.status = status;
-    projectPatch.project_status = status;
-  }
-
-  if (b.progress !== undefined && b.progress !== null && b.progress !== '') {
-    const progress = Number(b.progress);
-    if (!Number.isFinite(progress) || progress < 0 || progress > 100) {
-      return { error: 'progress must be a number from 0 to 100' };
-    }
-    update.progress = Math.round(progress * 10) / 10;
-    projectPatch.actual_site_progress_percent = update.progress;
-  }
-
-  if (b.next_milestone !== undefined && b.next_milestone !== null && b.next_milestone !== '') {
-    update.next_milestone = cleanText(b.next_milestone, SHORT_MAX);
-  }
-  if (b.next_milestone_date !== undefined && b.next_milestone_date !== null && b.next_milestone_date !== '') {
-    const d = String(b.next_milestone_date).trim();
-    if (!ISO_DATE.test(d) || Number.isNaN(Date.parse(d))) return { error: 'next_milestone_date must be YYYY-MM-DD' };
-    update.next_milestone_date = d;
-  }
-  if (b.risk !== undefined && b.risk !== null && b.risk !== '') {
-    const risk = String(b.risk).trim().toLowerCase();
-    if (!['low', 'medium', 'high'].includes(risk)) return { error: 'risk must be low, medium or high' };
-    update.risk = risk;
-  }
-  if (b.source) update.source = cleanText(b.source, SHORT_MAX);
-
-  return { update, projectPatch };
-}
-
 // The compact view agents read: enough to judge status, schedule and billing.
 function agentProjectView(id, p) {
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -142,12 +87,12 @@ function agentProjectView(id, p) {
     contract_billed: num(p.contract_billed),
     project_director: p.project_director || '',
     remarks: p.remarks || '',
-    agent_last_update: p.agent_last_update || null,
+    latest_update: p.latest_update || null,
     updated_at: p.updated_at || null,
   };
 }
 
-function createAgentRouter({ db, getCurrentUser, isActiveUser, syncOperationsStatusToCalcsheet }) {
+function createAgentRouter({ db, getCurrentUser, isActiveUser }) {
   const router = express.Router();
 
   const requireAgentOrStaff = async (req, res) => {
@@ -191,67 +136,6 @@ function createAgentRouter({ db, getCurrentUser, isActiveUser, syncOperationsSta
       res.json({ success: true, projects: rows });
     } catch (err) {
       console.error('[agent] list projects failed:', err);
-      res.status(500).json({ success: false, error: 'Database error' });
-    }
-  });
-
-  router.get('/api/agent/projects/:id/updates', async (req, res) => {
-    try {
-      if (!(await requireAgentOrStaff(req, res))) return;
-      const ref = db.collection('projects').doc(String(req.params.id));
-      const doc = await ref.get();
-      if (!doc.exists) return res.status(404).json({ success: false, error: 'Project not found' });
-      const snap = await ref.collection(UPDATES_SUBCOLLECTION).get();
-      const updates = snap.docs.map((d) => ({ ...d.data(), id: d.id }))
-        .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
-        .slice(0, 50);
-      res.json({ success: true, updates });
-    } catch (err) {
-      console.error('[agent] list updates failed:', err);
-      res.status(500).json({ success: false, error: 'Database error' });
-    }
-  });
-
-  router.post('/api/agent/projects/:id/updates', async (req, res) => {
-    try {
-      const user = await requireAgentOrStaff(req, res);
-      if (!user) return;
-      const parsed = parseAgentUpdate(req.body);
-      if (parsed.error) return res.status(400).json({ success: false, error: parsed.error });
-
-      const ref = db.collection('projects').doc(String(req.params.id));
-      const doc = await ref.get();
-      if (!doc.exists) return res.status(404).json({ success: false, error: 'Project not found' });
-      const before = doc.data() || {};
-
-      const now = new Date().toISOString();
-      const entry = {
-        ...parsed.update,
-        previous_status: before.project_status || '',
-        previous_progress: Number(before.actual_site_progress_percent || 0),
-        posted_by: user.username || user.name || String(user.id),
-        posted_by_agent: !!user.agentScope,
-        created_at: now,
-      };
-      const entryRef = await ref.collection(UPDATES_SUBCOLLECTION).add(entry);
-
-      const lastUpdate = {
-        id: entryRef.id,
-        note: entry.note,
-        at: now,
-        by: entry.posted_by,
-        ...(entry.next_milestone ? { next_milestone: entry.next_milestone } : {}),
-        ...(entry.next_milestone_date ? { next_milestone_date: entry.next_milestone_date } : {}),
-        ...(entry.risk ? { risk: entry.risk } : {}),
-      };
-      const patch = { ...parsed.projectPatch, agent_last_update: lastUpdate, updated_at: now };
-      await ref.update(patch);
-      if (syncOperationsStatusToCalcsheet && Object.keys(parsed.projectPatch).length) {
-        await syncOperationsStatusToCalcsheet(ref.id, { ...before, ...patch });
-      }
-      res.status(201).json({ success: true, update: { ...entry, id: entryRef.id } });
-    } catch (err) {
-      console.error('[agent] post update failed:', err);
       res.status(500).json({ success: false, error: 'Database error' });
     }
   });
@@ -318,12 +202,10 @@ function createAgentRouter({ db, getCurrentUser, isActiveUser, syncOperationsSta
 
 module.exports = {
   AGENT_KEY_PREFIX,
-  AGENT_STATUSES,
   hashAgentKey,
   mintAgentKey,
   isAgentKey,
   lookupAgentKey,
-  parseAgentUpdate,
   agentProjectView,
   createAgentRouter,
 };
