@@ -368,10 +368,9 @@ export class ReportDoc {
   /**
    * Signature blocks laid out in columns; the whole section is kept on one page
    * together with `leadIn` (e.g. an acceptance statement) so neither is orphaned.
-   * `lines: false` leaves out the signature and field underlines.
    * Returns true when it had to start a new page.
    */
-  signatures(signers: ReportSigner[], opts: { perRow?: number; leadIn?: string; lines?: boolean } = {}): boolean {
+  signatures(signers: ReportSigner[], opts: { perRow?: number; leadIn?: string } = {}): boolean {
     const perRow = opts.perRow ?? (signers.length === 3 ? 3 : 2);
     const colGap = 12;
     const colW = (CONTENT_WIDTH - (perRow - 1) * colGap) / perRow;
@@ -388,13 +387,7 @@ export class ReportDoc {
         let y = top;
         this.prose(9);
         this.doc.text(`${s.label}:`, x, y + 3);
-        y += 4 + 14;
-        if (opts.lines !== false) {
-          this.doc.setDrawColor(...REPORT_COLORS.ink);
-          this.doc.setLineWidth(0.3);
-          this.doc.line(x, y, x + colW, y);
-        }
-        y += 1.5;
+        y += 4 + 14 + 1.5; // label, then blank space to sign above the name
         const { name, sub } = this.signerLines(s, colW);
         if (name.length) {
           this.bold(9.5);
@@ -412,11 +405,6 @@ export class ReportDoc {
           const lbl = `${f.label}:`;
           this.doc.text(lbl, x, y - 1);
           const vx = x + Math.max(14, this.doc.getTextWidth(lbl) + 2);
-          if (opts.lines !== false) {
-            this.doc.setDrawColor(...REPORT_COLORS.ink);
-            this.doc.setLineWidth(0.2);
-            this.doc.line(vx, y, x + colW, y);
-          }
           if (f.value?.trim()) {
             this.prose(9);
             const v = (this.doc.splitTextToSize(f.value.trim(), x + colW - vx) as string[])[0];

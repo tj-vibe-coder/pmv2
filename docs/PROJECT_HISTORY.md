@@ -1020,4 +1020,4 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
   - Short certificates spread their spare space across the block gaps instead of leaving a hole above the signatures (render twice).
   - `ReportDoc.details` takes an optional font size; the COC uses the body size.
   - Title renamed to "Certificate of Completion" (TJ).
-  - No signature or Date underlines on the COC (TJ); `signatures(…, { lines: false })`. DR and Progress Report keep theirs.
+  - No signature or Date/Place underlines on any report (COC, DR, Progress Report), at TJ's request. The signing space above each name stays.
