@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import { buildDeliveryReceiptPdf, type DeliveryReceiptData } from './deliveryReceiptPdf';
 import { buildProgressReportPdf, type ProgressReportData } from './progressReportPdf';
 import { buildCompletionCertificatePdf } from './completionCertificatePdf';
+import { buildServiceReportPdf, type ServiceReportData } from './serviceReportPdf';
 import { formatLongDate } from './reportPdfKit';
 import { PDFDocument } from 'pdf-lib';
 import { appendPdfs } from './scheduleAnnex';
@@ -133,6 +134,63 @@ describe('report PDFs', () => {
     expect(total).toBeGreaterThanOrEqual(annexPage);
     expect(total === sigPage).toBe(photos === 0);
     expect(pageText(doc, annexPage).includes('Annex A')).toBe(photos > 0);
+  });
+
+  const srData = (activities: number, photos: number, placement: 'inline' | 'end'): ServiceReportData => ({
+    reportCompany: 'IOCT',
+    reportNo: 'IOCT-2610-014 - SR2',
+    title: 'Monthly PLC Service Visit',
+    projectName: 'Booster Pump PLC Upgrade',
+    projectNo: 'IOCT-2610-014',
+    client: 'Analog Devices Inc.',
+    poNumber: '4500123987',
+    reportDate: '2026-11-01',
+    coveredFrom: '2026-10-28',
+    coveredTo: '2026-10-30',
+    startTime: '08:00',
+    endTime: '17:30',
+    activities: [
+      ...Array.from({ length: activities }, (_, i) => ({ activity: `Activity ${i + 1} checked`, finding: `Finding ${i + 1} OK` })),
+      { activity: '', finding: '' },
+    ],
+    recommendations: 'Replace the CPU backup battery at the next shutdown.',
+    preparedBy: { name: 'Renzel Ramos', designation: 'Project Engineer' },
+    approvedBy: { name: 'Maria Santos', designation: 'Facilities Manager', company: 'Analog Devices Inc.' },
+    photos: Array.from({ length: photos }, (_, i) => ({ dataUrl: 'data:image/png;base64,iVBORw0KGgo=', width: 4, height: 3, caption: `Photo ${i + 1}`, activityIndex: i % 2 === 0 ? 0 : undefined })),
+    photoPlacement: placement,
+  });
+
+  it.each([
+    [3, 0, 'inline'],
+    [40, 0, 'inline'],
+    [4, 3, 'inline'],
+    [4, 3, 'end'],
+  ] as const)('Service Report with %i activities, %i photo(s) %s: framed, doc no in footer, signed once', (n, photos, placement) => {
+    const { doc, filename } = buildServiceReportPdf(srData(n, photos, placement));
+    expect(filename).toBe('IOCT-2610-014-SR2.pdf');
+    expectFramed(doc, 'SERVICE REPORT');
+    const total = doc.getNumberOfPages();
+    for (let p = 1; p <= total; p++) expect(pageText(doc, p)).toContain('IOCT-2610-014-SR2');
+    const first = pageText(doc, 1);
+    expect(first).toContain('SERVICE REPORT November 1, 2026');
+    expect(first).toContain('Date\\(s\\) Covered:');
+    expect(first).toContain('October 28, 2026');
+    expect(first).toContain('8:00 AM');
+    expect(first).toContain('Monthly PLC Service Visit');
+    expect(first).not.toContain('Doc. No.');
+    // Every activity printed once; the blank row is skipped.
+    let seen = 0;
+    for (let p = 1; p <= total; p++) seen += rowsOn(doc, p, /Finding \d+ OK/g);
+    expect(seen).toBe(n);
+    const sigPages = Array.from({ length: total }, (_, i) => i + 1).filter((p) => pageText(doc, p).includes('Prepared by:'));
+    expect(sigPages).toHaveLength(1);
+    expect(pageText(doc, sigPages[0])).toContain('Approved by:');
+    expect(pageText(doc, sigPages[0])).toContain('Recommendations and Remarks');
+    // Inline photos come before the signatures; "end" photos go in an annex after them.
+    const annex = Array.from({ length: total }, (_, i) => i + 1).find((p) => pageText(doc, p).includes('Annex A'));
+    expect(annex).toBe(placement === 'end' && photos > 0 ? sigPages[0] + 1 : undefined);
+    const all = Array.from({ length: total }, (_, i) => pageText(doc, i + 1)).join(' ');
+    expect(all.includes('Photos: Activity 1')).toBe(placement === 'inline' && photos > 0);
   });
 
   it('appends the Work Schedule PDF after the report pages', async () => {

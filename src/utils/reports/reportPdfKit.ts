@@ -81,6 +81,14 @@ export interface ReportSigner {
   fields?: { label: string; value?: string }[];
 }
 
+export interface ReportPhoto {
+  dataUrl: string;
+  /** Pixel size, used to fit the photo without distortion. */
+  width: number;
+  height: number;
+  caption?: string;
+}
+
 export interface TextRun {
   text: string;
   bold?: boolean;
@@ -333,6 +341,40 @@ export class ReportDoc {
       this.y += lines.length * lh + rowGap;
     }
     this.y += after - rowGap;
+  }
+
+  /** Photos two per row in equal frames, each fitted without distortion and captioned underneath. */
+  photoGrid(photos: ReportPhoto[]) {
+    const gap = 6;
+    const cols = 2;
+    const colW = (CONTENT_WIDTH - gap * (cols - 1)) / cols;
+    const boxH = 72;
+    for (let i = 0; i < photos.length; i += cols) {
+      const rowPhotos = photos.slice(i, i + cols);
+      this.prose(8);
+      const captions = rowPhotos.map((p, j) => (this.doc.splitTextToSize(p.caption?.trim() || `Photo ${i + j + 1}`, colW) as string[]).slice(0, 2));
+      const capH = Math.max(...captions.map((c) => c.length)) * 3.6;
+      this.ensure(boxH + 2 + capH + 2);
+      rowPhotos.forEach((p, j) => {
+        const x = PAGE.margin + j * (colW + gap);
+        const aspect = p.width > 0 && p.height > 0 ? p.width / p.height : colW / boxH;
+        let w = colW;
+        let h = colW / aspect;
+        if (h > boxH) { h = boxH; w = boxH * aspect; }
+        this.doc.setDrawColor(...REPORT_COLORS.rule);
+        this.doc.setLineWidth(0.2);
+        this.doc.rect(x, this.y, colW, boxH, 'S');
+        try {
+          const format = p.dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+          this.doc.addImage(p.dataUrl, format, x + (colW - w) / 2, this.y + (boxH - h) / 2, w, h, undefined, 'FAST');
+        } catch {
+          // Undecodable image: leave the framed placeholder.
+        }
+        this.prose(8);
+        captions[j].forEach((line, li) => this.doc.text(line, x + colW / 2, this.y + boxH + 4.5 + li * 3.6, { align: 'center' }));
+      });
+      this.y += boxH + 2 + capH + 6;
+    }
   }
 
   // ── Signatures ──────────────────────────────────────────────────────────

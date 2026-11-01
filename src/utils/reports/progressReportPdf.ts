@@ -1,7 +1,7 @@
 import type { RowInput } from 'jspdf-autotable';
 import {
-  ReportDoc, REPORT_ISSUERS, REPORT_COLORS, PAGE, CONTENT_WIDTH, formatLongDate, safeFileName,
-  type ReportCompanyKey, type ReportSigner,
+  ReportDoc, REPORT_ISSUERS, REPORT_COLORS, formatLongDate, safeFileName,
+  type ReportCompanyKey, type ReportSigner, type ReportPhoto,
 } from './reportPdfKit';
 import type { ReportAssets } from './completionCertificatePdf';
 
@@ -16,13 +16,7 @@ export interface ProgressReportRow {
   level: number;
 }
 
-export interface ProgressReportPhoto {
-  dataUrl: string;
-  /** Pixel size, used to fit the photo without distortion. */
-  width: number;
-  height: number;
-  caption?: string;
-}
+export type ProgressReportPhoto = ReportPhoto;
 
 export interface ProgressReportData {
   reportCompany: ReportCompanyKey;
@@ -153,36 +147,7 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
     if (data.photos.length > 0) {
       r.addPage();
       r.heading('Annex A: Site Photos', 80);
-      const gap = 6;
-      const cols = 2;
-      const colW = (CONTENT_WIDTH - gap * (cols - 1)) / cols;
-      const boxH = 72;
-      for (let i = 0; i < data.photos.length; i += cols) {
-        const rowPhotos = data.photos.slice(i, i + cols);
-        r.prose(8);
-        const captions = rowPhotos.map((p, j) => (r.doc.splitTextToSize(p.caption?.trim() || `Photo ${i + j + 1}`, colW) as string[]).slice(0, 2));
-        const capH = Math.max(...captions.map((c) => c.length)) * 3.6;
-        r.ensure(boxH + 2 + capH + 2);
-        rowPhotos.forEach((p, j) => {
-          const x = PAGE.margin + j * (colW + gap);
-          const aspect = p.width > 0 && p.height > 0 ? p.width / p.height : colW / boxH;
-          let w = colW;
-          let h = colW / aspect;
-          if (h > boxH) { h = boxH; w = boxH * aspect; }
-          r.doc.setDrawColor(...REPORT_COLORS.rule);
-          r.doc.setLineWidth(0.2);
-          r.doc.rect(x, r.y, colW, boxH, 'S');
-          try {
-            const format = p.dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-            r.doc.addImage(p.dataUrl, format, x + (colW - w) / 2, r.y + (boxH - h) / 2, w, h, undefined, 'FAST');
-          } catch {
-            // Undecodable image: leave the framed placeholder.
-          }
-          r.prose(8);
-          captions[j].forEach((line, li) => r.doc.text(line, x + colW / 2, r.y + boxH + 4.5 + li * 3.6, { align: 'center' }));
-        });
-        r.y += boxH + 2 + capH + 6;
-      }
+      r.photoGrid(data.photos);
     }
 
     r.finish({
