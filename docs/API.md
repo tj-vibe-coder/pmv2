@@ -961,7 +961,7 @@ The project page opens Post update directly with `/projects/:id?update=1`.
 
 ## Agent API keys
 
-For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET /api/agent/projects/:id`, `GET /api/agent/projects/:id/schedule`, `GET /api/agent/projects/:id/invoices`, `POST /api/agent/projects/:id/billing`, `POST /api/agent/projects/:id/payments`, `GET /api/agent/clients`, `GET|POST /api/agent/calcsheet/projects`, `GET|PUT /api/agent/calcsheet/projects/:id`, `POST /api/agent/calcsheet/projects/:id/quotations`, `PUT /api/agent/calcsheet/quotations/:id`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
+For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET /api/agent/projects/:id`, `GET /api/agent/projects/:id/schedule`, `GET /api/agent/projects/:id/invoices`, `POST /api/agent/projects/:id/billing`, `POST /api/agent/projects/:id/payments`, `GET /api/agent/clients`, `GET|POST /api/agent/calcsheet/projects`, `GET|PUT /api/agent/calcsheet/projects/:id`, `POST /api/agent/calcsheet/projects/:id/quotations`, `PUT /api/agent/calcsheet/quotations/:id`, `GET|POST /api/agent/projects/:id/emails`, `GET|POST /api/agent/projects/:id/action-items`, `PUT /api/agent/action-items/:id`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
 
 ### GET /api/agent/projects
 Compact project list: `id, ovp_number, po_number, po_date, project_name, account_name, with_acti, project_status, actual_site_progress_percent, start_date, completion_date, updated_completion_date, updated_contract_amount, contract_billed, project_director, remarks, latest_update, updated_at`. `?active=1` drops closed projects, except completed ones that are not fully billed.
@@ -1009,6 +1009,24 @@ Line ids and codes (`A-0010`, `B-0010`, `C-0010` …) are assigned by the server
 
 #### PUT /api/agent/calcsheet/quotations/:id
 Same settings and line arrays as above; a line array that is sent replaces that whole section. `remarks?` is the change note. The prior state is saved to `calcsheet_quotation_versions` as an editor save is. 409 when the quotation is awarded (price-locked) or its proposal is past `for_review`.
+
+### Email log and action items (agent)
+Code: `server/agentProjectLog.js`.
+
+#### POST /api/agent/projects/:id/emails
+Logs one email about the project in `project_emails`. Body: `{ message_id (required: the Message-ID or mailbox id), date (required, ISO date-time), subject and/or from (one required), to? / cc? (array or ;-separated), direction? (inbound|outbound, default inbound), thread_id?, summary? (max 4000), body? (max 50000), category? (free text, e.g. PO, RFQ, Submittal), link? (https, e.g. the Outlook web link), attachments? ([{ name, size?, link? (https) }], max 50) }`. One doc per project + `message_id` (the id is a hash of the two): re-sending an email answers 200 `duplicate: true` and changes nothing; a new one is 201. The same email may be logged on several projects.
+
+#### GET /api/agent/projects/:id/emails
+Newest first (by `date`), max 200. Bodies are left out (`has_body`) unless `?full=1`.
+
+#### POST /api/agent/projects/:id/action-items
+Creates a to-do on the Whiteboard's shared General board under **Project**, linked to the project (`kind: 'todo'`, `visibility: 'general'`, `category: 'project'`, `link: { type: 'project' }`). Body: `{ text (required, max 500), owner? (tj|rj|renzel|nylle|kim — shown as a [TJC]/[RJR]/[RPP]/[NDM]/[KKS] tag at the start of the text, since General items have no assignee), due_date? (YYYY-MM-DD), subtasks? (array of strings, max 50, 200 chars each), note? (first status note, max 1000), source_ref? (any stable string, e.g. message id + item number; re-posting the same ref answers 200 `duplicate: true`), email_message_id? }`. 201 `{ action_item }`.
+
+#### GET /api/agent/projects/:id/action-items
+Every General to-do linked to the project, including ones people made: `id, text, owner, due_date, done, done_by, done_at, progress, subtasks, notes, source_ref, email_message_id, posted_by, created_at, updated_at`. Open items first, then by due date. `?open=1` hides done ones.
+
+#### PUT /api/agent/action-items/:id
+`{ done? (true|false), note? (adds a status note), progress? (0-100, with a note), text?, due_date? (null clears) }`. Any project to-do may be ticked or noted, as on the board; `text` and `due_date` only on items this key posted (403 otherwise). Repeating to-dos answer 409 (tick those on the Whiteboard so the next copy is made). Private items and items not linked to a project are 404.
 
 ### POST /api/agent-keys · GET /api/agent-keys · DELETE /api/agent-keys/:id
 Superadmin login session only (never an agent key). POST `{ name }` returns the plain key once, plus a 12-character `id`. GET lists keys without the key itself. DELETE `:id` (that 12-character id) revokes the key; it stops working at once.

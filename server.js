@@ -2488,6 +2488,7 @@ app.use('/api/liquidations', require('./server/liquidationItemSearchRouter').cre
 app.use('/api/projects-monitor', require('./server/projectSpendMonitorRouter').createProjectSpendMonitorRouter({ db, requireActiveUser }));
 app.use(agentAccess.createAgentRouter({ db, getCurrentUser, isActiveUser }));
 app.use(require('./server/agentBilling').createAgentBillingRouter({ db, getCurrentUser, isActiveUser }));
+app.use(require('./server/agentProjectLog').createAgentProjectLogRouter({ db, getCurrentUser, isActiveUser, deleteField: FieldValue.delete() }));
 app.use(require('./server/agentCalcsheet').createAgentCalcsheetRouter({
   db, getCurrentUser, isActiveUser,
   nextProjectSeq: () => incrementProjectSeq(),

@@ -1063,3 +1063,8 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
 
 - **Why:** TJ's agent needed to open proposals and build quotations. `server/agentCalcsheet.js` adds `GET /api/agent/clients` (id/code/name only), `GET|POST /api/agent/calcsheet/projects`, `GET|PUT /api/agent/calcsheet/projects/:id`, `POST .../:id/quotations` and `PUT /api/agent/calcsheet/quotations/:id`. Codes come from the shared seq counter (`incrementProjectSeq()` in server.js, now also behind `/api/calcsheet/seq/increment`); quotations start from the app's blank-quotation defaults (duplicated from `quotationStore.ts`, keep in step); updates snapshot a version; agents stay on draft/for_review proposals and never touch awarded quotations. No OneDrive folder is created.
 - **Verified:** `npm run test:api-access` (in-memory fake, stub grand total). Not run against the emulator or prod.
+
+## 2026-11-01 Agent email log and project action items (branch `feat/agent-billing-api`)
+
+- **Why:** TJ's agent reads project emails and should log them and turn them into to-dos the team sees. `server/agentProjectLog.js` adds `GET|POST /api/agent/projects/:id/emails` (new `project_emails` collection, deduped by project + message_id) and `GET|POST /api/agent/projects/:id/action-items` + `PUT /api/agent/action-items/:id`, which write ordinary `whiteboard_items` (General board, Project category, linked to the project) so they show on the Whiteboard with no UI change. Owner is a text tag ([RPP] …) because General items have no assignee. There is no app screen for `project_emails` yet.
+- **Verified:** `npm run test:api-access` (in-memory fake). Not run against the emulator or prod.
