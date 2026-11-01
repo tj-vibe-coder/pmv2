@@ -9,9 +9,10 @@
 // - A key resolves to a synthetic user with `agentScope: true` and role
 //   'agent'. The /api gate (server/apiAccess.js) limits such users to
 //   AGENT_ROUTES, and no role check in the app grants anything to 'agent'.
-// - Agents never edit project fields directly. They read the compact list at
-//   GET /api/agent/projects and post to the shared project updates log
-//   (server/projectUpdates.js), which applies only status / site progress.
+// - Agents never edit project fields directly. They read the compact views at
+//   GET /api/agent/projects[/:id[/schedule]] and post to the shared project
+//   updates log (server/projectUpdates.js), which applies only status / site
+//   progress / PO number / PO date.
 // - Superadmins mint, list and revoke keys through /api/agent-keys from a
 //   normal login session.
 
@@ -75,6 +76,7 @@ function agentProjectView(id, p) {
     id,
     ovp_number: p.ovp_number || '',
     po_number: p.po_number || '',
+    po_date: p.po_date || null,
     project_name: p.project_name || '',
     account_name: p.account_name || '',
     with_acti: !!p.with_acti,
@@ -136,6 +138,35 @@ function createAgentRouter({ db, getCurrentUser, isActiveUser }) {
       res.json({ success: true, projects: rows });
     } catch (err) {
       console.error('[agent] list projects failed:', err);
+      res.status(500).json({ success: false, error: 'Database error' });
+    }
+  });
+
+  router.get('/api/agent/projects/:id', async (req, res) => {
+    try {
+      if (!(await requireAgentOrStaff(req, res))) return;
+      const doc = await db.collection('projects').doc(String(req.params.id)).get();
+      if (!doc.exists) return res.status(404).json({ success: false, error: 'Project not found' });
+      res.json({ success: true, project: agentProjectView(doc.id, doc.data() || {}) });
+    } catch (err) {
+      console.error('[agent] get project failed:', err);
+      res.status(500).json({ success: false, error: 'Database error' });
+    }
+  });
+
+  // The project's schedule, as GET /api/schedule-tasks?projectId= returns it.
+  router.get('/api/agent/projects/:id/schedule', async (req, res) => {
+    try {
+      if (!(await requireAgentOrStaff(req, res))) return;
+      const id = String(req.params.id);
+      const doc = await db.collection('projects').doc(id).get();
+      if (!doc.exists) return res.status(404).json({ success: false, error: 'Project not found' });
+      const snap = await db.collection('calcsheet_schedule_tasks').where('projectId', '==', id).get();
+      const tasks = snap.docs.map((d) => { const { id: _id, ...data } = d.data(); return { ...data, id: d.id }; });
+      tasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.startDate || '').localeCompare(String(b.startDate || '')));
+      res.json({ success: true, tasks });
+    } catch (err) {
+      console.error('[agent] get schedule failed:', err);
       res.status(500).json({ success: false, error: 'Database error' });
     }
   });

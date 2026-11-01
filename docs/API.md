@@ -952,7 +952,7 @@ Per-project dated history ("sent shop drawings", "panel delivered"). Code: `serv
 Any signed-in user (and agent keys). Returns `{ updates, types, statuses }`, newest first (by `date`, then `created_at`), max 100.
 
 ### POST /api/projects/:id/updates
-superadmin/admin/user sessions and agent keys (not viewers, tax filers or phone scanners). Body: `{ note (required, max 2000), type? (Progress|Submittal|Site work|Delivery|Meeting|Client|Billing|Issue|Other, default Other), date? (YYYY-MM-DD, default today), status?, progress? (0-100), next_step?, next_date?, risk? (low|medium|high), link? (https only), source? }`. `status` must be NOT STARTED, IN PROGRESS, ON HOLD, SUSPENDED or COMPLETED (closing/cancelling stays a normal project edit). Only `project_status` and `actual_site_progress_percent` change on the project; the entry keeps the previous values, and `latest_update` on the project holds the newest entry. Calcsheet status sync runs as for a normal edit.
+superadmin/admin/user sessions and agent keys (not viewers, tax filers or phone scanners). Body: `{ note (required, max 2000), type? (Progress|Submittal|Site work|Delivery|Meeting|Client|Billing|Issue|Other, default Other), date? (YYYY-MM-DD, default today), status?, progress? (0-100), po_number? (max 80), po_date? (YYYY-MM-DD or Unix seconds), next_step?, next_date?, risk? (low|medium|high), link? (https only), source? }`. `status` must be NOT STARTED, IN PROGRESS, ON HOLD, SUSPENDED or COMPLETED (closing/cancelling stays a normal project edit). Only `project_status`, `actual_site_progress_percent`, `po_number` and `po_date` change on the project (a PO date also sets `start_date`, as the project edit dialog does); the entry keeps the previous values (`previous_po_number` / `previous_po_date` when those were sent), and `latest_update` on the project holds the newest entry. Calcsheet status sync runs as for a normal edit.
 
 ### DELETE /api/projects/:id/updates/:updateId
 The poster or a superadmin (never an agent key). Does not roll back status/progress; `latest_update` moves to the next newest entry.
@@ -961,10 +961,16 @@ The project page opens Post update directly with `/projects/:id?update=1`.
 
 ## Agent API keys
 
-For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
+For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET /api/agent/projects/:id`, `GET /api/agent/projects/:id/schedule`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
 
 ### GET /api/agent/projects
-Compact project list: `id, ovp_number, po_number, project_name, account_name, with_acti, project_status, actual_site_progress_percent, start_date, completion_date, updated_completion_date, updated_contract_amount, contract_billed, project_director, remarks, latest_update, updated_at`. `?active=1` drops closed projects, except completed ones that are not fully billed.
+Compact project list: `id, ovp_number, po_number, po_date, project_name, account_name, with_acti, project_status, actual_site_progress_percent, start_date, completion_date, updated_completion_date, updated_contract_amount, contract_billed, project_director, remarks, latest_update, updated_at`. `?active=1` drops closed projects, except completed ones that are not fully billed.
+
+### GET /api/agent/projects/:id
+One project in the same compact view.
+
+### GET /api/agent/projects/:id/schedule
+The project's schedule tasks (`calcsheet_schedule_tasks` where `projectId` = `:id`), sorted as `GET /api/schedule-tasks` sorts them.
 
 ### POST /api/agent-keys · GET /api/agent-keys · DELETE /api/agent-keys/:id
 Superadmin login session only (never an agent key). POST `{ name }` returns the plain key once, plus a 12-character `id`. GET lists keys without the key itself. DELETE `:id` (that 12-character id) revokes the key; it stops working at once.

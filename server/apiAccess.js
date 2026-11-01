@@ -29,6 +29,8 @@ const SCANNER_ROUTES = [
 // The only routes an agent API key (server/agentAccess.js) may call.
 const AGENT_ROUTES = [
   ['GET', /^\/api\/agent\/projects$/],
+  ['GET', /^\/api\/agent\/projects\/[^/]+$/],
+  ['GET', /^\/api\/agent\/projects\/[^/]+\/schedule$/],
   ['GET', /^\/api\/projects\/[^/]+\/updates$/],
   ['POST', /^\/api\/projects\/[^/]+\/updates$/],
 ];

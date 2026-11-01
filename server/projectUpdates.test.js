@@ -112,3 +112,14 @@ test('only the poster or a superadmin deletes an update; latest_update follows',
     assert.equal(db.store.get('projects/sual').latest_update, null);
   });
 });
+
+test('parseProjectUpdate accepts a PO number and a PO date as YYYY-MM-DD or Unix seconds', () => {
+  const nov3 = Date.UTC(2026, 10, 3) / 1000;
+  const iso = parseProjectUpdate({ note: 'PO received', po_number: ' 4500123456 ', po_date: '2026-11-03' });
+  assert.deepEqual(iso.projectPatch, { po_number: '4500123456', po_date: nov3, start_date: nov3 });
+  assert.equal(parseProjectUpdate({ note: 'x', po_date: String(nov3) }).projectPatch.po_date, nov3);
+  assert.equal(parseProjectUpdate({ note: 'x', po_date: nov3 }).projectPatch.po_date, nov3);
+  assert.match(parseProjectUpdate({ note: 'x', po_date: '03/11/2026' }).error, /po_date/);
+  assert.match(parseProjectUpdate({ note: 'x', po_date: nov3 * 1000 }).error, /po_date/); // milliseconds
+  assert.match(parseProjectUpdate({ note: 'x', po_number: '   ' }).error, /po_number/);
+});

@@ -5,8 +5,8 @@
 // team posts from the project page; TJ's Claude agents post through an agent
 // API key (server/agentAccess.js). Stored in `projects/{id}/updates`.
 //
-// An update can also move the project's status and site progress; the
-// previous values are kept on the entry. Closing, cancelling or terminating a
+// An update can also move the project's status and site progress and set its
+// PO number / PO date; the previous values are kept on the entry. Closing, cancelling or terminating a
 // project stays a normal edit by a person.
 
 const express = require('express');
@@ -21,7 +21,11 @@ const UPDATE_STATUSES = ['NOT STARTED', 'IN PROGRESS', 'ON HOLD', 'SUSPENDED', '
 
 const NOTE_MAX = 2000;
 const SHORT_MAX = 200;
+const PO_NUMBER_MAX = 80;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+// po_date is stored as Unix seconds (EditProjectDialog); accept that or YYYY-MM-DD.
+const PO_DATE_MIN = Date.UTC(2000, 0, 1) / 1000;
+const PO_DATE_MAX = Date.UTC(2100, 0, 1) / 1000;
 
 function cleanText(value, max) {
   if (value === undefined || value === null) return '';
@@ -32,6 +36,14 @@ const present = (v) => v !== undefined && v !== null && v !== '';
 
 function isValidDate(d) {
   return ISO_DATE.test(d) && !Number.isNaN(Date.parse(d));
+}
+
+function parsePoDate(value) {
+  const s = String(value).trim();
+  let secs = null;
+  if (isValidDate(s)) secs = Math.floor(Date.parse(s) / 1000);
+  else if (/^\d+$/.test(s)) secs = Number(s);
+  return secs !== null && secs >= PO_DATE_MIN && secs < PO_DATE_MAX ? secs : null;
 }
 
 // Validate an update body. Returns { error } or { update, projectPatch }.
@@ -64,6 +76,20 @@ function parseProjectUpdate(body) {
     if (!Number.isFinite(progress) || progress < 0 || progress > 100) return { error: 'progress must be a number from 0 to 100' };
     update.progress = Math.round(progress * 10) / 10;
     projectPatch.actual_site_progress_percent = update.progress;
+  }
+  if (present(b.po_number)) {
+    const po = cleanText(b.po_number, PO_NUMBER_MAX);
+    if (!po) return { error: 'po_number must not be blank' };
+    update.po_number = po;
+    projectPatch.po_number = po;
+  }
+  if (present(b.po_date)) {
+    const secs = parsePoDate(b.po_date);
+    if (secs === null) return { error: 'po_date must be YYYY-MM-DD or Unix seconds' };
+    update.po_date = secs;
+    projectPatch.po_date = secs;
+    // The project edit dialog sets the start date to the PO date; do the same.
+    projectPatch.start_date = secs;
   }
   if (present(b.next_step)) update.next_step = cleanText(b.next_step, SHORT_MAX);
   if (present(b.next_date)) {
@@ -107,6 +133,8 @@ async function addProjectUpdate({ db, projectId, parsed, user, syncOperationsSta
     date: parsed.update.date || at.slice(0, 10),
     previous_status: before.project_status || '',
     previous_progress: Number(before.actual_site_progress_percent || 0),
+    ...(parsed.update.po_number ? { previous_po_number: before.po_number || '' } : {}),
+    ...(parsed.update.po_date ? { previous_po_date: before.po_date || null } : {}),
     ...posterOf(user),
     created_at: at,
   };

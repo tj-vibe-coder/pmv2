@@ -1046,3 +1046,10 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
 - **UI:** `ProjectUpdatesCard` under Project Overview (Post update dialog: note, type, date, optional status/progress/next step/next date/link; robot icon on Claude's posts; delete own). Updates also appear in Project Timeline & Activity. `/projects/:id?update=1` opens Post update directly (for a phone shortcut). The Update Progress dialog's Notes box, which used to be discarded, now posts a Progress update.
 - **Verified:** `npm run test:api-access` 38/38 (new `agentAccess.test.js`, `projectUpdates.test.js`), `ProjectUpdatesCard.test.tsx` 3/3, `tsc` clean, eslint clean on changed files. `CI=true npm run build` not completed locally (the sandbox ran out of memory); rely on the PR's CI build. Not run against the emulator or prod; not yet checked at 360 px in a browser.
 - **Follow-ups:** superadmin key-management card; show `latest_update` on the dashboard project table.
+- **Merged with PR #168** (agent PO number/date + single-project and schedule reads, which landed on main first): `po_number` / `po_date` moved from the old agent update post into `parseProjectUpdate` (any poster may send them; a PO date also sets `start_date`, and the entry keeps `previous_po_number` / `previous_po_date`); `GET /api/agent/projects/:id` and `/schedule` kept in `agentAccess.js` and `AGENT_ROUTES`. `npm run test:api-access` 41/41 after the merge.
+
+## 2026-11-01 Agent keys: PO number/date, single project and schedule (branch `feat/agent-po-schedule`, PR #168)
+
+- **Why:** TJ brought a separate `apiKeys.js` design (`pmk_` keys in an `X-API-Key` header, agent PUTs straight to `/api/projects/:id`) for the Projects Agent to read schedules and set the PO number/date. It duplicated the `agk_` system, would have been blocked by the /api gate, and its `'In Progress'` status spelling doesn't match the app's `'IN PROGRESS'`. Its extra abilities were added to the existing agent keys instead (now on the shared updates log, see the PR #167 entry above).
+- **Verified:** `npm run test:api-access`, `node --check server.js`. Not run against the emulator or prod.
+

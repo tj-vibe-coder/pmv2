@@ -770,6 +770,6 @@ When no reimbursement document exists, workflow closure requires explicit reimbu
 
 ### Project updates and agent API keys (2026-11-01)
 
-- `projects/{id}/updates/{auto}`: `{ date, type, note, status?, progress?, next_step?, next_date?, risk?, link?, source?, previous_status, previous_progress, posted_by, posted_by_id, posted_via ('app'|'agent'), created_at }`. Append-only except delete by the poster or a superadmin.
+- `projects/{id}/updates/{auto}`: `{ date, type, note, status?, progress?, po_number?, po_date? (Unix seconds), next_step?, next_date?, risk?, link?, source?, previous_status, previous_progress, previous_po_number?, previous_po_date?, posted_by, posted_by_id, posted_via ('app'|'agent'), created_at }`. Append-only except delete by the poster or a superadmin.
 - `projects/{id}.latest_update`: `{ id, date, type, note, by, via, at, next_step?, next_date?, risk? }`, the newest entry (or null).
 - `agent_keys/{sha256 of key}`: `{ name, createdAt, createdBy, lastUsedAt (written at most hourly), revokedAt, revokedBy? }`. The plain key is never stored.
