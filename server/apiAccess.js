@@ -26,6 +26,13 @@ const SCANNER_ROUTES = [
   ['POST', /^\/api\/receipts\/(parse|detect-crop|check-duplicates)$/],
 ];
 
+// The only routes an agent API key (server/agentAccess.js) may call.
+const AGENT_ROUTES = [
+  ['GET', /^\/api\/agent\/projects$/],
+  ['GET', /^\/api\/agent\/projects\/[^/]+\/updates$/],
+  ['POST', /^\/api\/agent\/projects\/[^/]+\/updates$/],
+];
+
 // Express routes case-insensitively and tolerates a trailing slash, so compare
 // the same way: '/API/Projects/' must not slip past as a non-API path.
 function normalizeApiPath(rawPath) {
@@ -59,6 +66,9 @@ function createApiAccessGate({ getCurrentUser, isActiveUser }) {
     if (user.scannerScope && !routeMatches(SCANNER_ROUTES, req.method, path)) {
       return res.status(403).json({ success: false, error: 'Not available from a phone scanner session' });
     }
+    if (user.agentScope && !routeMatches(AGENT_ROUTES, req.method, path)) {
+      return res.status(403).json({ success: false, error: 'Not available to an agent key' });
+    }
     return next();
   };
 }
@@ -66,6 +76,7 @@ function createApiAccessGate({ getCurrentUser, isActiveUser }) {
 module.exports = {
   PUBLIC_ROUTES,
   SCANNER_ROUTES,
+  AGENT_ROUTES,
   normalizeApiPath,
   isApiPath,
   routeMatches,
