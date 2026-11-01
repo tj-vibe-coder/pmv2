@@ -425,6 +425,7 @@ export class ReportDoc {
     title: string;
     /** Small right-aligned lines under the title, e.g. "Doc. No. …", "Date: …". */
     meta: string[];
+    /** Footer doc number on the certificate; the other reports show it in `meta` instead. */
     docNo: string;
     /** 'certificate': logo + company left, address right, no title band or rule (the title sits in the body). */
     letterhead?: 'report' | 'certificate';
@@ -482,7 +483,8 @@ export class ReportDoc {
       doc.setLineWidth(0.4);
       doc.line(PAGE.margin, 35, right, 35);
 
-      this.drawFooter(opts.issuer, opts.docNo, `Page ${p} of ${total}`);
+      // The doc number is already in the header on every page, so the footer leaves it out.
+      this.drawFooter(opts.issuer, '', `Page ${p} of ${total}`);
     }
     doc.setTextColor(0, 0, 0);
   }
@@ -495,12 +497,10 @@ export class ReportDoc {
     doc.setLineWidth(0.25);
     doc.line(PAGE.margin, fy - 4, right, fy - 4);
     this.prose(7.5);
-    doc.text(`Doc. No.: ${docNo}`, PAGE.margin, fy);
-    if (pageLabel) {
-      doc.text(issuer.name, PAGE.width / 2, fy, { align: 'center' });
-      doc.text(pageLabel, right, fy, { align: 'right' });
-    } else {
-      doc.text(issuer.name, right, fy, { align: 'right' });
-    }
+    if (docNo) doc.text(`Doc. No.: ${docNo}`, PAGE.margin, fy);
+    if (!docNo) doc.text(issuer.name, PAGE.margin, fy);
+    else if (pageLabel) doc.text(issuer.name, PAGE.width / 2, fy, { align: 'center' });
+    else doc.text(issuer.name, right, fy, { align: 'right' });
+    if (pageLabel) doc.text(pageLabel, right, fy, { align: 'right' });
   }
 }

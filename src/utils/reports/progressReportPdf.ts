@@ -78,7 +78,6 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
       ['Client', data.client],
       ['Location', data.location],
       ['PO Number', data.poNumber],
-      ['Report Date', reportDate],
     ]);
 
     r.heading('Project Status', 24);
@@ -118,7 +117,7 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
             { content: fmt(row.progress), styles },
           ];
         })
-      : [[{ content: 'No WBS items', colSpan: 4, styles: { halign: 'center' as const, textColor: REPORT_COLORS.ink } }]];
+      : [[{ content: 'No deliverables listed', colSpan: 4, styles: { halign: 'center' as const, textColor: REPORT_COLORS.ink } }]];
     const totalRow: RowInput = [
       { content: '', styles: totalStyle },
       { content: 'Total', styles: totalStyle },
@@ -128,7 +127,7 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
     const body = data.rows.length > 0 ? [...detail, totalRow] : detail;
     const split = Math.max(0, body.length - tailRows);
     if (tailRows > 0 && split === 0) r.addPage();
-    r.heading('Work Breakdown Structure', 22);
+    r.heading('Progress by Deliverable', 22);
     const wbsTable = (rows: RowInput[]) => r.table({
       head: [['Code', 'Deliverables', 'Weight %', 'Progress %']],
       body: rows,
