@@ -23,7 +23,7 @@ export interface ReportAssets {
 const BODY = 10.5;
 
 /**
- * Certificate of Project Completion: a one-page letter — centred title and
+ * Certificate of Completion: a one-page letter — centred title and
  * certificate number, the certification, the project facts as aligned
  * "Label: value" lines, and the client's acceptance with both signatures at
  * the foot of the page. Spacing opens up on short certificates so the page
@@ -56,7 +56,7 @@ export function buildCompletionCertificatePdf(data: CompletionCertificateData, a
 
     r.y = 52 + spread;
     r.prose(24);
-    const title = doc.splitTextToSize('Certificate of Project Completion', CONTENT_WIDTH) as string[];
+    const title = doc.splitTextToSize('Certificate of Completion', CONTENT_WIDTH) as string[];
     title.forEach((l, i) => doc.text(l, PAGE.width / 2, r.y + i * 10, { align: 'center' }));
     r.y += (title.length - 1) * 10 + 8;
     r.prose(9.5);
@@ -88,7 +88,7 @@ export function buildCompletionCertificatePdf(data: CompletionCertificateData, a
     r.y = sigTop;
     r.signatures(signers, { leadIn });
 
-    r.finish({ issuer, logoDataUrl: assets.logoDataUrl, title: 'Certificate of Project Completion', meta: [], docNo, letterhead: 'certificate' });
+    r.finish({ issuer, logoDataUrl: assets.logoDataUrl, title: 'Certificate of Completion', meta: [], docNo, letterhead: 'certificate' });
     return { doc: r.doc, free: sigTop - contentEnd };
   };
 

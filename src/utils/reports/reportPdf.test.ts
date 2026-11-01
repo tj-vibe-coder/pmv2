@@ -147,7 +147,7 @@ describe('report PDFs', () => {
     expect(filename).toBe('IOCT-2610-014-COC.pdf');
     expect(doc.getNumberOfPages()).toBe(1);
     const text = pageText(doc, 1);
-    expect(text).toContain('Certificate of Project');
+    expect(text).toContain('Certificate of Completion');
     expect(text).toContain('PO No.:');
     expect(text).not.toContain('ACTI PO');
     expect(text).not.toMatch(/payment|balance/i);

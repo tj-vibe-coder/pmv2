@@ -254,7 +254,7 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
         Certificate of Completion
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Generate the Final Project Completion Certificate. Preview or Export to PDF.
+        Generate the Certificate of Completion. Preview or Export to PDF.
       </Typography>
       <Grid container spacing={2} sx={{ mb: 2 }}>
         <Grid size={{ xs: 12, sm: 'auto' }}>

@@ -1019,3 +1019,4 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
   - The contractor's text no longer says "accepted by the client". Acceptance is now the client's own statement ("By signing below, the client confirms…"), kept together with both signatures at the foot of the page.
   - Short certificates spread their spare space across the block gaps instead of leaving a hole above the signatures (render twice).
   - `ReportDoc.details` takes an optional font size; the COC uses the body size.
+  - Title renamed to "Certificate of Completion" (TJ).
