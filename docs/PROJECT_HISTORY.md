@@ -1027,3 +1027,4 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
   - Progress Report letterhead shows the bare doc number and report date, without the "Doc. No.:" / "Report Date:" labels (TJ).
   - Progress Report: the doc number moved from the top-right corner to the footer (left, in place of the company name; "Page X of Y" on the right). The header keeps just the title and report date. DR and COC unchanged. `ReportDoc.finish` now takes `corner` (top-right line) and `footer` (footer-left text, default company name); `docNo` is certificate-only.
   - Bigger letterhead logo on all reports (TJ): IOCT 18 → 26 mm box, ACTI 24×14.8 → 30×18.5 mm.
+  - Progress Report tables show top-level codes as "1.0", "2.0"… (sub-codes like "1.1" unchanged; PDF only, the stored WBS codes are not touched).

@@ -43,6 +43,8 @@ export interface ProgressReportData {
 }
 
 const fmt = (n: number) => (Number.isFinite(n) ? n : 0).toFixed(2);
+/** Top-level WBS codes read as "1.0", "2.0"…; sub-codes ("1.1") are left as they are. */
+const wbsCode = (code: string) => (/^\d+$/.test(code.trim()) ? `${code.trim()}.0` : code);
 
 export function buildProgressReportPdf(data: ProgressReportData, assets: ReportAssets = {}) {
   const issuer = REPORT_ISSUERS[data.reportCompany];
@@ -96,7 +98,7 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
       r.table({
         head: [['Code', 'Scope', 'Weight %', 'Progress %']],
         body: [
-          ...parents.map((p) => [p.code, p.name, fmt(p.weight), fmt(p.progress)]),
+          ...parents.map((p) => [wbsCode(p.code), p.name, fmt(p.weight), fmt(p.progress)]),
           [{ content: '', styles: totalStyle }, { content: 'Total', styles: totalStyle }, { content: fmt(parents.reduce((s, p) => s + p.weight, 0)), styles: totalStyle }, { content: fmt(pct), styles: totalStyle }],
         ],
         columnStyles: wbsColumns,
@@ -111,7 +113,7 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
             ? { font: 'helvetica', fontStyle: 'bold' as const, fillColor: REPORT_COLORS.groupFill }
             : {};
           return [
-            { content: row.code || '—', styles },
+            { content: wbsCode(row.code) || '—', styles },
             { content: row.name || '—', styles: { ...styles, cellPadding: { top: 1.6, bottom: 1.6, left: indent, right: 2 } } },
             { content: fmt(row.weight), styles },
             { content: fmt(row.progress), styles },

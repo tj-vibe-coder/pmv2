@@ -105,6 +105,10 @@ describe('report PDFs', () => {
     expect(filename).toBe('IOCT-2610-014-PB-03.pdf');
     expectFramed(doc, 'PROGRESS REPORT');
     const total = doc.getNumberOfPages();
+    // Top-level codes read "1.0"; sub-codes stay "1.1".
+    expect(pageText(doc, 1)).toContain('1.0 Section 1');
+    expect(pageText(doc, 1)).not.toMatch(/(^| )1 Section 1/);
+    expect(pageText(doc, 1)).toContain('1.1 Deliverable 1.1');
     // The doc number is in the footer of every page.
     for (let p = 1; p <= total; p++) expect(pageText(doc, p)).toContain('IOCT-2610-014-PB-03');
     let sigPage = 0;
