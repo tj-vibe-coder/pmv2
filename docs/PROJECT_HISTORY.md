@@ -1026,3 +1026,4 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
   - Letterhead: the doc number (Progress Report Doc. No., DR No.) now sits alone in the top-right corner of every page, above the title; the date stays under the title. The header and footer rules are removed on all three reports (TJ).
   - Progress Report letterhead shows the bare doc number and report date, without the "Doc. No.:" / "Report Date:" labels (TJ).
   - Progress Report: the doc number moved from the top-right corner to the footer (left, in place of the company name; "Page X of Y" on the right). The header keeps just the title and report date. DR and COC unchanged. `ReportDoc.finish` now takes `corner` (top-right line) and `footer` (footer-left text, default company name); `docNo` is certificate-only.
+  - Bigger letterhead logo on all reports (TJ): IOCT 18 → 26 mm box, ACTI 24×14.8 → 30×18.5 mm.

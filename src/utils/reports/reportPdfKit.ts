@@ -55,8 +55,8 @@ export const REPORT_ISSUERS: Record<ReportCompanyKey, ReportIssuer> = {
     tin: 'TIN: 697-029-976-00000',
     logoFile: '/logo-ioct-only.png',
     logoNeedsBgRemoval: false,
-    logoWidth: 18,
-    logoHeight: 18,
+    logoWidth: 26,
+    logoHeight: 26,
   },
   ACT: {
     name: 'Advance Controle Technologie Inc',
@@ -66,8 +66,8 @@ export const REPORT_ISSUERS: Record<ReportCompanyKey, ReportIssuer> = {
     ],
     logoFile: '/logo-acti.png',
     logoNeedsBgRemoval: true,
-    logoWidth: 24,
-    logoHeight: 14.8,
+    logoWidth: 30,
+    logoHeight: 18.5,
   },
 };
 
