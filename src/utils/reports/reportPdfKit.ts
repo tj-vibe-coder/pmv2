@@ -423,10 +423,14 @@ export class ReportDoc {
     issuer: ReportIssuer;
     logoDataUrl?: string | null;
     title: string;
-    /** Small right-aligned lines: the first (the doc number) in the top-right corner, the rest under the title. */
+    /** Small right-aligned lines under the title, e.g. the report date. */
     meta: string[];
-    /** Footer doc number on the certificate; the other reports show it in `meta` instead. */
-    docNo: string;
+    /** Optional line in the top-right corner, above the title (e.g. the DR number). */
+    corner?: string;
+    /** Footer text on the left, beside "Page X of Y" (default: the company name). */
+    footer?: string;
+    /** Certificate only: the doc number in its footer. */
+    docNo?: string;
     /** 'certificate': logo + company left, address right, no title band (the title sits in the body). */
     letterhead?: 'report' | 'certificate';
   }) {
@@ -454,7 +458,7 @@ export class ReportDoc {
         doc.text(opts.issuer.name, textX, top + 10.5);
         this.prose(7.5);
         info.forEach((l, i) => doc.text(l, right, top + 5 + i * 3.4, { align: 'right' }));
-        this.drawFooter(opts.issuer, opts.docNo, '');
+        this.drawFooter(opts.docNo ? `Doc. No.: ${opts.docNo}` : '', opts.issuer.name);
         continue;
       }
       this.bold(11.5);
@@ -475,28 +479,20 @@ export class ReportDoc {
         this.bold(13.5);
       }
       titleLines.forEach((l, i) => doc.text(l, right, top + 5.5 + i * 5.6, { align: 'right' }));
-      // The document number sits in the top-right corner; the other lines go under the title.
       this.prose(8);
-      const [docLine, ...rest] = opts.meta;
-      if (docLine) doc.text(docLine, right, 8, { align: 'right' });
+      if (opts.corner) doc.text(opts.corner, right, 8, { align: 'right' });
       const metaTop = top + 11 + (titleLines.length - 1) * 5.6;
-      rest.forEach((m, i) => doc.text(m, right, metaTop + i * 3.8, { align: 'right' }));
+      opts.meta.forEach((m, i) => doc.text(m, right, metaTop + i * 3.8, { align: 'right' }));
 
-      // The doc number is already in the header on every page, so the footer leaves it out.
-      this.drawFooter(opts.issuer, '', `Page ${p} of ${total}`);
+      this.drawFooter(opts.footer ?? opts.issuer.name, `Page ${p} of ${total}`);
     }
     doc.setTextColor(0, 0, 0);
   }
 
-  private drawFooter(issuer: ReportIssuer, docNo: string, pageLabel: string) {
-    const { doc } = this;
-    const right = PAGE.width - PAGE.margin;
+  private drawFooter(left: string, right: string) {
     const fy = PAGE.height - 11;
     this.prose(7.5);
-    if (docNo) doc.text(`Doc. No.: ${docNo}`, PAGE.margin, fy);
-    if (!docNo) doc.text(issuer.name, PAGE.margin, fy);
-    else if (pageLabel) doc.text(issuer.name, PAGE.width / 2, fy, { align: 'center' });
-    else doc.text(issuer.name, right, fy, { align: 'right' });
-    if (pageLabel) doc.text(pageLabel, right, fy, { align: 'right' });
+    if (left) this.doc.text(left, PAGE.margin, fy);
+    this.doc.text(right, PAGE.width - PAGE.margin, fy, { align: 'right' });
   }
 }

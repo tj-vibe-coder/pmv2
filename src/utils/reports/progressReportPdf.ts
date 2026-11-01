@@ -187,8 +187,8 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
       issuer,
       logoDataUrl: assets.logoDataUrl,
       title: 'Progress Report',
-      meta: [docNo, reportDate],
-      docNo,
+      meta: [reportDate],
+      footer: docNo,
     });
     return { doc: r.doc, signatureOrphaned: broke || (multiPageTable && tailOnPage < 3) };
   };
