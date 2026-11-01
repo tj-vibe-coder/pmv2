@@ -1,0 +1,239 @@
+import jsPDF from 'jspdf';
+import { buildDeliveryReceiptPdf, type DeliveryReceiptData } from './deliveryReceiptPdf';
+import { buildProgressReportPdf, type ProgressReportData } from './progressReportPdf';
+import { buildCompletionCertificatePdf } from './completionCertificatePdf';
+import { buildServiceReportPdf, type ServiceReportData } from './serviceReportPdf';
+import { formatLongDate } from './reportPdfKit';
+import { PDFDocument } from 'pdf-lib';
+import { appendPdfs } from './scheduleAnnex';
+
+// Without a body font every string is drawn in Helvetica, so it shows up as
+// plain "(text) Tj" operators in the page content stream.
+const pageText = (doc: jsPDF, page: number): string => {
+  const pages = (doc.internal as unknown as { pages: string[][] }).pages;
+  return (pages[page] || [])
+    .join('\n')
+    .match(/\((?:\\.|[^\\)])*\) Tj/g)?.map((t) => t.slice(1, -4)).join(' ') ?? '';
+};
+
+const drData = (n: number, longEvery = 0): DeliveryReceiptData => ({
+  reportCompany: 'IOCT',
+  deliveryNoteNo: 'DR-0042',
+  despatchDate: '2026-10-30',
+  poNumber: '4500123987',
+  shipTo: { name: 'Analog Devices Inc.', address: 'Gateway Business Park, General Trias, Cavite', contactName: 'Maria Santos' },
+  items: Array.from({ length: n }, (_, i) => ({
+    itemNo: i + 1,
+    description: longEvery && i % longEvery === 0
+      ? `Item ${i + 1} — panel component delivered complete with manufacturer's test certificate, installation manual and calibration report`
+      : `Item ${i + 1} — terminal block 2.5 mm2 feed-through`,
+    partNo: i === 0 ? '6ES7515-2AM02-0AB0' : undefined,
+    delivered: 2,
+    unit: 'pcs',
+  })),
+  dispatchedBy: { name: 'Renzel Ramos', date: '2026-10-30' },
+  receivedBy: {},
+});
+
+const prData = (sections: number, perSection: number, approvers: number, photos = 0): ProgressReportData => {
+  const rows: ProgressReportData['rows'] = [];
+  const leaf = 100 / (sections * perSection);
+  for (let s = 1; s <= sections; s++) {
+    rows.push({ code: String(s), name: `Section ${s}`, weight: leaf * perSection, progress: 50, isParent: true, level: 0 });
+    for (let c = 1; c <= perSection; c++) rows.push({ code: `${s}.${c}`, name: `Deliverable ${s}.${c}`, weight: leaf, progress: 50, isParent: false, level: 1 });
+  }
+  return {
+    reportCompany: 'IOCT',
+    projectName: 'Booster Pump PLC Upgrade',
+    projectNo: 'IOCT-2610-014',
+    poNumber: '4500123987',
+    client: 'Analog Devices Inc.',
+    location: 'General Trias, Cavite',
+    reportDate: '10/31/2026',
+    pbNumber: '03',
+    rows,
+    totalWeight: 100,
+    overallProgress: 50,
+    preparedBy: { name: 'Tyrone James Caballero', designation: 'General Manager' },
+    approvers: Array.from({ length: approvers }, (_, i) => ({ name: `Approver ${i + 1}`, designation: 'Manager', company: 'Client Co.' })),
+    photos: Array.from({ length: photos }, (_, i) => ({ dataUrl: 'data:image/png;base64,iVBORw0KGgo=', width: 4, height: 3, caption: `Photo ${i + 1}` })),
+  };
+};
+
+/** Every page carries the letterhead title and a correct "Page X of Y". */
+const expectFramed = (doc: jsPDF, title: string) => {
+  const total = doc.getNumberOfPages();
+  for (let p = 1; p <= total; p++) {
+    const text = pageText(doc, p);
+    expect(text).toContain(title);
+    expect(text).toContain(`Page ${p} of ${total}`);
+  }
+};
+
+/** Item labels ("Item 12 —" / "Deliverable 3.2") on a page. */
+const rowsOn = (doc: jsPDF, page: number, re: RegExp) => pageText(doc, page).match(re)?.length ?? 0;
+
+describe('report PDFs', () => {
+  it('formats report dates', () => {
+    expect(formatLongDate('2026-10-30')).toBe('October 30, 2026');
+    expect(formatLongDate('10/31/2026')).toBe('October 31, 2026');
+    expect(formatLongDate('')).toBe('');
+    expect(formatLongDate('not a date')).toBe('not a date');
+  });
+
+  it.each([3, 18, 26, 30, 64])('Delivery Receipt with %i items: framed pages, every page signed', (n) => {
+    const { doc, filename } = buildDeliveryReceiptPdf(drData(n, 7));
+    expect(filename).toBe('DR-0042.pdf');
+    expectFramed(doc, 'DELIVERY RECEIPT');
+    const last = doc.getNumberOfPages();
+    // Each page carries the acknowledgement and both signatures, plus line items.
+    for (let p = 1; p <= last; p++) {
+      expect(pageText(doc, p)).toContain('Dispatched by:');
+      expect(pageText(doc, p)).toContain('Received by:');
+      expect(rowsOn(doc, p, /Item \d+ /g)).toBeGreaterThan(0);
+    }
+    expect(pageText(doc, last)).toContain(`Item ${n} `);
+    // Every item appears exactly once across the document.
+    let seen = 0;
+    for (let p = 1; p <= last; p++) seen += rowsOn(doc, p, /Item \d+ /g);
+    expect(seen).toBe(n);
+    // DR number in the footer of every page, without labels in the header.
+    for (let p = 1; p <= last; p++) expect(pageText(doc, p)).toContain('DR-0042');
+    expect(pageText(doc, 1)).not.toContain('DR No.:');
+    expect(pageText(doc, 1)).toContain('DELIVERY RECEIPT October 30, 2026');
+    // A part number prints under its item's description.
+    expect(pageText(doc, 1)).toContain('6ES7515-2AM02-0AB0');
+    expect(pageText(doc, 1)).not.toContain('Part No.');
+    expect(pageText(doc, 1)).toContain('Ship To:');
+    expect(pageText(doc, 1)).not.toContain('Invoice To');
+  });
+
+  it.each([
+    [1, 4, 1, 0],
+    [4, 4, 2, 2],
+    [8, 8, 3, 5],
+    [5, 6, 3, 0],
+  ])('Progress Report %i×%i with %i approver(s), %i photo(s): signatures stay with WBS rows', (sections, per, approvers, photos) => {
+    const { doc, filename } = buildProgressReportPdf(prData(sections, per, approvers, photos));
+    expect(filename).toBe('IOCT-2610-014-PB-03.pdf');
+    expectFramed(doc, 'PROGRESS REPORT');
+    const total = doc.getNumberOfPages();
+    // Top-level codes read "1.0"; sub-codes stay "1.1".
+    expect(pageText(doc, 1)).toContain('1.0 Section 1');
+    expect(pageText(doc, 1)).not.toMatch(/(^| )1 Section 1/);
+    expect(pageText(doc, 1)).toContain('1.1 Deliverable 1.1');
+    // The doc number is in the footer of every page.
+    for (let p = 1; p <= total; p++) expect(pageText(doc, p)).toContain('IOCT-2610-014-PB-03');
+    let sigPage = 0;
+    for (let p = 1; p <= total; p++) if (pageText(doc, p).includes('Prepared by:')) sigPage = p;
+    expect(sigPage).toBeGreaterThan(0);
+    // Rows + the Total row share the signature page.
+    expect(rowsOn(doc, sigPage, /Deliverable \d+\.\d+|Total/g)).toBeGreaterThanOrEqual(3);
+    // Photos go in an annex that starts on the page after the signatures.
+    const annexPage = sigPage + (photos > 0 ? 1 : 0);
+    expect(total).toBeGreaterThanOrEqual(annexPage);
+    expect(total === sigPage).toBe(photos === 0);
+    expect(pageText(doc, annexPage).includes('Annex A')).toBe(photos > 0);
+  });
+
+  const srData = (activities: number, photos: number, placement: 'inline' | 'end'): ServiceReportData => ({
+    reportCompany: 'IOCT',
+    reportNo: 'IOCT-2610-014 - SR2',
+    title: 'Monthly PLC Service Visit',
+    projectName: 'Booster Pump PLC Upgrade',
+    projectNo: 'IOCT-2610-014',
+    client: 'Analog Devices Inc.',
+    poNumber: '4500123987',
+    reportDate: '2026-11-01',
+    coveredFrom: '2026-10-28',
+    coveredTo: '2026-10-30',
+    startTime: '08:00',
+    endTime: '17:30',
+    activities: [
+      ...Array.from({ length: activities }, (_, i) => ({ activity: `Activity ${i + 1} checked`, finding: `Finding ${i + 1} OK` })),
+      { activity: '', finding: '' },
+    ],
+    recommendations: 'Replace the CPU backup battery at the next shutdown.',
+    preparedBy: { name: 'Renzel Ramos', designation: 'Project Engineer' },
+    approvedBy: { name: 'Maria Santos', designation: 'Facilities Manager', company: 'Analog Devices Inc.' },
+    photos: Array.from({ length: photos }, (_, i) => ({ dataUrl: 'data:image/png;base64,iVBORw0KGgo=', width: 4, height: 3, caption: `Photo ${i + 1}`, activityIndex: i % 2 === 0 ? 0 : undefined })),
+    photoPlacement: placement,
+  });
+
+  it.each([
+    [3, 0, 'inline'],
+    [40, 0, 'inline'],
+    [4, 3, 'inline'],
+    [4, 3, 'end'],
+  ] as const)('Service Report with %i activities, %i photo(s) %s: framed, doc no in footer, signed once', (n, photos, placement) => {
+    const { doc, filename } = buildServiceReportPdf(srData(n, photos, placement));
+    expect(filename).toBe('IOCT-2610-014-SR2.pdf');
+    expectFramed(doc, 'SERVICE REPORT');
+    const total = doc.getNumberOfPages();
+    for (let p = 1; p <= total; p++) expect(pageText(doc, p)).toContain('IOCT-2610-014-SR2');
+    const first = pageText(doc, 1);
+    expect(first).toContain('SERVICE REPORT November 1, 2026');
+    expect(first).toContain('Date\\(s\\) Covered:');
+    expect(first).toContain('October 28, 2026');
+    expect(first).toContain('8:00 AM');
+    expect(first).toContain('Monthly PLC Service Visit');
+    expect(first).not.toContain('Doc. No.');
+    // Every activity printed once; the blank row is skipped.
+    let seen = 0;
+    for (let p = 1; p <= total; p++) seen += rowsOn(doc, p, /Finding \d+ OK/g);
+    expect(seen).toBe(n);
+    const sigPages = Array.from({ length: total }, (_, i) => i + 1).filter((p) => pageText(doc, p).includes('Prepared by:'));
+    expect(sigPages).toHaveLength(1);
+    expect(pageText(doc, sigPages[0])).toContain('Approved by:');
+    expect(pageText(doc, sigPages[0])).toContain('Recommendations and Remarks');
+    // Inline photos come before the signatures; "end" photos go in an annex after them.
+    const annex = Array.from({ length: total }, (_, i) => i + 1).find((p) => pageText(doc, p).includes('Annex A'));
+    expect(annex).toBe(placement === 'end' && photos > 0 ? sigPages[0] + 1 : undefined);
+    const all = Array.from({ length: total }, (_, i) => pageText(doc, i + 1)).join(' ');
+    expect(all.includes('Photos: Activity 1')).toBe(placement === 'inline' && photos > 0);
+  });
+
+  it('appends the Work Schedule PDF after the report pages', async () => {
+    const { doc } = buildProgressReportPdf(prData(2, 3, 1, 1));
+    const reportPages = doc.getNumberOfPages();
+    const gantt = new jsPDF({ orientation: 'landscape', format: 'a3' });
+    gantt.addPage('a3', 'landscape');
+    const merged = await PDFDocument.load(await appendPdfs(doc.output('arraybuffer'), [new Uint8Array(gantt.output('arraybuffer'))]));
+    expect(merged.getPageCount()).toBe(reportPages + 2);
+    // Attached pages keep their own size (A3 landscape), report pages stay A4.
+    expect(Math.round(merged.getPage(0).getWidth())).toBe(595);
+    expect(Math.round(merged.getPage(reportPages).getWidth())).toBe(1191);
+  });
+
+  it('Certificate of Completion fits one page even with long text', () => {
+    const long = 'Supply, Installation, Testing and Commissioning of PLC-Based Water Treatment Plant Automation and SCADA System — Phase 2';
+    const { doc, filename } = buildCompletionCertificatePdf({
+      reportCompany: 'ACT',
+      projectName: long,
+      projectNo: 'IOCT-2610-014',
+      client: 'Analog Devices Inc.',
+      poNumber: '4500123987',
+      location: 'Gateway Business Park, General Trias, Cavite',
+      startDate: '2026-08-03',
+      completionDate: '2026-10-28',
+      approver: { name: 'Engr. Maria Cristina Dela Paz-Santos', designation: 'Senior Facilities and Utilities Engineering Manager', company: 'Analog Devices Inc.' },
+      contractorRep: { name: 'Tyrone James Caballero', designation: 'General Manager' },
+    });
+    expect(filename).toBe('IOCT-2610-014-COC.pdf');
+    expect(doc.getNumberOfPages()).toBe(1);
+    const text = pageText(doc, 1);
+    expect(text).toContain('Certificate of Completion');
+    expect(text).toContain('PO No.:');
+    expect(text).not.toContain('ACTI PO');
+    expect(text).not.toMatch(/payment|balance/i);
+    // Both signatures, with the dates list above them.
+    expect(text).toContain('Contractor:');
+    expect(text).toContain('Accepted by \\(Client\\):');
+    expect(text).not.toContain('Certificate No.');
+    expect(text).not.toContain('Doc. No.');
+    expect(text).toContain('IOCT-2610-014-COC');
+    expect(text).toContain('Page 1 of 1');
+    expect(text).toContain('Completion Date:');
+    expect(text).toContain('By signing below, the client confirms');
+  });
+});

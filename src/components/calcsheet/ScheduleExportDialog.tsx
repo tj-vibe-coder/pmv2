@@ -32,7 +32,8 @@ interface Props {
 
 const storageKey = (id: string) => `gantt-export-${id}`;
 
-function loadSettings(id: string, project: Props['project']): ScheduleExportSettings {
+/** The Export dialog's remembered settings for a project (defaults when none saved). */
+export function loadSettings(id: string, project: Props['project']): ScheduleExportSettings {
   const base = defaultExportSettings(project);
   try {
     const raw = localStorage.getItem(storageKey(id));

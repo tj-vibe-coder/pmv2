@@ -40,7 +40,7 @@ function buildWorkbook(data: ServiceReportXlsxData): ExcelJS.Workbook {
     pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, margins: { left: 0.5, right: 0.5, top: 0.6, bottom: 0.6, header: 0.3, footer: 0.3 } },
   });
   // A is wide enough for the meta/signature labels ("Project Name:", "Designation");
-  // Activity (B) and Finding/Outcome (C+D) stay close to the PDF's 50/50 split.
+  // Activity (B) and Findings / Results (C+D) stay close to the PDF's 50/50 split.
   ws.columns = [{ width: 11 }, { width: 30 }, { width: 14 }, { width: 24 }];
 
   // ---- Header ----
@@ -99,7 +99,7 @@ function buildWorkbook(data: ServiceReportXlsxData): ExcelJS.Workbook {
 
   // ---- Activities ----
   heading('Activities');
-  ['No.', 'Activity', 'Finding / Outcome'].forEach((label, i) => {
+  ['No.', 'Activity', 'Findings / Results'].forEach((label, i) => {
     // Activity spans B; Finding spans C:D
     const cell = i === 2 ? ws.getCell(r, 3) : ws.getCell(r, i + 1);
     if (i === 2) ws.mergeCells(r, 3, r, 4);

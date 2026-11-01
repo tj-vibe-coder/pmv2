@@ -83,9 +83,9 @@ describe('Siemens PLC configurator', () => {
   });
 
   it('prices: catalog item with the same part no. wins, else the quote price', () => {
-    expect(siemensPrice(SIEMENS_PARTS.di16, [])).toEqual({ price: 6218.99, source: 'quote' });
+    expect(siemensPrice(SIEMENS_PARTS.di16, [])).toEqual({ price: 6630.85, source: 'quote' });
     expect(siemensPrice(SIEMENS_PARTS.di16, [{ catalogNo: '6ES7131-6BH01-0BA0', sellingPrice: 6000 }])).toEqual({ price: 6000, source: 'catalog' });
-    expect(siemensPrice(SIEMENS_PARTS.buLight, [])).toEqual({ price: 1600, source: 'quote' });
+    expect(siemensPrice(SIEMENS_PARTS.buLight, [])).toEqual({ price: 2063.01, source: 'quote' });
   });
 });
 

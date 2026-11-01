@@ -36,17 +36,16 @@ import {
   MenuItem,
   CircularProgress,
   Tooltip,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, CameraAlt as CameraAltIcon, OpenInNew as OpenInNewIcon, DragIndicator as DragIndicatorIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
 import { useOneDriveAuth } from '../../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../../config/onedriveConfig';
 import { resolveCorporateDriveId, uploadFileToFolderById, ensureExecutionFolder, getOrCreateChildFolderById, fetchDriveItemBlob } from '../../services/onedriveFolderService';
-import jsPDF from 'jspdf';
-import { autoTable } from 'jspdf-autotable';
 import dataService from '../../services/dataService';
 import {
-  REPORT_COMPANIES,
   type ReportCompanyKey,
   WBSItem,
   loadWBS,
@@ -61,9 +60,14 @@ import {
   migrateProgressSnapshotsFromLocalStorage,
 } from '../ProjectDetails';
 import { arialNarrowBase64 } from '../../fonts/arialNarrowBase64';
+import { parseClientApprover } from '../../utils/clientApprover';
+import { buildProgressReportPdf, type ProgressReportPhoto, type ProgressReportRow } from '../../utils/reports/progressReportPdf';
+import { appendPdfs, fetchScheduleTasks, renderScheduleAttachment } from '../../utils/reports/scheduleAnnex';
+import { saveAs } from 'file-saver';
+import { REPORT_ISSUERS } from '../../utils/reports/reportPdfKit';
+import { loadReportLogo } from '../../utils/reports/reportLogo';
 
-const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
-const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
+const NET_PACIFIC_COLORS = { primary: '#2c5aa0', secondary: '#1e4a72' };
 
 interface PhotoItem {
   localId: string;
@@ -253,6 +257,21 @@ export interface ProgressReportTabProps {
   clientContacts?: { name: string; designation: string; company: string }[];
 }
 
+/** Accordion sections styled as the design guide's content papers (DESIGN_PHILOSOPHY §8). */
+const sectionSx = {
+  mb: 1.5,
+  borderRadius: '8px !important',
+  overflow: 'hidden',
+  border: '1px solid #e2e8f0',
+  background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+  '&:before': { display: 'none' },
+} as const;
+const summarySx = { minHeight: 52, px: 1.5, '&.Mui-expanded': { borderBottom: '1px solid #e0e0e0' }, '& .MuiAccordionSummary-content': { alignItems: 'center', my: 1 } } as const;
+const sectionTitleSx = { fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 } as const;
+const wbsHeadSx = { fontWeight: 600, fontSize: '0.875rem', bgcolor: '#f8fafc', color: 'text.primary', borderBottom: '2px solid #e2e8f0', py: 1.25, px: 1.5, whiteSpace: 'nowrap' } as const;
+const wbsTotalSx = { fontWeight: 700, fontSize: '0.875rem', color: 'text.primary', borderTop: '2px solid #e2e8f0', borderBottom: 0, bgcolor: '#f8fafc', py: 1.25, px: 1.5 } as const;
+const savedHeadSx = { fontWeight: 600, fontSize: '0.875rem', bgcolor: '#f8fafc' } as const;
+
 const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   project,
   currentUser,
@@ -302,6 +321,31 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   }, [project.id]);
 
   const [wbsItems, setWbsItems] = useState<WBSItem[]>([]);
+
+  // Work Schedule annexes (Gantt chart / S-Curve) — remembered per project.
+  const scheduleAttachKey = `progressReportScheduleAttach-${project.id}`;
+  const [scheduleAttach, setScheduleAttach] = useState<{ gantt: boolean; sCurve: boolean }>({ gantt: false, sCurve: false });
+  const [scheduleTaskCount, setScheduleTaskCount] = useState<number | null>(null);
+  useEffect(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(scheduleAttachKey) || 'null');
+      setScheduleAttach({ gantt: !!v?.gantt, sCurve: !!v?.sCurve });
+    } catch {
+      setScheduleAttach({ gantt: false, sCurve: false });
+    }
+    setScheduleTaskCount(null);
+    let cancelled = false;
+    fetchScheduleTasks(String(project.id))
+      .then((tasks) => { if (!cancelled) setScheduleTaskCount(tasks.length); })
+      .catch(() => { if (!cancelled) setScheduleTaskCount(0); });
+    return () => { cancelled = true; };
+  }, [project.id, scheduleAttachKey]);
+  const toggleScheduleAttach = (key: 'gantt' | 'sCurve') => setScheduleAttach((prev) => {
+    const next = { ...prev, [key]: !prev[key] };
+    try { localStorage.setItem(scheduleAttachKey, JSON.stringify(next)); } catch { /* per-device convenience only */ }
+    return next;
+  });
+  const hasSchedule = (scheduleTaskCount ?? 0) > 0;
   const [pbInput, setPbInput] = useState(initialPb ?? '');
   const [showBillingHint, setShowBillingHint] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -316,9 +360,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     if (clientApprover?.name || clientApprover?.designation) {
       return [{ name: clientApprover.name, designation: clientApprover.designation, company: clientApprover.company }];
     }
-    const approverParts = (project.client_approver || '').split(/\s*[–-]\s*/);
-    const approverName = (approverParts[0] || '').trim();
-    const approverDesignation = (approverParts[1] || '').trim();
+    const { name: approverName, designation: approverDesignation } = parseClientApprover(project.client_approver);
     const approverCompany = (project.account_name || '').trim();
     if (approverName || approverDesignation || approverCompany) {
       return [{ name: approverName, designation: approverDesignation, company: approverCompany }];
@@ -727,467 +769,8 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   };
 
   const buildPdf = async (preview: boolean): Promise<Blob | { blob: Blob; filename: string; missingPhotos?: number } | void> => {
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const margin = 16;
-    const contentWidth = 210 - margin * 2;
-    const pageHeight = 297;
-    const footerY = pageHeight - 10; // Doc. No. and Page X of Y at very bottom
-    const lineHeight = 5.2;
-    const sectionGap = 6;
-    const afterHeading = 4;
+    const issuer = REPORT_ISSUERS[reportCompany];
 
-    const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
-    if (hasArialNarrow) {
-      doc.addFileToVFS('ArialNarrow.ttf', arialNarrowBase64);
-      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'normal');
-      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'bold');
-    }
-    const fontTitle = () => doc.setFont('helvetica', 'bold');
-    const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
-
-    const companyName = REPORT_COMPANIES[reportCompany];
-    const completionPct = Math.round(wbsOverallProgress * 100) / 100;
-    const poNum = project.po_number || '—';
-
-    // Header — mirrors the Certificate of Completion layout for a uniform look:
-    // logo top-left, large blue document title top-right, blue company name, divider.
-    const addPageHeader = async (pageY: number, isFirstPage: boolean = false): Promise<number> => {
-      const rightX = 210 - margin;
-      const headerStartY = pageY;
-
-      // Format the report date (e.g. June 23, 2026)
-      const formatReportDate = (input: string | undefined): string => {
-        const d = input ? (() => {
-          const parts = input.trim().split(/[/-]/);
-          if (parts.length === 3) {
-            const [a, b, c] = parts.map(Number);
-            if (input.includes('/')) return new Date(c, a - 1, b); // MM/DD/YYYY
-            return new Date(a, b - 1, c); // ISO-like YYYY-MM-DD
-          }
-          return new Date(input);
-        })() : new Date();
-        return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: '2-digit' });
-      };
-      const reportDate = formatReportDate(preparedBy.date);
-
-      // Logo (top-left)
-      let logoBottomY = headerStartY;
-      if (reportCompany === 'ACT') {
-        try {
-          const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
-          const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
-          const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-          doc.addImage(logoDataUrl, 'PNG', margin, headerStartY, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT);
-          logoBottomY = headerStartY + ACT_LOGO_PDF_HEIGHT;
-        } catch (_) {}
-      } else if (reportCompany === 'IOCT') {
-        try {
-          const { loadImageDataUrl, IOCT_ICON_LOGO_PDF_SIZE } = await import('../../utils/logoUtils');
-          const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
-          const logoDataUrl = await loadImageDataUrl(logoUrl);
-          doc.addImage(logoDataUrl, 'PNG', margin, headerStartY, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
-          logoBottomY = headerStartY + IOCT_ICON_LOGO_PDF_SIZE;
-        } catch (_) {}
-      }
-
-      // Document title (right column, large, blue) — stacked to mirror the COC
-      doc.setTextColor(44, 90, 160);
-      fontTitle();
-      doc.setFontSize(20);
-      doc.text('Progress', rightX, headerStartY + 7, { align: 'right' });
-      doc.text('Report', rightX, headerStartY + 15, { align: 'right' });
-      doc.setTextColor(0, 0, 0);
-
-      // Company name (below logo, left column, blue)
-      let infoY = logoBottomY + 2;
-      doc.setTextColor(44, 90, 160);
-      fontTitle();
-      doc.setFontSize(10);
-      doc.text(companyName, margin, infoY);
-      infoY += 4.5;
-      doc.setTextColor(0, 0, 0);
-
-      // Horizontal divider below header
-      let currentY = Math.max(infoY, headerStartY + 22) + 3;
-      doc.setDrawColor(180, 180, 180);
-      doc.setLineWidth(0.5);
-      doc.line(margin, currentY, rightX, currentY);
-      doc.setDrawColor(0, 0, 0);
-      doc.setLineWidth(0.2);
-      currentY += 8;
-
-      // Project Details
-      fontTitle();
-      doc.setFontSize(12);
-      doc.text('Project Details', margin, currentY);
-      fontBody();
-      currentY += lineHeight + afterHeading;
-      doc.setFontSize(9);
-      doc.text(`Project Name: ${project.project_name || '—'}`, margin, currentY);
-      currentY += lineHeight;
-      doc.text(`Project No.: ${project.project_no || String(project.item_no ?? project.id) || '—'}`, margin, currentY);
-      currentY += lineHeight;
-      doc.text(`Purchase Order No.: ${project.po_number || '—'}`, margin, currentY);
-      currentY += lineHeight;
-      doc.text(`Client: ${project.account_name || '—'}`, margin, currentY);
-      currentY += lineHeight;
-      {
-        const locationLabel = 'Project Location: ';
-        const locationValue = project.project_location || '—';
-        const labelWidth = doc.getTextWidth(locationLabel);
-        // Wrap only the value part; indent continuation lines to align under the value
-        const valueLines = doc.splitTextToSize(locationValue, contentWidth - labelWidth);
-        doc.text(locationLabel + valueLines[0], margin, currentY);
-        for (let li = 1; li < valueLines.length; li++) {
-          currentY += lineHeight;
-          doc.text(valueLines[li], margin + labelWidth, currentY);
-        }
-        currentY += lineHeight;
-      }
-      doc.text(`Report Date: ${reportDate}`, margin, currentY);
-      currentY += lineHeight + sectionGap;
-
-      // Add Project Status and Certification Statement only on first page
-      if (isFirstPage) {
-        fontTitle();
-        doc.setFontSize(11);
-        doc.text('Project Status', margin, currentY);
-        fontBody();
-        currentY += lineHeight + afterHeading - 1;
-        doc.setFontSize(9);
-        
-        // Build certification text with bold parts - draw segment by segment
-        const certPart1 = `${companyName} hereby certifies that `;
-        const certPart2 = `(${completionPct}%)`;
-        const certPart3 = ` of the total scope of work under Purchase Order No. `;
-        const certPart4 = `${poNum}`;
-        const certPart5 = ` has been completed as of the date of this report. The completed works were executed in full compliance with the approved project scope, technical specifications, and contractual obligations. All deliverables corresponding to the stated progress have been properly performed and documented.`;
-        
-        let xPos = margin;
-        let yPos = currentY;
-        const maxWidth = margin + contentWidth;
-        
-        // Helper to draw text with wrapping
-        const drawTextSegment = (text: string, isBold: boolean) => {
-          if (isBold) {
-            fontTitle();
-          } else {
-            fontBody();
-          }
-          
-          const words = text.split(' ');
-          for (let i = 0; i < words.length; i++) {
-            const word = words[i] + (i < words.length - 1 ? ' ' : '');
-            const wordWidth = doc.getTextWidth(word);
-            
-            // Check if word fits on current line
-            if (xPos + wordWidth > maxWidth && xPos > margin) {
-              // Move to next line
-              yPos += lineHeight;
-              xPos = margin;
-            }
-            
-            doc.text(word, xPos, yPos);
-            xPos += wordWidth;
-          }
-        };
-        
-        // Draw each part
-        drawTextSegment(certPart1, false);
-        drawTextSegment(certPart2, true); // Bold percentage
-        drawTextSegment(certPart3, false);
-        drawTextSegment(certPart4, true); // Bold PO number
-        drawTextSegment(certPart5, false);
-        
-        currentY = yPos + lineHeight + sectionGap;
-
-        fontTitle();
-        doc.setFontSize(11);
-        doc.text('Certification Statement', margin, currentY);
-        fontBody();
-        currentY += lineHeight + afterHeading - 1;
-        doc.setFontSize(9);
-        doc.text('This certification is issued for documentation, verification, and progress billing purposes.', margin, currentY);
-        currentY += lineHeight + 4;
-      }
-      
-      return currentY;
-    };
-
-    // Prepare WBS rows data
-    const wbsRows = wbsItems.map((i) => {
-      const code = (i.code || '').trim();
-      const isParent = isParentItem(code, wbsItems);
-      const indentLevel = getIndentLevel(code);
-      const indentSpaces = '  '.repeat(indentLevel);
-      const name = i.name || '—';
-      const indentedName = indentSpaces + name;
-      
-      let weight: string;
-      let progress: string;
-      
-      if (isParent) {
-        const totals = calculateParentTotals(code, wbsItems);
-        weight = totals.weight.toFixed(2);
-        progress = totals.progress.toFixed(2);
-      } else {
-        weight = Number(parseWBSNum(i.weight)).toFixed(2);
-        progress = Number(parseWBSNum(i.progress)).toFixed(2);
-      }
-      
-      return {
-        code: code || '—',
-        name: indentedName,
-        weight,
-        progress,
-        isParent,
-      };
-    });
-
-    const totalPct = wbsOverallProgress.toFixed(2);
-    const dataRows = wbsRows.map((r) => [r.code, r.name, r.weight, r.progress]);
-    const totalRow = ['', 'Total', `${wbsTotalWeight.toFixed(2)}%`, `${totalPct}%`];
-
-    // Parent-only summary for last page (code, name, weight, progress)
-    const parentOnlyRows = wbsRows.filter((r) => r.isParent);
-    const summaryTableRows = parentOnlyRows.length > 0
-      ? [
-          ...parentOnlyRows.map((r) => [r.code, r.name.trim(), r.weight, r.progress]),
-          ['', 'Total', parentOnlyRows.reduce((s, r) => s + parseFloat(r.weight), 0).toFixed(2), totalPct],
-        ]
-      : [];
-
-    // If no rows, use empty state
-    const allBodyRows = dataRows.length > 0 ? [...dataRows, totalRow] : [['—', 'No WBS items', '—', '—']];
-
-    // Add signature section helper
-    const addSignatureSection = (startY: number): number => {
-      const pageWidth = 210;
-      const sigLineHeight = 5;
-      let y = startY;
-      
-      const colSpacing = 8; // Spacing between columns in mm
-      const preparedByWidth = 50;
-      const originalRightColX = margin + 95; // Single approver: keep on the right
-      
-      const numApprovers = approvers.length > 0 ? Math.min(approvers.length, 3) : 1;
-      const col0 = margin;
-      let col1: number;
-      
-      if (numApprovers === 1) {
-        col1 = originalRightColX;
-      } else {
-        col1 = col0 + preparedByWidth + colSpacing; // unused for 2/3; approvers go below
-      }
-      
-      fontTitle();
-      doc.setFontSize(10);
-      doc.text('Prepared by:', col0, y);
-      if (numApprovers === 1) {
-        doc.text('Approved by:', col1, y);
-      }
-      
-      let rowY = y + sigLineHeight;
-      fontBody();
-      doc.setFontSize(9);
-      
-      const preparedByName = (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
-      const preparedByDesignation = (preparedBy.designation || '').trim() || '—';
-      // Always use the selected report company — not the free-text field which may be stale
-      const preparedByCompany = companyName;
-      
-      // One line before name for signature
-      const preparedByNameY = rowY + sigLineHeight;
-      doc.text(preparedByName, col0, preparedByNameY);
-      let preparedByY = preparedByNameY + sigLineHeight;
-      if (preparedByDesignation !== '—') {
-        doc.text(preparedByDesignation, col0, preparedByY);
-        preparedByY += sigLineHeight;
-      }
-      doc.text(preparedByCompany, col0, preparedByY);
-      preparedByY += sigLineHeight;
-      
-      let maxApproverY = rowY;
-      const rowGap = sigLineHeight + 4; // gap between Prepared by block and Approved by row
-      
-      if (approvers.length > 0) {
-        if (numApprovers === 1) {
-          const approver = approvers[0];
-          const approverName = (approver.name || '').trim();
-          const approverDesignation = (approver.designation || '').trim();
-          const approverCompany = (approver.company || '').trim();
-          // One line before name for signature
-          let approverY = rowY + sigLineHeight;
-          if (approverName) {
-            doc.text(approverName, col1, approverY);
-            approverY += sigLineHeight;
-          }
-          if (approverDesignation) {
-            doc.text(approverDesignation, col1, approverY);
-            approverY += sigLineHeight;
-          }
-          if (approverCompany) {
-            doc.text(approverCompany, col1, approverY);
-            approverY += sigLineHeight;
-          }
-          maxApproverY = Math.max(maxApproverY, approverY);
-        } else {
-          // 2 or 3 approvers: place below Prepared by, distributed across full page width
-          const approvedByStartY = preparedByY + rowGap;
-          const labelY = approvedByStartY;
-          // One line before names for signature
-          const approverContentY = approvedByStartY + sigLineHeight + sigLineHeight;
-          
-          fontTitle();
-          doc.setFontSize(10);
-          doc.text('Approved by:', col0, labelY);
-          fontBody();
-          doc.setFontSize(9);
-          
-          const availableWidth = pageWidth - margin * 2;
-          const n = numApprovers;
-          const totalSpacing = (n - 1) * colSpacing;
-          const totalColWidth = availableWidth - totalSpacing;
-          const colWidth = totalColWidth / n;
-          const approverCols: number[] = [];
-          for (let i = 0; i < n; i++) {
-            approverCols.push(margin + i * (colWidth + colSpacing));
-          }
-          
-          for (let i = 0; i < n; i++) {
-            const approver = approvers[i];
-            const approverName = (approver.name || '').trim();
-            const approverDesignation = (approver.designation || '').trim();
-            const approverCompany = (approver.company || '').trim();
-            const colX = approverCols[i];
-            let approverY = approverContentY;
-            if (approverName) {
-              doc.text(approverName, colX, approverY);
-              approverY += sigLineHeight;
-            }
-            if (approverDesignation) {
-              doc.text(approverDesignation, colX, approverY);
-              approverY += sigLineHeight;
-            }
-            if (approverCompany) {
-              doc.text(approverCompany, colX, approverY);
-              approverY += sigLineHeight;
-            }
-            maxApproverY = Math.max(maxApproverY, approverY);
-          }
-        }
-      } else {
-        const approverParts = (project.client_approver || '').split(/\s*[–-]\s*/);
-        const approverName = (approverParts[0] || '').trim();
-        const approverDesignation = (approverParts[1] || '').trim();
-        const approverCompany = (project.account_name || '').trim();
-        // One line before name for signature
-        let approverY = rowY + sigLineHeight;
-        if (approverName) {
-          doc.text(approverName, col1, approverY);
-          approverY += sigLineHeight;
-        }
-        if (approverDesignation) {
-          doc.text(approverDesignation, col1, approverY);
-          approverY += sigLineHeight;
-        }
-        if (approverCompany) {
-          doc.text(approverCompany, col1, approverY);
-          approverY += sigLineHeight;
-        }
-        maxApproverY = Math.max(maxApproverY, approverY);
-      }
-      
-      return Math.max(preparedByY, maxApproverY) + sigLineHeight;
-    };
-
-    // Generate pages — let autoTable handle pagination automatically (no manual row chunking)
-    const headers = ['Code', 'Deliverables', 'Weight %', 'Progress %'];
-    const tableStartY = await addPageHeader(18, true); // First page includes Project Status and Certification
-
-    autoTable(doc, {
-      head: [headers],
-      body: allBodyRows,
-      startY: tableStartY,
-      margin: { left: margin, right: margin, top: 18, bottom: 20 },
-      tableWidth: 'auto',
-      columnStyles: { 0: { cellWidth: 18 }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 22 }, 3: { cellWidth: 22 } },
-      styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica' },
-      headStyles: {
-        fillColor: DR_HEADER_BLUE,
-        textColor: [255, 255, 255],
-        fontStyle: 'bold',
-        fontSize: 8,
-        font: 'helvetica'
-      },
-      showHead: 'everyPage',
-      didParseCell: (data) => {
-        if (data.section === 'head') {
-          data.cell.styles.font = 'helvetica';
-          data.cell.styles.fontStyle = 'bold';
-        } else if (data.section === 'body') {
-          const rowIndex = data.row.index;
-          // Last row is the Total row
-          if (rowIndex === allBodyRows.length - 1 && dataRows.length > 0) {
-            // helvetica: ArialNarrow has no real bold variant
-            data.cell.styles.font = 'helvetica';
-            data.cell.styles.fontStyle = 'bold';
-            data.cell.styles.fillColor = [235, 241, 250];
-          } else if (rowIndex < wbsRows.length) {
-            const rowData = wbsRows[rowIndex];
-            if (rowData.isParent) {
-              // Parent items: bold helvetica (ArialNarrow has no real bold variant), yellow background
-              data.cell.styles.fontStyle = 'bold';
-              data.cell.styles.fillColor = [255, 250, 205]; // Light yellow (#fffacd)
-              data.cell.styles.font = 'helvetica';
-            }
-          }
-        }
-      },
-    });
-
-    const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
-    let tableFinalY = docWithTable.lastAutoTable?.finalY ?? tableStartY;
-
-    // Add parent-only summary table after the main WBS table
-    if (summaryTableRows.length > 0) {
-      const summaryGap = 6;
-      let summaryStartY = tableFinalY + summaryGap;
-
-      fontTitle();
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Summary', margin, summaryStartY);
-      fontBody();
-      summaryStartY += lineHeight + 2;
-
-      autoTable(doc, {
-        head: [['Code', 'Deliverables', 'Weight %', 'Progress %']],
-        body: summaryTableRows,
-        startY: summaryStartY,
-        margin: { left: margin, right: margin },
-        tableWidth: 'auto',
-        columnStyles: { 0: { cellWidth: 18 }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 22 }, 3: { cellWidth: 22 } },
-        styles: { fontSize: 8, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', fontStyle: 'bold' },
-        headStyles: {
-          fillColor: DR_HEADER_BLUE,
-          textColor: [255, 255, 255],
-          fontStyle: 'bold',
-          fontSize: 8,
-          font: 'helvetica',
-        },
-        didParseCell: (data) => {
-          if (data.section === 'body') {
-            data.cell.styles.fontStyle = 'bold';
-            data.cell.styles.font = 'helvetica';
-          }
-        },
-      });
-
-      tableFinalY = docWithTable.lastAutoTable?.finalY ?? tableFinalY;
-    }
-
-    // ── Site Photos ───────────────────────────────────────────────────────────
     // Pre-fetch embeddable photos. A photo is embeddable when its original file
     // is still in memory (even if the OneDrive upload failed) or when it can be
     // re-fetched from OneDrive — don't silently drop attached photos.
@@ -1224,125 +807,74 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     }
     const missingPhotos = exportablePhotos.length - photoDataUrls.size;
 
-    if (photoDataUrls.size > 0) {
-      const colCount = 2;
-      const gap = 5;
-      const photoW = (contentWidth - gap * (colCount - 1)) / colCount;
-      const photoMaxH = 55;
-      const captionH = 5;
-      const headingH = lineHeight + 4;
-
-      // Heading — keep it with at least one photo row on the same page
-      let y = tableFinalY + sectionGap + 2;
-      if (y + headingH + photoMaxH + captionH > pageHeight - 25) {
-        doc.addPage();
-        y = 20;
-      }
-      fontTitle();
-      doc.setFontSize(11);
-      doc.text('Site Photos', margin, y);
-      fontBody();
-      y += headingH;
-
-      let col = 0;
-      let rowTopY = y;
-      const photoList = exportablePhotos.filter(p => photoDataUrls.has(p.localId));
-      for (const photo of photoList) {
-        const dataUrl = photoDataUrls.get(photo.localId)!;
-
-        // Aspect-ratio fit within the cell
-        let drawW = photoW;
-        let drawH = photoMaxH;
-        try {
-          await new Promise<void>(res => {
-            const img = new Image();
-            img.onload = () => {
-              const aspect = img.naturalWidth / img.naturalHeight;
-              if (aspect > photoW / photoMaxH) { drawW = photoW; drawH = photoW / aspect; }
-              else { drawH = photoMaxH; drawW = photoMaxH * aspect; }
-              res();
-            };
-            img.onerror = () => res();
-            img.src = dataUrl;
-          });
-        } catch (_) {}
-
-        // New page if this row won't fit
-        if (rowTopY + photoMaxH + captionH + 4 > pageHeight - 25) {
-          doc.addPage();
-          rowTopY = 20;
-          col = 0;
-        }
-        const x = margin + col * (photoW + gap);
-
-        try {
-          const fmt = dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-          doc.addImage(dataUrl, fmt, x, rowTopY, drawW, drawH, undefined, 'FAST');
-        } catch (_) {}
-
-        fontBody();
-        doc.setFontSize(7);
-        const userCaption = (photo.caption || '').trim();
-        const rawName = photo.filename || photo.file?.name || '';
-        const caption = userCaption || rawName.replace(/^[^_]*_[^_]*_\d+\./, '').slice(0, 40) || rawName;
-        const captionLines = doc.splitTextToSize(caption, photoW);
-        doc.text(captionLines.slice(0, 2), x, rowTopY + photoMaxH + captionH, { maxWidth: photoW });
-
-        col++;
-        if (col >= colCount) {
-          col = 0;
-          rowTopY = rowTopY + photoMaxH + captionH + 4;
-        }
-      }
-      tableFinalY = col > 0 ? rowTopY + photoMaxH + captionH + 4 : rowTopY;
+    // Pixel size of each embeddable photo so the PDF can fit it without distortion.
+    const pdfPhotos: ProgressReportPhoto[] = [];
+    for (const photo of exportablePhotos) {
+      const dataUrl = photoDataUrls.get(photo.localId);
+      if (!dataUrl) continue;
+      const size = await new Promise<{ width: number; height: number }>((res) => {
+        const img = new Image();
+        img.onload = () => res({ width: img.naturalWidth, height: img.naturalHeight });
+        img.onerror = () => res({ width: 0, height: 0 });
+        img.src = dataUrl;
+      });
+      const userCaption = (photo.caption || '').trim();
+      const rawName = photo.filename || photo.file?.name || '';
+      const caption = userCaption || rawName.replace(/^[^_]*_[^_]*_\d+\./, '').slice(0, 40) || rawName;
+      pdfPhotos.push({ dataUrl, ...size, caption });
     }
 
-    // ── Signature section — only on the LAST page ─────────────────────────────
+    const rows: ProgressReportRow[] = wbsItems.map((i) => {
+      const code = (i.code || '').trim();
+      const isParent = isParentItem(code, wbsItems);
+      const totals = isParent
+        ? calculateParentTotals(code, wbsItems)
+        : { weight: parseWBSNum(i.weight), progress: parseWBSNum(i.progress) };
+      return { code: code || '—', name: i.name || '—', ...totals, isParent, level: getIndentLevel(code) };
+    });
+
+    // Approvers: the signatory cards, else the project's legacy client_approver text.
+    let pdfApprovers = approvers.slice(0, 3);
+    if (pdfApprovers.length === 0) {
+      const { name, designation } = parseClientApprover(project.client_approver);
+      pdfApprovers = [{ name, designation, company: (project.account_name || '').trim() }];
+    }
+
     const projectNo = project.project_no || String(project.item_no ?? project.id) || '—';
     const pbNumRaw = pbInput.trim() || '0';
     const pbNum = pbNumRaw === '—' || pbNumRaw === '' ? '01' : String(Number(pbNumRaw) || 1).padStart(2, '0');
-    const docNumber = `Doc. No.: ${projectNo}-PB-${pbNum}`;
 
-    const numApprovers = approvers.length > 0 ? Math.min(approvers.length, 3) : 1;
-    const signatureGap = numApprovers === 3 ? 10 : 8;
-    const hasPhotos = photoDataUrls.size > 0;
+    const { doc, filename } = buildProgressReportPdf({
+      reportCompany,
+      projectName: project.project_name || '—',
+      projectNo,
+      poNumber: project.po_number || '—',
+      client: project.account_name || '—',
+      location: project.project_location || '—',
+      reportDate: preparedBy.date,
+      pbNumber: pbNum,
+      rows,
+      totalWeight: wbsTotalWeight,
+      overallProgress: wbsOverallProgress,
+      preparedBy: {
+        name: (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim(),
+        designation: (preparedBy.designation || '').trim() || undefined,
+      },
+      approvers: pdfApprovers,
+      photos: pdfPhotos,
+    }, { logoDataUrl: await loadReportLogo(issuer), bodyFontBase64: arialNarrowBase64 });
 
-    // Place the signature on the last page. Estimate the block height from the
-    // approver count (2–3 approvers stack the "Approved by" row below "Prepared by").
-    // Keep it on the current page whenever it fits — only break to a new page when
-    // it genuinely won't, so signatures never get orphaned on a near-empty page.
-    // When there's spare room, anchor near the bottom for a formal look.
-    doc.setPage(doc.getNumberOfPages());
-    const estSigHeight = numApprovers >= 2 ? 60 : 36;
-    const afterContentY = tableFinalY + signatureGap;
-    let signatureY;
-    if (afterContentY + estSigHeight <= footerY) {
-      const bottomAnchorY = footerY - estSigHeight - 4;
-      signatureY = (!hasPhotos && bottomAnchorY > afterContentY) ? bottomAnchorY : afterContentY;
-    } else {
-      doc.addPage();
-      signatureY = 24;
-    }
-    const signatureEndY = addSignatureSection(signatureY);
-
-    // Recompute page count after any page added for the signature, then stamp footers
-    const totalPages = doc.getNumberOfPages();
-    fontBody();
-    doc.setFontSize(8);
-    for (let p = 1; p <= totalPages; p++) {
-      doc.setPage(p);
-      const docNoY = p === totalPages
-        ? Math.max(signatureEndY + 4, footerY - 5)
-        : footerY;
-      doc.text(docNumber, margin, docNoY);
-      doc.text(`Page ${p} of ${totalPages}`, 210 - margin, docNoY, { align: 'right' });
+    // Work Schedule attachment: the Gantt generator's own PDF (its saved export settings), appended after the report.
+    let blob = doc.output('blob') as Blob;
+    if (hasSchedule && (scheduleAttach.gantt || scheduleAttach.sCurve)) {
+      const attachment = await renderScheduleAttachment(String(project.id), { code: projectNo, name: project.project_name || '' }, scheduleAttach)
+        .catch((e) => { console.warn('[ProgressReport] Work Schedule attachment skipped:', e); return null; });
+      if (attachment) blob = new Blob([await appendPdfs(doc.output('arraybuffer'), [attachment])], { type: 'application/pdf' });
     }
 
-    if (preview) return doc.output('blob') as Blob;
-    // Use Doc. No. as filename (without "Doc. No.: " prefix)
-    const fileName = `${projectNo}-PB-${pbNum}.pdf`;
-    doc.save(fileName);
-    return { blob: doc.output('blob') as Blob, filename: fileName, missingPhotos };
+    if (preview) return blob;
+    saveAs(blob, filename);
+    return { blob, filename, missingPhotos };
   };
 
   const handlePreview = async () => {
@@ -1441,10 +973,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           onChange={() => toggleSection('setup')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Report Setup
             </Typography>
             {pbInput && preparedBy.date && (
@@ -1456,6 +988,22 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
               <TextField size="small" label="PB #" placeholder="e.g. 1" value={pbInput} onChange={(e) => setPbInput(e.target.value)} sx={{ width: 80 }} />
               <TextField size="small" label="Date" type="date" value={preparedBy.date} onChange={(e) => setPreparedBy((p) => ({ ...p, date: e.target.value }))} sx={{ width: 160 }} InputLabelProps={{ shrink: true }} />
             </Box>
+            <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 2, rowGap: 0.5 }}>
+              <Typography variant="body2" sx={{ fontWeight: 600, width: { xs: '100%', sm: 'auto' } }}>Work Schedule attachment</Typography>
+              <FormControlLabel
+                control={<Switch size="small" checked={hasSchedule && scheduleAttach.gantt} onChange={() => toggleScheduleAttach('gantt')} disabled={!hasSchedule} />}
+                label={<Typography variant="body2">Attach Gantt chart</Typography>}
+              />
+              <FormControlLabel
+                control={<Switch size="small" checked={hasSchedule && scheduleAttach.sCurve} onChange={() => toggleScheduleAttach('sCurve')} disabled={!hasSchedule} />}
+                label={<Typography variant="body2">Attach S-Curve</Typography>}
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ width: { xs: '100%', sm: 'auto' } }}>
+                {scheduleTaskCount === null ? 'Checking the Work Schedule…'
+                  : hasSchedule ? `Attached after the report, exactly as the Work Schedule's Export Gantt makes it (${scheduleTaskCount} tasks).`
+                  : <>No Work Schedule yet. <Button size="small" sx={{ p: 0, minWidth: 0, verticalAlign: 'baseline', textTransform: 'none' }} onClick={() => navigate(`/projects/${project.id}/schedule`)}>Build one</Button> to attach it.</>}
+              </Typography>
+            </Box>
           </AccordionDetails>
         </Accordion>
 
@@ -1465,10 +1013,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           onChange={() => toggleSection('wbs')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Work Breakdown Structure
             </Typography>
             {wbsItems.length > 0 && (
@@ -1476,11 +1024,12 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
             )}
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1, flexWrap: 'wrap' }}>
-              <FormControl size="small" sx={{ minWidth: 200 }}>
-                <InputLabel id="wbs-template-label">Template</InputLabel>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, pt: 1.5, pb: 1, flexWrap: 'wrap' }}>
+              <FormControl size="small" sx={{ minWidth: { xs: '100%', sm: 240 } }}>
+                <InputLabel id="wbs-template-label" shrink>Template</InputLabel>
                 <Select
                   labelId="wbs-template-label"
+                  notched
                   value=""
                   label="Template"
                   onChange={(e) => {
@@ -1495,27 +1044,29 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                 </Select>
               </FormControl>
               <Button
+                variant="contained"
+                size="small"
                 startIcon={<AddIcon />}
                 onClick={handleAddWBSItem}
-                sx={{ textTransform: 'none', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}
+                sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
               >
                 Add WBS item
               </Button>
             </Box>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, pb: 1 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 1.5, pb: 1.5 }}>
               Tip: a row becomes a bold <strong>sub-header</strong> automatically when other rows use its code as a prefix — e.g. code <strong>1</strong> is the &quot;Engineering Services&quot; header, and <strong>1.1</strong> / <strong>1.2</strong> are its items (their weight &amp; progress roll up into the header). Drag the <DragIndicatorIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} /> handle to reorder rows.
             </Typography>
             <DndContext sensors={wbsSensors} collisionDetection={closestCenter} onDragEnd={handleWbsDragEnd}>
             <TableContainer sx={{ border: 0, borderRadius: 0, overflow: 'auto' }}>
-              <Table stickyHeader size="medium" sx={{ minWidth: 560 }}>
+              <Table stickyHeader size="small" sx={{ minWidth: 560 }}>
                 <TableHead>
                   <TableRow>
-                    <TableCell sx={{ width: 40, bgcolor: NET_PACIFIC_COLORS.primary, borderBottom: '2px solid #e2e8f0', py: 2, px: 0.5 }} />
-                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Code</TableCell>
-                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, minWidth: 200 }}>Name</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Weight %</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Progress %</TableCell>
-                    <TableCell align="center" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 72 }}>Actions</TableCell>
+                    <TableCell sx={{ ...wbsHeadSx, width: 40, px: 0.5 }} />
+                    <TableCell sx={{ ...wbsHeadSx, width: 100 }}>Code</TableCell>
+                    <TableCell sx={{ ...wbsHeadSx, minWidth: 200 }}>Name</TableCell>
+                    <TableCell align="right" sx={{ ...wbsHeadSx, width: 100 }}>Weight %</TableCell>
+                    <TableCell align="right" sx={{ ...wbsHeadSx, width: 100 }}>Progress %</TableCell>
+                    <TableCell align="center" sx={{ ...wbsHeadSx, width: 72 }}>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1540,9 +1091,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                           style={style}
                           hover
                           sx={{
-                            bgcolor: isParent ? '#fffacd' : (index % 2 === 0 ? '#fff' : 'grey.50'),
+                            // Sub-headers get a light brand tint; items are lightly striped.
+                            bgcolor: isParent ? 'rgba(44,90,160,0.07)' : (index % 2 === 0 ? '#fff' : 'rgba(0,0,0,0.02)'),
                             '&:hover': {
-                              bgcolor: isParent ? '#fff9c4' : undefined,
+                              bgcolor: isParent ? 'rgba(44,90,160,0.11)' : undefined,
                             }
                           }}
                         >
@@ -1554,7 +1106,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                           >
                             <DragIndicatorIcon fontSize="small" />
                           </TableCell>
-                          <TableCell sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                          <TableCell sx={{ py: 0.75, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             <TextField
                               size="small"
                               fullWidth
@@ -1573,7 +1125,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                               inputProps={{ maxLength: 20 }}
                             />
                           </TableCell>
-                          <TableCell sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                          <TableCell sx={{ py: 0.75, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             <Box sx={{ pl: `${indentPx}px` }}>
                               <TextField
                                 size="small"
@@ -1593,7 +1145,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                               />
                             </Box>
                           </TableCell>
-                          <TableCell align="right" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                          <TableCell align="right" sx={{ py: 0.75, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             {isParent ? (
                               <Typography sx={{ fontWeight: 700, fontSize: '0.9375rem', color: '#1e293b', fontFamily: '"Arial Narrow", Arial, sans-serif' }}>
                                 {parentTotals ? parentTotals.weight.toFixed(2) : '0.00'}
@@ -1613,7 +1165,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                               />
                             )}
                           </TableCell>
-                          <TableCell align="right" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                          <TableCell align="right" sx={{ py: 0.75, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             {isParent ? (
                               <Typography sx={{ fontWeight: 700, fontSize: '0.9375rem', color: '#1e293b', fontFamily: '"Arial Narrow", Arial, sans-serif' }}>
                                 {parentTotals ? parentTotals.progress.toFixed(2) : '0.00'}
@@ -1633,7 +1185,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                               />
                             )}
                           </TableCell>
-                          <TableCell align="center" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                          <TableCell align="center" sx={{ py: 0.75, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             <IconButton size="small" onClick={() => handleDeleteWBSItem(item.id)} title="Delete" color="error"><DeleteIcon fontSize="small" /></IconButton>
                           </TableCell>
                         </TableRow>
@@ -1650,10 +1202,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                   return (
                     <TableFooter>
                       <TableRow sx={{ bgcolor: '#f8fafc' }}>
-                        <TableCell colSpan={3} sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>Total progress</TableCell>
-                        <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>{totalWeight.toFixed(2)}%</TableCell>
-                        <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>{wbsOverallProgress.toFixed(2)}%</TableCell>
-                        <TableCell sx={{ borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }} />
+                        <TableCell colSpan={3} sx={wbsTotalSx}>Total</TableCell>
+                        <TableCell align="right" sx={{ ...wbsTotalSx, color: Math.abs(totalWeight - 100) > 0.01 ? 'error.main' : undefined }}>{totalWeight.toFixed(2)}%</TableCell>
+                        <TableCell align="right" sx={wbsTotalSx}>{wbsOverallProgress.toFixed(2)}%</TableCell>
+                        <TableCell sx={wbsTotalSx} />
                       </TableRow>
                     </TableFooter>
                   );
@@ -1670,10 +1222,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           onChange={() => toggleSection('signatories')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Signatories
             </Typography>
             {(preparedBy.name || approvers.length > 0) && (
@@ -1798,10 +1350,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           onChange={() => toggleSection('photos')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Site Photos
             </Typography>
             {photos.length > 0 && (
@@ -1925,10 +1477,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           onChange={() => toggleSection('savedReports')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Saved Reports
             </Typography>
             {savedReports.length > 0 && (
@@ -1938,19 +1490,19 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           </AccordionSummary>
           <AccordionDetails>
             {savedReports.length > 0 ? (
-              <TableContainer sx={{ mb: 1.5, border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 240 }}>
+              <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 280 }}>
                 <Table size="small" stickyHeader>
                   <TableHead>
                     <TableRow>
-                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>PB#</TableCell>
-                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Date</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Progress</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Actions</TableCell>
+                      <TableCell sx={savedHeadSx}>PB#</TableCell>
+                      <TableCell sx={savedHeadSx}>Date</TableCell>
+                      <TableCell align="right" sx={savedHeadSx}>Progress</TableCell>
+                      <TableCell align="right" sx={savedHeadSx}>Actions</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {savedReports.map((s) => (
-                      <TableRow key={s.id} hover selected={editingReportId === s.id}>
+                      <TableRow key={s.id} hover selected={editingReportId === s.id} sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' }, '& td': { fontSize: '0.8rem' } }}>
                         <TableCell>PB{s.pbNumber}</TableCell>
                         <TableCell>{new Date(s.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
                         <TableCell align="right">{Math.round(s.overallProgress * 100) / 100}%</TableCell>
@@ -1987,8 +1539,9 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           bottom: 0,
           zIndex: 10,
           borderTop: `2px solid ${NET_PACIFIC_COLORS.primary}`,
-          px: 2,
-          py: 1.5,
+          pl: 2,
+          pr: 9,
+          py: 1.25,
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
@@ -2048,7 +1601,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
               startIcon={<PictureAsPdfIcon />}
               onClick={handleExport}
               disabled={hasBlockingWarnings || exporting}
-              sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}
+              sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
             >
               {exporting ? 'Uploading...' : 'Export PDF'}
             </Button>

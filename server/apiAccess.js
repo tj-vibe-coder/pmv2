@@ -26,6 +26,31 @@ const SCANNER_ROUTES = [
   ['POST', /^\/api\/receipts\/(parse|detect-crop|check-duplicates)$/],
 ];
 
+// The only routes an agent API key (server/agentAccess.js) may call.
+const AGENT_ROUTES = [
+  ['GET', /^\/api\/agent\/projects$/],
+  ['GET', /^\/api\/agent\/projects\/[^/]+$/],
+  ['GET', /^\/api\/agent\/projects\/[^/]+\/schedule$/],
+  ['GET', /^\/api\/agent\/projects\/[^/]+\/invoices$/],
+  ['POST', /^\/api\/agent\/projects\/[^/]+\/billing$/],
+  ['POST', /^\/api\/agent\/projects\/[^/]+\/payments$/],
+  ['GET', /^\/api\/agent\/clients$/],
+  ['GET', /^\/api\/agent\/calcsheet\/projects$/],
+  ['POST', /^\/api\/agent\/calcsheet\/projects$/],
+  ['GET', /^\/api\/agent\/calcsheet\/projects\/[^/]+$/],
+  ['PUT', /^\/api\/agent\/calcsheet\/projects\/[^/]+$/],
+  ['POST', /^\/api\/agent\/calcsheet\/projects\/[^/]+\/quotations$/],
+  ['PUT', /^\/api\/agent\/calcsheet\/quotations\/[^/]+$/],
+  ['GET', /^\/api\/agent\/projects\/[^/]+\/emails$/],
+  ['POST', /^\/api\/agent\/projects\/[^/]+\/emails$/],
+  ['GET', /^\/api\/agent\/projects\/[^/]+\/action-items$/],
+  ['POST', /^\/api\/agent\/projects\/[^/]+\/action-items$/],
+  ['PUT', /^\/api\/agent\/action-items\/[^/]+$/],
+  ['GET', /^\/api\/project-activity$/],
+  ['GET', /^\/api\/projects\/[^/]+\/updates$/],
+  ['POST', /^\/api\/projects\/[^/]+\/updates$/],
+];
+
 // Express routes case-insensitively and tolerates a trailing slash, so compare
 // the same way: '/API/Projects/' must not slip past as a non-API path.
 function normalizeApiPath(rawPath) {
@@ -59,6 +84,9 @@ function createApiAccessGate({ getCurrentUser, isActiveUser }) {
     if (user.scannerScope && !routeMatches(SCANNER_ROUTES, req.method, path)) {
       return res.status(403).json({ success: false, error: 'Not available from a phone scanner session' });
     }
+    if (user.agentScope && !routeMatches(AGENT_ROUTES, req.method, path)) {
+      return res.status(403).json({ success: false, error: 'Not available to an agent key' });
+    }
     return next();
   };
 }
@@ -66,6 +94,7 @@ function createApiAccessGate({ getCurrentUser, isActiveUser }) {
 module.exports = {
   PUBLIC_ROUTES,
   SCANNER_ROUTES,
+  AGENT_ROUTES,
   normalizeApiPath,
   isApiPath,
   routeMatches,

@@ -302,14 +302,19 @@ export async function exportQuotationXlsx(
   }
 
   // Totals
-  const totalsBlock: [string, number, boolean?][] = [
-    ['Subtotal (VAT-EX)', totals.subtotal, true],
+  const totalsBlock: [string, number | string, boolean?][] = [
+    [quotation.nonVat ? 'Subtotal' : 'Subtotal (VAT-EX)', totals.subtotal, true],
   ];
   if (quotation.discountPct > 0) totalsBlock.push([`Discount (${formatDiscountPct(quotation.discountPct)}%)`, -totals.discount]);
   if ((totals.deliveryFee ?? 0) > 0) totalsBlock.push(['Delivery Fee', totals.deliveryFee ?? 0]);
   if ((totals.smallOrderSurcharge ?? 0) > 0) totalsBlock.push(['Small-order surcharge', totals.smallOrderSurcharge ?? 0]);
-  if (quotation.vatPct > 0) totalsBlock.push([`VAT (${quotation.vatPct}%)`, totals.vat]);
-  totalsBlock.push(['GRAND TOTAL (PHP)', totals.grandTotal, true]);
+  if (quotation.nonVat) {
+    // Text value in the amount column — printed as-is, no 0% VAT line.
+    totalsBlock.push(['VAT', 'N/A (Non-VAT)']);
+  } else if (quotation.vatPct > 0) {
+    totalsBlock.push([`VAT (${quotation.vatPct}%)`, totals.vat]);
+  }
+  totalsBlock.push([quotation.nonVat ? 'TOTAL AMOUNT PAYABLE (PHP)' : 'GRAND TOTAL (PHP)', totals.grandTotal, true]);
 
   totalsBlock.forEach(([label, value, bold]) => {
     ws.getCell(r, 5).value = label;
@@ -319,7 +324,7 @@ export async function exportQuotationXlsx(
       ws.getCell(r, 5).font = { bold: true };
       ws.getCell(r, 6).font = { bold: true };
     }
-    if (label.startsWith('GRAND')) {
+    if (label.startsWith('GRAND') || label.startsWith('TOTAL AMOUNT')) {
       ws.getCell(r, 5).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
       ws.getCell(r, 6).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
       ws.getCell(r, 5).font = { bold: true, color: { argb: 'FFFFFFFF' } };

@@ -8,6 +8,7 @@ import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
 import AiAssistHost from './components/ai/AiAssistHost';
 import AiAssistPage from './components/ai/AiAssistPage';
 import AnalyticsStudioPage from './components/analytics/AnalyticsStudioPage';
+import ProjectActivityPage from './components/ProjectActivityPage';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
@@ -44,6 +45,7 @@ import CompanyPnLPage from './components/finance/CompanyPnLPage';
 import TaxFilerLedgerPage from './components/finance/TaxFilerLedgerPage';
 import SalesEwtRegisterPage from './components/finance/SalesEwtRegisterPage';
 import SoaDashboardPage from './components/finance/soa/SoaDashboardPage';
+import BlsPage from './components/finance/bls/BlsPage';
 import SoaDetailView from './components/finance/soa/SoaDetailView';
 import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
@@ -348,6 +350,20 @@ function App() {
               }
             />
             <Route
+              path="/projects/activity"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <ProjectActivityPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/sales/analytics"
               element={
                 <ProtectedRoute>
@@ -616,6 +632,20 @@ function App() {
                     <TaxFilerBlock>
                       <AppLayout>
                         <SoaDashboardPage />
+                      </AppLayout>
+                    </TaxFilerBlock>
+                  </EmployeeGuard>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/finance/bls"
+              element={
+                <ProtectedRoute>
+                  <EmployeeGuard>
+                    <TaxFilerBlock>
+                      <AppLayout>
+                        <BlsPage />
                       </AppLayout>
                     </TaxFilerBlock>
                   </EmployeeGuard>

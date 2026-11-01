@@ -306,6 +306,8 @@ const WAGO_PSU_PRICE: Record<string, number> = {
 };
 
 // ── Part list ────────────────────────────────────────────────────────────
+// ET 200SP prices (and the AI 4xU/I, RTD and PROFINET cable/plug prices below):
+// Exponent Q-DBG-2610-057 (Oct 2026), discounted unit price, VAT-ex.
 const QUOTED: SiemensPart[] = [
   { key: 'cpu1214', partNo: '6ES7214-1AG40-0XB0', price: 24059.81,
     description: 'SIMATIC S7-1200, CPU 1214C, compact CPU, DC/DC/DC, onboard I/O: 14 DI 24 V DC; 10 DO 24 V DC; 2 AI 0-10 V DC, power supply: DC 20.4-28.8 V DC, program/data memory 150 KB' },
@@ -315,21 +317,21 @@ const QUOTED: SiemensPart[] = [
     description: 'SIMATIC S7, memory card for S7-1x00 CPU, 3.3 V Flash, 256 MB' },
   { key: 'cb1241', partNo: '6ES7241-1CH30-1XB0', price: 4995.65,
     description: 'SIMATIC S7-1200, Communication Board CB 1241, RS485, terminal block, supports Freeport (Modbus RTU)' },
-  { key: 'imBundle', partNo: '6ES7155-6AA02-0BN0', price: 21697.11,
+  { key: 'imBundle', partNo: '6ES7155-6AA02-0BN0', price: 23134.01,
     description: 'SIMATIC ET 200SP, bundle PROFINET interface module IM 155-6 PN ST, max. 32 I/O modules and 16 ET 200AL modules, bundle consists of: interface module (6ES7155-6AU02-0BN0), server module (6ES7193-6PA00-0AA0), SIMATIC bus adapter BA 2x RJ45 (6ES7193-6AR00-0AA0)' },
-  { key: 'di16', partNo: '6ES7131-6BH01-0BA0', price: 6218.99,
+  { key: 'di16', partNo: '6ES7131-6BH01-0BA0', price: 6630.85,
     description: 'SIMATIC ET 200SP, Digital input module, DI 16x 24V DC Standard, type 3 (IEC 61131), sink input (PNP, P-reading), fits to BU-type A0, Colour Code CC00' },
-  { key: 'dq16', partNo: '6ES7132-6BH01-0BA0', price: 7255.57,
+  { key: 'dq16', partNo: '6ES7132-6BH01-0BA0', price: 7736.07,
     description: 'SIMATIC ET 200SP, Digital output module, DQ 16x 24V DC/0.5A Standard, Source output (PNP, P-switching), fits to BU-type A0, Colour Code CC00' },
-  { key: 'ai8', partNo: '6ES7134-6GF00-0AA1', price: 16583.83,
+  { key: 'ai8', partNo: '6ES7134-6GF00-0AA1', price: 17682.1,
     description: 'SIMATIC ET 200SP, Analog input module, AI 8xI 2-/4-wire Basic, suitable for BU type A0, A1, Color code CC01, Module diagnostics, 16 bit' },
-  { key: 'aq4', partNo: '6ES7135-6HD00-0BA1', price: 14850.27,
+  { key: 'aq4', partNo: '6ES7135-6HD00-0BA1', price: 17019.16,
     description: 'SIMATIC ET 200SP, Analog output module, AQ 4xU/I Standard, suitable for BU type A0, A1, Color code CC00, Module diagnostics, 16 bit, +/-0.3%' },
   { key: 'cmPtp', partNo: '6ES7137-6AA01-0BA0', price: 22526.27,
     description: 'SIMATIC ET 200SP, CM PtP communication module for serial connection RS-422, RS-485 and RS-232, freeport, 3964 (R), USS, MODBUS RTU master, slave, max. 250 Kbit/s, suitable for BU type A0' },
-  { key: 'buLight', partNo: '6ES7193-6BP00-0DA0', price: 1600,
+  { key: 'buLight', partNo: '6ES7193-6BP00-0DA0', price: 2063.01,
     description: 'SIMATIC ET 200SP, BaseUnit BU15-P16+A0+2D, BU type A0, Push-in terminals, without AUX terminals, new load group (light), WxH: 15x 117 mm' },
-  { key: 'buDark', partNo: '6ES7193-6BP00-0BA0', price: 1105.71,
+  { key: 'buDark', partNo: '6ES7193-6BP00-0BA0', price: 1178.94,
     description: 'SIMATIC ET 200SP, BaseUnit BU15-P16+A0+2B, BU type A0, Push-in terminals, without AUX terminals, bridged to the left, WxH: 15x 117 mm' },
   { key: 'psu100s20', partNo: '6EP1336-2BA10', price: 27429.76,
     description: 'SITOP PSU100S 20 A stabilized power supply input: 120/230 V AC output: 24 V DC/20 A' },
@@ -343,7 +345,7 @@ const CATALOG: SiemensPart[] = [
   { key: 'di8', partNo: '6ES7131-6BF01-0BA0', price: 0, description: 'SIMATIC ET 200SP, Digital input module, DI 8x 24V DC Standard, type 3 (IEC 61131), sink input (PNP, P-reading), fits to BU-type A0, Colour Code CC01' },
   { key: 'dq8', partNo: '6ES7132-6BF01-0BA0', price: 0, description: 'SIMATIC ET 200SP, Digital output module, DQ 8x 24V DC/0.5A Standard, Source output (PNP, P-switching), fits to BU-type A0, Colour Code CC02' },
   { key: 'ai4i', partNo: '6ES7134-6GD01-0BA1', price: 0, description: 'SIMATIC ET 200SP, Analog input module, AI 4xI 2-/4-wire Standard, suitable for BU type A0, A1, Color code CC03, Module diagnostics, 16 bit' },
-  { key: 'ai4u', partNo: '6ES7134-6HD01-0BA1', price: 0, verify: true, description: 'SIMATIC ET 200SP, Analog input module, AI 4xU/I 2-wire Standard, suitable for BU type A0, A1, Color code CC03, Module diagnostics, 16 bit' },
+  { key: 'ai4u', partNo: '6ES7134-6HD01-0BA1', price: 13335.4, quoted: true, description: 'SIMATIC ET 200SP, Analog input module, AI 4xU/I 2-wire Standard, suitable for BU type A0, A1, Color code CC03, Module diagnostics, 16 bit' },
   { key: 'aq2', partNo: '6ES7135-6HB00-0BA1', price: 0, description: 'SIMATIC ET 200SP, Analog output module, AQ 2xU/I Standard, suitable for BU type A0, A1, Color code CC00, Module diagnostics, 16 bit' },
   // S7-1200 signal modules / boards / communication modules (local expansion on the CPU).
   { key: 'sm1221di16', partNo: '6ES7221-1BH32-0XB0', price: 0, description: 'SIMATIC S7-1200, Digital input SM 1221, 16 DI, 24 V DC, sink/source' },
@@ -370,8 +372,8 @@ const CATALOG: SiemensPart[] = [
   { key: 'bat12', partNo: '6EP4135-0GB00-0AY0', price: 0, verify: true, description: 'SITOP UPS1100 battery module 24 V / 12 Ah, maintenance-free lead battery' },
   // PROFINET cabling
   { key: 'pnPatch2m', partNo: '6XV1870-3QH20', price: 0, description: 'SIMATIC NET IE TP Cord RJ45/RJ45, TP cable 4x2 with 2 RJ45 connectors, 2 m (patch cable inside the panel)' },
-  { key: 'pnCable', partNo: '6XV1840-2AH10', price: 0, uom: 'm', description: 'SIMATIC NET IE FC TP Standard Cable GP 2x2 (PROFINET Type A), Cat 5e, shielded, sold by the metre' },
-  { key: 'pnPlug', partNo: '6GK1901-1BB10-2AA0', price: 0, description: 'SIMATIC NET IE FC RJ45 Plug 180 2x2, RJ45 connector with metal enclosure and FastConnect, 180° cable outlet' },
+  { key: 'pnCable', partNo: '6XV1840-2AH10', price: 213.33, quoted: true, uom: 'm', description: 'SIMATIC NET IE FC TP Standard Cable GP 2x2 (PROFINET Type A), Cat 5e, shielded, sold by the metre' },
+  { key: 'pnPlug', partNo: '6GK1901-1BB10-2AA0', price: 2130.91, quoted: true, description: 'SIMATIC NET IE FC RJ45 Plug 180 2x2, RJ45 connector with metal enclosure and FastConnect, 180° cable outlet' },
   { key: 'cm1241', partNo: '6ES7241-1CH32-0XB0', price: 0, verify: true, description: 'SIMATIC S7-1200, Communication module CM 1241, RS-422/485, 9-pin sub D (Modbus RTU / Freeport)' },
   // S7-1500 central I/O (on the CPU's mounting rail) — order numbers from the TIA Selection Tool;
   // DI 32 / DQ 32 BA prices from Exponent Q-DBG-2609-035 (VAT-inc, like the other quoted figures).
@@ -397,9 +399,9 @@ const CATALOG: SiemensPart[] = [
     description: 'SIMATIC S7-1500, system power supply PS 60 W 24/48/60 V DC — feeds the backplane bus when the CPU alone can\'t' },
   { key: 'ai8u', partNo: '6ES7134-6FF00-0AA1', price: 0,
     description: 'SIMATIC ET 200SP, Analog input module, AI 8xU Basic, 0-10 V / ±10 V, suitable for BU type A0, A1, Color code CC01, Module diagnostics, 16 bit' },
-  { key: 'rtd8', partNo: '6ES7134-6JF00-0CA1', price: 0,
+  { key: 'rtd8', partNo: '6ES7134-6JF00-0CA1', price: 25270.73, quoted: true,
     description: 'SIMATIC ET 200SP, Analog input module, AI 8xRTD/TC 2-wire High Feature, suitable for BU type A0, A1, Color code CC00, Module diagnostics, 16 bit' },
-  { key: 'rtd4', partNo: '6ES7134-6JD00-0CA1', price: 0,
+  { key: 'rtd4', partNo: '6ES7134-6JD00-0CA1', price: 17019.16, quoted: true,
     description: 'SIMATIC ET 200SP, Analog input module, AI 4xRTD/TC 2-/3-/4-wire High Feature, suitable for BU type A0, A1, Color code CC00, Module diagnostics, 16 bit' },
   { verify: true, key: 'buLightA1', partNo: '6ES7193-6BP00-0DA1', price: 0,
     description: 'SIMATIC ET 200SP, BaseUnit BU15-P16+A0+2D/T, BU type A1, Push-in terminals, with temperature sensor (thermocouple cold junction), new load group (light), WxH: 15x 117 mm' },

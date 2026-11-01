@@ -34,8 +34,6 @@ import {
   OpenInNew as OpenInNewIcon,
 } from '@mui/icons-material';
 import { Project } from '../../types/Project';
-import jsPDF from 'jspdf';
-import { autoTable } from 'jspdf-autotable';
 import {
   REPORT_COMPANIES,
   type ReportCompanyKey,
@@ -59,9 +57,24 @@ import {
 } from '../../services/onedriveFolderService';
 import dataService from '../../services/dataService';
 import { buildServiceReportXlsxBlob } from '../../utils/reports/serviceReportXlsx';
+import { buildServiceReportPdf, type ServiceReportPhoto as PdfPhoto } from '../../utils/reports/serviceReportPdf';
+import { REPORT_ISSUERS } from '../../utils/reports/reportPdfKit';
+import { loadReportLogo } from '../../utils/reports/reportLogo';
 
-const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
-const DR_HEADER_BLUE = [44, 90, 160] as [number, number, number];
+const NET_PACIFIC_COLORS = { primary: '#2c5aa0', secondary: '#1e4a72' };
+
+/** Accordion sections styled as the design guide's content papers (DESIGN_PHILOSOPHY §8). */
+const sectionSx = {
+  mb: 1.5,
+  borderRadius: '8px !important',
+  overflow: 'hidden',
+  border: '1px solid #e2e8f0',
+  background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+  '&:before': { display: 'none' },
+} as const;
+const summarySx = { minHeight: 52, px: 1.5, '&.Mui-expanded': { borderBottom: '1px solid #e0e0e0' }, '& .MuiAccordionSummary-content': { alignItems: 'center', my: 1 } } as const;
+const sectionTitleSx = { fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 } as const;
+const headSx = { fontWeight: 600, fontSize: '0.875rem', bgcolor: '#f8fafc', color: 'text.primary', whiteSpace: 'nowrap' } as const;
 
 interface PhotoItem {
   localId: string;
@@ -539,65 +552,9 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
   };
 
   const buildPdf = async (preview: boolean): Promise<{ blob: Blob; filename: string; missingPhotos: number } | void> => {
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const margin = 16;
-    const contentWidth = 210 - margin * 2;
-    const pageHeight = 297;
-    let y = 18;
-    const lineHeight = 5.2;
-    const sectionGap = 6;
-
-    const hasArialNarrow = typeof arialNarrowBase64 === 'string' && arialNarrowBase64.length > 0;
-    if (hasArialNarrow) {
-      doc.addFileToVFS('ArialNarrow.ttf', arialNarrowBase64);
-      doc.addFont('ArialNarrow.ttf', 'ArialNarrow', 'normal');
-    }
-    const fontTitle = () => doc.setFont('helvetica', 'bold');
-    const fontBody = () => doc.setFont(hasArialNarrow ? 'ArialNarrow' : 'helvetica', 'normal');
-    const companyName = REPORT_COMPANIES[reportCompany];
-    const companyNameUpper = companyName.toUpperCase();
     const pdfProjectNo = projectNo || '—';
     const reportNo = (serviceReportNo || '').trim() || `${pdfProjectNo} - SR${serviceReports.length + 1}`;
-    const reportDateStr = serviceReportDate ? new Date(serviceReportDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    const fmtLongDate = (iso: string) => new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    const dateCoveredStr = serviceReportDateCoveredStart && serviceReportDateCoveredEnd
-      ? (serviceReportDateCoveredStart === serviceReportDateCoveredEnd
-          ? fmtLongDate(serviceReportDateCoveredStart)
-          : `${fmtLongDate(serviceReportDateCoveredStart)} – ${fmtLongDate(serviceReportDateCoveredEnd)}`)
-      : reportDateStr;
-    const preparedByNamePdf = (preparedByName.trim() || preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim() || '—';
-
-    // ── Professional-layout palette + helpers ─────────────────────────────
-    const BLUE = DR_HEADER_BLUE;
-    const BLUE_DARK: [number, number, number] = [30, 74, 114];
-    const PANEL_FILL: [number, number, number] = [244, 247, 251];
-    const BORDER: [number, number, number] = [208, 215, 224];
-    const MUTED: [number, number, number] = [96, 106, 122];
-    const pageWidth = 210;
-    const REPORT_COMPANY_TAGLINE: Record<ReportCompanyKey, string> = {
-      IOCT: 'INDUSTRIAL AUTOMATION & DIGITAL SOLUTIONS',
-      ACT: '',
-    };
-    // Truncate a string with an ellipsis to fit maxW at the current font/size.
-    const fit = (s: string, maxW: number): string => {
-      if (!s) return '';
-      if (doc.getTextWidth(s) <= maxW) return s;
-      let t = s;
-      while (t.length > 1 && doc.getTextWidth(`${t}…`) > maxW) t = t.slice(0, -1);
-      return `${t}…`;
-    };
-    // Section heading: short brand accent bar + uppercase label. Advances y.
-    const sectionHeading = (label: string) => {
-      doc.setFillColor(...BLUE);
-      doc.rect(margin, y - 3.4, 1.5, 4.4, 'F');
-      fontTitle();
-      doc.setFontSize(10.5);
-      doc.setTextColor(...BLUE_DARK);
-      doc.text(label.toUpperCase(), margin + 4.5, y);
-      doc.setTextColor(0, 0, 0);
-      fontBody();
-      y += lineHeight + 1;
-    };
+    const preparedByNamePdf = (preparedByName.trim() || preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim();
 
     // ------------------------------------------------------------------
     // Pre-fetch photo data URLs. A photo is embeddable when its original
@@ -643,361 +600,52 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     // with no OneDrive token, or undecodable formats) — surfaced to the user.
     const missingPhotos = exportablePhotos.length - photoDataUrls.size;
 
-    // Helper: add a grid of photos to the PDF, returns new Y
-    const addPhotoGrid = async (items: PhotoItem[], startY: number): Promise<number> => {
-      const colCount = 2;
-      const gap = 5;
-      const photoW = (contentWidth - gap * (colCount - 1)) / colCount;
-      const photoMaxH = 55;
-      const captionH = 5;
-      let gY = startY;
-      let col = 0;
-      let rowTopY = gY;
-
-      for (const photo of items) {
-        const dataUrl = photoDataUrls.get(photo.localId);
-        if (!dataUrl) continue;
-        const x = margin + col * (photoW + gap);
-
-        // Measure image natural dimensions for aspect-ratio fitting
-        let drawW = photoW;
-        let drawH = photoMaxH;
-        try {
-          await new Promise<void>(res => {
-            const img = new Image();
-            img.onload = () => {
-              const aspect = img.naturalWidth / img.naturalHeight;
-              if (aspect > photoW / photoMaxH) {
-                drawW = photoW;
-                drawH = photoW / aspect;
-              } else {
-                drawH = photoMaxH;
-                drawW = photoMaxH * aspect;
-              }
-              res();
-            };
-            img.onerror = () => res();
-            img.src = dataUrl;
-          });
-        } catch (_) {}
-
-        // New page if this row won't fit
-        if (rowTopY + photoMaxH + captionH + 4 > pageHeight - 25) {
-          doc.addPage();
-          gY = 20;
-          rowTopY = gY;
-          col = 0;
-        }
-
-        try {
-          const fmt = dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-          doc.addImage(dataUrl, fmt, x, rowTopY, drawW, drawH, undefined, 'FAST');
-        } catch (_) {}
-
-        // Caption: filename under the photo
-        fontBody();
-        doc.setFontSize(7);
-        const rawName = photo.filename || photo.file?.name || '';
-        const caption = rawName.replace(/^[^_]*_[^_]*_\d+\./, '').slice(0, 40) || rawName;
-        doc.text(caption, x, rowTopY + photoMaxH + captionH, { maxWidth: photoW });
-
-        col++;
-        if (col >= colCount) {
-          col = 0;
-          gY = rowTopY + photoMaxH + captionH + 4;
-          rowTopY = gY;
-        }
-      }
-      if (col > 0) {
-        gY = rowTopY + photoMaxH + captionH + 4;
-      }
-      return gY;
-    };
-
-    // ── Header band: logo + company name/tagline (left), title (right) ────
-    const headerTop = y;
-    let logoBottom = headerTop;
-    let logoW = 0;
-    if (reportCompany === 'ACT') {
-      try {
-        const { loadLogoTransparentBackground, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT } = await import('../../utils/logoUtils');
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-acti.png`;
-        const logoDataUrl = await loadLogoTransparentBackground(logoUrl);
-        doc.addImage(logoDataUrl, 'PNG', margin, headerTop, ACT_LOGO_PDF_WIDTH, ACT_LOGO_PDF_HEIGHT);
-        logoBottom = headerTop + ACT_LOGO_PDF_HEIGHT;
-        logoW = ACT_LOGO_PDF_WIDTH;
-      } catch (_) {}
-    } else if (reportCompany === 'IOCT') {
-      try {
-        const { loadImageDataUrl, IOCT_ICON_LOGO_PDF_SIZE } = await import('../../utils/logoUtils');
-        const logoUrl = `${process.env.PUBLIC_URL || ''}/logo-ioct-only.png`;
-        const logoDataUrl = await loadImageDataUrl(logoUrl);
-        doc.addImage(logoDataUrl, 'PNG', margin, headerTop, IOCT_ICON_LOGO_PDF_SIZE, IOCT_ICON_LOGO_PDF_SIZE);
-        logoBottom = headerTop + IOCT_ICON_LOGO_PDF_SIZE;
-        logoW = IOCT_ICON_LOGO_PDF_SIZE;
-      } catch (_) {}
+    // Pixel size of each embeddable photo so the PDF can fit it without distortion.
+    const pdfPhotos: PdfPhoto[] = [];
+    for (const photo of exportablePhotos) {
+      const dataUrl = photoDataUrls.get(photo.localId);
+      if (!dataUrl) continue;
+      const size = await new Promise<{ width: number; height: number }>((res) => {
+        const img = new Image();
+        img.onload = () => res({ width: img.naturalWidth, height: img.naturalHeight });
+        img.onerror = () => res({ width: 0, height: 0 });
+        img.src = dataUrl;
+      });
+      const rawName = photo.filename || photo.file?.name || '';
+      const caption = rawName.replace(/^[^_]*_[^_]*_\d+\./, '').slice(0, 40) || rawName;
+      pdfPhotos.push({ dataUrl, ...size, caption, activityIndex: photo.activityIndex });
     }
-    // Company name + tagline sit beside the logo, vertically centered on it.
-    const textX = margin + logoW + (logoW > 0 ? 4 : 0);
-    const logoMidY = (headerTop + logoBottom) / 2;
-    const tagline = REPORT_COMPANY_TAGLINE[reportCompany];
-    fontTitle();
-    doc.setFontSize(11);
-    doc.setTextColor(33, 37, 43);
-    doc.text(companyNameUpper, textX, tagline ? logoMidY - 0.5 : logoMidY + 1.5);
-    if (tagline) {
-      fontBody();
-      doc.setFontSize(6.6);
-      doc.setTextColor(...MUTED);
-      doc.text(tagline, textX, logoMidY + 4);
-    }
-    doc.setTextColor(0, 0, 0);
-    // Title, right-aligned, with a short brand underline matching its width.
-    const titleText = 'SERVICE REPORT';
-    fontTitle();
-    doc.setFontSize(19);
-    doc.setTextColor(...BLUE);
-    const titleY = headerTop + 7;
-    doc.text(titleText, pageWidth - margin, titleY, { align: 'right' });
-    const titleW = doc.getTextWidth(titleText);
-    doc.setDrawColor(...BLUE);
-    doc.setLineWidth(0.7);
-    doc.line(pageWidth - margin - titleW, titleY + 1.8, pageWidth - margin, titleY + 1.8);
-    doc.setTextColor(0, 0, 0);
-    doc.setLineWidth(0.2);
-    // Full-width light rule separates the header band from the info panel.
-    const headerBottom = Math.max(logoBottom, titleY + 1.8) + 3;
-    doc.setDrawColor(...BORDER);
-    doc.setLineWidth(0.3);
-    doc.line(margin, headerBottom, pageWidth - margin, headerBottom);
-    doc.setLineWidth(0.2);
-    y = headerBottom + 6;
 
-    // ── Info panel: framed light box, two-column labeled grid ─────────────
-    const infoRowH = 6.4;
-    const infoPanelH = 4 * infoRowH + 4;
-    doc.setFillColor(...PANEL_FILL);
-    doc.setDrawColor(...BORDER);
-    doc.roundedRect(margin, y, contentWidth, infoPanelH, 1.6, 1.6, 'FD');
-    const colLX = margin + 5;
-    const colRX = margin + contentWidth / 2 + 3;
-    const labelW = 30;
-    const cellValW = contentWidth / 2 - labelW - 9;
-    const infoField = (x: number, label: string, value: string, rowY: number) => {
-      fontTitle();
-      doc.setFontSize(7.2);
-      doc.setTextColor(...MUTED);
-      doc.text(label.toUpperCase(), x, rowY);
-      fontBody();
-      doc.setFontSize(9);
-      doc.setTextColor(33, 37, 43);
-      doc.text(fit(value || '—', cellValW), x + labelW, rowY);
-    };
-    let iy = y + 5.6;
-    infoField(colLX, 'Project Name', projectName || '—', iy); infoField(colRX, 'Report No.', reportNo, iy); iy += infoRowH;
-    infoField(colLX, 'Project No.', pdfProjectNo, iy);        infoField(colRX, 'Report Date', reportDateStr, iy); iy += infoRowH;
-    infoField(colLX, 'Client', projectClient || '—', iy);     infoField(colRX, 'Date(s) Covered', dateCoveredStr, iy); iy += infoRowH;
-    infoField(colLX, 'PO No.', projectPo || '—', iy);         infoField(colRX, 'Prepared By', preparedByNamePdf, iy);
-    doc.setTextColor(0, 0, 0);
-    y = y + infoPanelH + sectionGap;
-
-    const signatureSpace = 2 * lineHeight;
-    // 5 rows now (Name/Designation/Company/Date/Signature) — was 4.
-    const signatureBlockHeight = 48 + signatureSpace;
-    const signatureY = pageHeight - signatureBlockHeight - 10;
-
-    // Activities table
-    const tableRows = serviceReportActivitiesTable.filter((r) => (r.activity || '').trim() || (r.findingOutcome || '').trim());
-    const headers = ['No.', 'Activity / Description', 'Finding / Outcome'];
-    const body: string[][] = tableRows.map((r, i) => [
-      String(i + 1),
-      (r.activity || '').trim() || '—',
-      (r.findingOutcome || '').trim() || '—',
-    ]);
-    if (y > signatureY - 80) { doc.addPage(); y = 20; }
-    sectionHeading('Activities Performed');
-    autoTable(doc, {
-      head: [headers],
-      body,
-      startY: y,
-      margin: { left: margin, right: margin },
-      tableWidth: contentWidth,
-      theme: 'grid',
-      columnStyles: {
-        0: { cellWidth: 11, halign: 'center' },
-        1: { cellWidth: contentWidth * 0.5 - 5.5 },
-        2: { cellWidth: contentWidth * 0.5 - 5.5 },
+    const { doc, filename } = buildServiceReportPdf({
+      reportCompany,
+      reportNo,
+      title: serviceReportTitle,
+      projectName: projectName || '—',
+      projectNo: pdfProjectNo,
+      client: projectClient || '—',
+      location: project?.project_location || undefined,
+      poNumber: projectPo || '—',
+      reportDate: serviceReportDate,
+      coveredFrom: serviceReportDateCoveredStart,
+      coveredTo: serviceReportDateCoveredEnd,
+      startTime: serviceReportStartTime,
+      endTime: serviceReportEndTime,
+      activities: serviceReportActivitiesTable.map((r) => ({ activity: r.activity || '', finding: r.findingOutcome || '' })),
+      recommendations: serviceReportCustomerComments || '',
+      preparedBy: {
+        name: preparedByNamePdf,
+        designation: preparedByDesignation.trim() || (preparedBy.designation || '').trim() || undefined,
+        company: preparedByCompany.trim() || undefined,
       },
-      styles: { fontSize: 8.5, font: hasArialNarrow ? 'ArialNarrow' : 'helvetica', overflow: 'linebreak', cellPadding: 3, textColor: [40, 44, 52], lineColor: BORDER, lineWidth: 0.1, valign: 'top' },
-      headStyles: { fillColor: BLUE_DARK, textColor: [255, 255, 255], font: 'helvetica', fontStyle: 'bold', fontSize: 8.5, halign: 'left', cellPadding: { top: 3, bottom: 3, left: 2.4, right: 2.4 } },
-    });
-    const docWithTable = doc as jsPDF & { lastAutoTable?: { finalY: number } };
-    y = (docWithTable.lastAutoTable?.finalY ?? y) + sectionGap;
+      approvedBy: {
+        name: approverName.trim() || undefined,
+        designation: approverDesignation.trim() || undefined,
+        company: approverCompany.trim() || undefined,
+      },
+      photos: pdfPhotos,
+      photoPlacement,
+    }, { logoDataUrl: await loadReportLogo(REPORT_ISSUERS[reportCompany]), bodyFontBase64: arialNarrowBase64 });
 
-    // ------------------------------------------------------------------
-    // Photos — inline mode: group by activity, render right after table
-    // ------------------------------------------------------------------
-    // Minimum vertical space needed to keep a section heading with at least
-    // one photo row on the same page (heading + photo + caption + gap + footer).
-    const photoRowMinH = 55 + 5 + 4; // photoMaxH + captionH + rowGap
-    const headingH = lineHeight + 2;
-    const footerClearance = 20; // keep clear of footer
-    const ensurePhotoSectionFits = () => {
-      if (y + headingH + photoRowMinH > pageHeight - footerClearance) {
-        doc.addPage(); y = 20;
-      }
-    };
-
-    if (photoPlacement === 'inline' && photoDataUrls.size > 0) {
-      // Group: per-activity first (skip -1 which renders after recommendations), then general
-      const activityIndices = Array.from(
-        new Set(exportablePhotos.filter(p => p.activityIndex !== undefined && p.activityIndex >= 0).map(p => p.activityIndex as number))
-      ).sort((a, b) => a - b);
-
-      for (const idx of activityIndices) {
-        const groupPhotos = exportablePhotos.filter(p => p.activityIndex === idx && photoDataUrls.has(p.localId));
-        if (groupPhotos.length === 0) continue;
-        const activityLabel = tableRows[idx]?.activity?.trim() || `Activity ${idx + 1}`;
-        ensurePhotoSectionFits();
-        fontTitle();
-        doc.setFontSize(9);
-        doc.text(`Photos — Activity ${idx + 1}: ${activityLabel.slice(0, 60)}`, margin, y);
-        y += headingH;
-        y = await addPhotoGrid(groupPhotos, y);
-        y += sectionGap;
-      }
-
-      const generalPhotos = exportablePhotos.filter(p => p.activityIndex === undefined && photoDataUrls.has(p.localId));
-      if (generalPhotos.length > 0) {
-        ensurePhotoSectionFits();
-        fontTitle();
-        doc.setFontSize(9);
-        doc.text('Site Photos (General)', margin, y);
-        y += headingH;
-        y = await addPhotoGrid(generalPhotos, y);
-        y += sectionGap;
-      }
-    }
-
-    // Recommendations and Remarks
-    const boxHeight = 4 * lineHeight;
-    if (y + boxHeight + sectionGap > signatureY - 5) { doc.addPage(); y = 20; }
-    sectionHeading('Recommendations and Remarks');
-    doc.setFillColor(250, 251, 253);
-    doc.setDrawColor(...BORDER);
-    doc.roundedRect(margin, y, contentWidth, boxHeight, 1.4, 1.4, 'FD');
-    const commentsText = (serviceReportCustomerComments || '').trim();
-    if (commentsText) {
-      fontBody();
-      doc.setFontSize(9);
-      doc.setTextColor(40, 44, 52);
-      doc.text(doc.splitTextToSize(commentsText, contentWidth - 6), margin + 3, y + 5);
-      doc.setTextColor(0, 0, 0);
-    }
-    y += boxHeight + sectionGap;
-
-    // Recommendations photos (activityIndex === -1) — always inline, right after the box
-    const recPhotos = exportablePhotos.filter(p => p.activityIndex === -1 && photoDataUrls.has(p.localId));
-    if (recPhotos.length > 0) {
-      ensurePhotoSectionFits();
-      fontTitle();
-      doc.setFontSize(9);
-      doc.text('Photos — Recommendations and Remarks', margin, y);
-      y += headingH;
-      y = await addPhotoGrid(recPhotos, y);
-      y += sectionGap;
-    }
-
-    // ------------------------------------------------------------------
-    // Photos — end-of-report mode: all non-recommendations photos at end
-    // ------------------------------------------------------------------
-    if (photoPlacement === 'end' && photoDataUrls.size > 0) {
-      const endPhotos = exportablePhotos.filter(p => p.activityIndex !== -1 && photoDataUrls.has(p.localId));
-      if (endPhotos.length > 0) {
-        ensurePhotoSectionFits();
-        fontTitle();
-        doc.setFontSize(11);
-        doc.text('Site Photos', margin, y);
-        y += headingH;
-        y = await addPhotoGrid(endPhotos, y);
-        y += sectionGap;
-      }
-    }
-
-    // Signature block — fixed position at bottom of last page
-    const leftColX = margin;
-    const rightColX = margin + 95;
-    const lineWidth = 52;
-    const sigLineHeight = 5.4;
-    const drawSignatureLine = (colX: number, label: string, rowY: number, value?: string) => {
-      fontBody();
-      doc.setFontSize(7.4);
-      doc.setTextColor(...MUTED);
-      doc.text(label.toUpperCase(), colX, rowY);
-      if (value) {
-        doc.setFontSize(9);
-        doc.setTextColor(33, 37, 43);
-        doc.text(fit(value, lineWidth - 1), colX + 26, rowY - 0.2);
-      }
-      doc.setDrawColor(...BORDER);
-      doc.setLineWidth(0.2);
-      doc.line(colX + 25, rowY + 1.6, colX + 25 + lineWidth, rowY + 1.6);
-      doc.setTextColor(0, 0, 0);
-    };
-    const totalPages = doc.getNumberOfPages();
-    const lastPageSignatureY = pageHeight - signatureBlockHeight - 10;
-    doc.setPage(totalPages);
-    // Divider above the signature block
-    doc.setDrawColor(...BORDER);
-    doc.setLineWidth(0.3);
-    doc.line(margin, lastPageSignatureY - 5, pageWidth - margin, lastPageSignatureY - 5);
-    doc.setLineWidth(0.2);
-    fontTitle();
-    doc.setFontSize(9.5);
-    doc.setTextColor(...BLUE_DARK);
-    doc.text('PREPARED BY', leftColX, lastPageSignatureY);
-    doc.text('APPROVED BY', rightColX, lastPageSignatureY);
-    doc.setTextColor(0, 0, 0);
-    let rowY = lastPageSignatureY + signatureSpace;
-    drawSignatureLine(leftColX, 'Name', rowY, preparedByNamePdf);
-    drawSignatureLine(rightColX, 'Name', rowY, approverName.trim() || undefined);
-    rowY += sigLineHeight;
-    drawSignatureLine(leftColX, 'Designation', rowY, preparedByDesignation.trim() || (preparedBy.designation || '').trim() || undefined);
-    drawSignatureLine(rightColX, 'Designation', rowY, approverDesignation.trim() || undefined);
-    rowY += sigLineHeight;
-    drawSignatureLine(leftColX, 'Company', rowY, preparedByCompany.trim() || companyName);
-    drawSignatureLine(rightColX, 'Company', rowY, approverCompany.trim() || undefined);
-    rowY += sigLineHeight;
-    drawSignatureLine(leftColX, 'Date', rowY, reportDateStr);
-    drawSignatureLine(rightColX, 'Date', rowY, reportDateStr);
-    rowY += sigLineHeight;
-    // Blank signature line — wet-signed by hand on the printed/exported copy.
-    drawSignatureLine(leftColX, 'Signature', rowY);
-    drawSignatureLine(rightColX, 'Signature', rowY);
-
-    // Vertical divider between the two signatory columns.
-    const dividerX = (leftColX + 77 + rightColX) / 2;
-    doc.setDrawColor(...BORDER);
-    doc.setLineWidth(0.2);
-    doc.line(dividerX, lastPageSignatureY - 5, dividerX, rowY + 2);
-
-    const docNumber = `Doc. No.: ${reportNo}`;
-    const footerY = pageHeight - 10;
-    for (let p = 1; p <= totalPages; p++) {
-      doc.setPage(p);
-      doc.setDrawColor(...BORDER);
-      doc.setLineWidth(0.2);
-      doc.line(margin, footerY - 3.6, pageWidth - margin, footerY - 3.6);
-      fontBody();
-      doc.setFontSize(8);
-      doc.setTextColor(...MUTED);
-      doc.text(docNumber, margin, footerY);
-      doc.text(`Page ${p} of ${totalPages}`, pageWidth - margin, footerY, { align: 'right' });
-      doc.setTextColor(0, 0, 0);
-    }
-
-    // Format: IOCT2606001-SR1.pdf (collapse "IOCT2606001 - SR1" → "IOCT2606001-SR1")
-    const filename = `${reportNo.replace(/\s*-\s*/g, '-').replace(/\s+/g, '')}.pdf`;
     const blob = doc.output('blob') as Blob;
     if (!preview) doc.save(filename);
     return { blob, filename, missingPhotos };
@@ -1186,10 +834,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           onChange={() => toggleSection('setup')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Report Setup
             </Typography>
             {serviceReportDate && serviceReportTitle && (
@@ -1225,7 +873,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
                 <TextField size="small" fullWidth label="End Time" type="time" value={serviceReportEndTime} onChange={(e) => setServiceReportEndTime(e.target.value)} InputLabelProps={{ shrink: true }} />
               </Grid>
               <Grid size={{ xs: 12 }}>
-                <TextField size="small" fullWidth label="Title" placeholder="e.g. Monthly Service Visit" value={serviceReportTitle} onChange={(e) => setServiceReportTitle(e.target.value)} />
+                <TextField size="small" fullWidth label="Subject" placeholder="e.g. Monthly Service Visit" value={serviceReportTitle} onChange={(e) => setServiceReportTitle(e.target.value)} />
               </Grid>
             </Grid>
           </AccordionDetails>
@@ -1237,10 +885,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           onChange={() => toggleSection('activities')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Activities
             </Typography>
             <Chip
@@ -1255,12 +903,12 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
               <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1 }}>
                 <Table size="small" sx={{ minWidth: 560, '& td, & th': { border: '1px solid #e2e8f0' } }}>
                   <TableHead>
-                    <TableRow sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>
-                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', width: 48, color: '#fff' }}>No.</TableCell>
-                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', color: '#fff' }}>Activity</TableCell>
-                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', color: '#fff' }}>Finding / Outcome</TableCell>
-                      <TableCell sx={{ width: 80, color: '#fff', fontWeight: 600, fontSize: '0.8125rem' }}>Photos</TableCell>
-                      <TableCell sx={{ width: 48 }} />
+                    <TableRow>
+                      <TableCell sx={{ ...headSx, width: 48 }}>No.</TableCell>
+                      <TableCell sx={headSx}>Activity</TableCell>
+                      <TableCell sx={headSx}>Findings / Results</TableCell>
+                      <TableCell sx={{ ...headSx, width: 80 }}>Photos</TableCell>
+                      <TableCell sx={{ ...headSx, width: 48 }} />
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -1273,7 +921,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
                             <TextField size="small" fullWidth multiline minRows={1} placeholder="Activity" value={row.activity} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, activity: e.target.value } : r)))} />
                           </TableCell>
                           <TableCell sx={{ py: 0.5, px: 1 }}>
-                            <TextField size="small" fullWidth multiline minRows={1} placeholder="Finding / Outcome" value={row.findingOutcome} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, findingOutcome: e.target.value } : r)))} />
+                            <TextField size="small" fullWidth multiline minRows={1} placeholder="Findings / Results" value={row.findingOutcome} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, findingOutcome: e.target.value } : r)))} />
                           </TableCell>
                           <TableCell sx={{ verticalAlign: 'top', pt: 0.5, px: 0.5 }}>
                             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
@@ -1373,10 +1021,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           onChange={() => toggleSection('signatories')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Signatories
             </Typography>
             {preparedByName && (
@@ -1419,10 +1067,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           onChange={() => toggleSection('photos')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Site Photos
             </Typography>
             {photos.filter(p => p.activityIndex === undefined).length > 0 && (
@@ -1524,10 +1172,10 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           onChange={() => toggleSection('savedReports')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Saved Reports
             </Typography>
             {serviceReports.length > 0 && (
@@ -1541,15 +1189,15 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
                 <Table size="small" stickyHeader>
                   <TableHead>
                     <TableRow>
-                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Report No.</TableCell>
-                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Date</TableCell>
-                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Title</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Actions</TableCell>
+                      <TableCell sx={headSx}>Report No.</TableCell>
+                      <TableCell sx={headSx}>Date</TableCell>
+                      <TableCell sx={headSx}>Title</TableCell>
+                      <TableCell align="right" sx={headSx}>Actions</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {serviceReports.map((r) => (
-                      <TableRow key={r.id} hover selected={editingServiceReportId === r.id}>
+                      <TableRow key={r.id} hover selected={editingServiceReportId === r.id} sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' }, '& td': { fontSize: '0.8rem' } }}>
                         <TableCell>{r.reportNo}</TableCell>
                         <TableCell>{new Date(r.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
                         <TableCell>{r.title || 'Service Report'}</TableCell>
@@ -1585,8 +1233,9 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           bottom: 0,
           zIndex: 10,
           borderTop: `2px solid ${NET_PACIFIC_COLORS.primary}`,
-          px: 2,
-          py: 1.5,
+          pl: 2,
+          pr: 9,
+          py: 1.25,
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
@@ -1602,7 +1251,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
             <Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={resetServiceReportForm} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>New</Button>
             <Button variant="outlined" size="small" onClick={handleSaveServiceReport} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{serviceReportSaveFeedback ? 'Saved' : 'Save'}</Button>
             <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview</Button>
-            <Button variant="contained" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Exporting...' : 'Export PDF'}</Button>
+            <Button variant="contained" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}>{exporting ? 'Exporting...' : 'Export PDF'}</Button>
             <Button variant="outlined" size="small" startIcon={<GridOnIcon />} onClick={handleExportXlsx} disabled={exportingXlsx} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exportingXlsx ? 'Excel...' : 'Excel'}</Button>
           </Box>
         </Box>

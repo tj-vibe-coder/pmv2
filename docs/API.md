@@ -944,6 +944,102 @@ Delete an invoice. Requires active user session.
 
 ---
 
+## Project updates log
+
+Per-project dated history ("sent shop drawings", "panel delivered"). Code: `server/projectUpdates.js`; UI: `ProjectUpdatesCard` on the project page.
+
+### GET /api/projects/:id/updates
+Any signed-in user (and agent keys). Returns `{ updates, types, statuses }`, newest first (by `date`, then `created_at`), max 100.
+
+### POST /api/projects/:id/updates
+superadmin/admin/user sessions and agent keys (not viewers, tax filers or phone scanners). Body: `{ note (required, max 2000), type? (Progress|Submittal|Site work|Delivery|Meeting|Client|Billing|Issue|Other, default Other), date? (YYYY-MM-DD, default today), status?, progress? (0-100), po_number? (max 80), po_date? (YYYY-MM-DD or Unix seconds), next_step?, next_date?, risk? (low|medium|high), link? (https only), source? }`. `status` must be NOT STARTED, IN PROGRESS, ON HOLD, SUSPENDED or COMPLETED (closing/cancelling stays a normal project edit). Only `project_status`, `actual_site_progress_percent`, `po_number` and `po_date` change on the project (a PO date also sets `start_date`, as the project edit dialog does); the entry keeps the previous values (`previous_po_number` / `previous_po_date` when those were sent), and `latest_update` on the project holds the newest entry. Calcsheet status sync runs as for a normal edit.
+
+### DELETE /api/projects/:id/updates/:updateId
+The poster or a superadmin (never an agent key). Does not roll back status/progress; `latest_update` moves to the next newest entry.
+
+The project page opens Post update directly with `/projects/:id?update=1`.
+
+## Agent API keys
+
+For TJ's scheduled Claude agents. A key (`agk_` + 64 hex) is sent as `Authorization: Bearer agk_...`. Only its SHA-256 hash is stored (`agent_keys`). The /api gate limits a key to `AGENT_ROUTES`: `GET /api/agent/projects`, `GET /api/agent/projects/:id`, `GET /api/agent/projects/:id/schedule`, `GET /api/agent/projects/:id/invoices`, `POST /api/agent/projects/:id/billing`, `POST /api/agent/projects/:id/payments`, `GET /api/agent/clients`, `GET|POST /api/agent/calcsheet/projects`, `GET|PUT /api/agent/calcsheet/projects/:id`, `POST /api/agent/calcsheet/projects/:id/quotations`, `PUT /api/agent/calcsheet/quotations/:id`, `GET|POST /api/agent/projects/:id/emails`, `GET|POST /api/agent/projects/:id/action-items`, `PUT /api/agent/action-items/:id`, `GET /api/project-activity`, `GET|POST /api/projects/:id/updates`; every other route answers 403. Code: `server/agentAccess.js`. Agent posts show `posted_via: 'agent'` and the key's name as `posted_by`.
+
+### GET /api/agent/projects
+Compact project list: `id, ovp_number, po_number, po_date, project_name, account_name, with_acti, project_status, actual_site_progress_percent, start_date, completion_date, updated_completion_date, updated_contract_amount, contract_billed, project_director, remarks, latest_update, updated_at`. `?active=1` drops closed projects, except completed ones that are not fully billed.
+
+### GET /api/agent/projects/:id
+One project in the same compact view.
+
+### GET /api/agent/projects/:id/schedule
+The project's schedule tasks (`calcsheet_schedule_tasks` where `projectId` = `:id`), sorted as `GET /api/schedule-tasks` sorts them.
+
+### GET /api/agent/projects/:id/invoices
+`{ success, invoices }`, newest first: `id, project_id, invoice_no, type, pb_number, invoice_date, due_date, amount, amount_collected, collection_date, status (paid|partial|overdue|unpaid, computed), notes`.
+
+### POST /api/agent/projects/:id/billing
+Records an invoice in `invoices` (what Collections & AR reads). Body: `{ invoice_no (required, max 60), type (required: down payment|progress|final|retention), amount (required, > 0), date? (YYYY-MM-DD, default today), payment_terms_days? (0-365, default 30), due_date? (default date + terms), pb_number?, notes? (max 500), amount_collected?, collection_date? }`. Posting an `invoice_no` that already exists on the project (case-insensitive) updates that invoice instead of adding another, so retries are safe. The project's `contract_billed` and `amount_contract_billed_net` move by the change in invoice amount (hand-entered billing is preserved), and the billed percents and balance fields follow. Returns 201 (`created: true`) or 200 (`created: false`) with `{ invoice, project: { contract_billed, amount_contract_billed_net, updated_contract_balance_net } }`. 400 for bad input, 404 for an unknown project.
+
+### POST /api/agent/projects/:id/payments
+Records a payment received. Body: `{ invoice_no (required, must already exist on the project), amount (required, > 0), date? (default today), payment_ref? (max 80) }`. Adds to `amount_collected`, sets `collection_date`, and appends to the invoice's `payments` list. Re-posting the same `payment_ref` is a no-op (`duplicate: true`). A payment above the unpaid balance is a 400. Returns 201 with the updated `invoice` (its `status` becomes `partial` or `paid`).
+
+### Proposals and calcsheets (agent)
+Code: `server/agentCalcsheet.js`. Agents work on proposals in `draft` or `for_review` only; sent/won/lost and awarding stay with people (409 otherwise). The OneDrive proposal folder is not created; open the proposal in the app to create or link it. Responses carry a `url` to the page in the app.
+
+#### GET /api/agent/clients
+`{ success, clients: [{ id, code, name }] }` — no contact details. Use `id` or the 3-letter `code` as `customerId`.
+
+#### GET /api/agent/calcsheet/projects · GET /api/agent/calcsheet/projects/:id
+List of proposals (`id, code, name, location, date, customerId, status, opportunityGrade, notes, mainProjectId, createdByName, createdAt, updatedAt, url`), newest first. The single view adds `quotations` (full documents plus a computed `grandTotal` and `url`).
+
+#### POST /api/agent/calcsheet/projects
+Creates a proposal. Body: `{ name (required, max 200), customerId (required: client id or code), date? (YYYY-MM-DD, default today), location?, notes? (max 4000), status? (draft|for_review, default draft), opportunityGrade? (A|B|C) }`. The PCS code (`PCS{YYMM}{SEQ}-{CLI}-00`) comes from the shared `calcsheet_meta/seq` counter, as the app's New project does. 201 `{ project }`.
+
+#### PUT /api/agent/calcsheet/projects/:id
+`{ name?, location?, notes?, status? (draft|for_review), opportunityGrade? }`.
+
+#### POST /api/agent/calcsheet/projects/:id/quotations
+Creates a quotation seeded with the app's new-quotation defaults (30% product markup, 100% labor markup, IOCT: 5% EWT and Non-VAT, starter General Requirements rows unless `scopeCategory` is `supply`), then applies the body:
+- `kind?` (IOCT|ACTI, default IOCT), `scopeCategory?` (supply|services|both, default both), `recipientId?` (default the proposal's customer), `revision?` (default `00`)
+- Settings: `productMarkupPct, laborMarkupPct, generalReqMarkupPct, productContingencyPct, globalContingencyPct, ewtPct, discountPct, vatPct, nonVat, deliveryTermsEnabled, deliveryFee, validityDays, warrantyMonths, paymentTerms, deliveryTerms, preparedBy, preparedByTitle, authorizedBy, notes, dateSent, expectedPurchaseDate`, `terms: { scopeOfWork, exclusions, basisOfProposal, deliveryLines, warrantyExclusion }`
+- `generalReqts[]`: `{ description, unitPrice, qty, uom, markupPct? }` (replaces the starter rows)
+- `components[]`: `{ description, brand?, partNo?, qty, uom?, unitCost, forex? (default 1), contingencyPct?, discountPct?, markupPct?, leadTimeDays?, group?, subheader?, internalNote?, optional?, isHeader?, isChildHeader? }`
+- `services[]`: `{ description, qty?, uom?, unitPrice?, amount? (default qty × unitPrice; the final price of the line), group?, subheader?, internalNote?, isHeader? }`
+- `manpower[]`: `{ role, group (engineering|labor), headcount, mandays, dailyRate, allowance }`. When manpower is given, Engineering Services price from manpower; otherwise from the service lines' amounts.
+
+Line ids and codes (`A-0010`, `B-0010`, `C-0010` …) are assigned by the server; at most 500 lines per section. 201 `{ quotation }` with `grandTotal`.
+
+#### PUT /api/agent/calcsheet/quotations/:id
+Same settings and line arrays as above; a line array that is sent replaces that whole section. `remarks?` is the change note. The prior state is saved to `calcsheet_quotation_versions` as an editor save is. 409 when the quotation is awarded (price-locked) or its proposal is past `for_review`.
+
+### Email log and action items (agent)
+Code: `server/agentProjectLog.js`.
+
+#### POST /api/agent/projects/:id/emails
+Logs one email about the project in `project_emails`. Body: `{ message_id (required: the Message-ID or mailbox id), date (required, ISO date-time), subject and/or from (one required), to? / cc? (array or ;-separated), direction? (inbound|outbound, default inbound), thread_id?, summary? (max 4000), body? (max 50000), category? (free text, e.g. PO, RFQ, Submittal), link? (https, e.g. the Outlook web link), attachments? ([{ name, size?, link? (https) }], max 50) }`. One doc per project + `message_id` (the id is a hash of the two): re-sending an email answers 200 `duplicate: true` and changes nothing; a new one is 201. The same email may be logged on several projects.
+
+#### GET /api/agent/projects/:id/emails
+Newest first (by `date`), max 200. Bodies are left out (`has_body`) unless `?full=1`.
+
+#### POST /api/agent/projects/:id/action-items
+Creates a to-do on the Whiteboard's shared General board under **Project**, linked to the project (`kind: 'todo'`, `visibility: 'general'`, `category: 'project'`, `link: { type: 'project' }`). Body: `{ text (required, max 500), owner? (tj|rj|renzel|nylle|kim — shown as a [TJC]/[RJR]/[RPP]/[NDM]/[KKS] tag at the start of the text, since General items have no assignee), due_date? (YYYY-MM-DD), subtasks? (array of strings, max 50, 200 chars each), note? (first status note, max 1000), source_ref? (any stable string, e.g. message id + item number; re-posting the same ref answers 200 `duplicate: true`), email_message_id? }`. 201 `{ action_item }`.
+
+#### GET /api/agent/projects/:id/action-items
+Every General to-do linked to the project, including ones people made: `id, text, owner, due_date, done, done_by, done_at, progress, subtasks, notes, source_ref, email_message_id, posted_by, created_at, updated_at`. Open items first, then by due date. `?open=1` hides done ones.
+
+#### PUT /api/agent/action-items/:id
+`{ done? (true|false), note? (adds a status note), progress? (0-100, with a note), text?, due_date? (null clears) }`. Any project to-do may be ticked or noted, as on the board; `text` and `due_date` only on items this key posted (403 otherwise). Repeating to-dos answer 409 (tick those on the Whiteboard so the next copy is made). Private items and items not linked to a project are 404.
+
+### GET /api/project-activity
+The Project Activity page's data (`/projects/activity`, `server/projectActivity.js`); staff sessions (superadmin/admin/user/viewer) and agent keys. `?days=` 7|14|30|90|365 (default 30; the window counts today, Philippine time). Returns `{ days, since, today, totals: { open_items, overdue_items, due_this_week, done_items, updates, emails, projects_active }, by_project, action_items, updates, emails }`:
+- `action_items`: every open project to-do on the General board, plus ones ticked inside the window.
+- `updates`: project updates dated inside the window (read only from projects whose `latest_update` is in the window), newest first, max 500.
+- `emails`: logged emails inside the window without their bodies, newest first, max 500.
+- `by_project`: one row per project with anything above (`open_items, overdue_items, done_items, next_due, updates, emails, last_activity, latest_update`), most overdue first, then most recently active.
+
+The page ticks action items through `PUT /api/agent/action-items/:id`, which staff sessions may also call.
+
+### POST /api/agent-keys · GET /api/agent-keys · DELETE /api/agent-keys/:id
+Superadmin login session only (never an agent key). POST `{ name }` returns the plain key once, plus a 12-character `id`. GET lists keys without the key itself. DELETE `:id` (that 12-character id) revokes the key; it stops working at once.
+
 ## Authorization Matrix
 
 | Role | Projects | Clients | CA | Liquidation | Users | Suppliers | Payroll |

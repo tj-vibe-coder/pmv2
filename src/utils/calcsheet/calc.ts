@@ -189,7 +189,7 @@ export function computeTotals(q: Quotation): QuotationTotals {
   const smallOrderSurcharge = deliveryEnabled && subtotal < minOrderThreshold ? (q.smallOrderFee ?? 5000) : 0;
   const deliveryTotal = deliveryFee + smallOrderSurcharge;
 
-  const vat = (afterDiscount + deliveryTotal) * ((q.vatPct || 0) / 100);
+  const vat = q.nonVat ? 0 : (afterDiscount + deliveryTotal) * ((q.vatPct || 0) / 100);
   const grandTotal = afterDiscount + deliveryTotal + vat;
 
   return {
@@ -270,7 +270,7 @@ export function computeTotalsLegacy(q: Quotation): QuotationTotals {
   const subtotal = generalReqtsSubtotal + componentsSubtotal + servicesSub;
   const discount = subtotal * ((q.discountPct || 0) / 100);
   const afterDiscount = subtotal - discount;
-  const vat = afterDiscount * ((q.vatPct || 0) / 100);
+  const vat = q.nonVat ? 0 : afterDiscount * ((q.vatPct || 0) / 100);
   const grandTotal = afterDiscount + vat;
 
   return {

@@ -8,7 +8,7 @@ import {
   computeTotals, lineGeneralTotal, componentLineTotal, componentSellingUnit, serviceLineAmount, PHP, NUM,
   formatDiscountPct,
 } from './calc';
-import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
+import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, defaultTaxStatusTerm, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
 import { quotationRefNo } from './codes';
 import { quotationPdfScale, type QuotationPdfLayout } from './quotationPdfLayout';
 import { subheaderBefore } from './subheaders';
@@ -55,14 +55,32 @@ const ISSUER_INFO = {
 // When the quotation is issued under ACTI, prefer each contact's
 // actiPosition/actiEmail (their designation under the ACTI partnership),
 // falling back to the IOCT position/email when no ACTI override is set.
+// Exact (case-insensitive) name match first, then first+last name, so a
+// typed "Reuel Rivera" still resolves to the "Reuel Joshua Rivera" contact.
+export function findSalesContact(
+  name: string | undefined,
+  salesContacts: SalesContact[],
+): SalesContact | undefined {
+  const norm = (v: string | undefined) => (v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const firstLast = (v: string | undefined) => {
+    const parts = norm(v).split(' ').filter(Boolean);
+    return parts.length ? `${parts[0]} ${parts[parts.length - 1]}` : '';
+  };
+  const key = norm(name);
+  if (!key) return undefined;
+  const exact = salesContacts.find((c) => norm(c.name) === key);
+  if (exact) return exact;
+  const fl = firstLast(name);
+  return salesContacts.find((c) => firstLast(c.name) === fl);
+}
+
 function lookupStaff(
   name: string | undefined,
   salesContacts: SalesContact[],
   kind: QuotationKind,
 ): { title: string; phone: string; email: string } | null {
   if (!name) return null;
-  const trimmed = name.trim().toLowerCase();
-  const match = salesContacts.find((c) => c.name.trim().toLowerCase() === trimmed);
+  const match = findSalesContact(name, salesContacts);
   if (!match) return null;
   const isActi = kind === 'ACTI';
   return {
@@ -299,11 +317,14 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
   // line/label. See Quotation.ewtPct.
   const ewtPct = quotation.ewtPct || 0;
   const issuer = ISSUER_INFO[quotation.kind];
+  // Non-VAT mode: no "VAT-EX" / 0% VAT wording anywhere on the printout.
+  const nonVat = !!quotation.nonVat;
 
   const totalRows = quotation.generalReqts.length + quotation.components.length + quotation.services.length;
   const to0 = quotation.termsOverrides ?? {};
   const termsCharCount = [
     to0.scopeOfWork, to0.exclusions, to0.basisOfProposal, to0.deliveryLines, to0.warrantyExclusion,
+    nonVat ? (to0.taxStatus || defaultTaxStatusTerm(ISSUER_INFO[quotation.kind].name)) : undefined,
   ].reduce((sum, t) => sum + (t?.length || 0), 0);
   const scale = quotationPdfScale({ totalRows, termsCharCount, layout });
   const styles = buildStyles(scale);
@@ -470,7 +491,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
             )}
             </View>
             <View style={styles.trSub}>
-              <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
+              <Text style={{ fontWeight: 500 }}>{nonVat ? 'sub total' : 'sub total (vat-ex)'}</Text>
               <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.generalReqtsSubtotal)}</Text>
             </View>
           </>
@@ -546,7 +567,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                 })}
                 </View>
                 <View style={styles.trSub}>
-                  <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
+                  <Text style={{ fontWeight: 500 }}>{nonVat ? 'sub total' : 'sub total (vat-ex)'}</Text>
                   <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.componentsSubtotal)}</Text>
                 </View>
               </>
@@ -718,7 +739,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
             )}
             </View>
             <View style={styles.trSub}>
-              <Text style={{ fontWeight: 500 }}>sub total (vat-ex)</Text>
+              <Text style={{ fontWeight: 500 }}>{nonVat ? 'sub total' : 'sub total (vat-ex)'}</Text>
               <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.servicesSubtotal)}</Text>
             </View>
           </>
@@ -760,7 +781,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
           )}
           </View>
           <View style={[styles.sumFooterRow, styles.sumTotalRow]}>
-            <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP (VAT-EX)</Text>
+            <Text style={styles.sumFooterLabel}>{nonVat ? 'SUBTOTAL, PhP' : 'TOTAL PRICE, PhP (VAT-EX)'}</Text>
             <Text style={styles.sumFooterValue}>{PHP(totals.subtotal)}</Text>
           </View>
           {quotation.discountPct > 0 && (
@@ -770,10 +791,12 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
                 <Text style={styles.sumFooterLabel}>DISCOUNT ({formatDiscountPct(quotation.discountPct)}%)</Text>
                 <Text style={styles.sumFooterValue}>{PHP(totals.discount)}</Text>
               </View>
-              <View style={styles.sumFooterRow}>
-                <Text style={styles.sumFooterLabel}>DISCOUNTED PRICE (VAT-EX)</Text>
-                <Text style={styles.sumFooterValue}>{PHP(totals.subtotal - totals.discount)}</Text>
-              </View>
+              {!nonVat && (
+                <View style={styles.sumFooterRow}>
+                  <Text style={styles.sumFooterLabel}>DISCOUNTED PRICE (VAT-EX)</Text>
+                  <Text style={styles.sumFooterValue}>{PHP(totals.subtotal - totals.discount)}</Text>
+                </View>
+              )}
             </>
           )}
           {(totals.deliveryFee ?? 0) > 0 && (
@@ -788,17 +811,32 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
               <Text style={styles.sumFooterValue}>{PHP(totals.smallOrderSurcharge ?? 0)}</Text>
             </View>
           )}
-          {quotation.vatPct > 0 && (
-            <View style={styles.sumFooterRow}>
-              <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
-              <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
-            </View>
-          )}
-          {(quotation.vatPct > 0 || (totals.deliveryTotal ?? 0) > 0) && (
-            <View style={styles.sumFooterRow}>
-              <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP{quotation.vatPct > 0 ? ' (VAT-IN)' : ''}</Text>
-              <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
-            </View>
+          {nonVat ? (
+            <>
+              <View style={styles.sumFooterRow}>
+                <Text style={styles.sumFooterLabel}>VAT</Text>
+                <Text style={styles.sumFooterValue}>N/A (Non-VAT)</Text>
+              </View>
+              <View style={[styles.sumFooterRow, styles.sumTotalRow]}>
+                <Text style={styles.sumFooterLabel}>TOTAL AMOUNT PAYABLE, PhP</Text>
+                <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              {quotation.vatPct > 0 && (
+                <View style={styles.sumFooterRow}>
+                  <Text style={styles.sumFooterLabel}>{quotation.vatPct}% VAT</Text>
+                  <Text style={styles.sumFooterValue}>{PHP(totals.vat)}</Text>
+                </View>
+              )}
+              {(quotation.vatPct > 0 || (totals.deliveryTotal ?? 0) > 0) && (
+                <View style={styles.sumFooterRow}>
+                  <Text style={styles.sumFooterLabel}>TOTAL PRICE, PhP{quotation.vatPct > 0 ? ' (VAT-IN)' : ''}</Text>
+                  <Text style={styles.sumFooterValue}>{PHP(totals.grandTotal)}</Text>
+                </View>
+              )}
+            </>
           )}
         </View>
 
@@ -831,7 +869,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
               </View>
             ))}
             <View style={styles.trSub}>
-              <Text style={{ fontWeight: 500 }}>optional total (vat-ex)</Text>
+              <Text style={{ fontWeight: 500 }}>{nonVat ? 'optional total' : 'optional total (vat-ex)'}</Text>
               <Text style={{ fontWeight: 700, marginLeft: 12, color: PRIMARY }}>{PHP(totals.componentsOptionalSubtotal ?? 0)}</Text>
             </View>
           </View>
@@ -841,6 +879,11 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
         <View style={styles.terms} break={!!quotation.pageBreakBeforeTerms}>
           <View wrap={false}>
             <Text style={styles.termsTitle}>Terms and Conditions</Text>
+            {nonVat && (
+              <Text style={[styles.termText, { fontWeight: 700, marginTop: 4, marginBottom: 2 }]}>
+                {to.taxStatus || defaultTaxStatusTerm(issuer.name)}
+              </Text>
+            )}
             <Text style={styles.termSubtitle}>Scope of Work</Text>
             <Text style={styles.termText}>
               {to.scopeOfWork || DEFAULT_SCOPE_OF_WORK}

@@ -101,6 +101,13 @@ export interface PurchaseOrder {
   approvedBy?: string;
   receivedByVendor?: string;
   reportCompany?: ReportCompanyKey;
+  /** Optional Ship To overrides. When shipToName is set the goods go to another party (e.g. a client site),
+   * so only these fields print and the issuing company's own contact is not used. */
+  shipToName?: string;
+  shipToAddress?: string;
+  shipToAttn?: string;
+  shipToEmail?: string;
+  shipToPhone?: string;
   items: PurchaseOrderItem[];
   status: 'Draft' | 'Sent' | 'Confirmed';
   createdAt: string;
@@ -509,32 +516,40 @@ async function exportPOToPDF(po: PurchaseOrder) {
   // SHIP TO: Attention, Company, Address, Email, Phone (same spacing)
   y = vendorContentY;
   fontBody();
-  if (companyContact.attn) {
-    doc.text(`Attention: ${companyContact.attn}`, shipToX, y);
+  // Ship To: the issuing company's own details by default; per-field overrides win, and a different
+  // recipient (shipToName) suppresses the issuer's contact/TIN/tel so staff names never print for client sites.
+  const shipToOther = !!po.shipToName?.trim();
+  const shipToAttnText = po.shipToAttn?.trim() || (shipToOther ? '' : companyContact.attn || '');
+  const shipToEmailText = po.shipToEmail?.trim() || (shipToOther ? '' : companyContact.email || '');
+  const shipToPhoneText = po.shipToPhone?.trim() || (shipToOther ? '' : companyContact.phone || '');
+  const shipToNameText = po.shipToName?.trim() || companyName;
+  const shipToAddress = po.shipToAddress?.trim() || (shipToOther ? '' : companyAddress);
+  if (shipToAttnText) {
+    doc.text(`Attention: ${shipToAttnText}`, shipToX, y);
     y += blockLineHeight;
   }
   fontTitle();
-  doc.text(companyName, shipToX, y);
+  doc.text(shipToNameText, shipToX, y);
   fontBody();
   y += blockLineHeight;
-  const shipToAddrLines = doc.splitTextToSize(companyAddress, halfWidth - 8);
+  const shipToAddrLines = doc.splitTextToSize(shipToAddress, halfWidth - 8);
   shipToAddrLines.forEach((line: string) => {
     doc.text(line, shipToX, y);
     y += blockLineHeight;
   });
-  if (companyContact.email) {
-    doc.text(`Email: ${companyContact.email}`, shipToX, y);
+  if (shipToEmailText) {
+    doc.text(`Email: ${shipToEmailText}`, shipToX, y);
     y += blockLineHeight;
   }
-  if (companyContact.phone) {
-    doc.text(`Contact No.: ${companyContact.phone}`, shipToX, y);
+  if (shipToPhoneText) {
+    doc.text(`Contact No.: ${shipToPhoneText}`, shipToX, y);
     y += blockLineHeight;
   }
-  if (companyContact.tin) {
+  if (!shipToOther && companyContact.tin) {
     doc.text(`TIN: ${companyContact.tin}`, shipToX, y);
     y += blockLineHeight;
   }
-  if (companyContact.tel) {
+  if (!shipToOther && companyContact.tel) {
     doc.text(companyContact.tel, shipToX, y);
     y += blockLineHeight;
   }
@@ -864,6 +879,11 @@ const PurchaseOrderPage: React.FC = () => {
   const [approvedBy, setApprovedBy] = useState('');
   const [receivedByVendor, setReceivedByVendor] = useState('');
   const [reportCompany, setReportCompany] = useState<ReportCompanyKey>('IOCT');
+  const [shipToName, setShipToName] = useState('');
+  const [shipToAddress, setShipToAddress] = useState('');
+  const [shipToAttn, setShipToAttn] = useState('');
+  const [shipToEmail, setShipToEmail] = useState('');
+  const [shipToPhone, setShipToPhone] = useState('');
   const [createDialogItems, setCreateDialogItems] = useState<PurchaseOrderItem[]>([]);
   const { user: currentUser } = useAuth();
 
@@ -1011,6 +1031,11 @@ const PurchaseOrderPage: React.FC = () => {
     setCreateDiscount(0);
     setApprovedBy('');
     setReceivedByVendor('');
+    setShipToName('');
+    setShipToAddress('');
+    setShipToAttn('');
+    setShipToEmail('');
+    setShipToPhone('');
     setReportCompany('IOCT');
     setCreateDialogItems([]);
     setCreateOpen(true);
@@ -1081,6 +1106,11 @@ const PurchaseOrderPage: React.FC = () => {
       approvedBy: approvedBy.trim(),
       receivedByVendor: receivedByVendor.trim(),
       reportCompany,
+      shipToName: shipToName.trim() || undefined,
+      shipToAddress: shipToAddress.trim() || undefined,
+      shipToAttn: shipToAttn.trim() || undefined,
+      shipToEmail: shipToEmail.trim() || undefined,
+      shipToPhone: shipToPhone.trim() || undefined,
       items: createDialogItems,
       status: poStatus,
       createdAt: new Date().toISOString(),
@@ -1503,6 +1533,12 @@ const PurchaseOrderPage: React.FC = () => {
             <TextField fullWidth size="small" type="number" label="DISCOUNT (PHP)" value={createDiscount || ''} onChange={(e) => setCreateDiscount(parseFloat(e.target.value) || 0)} inputProps={{ min: 0, step: 0.01 }} placeholder="0" />
             <TextField fullWidth size="small" label="Approved by" value={approvedBy} onChange={(e) => setApprovedBy(e.target.value)} placeholder="Name" />
             <TextField fullWidth size="small" label="Received by vendor" value={receivedByVendor} onChange={(e) => setReceivedByVendor(e.target.value)} placeholder="Vendor acknowledgment" />
+            <Typography variant="subtitle2" color="text.secondary">Ship To (optional — leave blank to ship to the issuing company)</Typography>
+            <TextField fullWidth size="small" label="Deliver to (company / site)" value={shipToName} onChange={(e) => setShipToName(e.target.value)} placeholder="e.g. client name when shipping direct to site" />
+            <TextField fullWidth size="small" label="Delivery address" value={shipToAddress} onChange={(e) => setShipToAddress(e.target.value)} />
+            <TextField fullWidth size="small" label="Attention" value={shipToAttn} onChange={(e) => setShipToAttn(e.target.value)} />
+            <TextField fullWidth size="small" label="Email" value={shipToEmail} onChange={(e) => setShipToEmail(e.target.value)} />
+            <TextField fullWidth size="small" label="Contact No." value={shipToPhone} onChange={(e) => setShipToPhone(e.target.value)} />
             {combinedItems.length > 0 && (
               <Box>
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
@@ -1743,6 +1779,24 @@ const PurchaseOrderPage: React.FC = () => {
                       <MenuItem value="Confirmed">Confirmed</MenuItem>
                     </Select>
                   </FormControl>
+                </Grid>
+                <Grid size={{ xs: 12 }}>
+                  <Typography variant="subtitle2" color="text.secondary">Ship To (optional — leave blank to ship to the issuing company)</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Deliver to (company / site)" value={editingPO.shipToName ?? ''} onChange={(e) => updateEditPO({ shipToName: e.target.value || undefined })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth size="small" label="Delivery address" value={editingPO.shipToAddress ?? ''} onChange={(e) => updateEditPO({ shipToAddress: e.target.value || undefined })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <TextField fullWidth size="small" label="Attention" value={editingPO.shipToAttn ?? ''} onChange={(e) => updateEditPO({ shipToAttn: e.target.value || undefined })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <TextField fullWidth size="small" label="Email" value={editingPO.shipToEmail ?? ''} onChange={(e) => updateEditPO({ shipToEmail: e.target.value || undefined })} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <TextField fullWidth size="small" label="Contact No." value={editingPO.shipToPhone ?? ''} onChange={(e) => updateEditPO({ shipToPhone: e.target.value || undefined })} />
                 </Grid>
               </Grid>
               <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>Line items</Typography>

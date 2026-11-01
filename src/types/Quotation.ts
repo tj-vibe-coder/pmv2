@@ -312,6 +312,13 @@ export interface Quotation {
   globalContingencyPct: number;
   discountPct: number;
   vatPct: number;
+  /** Issuer is a NON-VAT taxpayer (percentage tax). When true the quotation
+   * never adds VAT (`vatPct` is forced to 0 in the totals), the printed PDF /
+   * Excel totals read "VAT: N/A (Non-VAT)" with no "VAT-EX" / 0% VAT wording,
+   * and a bold TAX STATUS clause leads the Terms and Conditions. New IOCT
+   * quotations default to true; absent (older quotations) reads as false, so
+   * existing printed output is unchanged until a user switches it on. */
+  nonVat?: boolean;
   // ── Delivery fee & minimum-order surcharge (opt-in per quotation) ──
   // When `deliveryTermsEnabled` is true, a manual `deliveryFee` (VAT-ex freight
   // charge) is added to the quote, and orders whose goods+services subtotal
@@ -340,6 +347,7 @@ export interface Quotation {
     basisOfProposal?: string;     // replaces the hardcoded Basis of Proposal paragraph
     deliveryLines?: string;       // replaces ALL delivery bullet lines (newline-separated, each already starts with "- ")
     warrantyExclusion?: string;   // replaces the hardcoded warranty-exclusion sentence
+    taxStatus?: string;           // replaces the TAX STATUS clause printed first in the terms when `nonVat` is on
   };
   notes?: string;
   exportGeneralReqtsAsLot?: boolean;

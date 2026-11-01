@@ -30,6 +30,7 @@ import {
   AssignmentTurnedIn as LiquidationIcon,
   RequestQuote as CaIcon,
   Description as SoaIcon,
+  Receipt as BlsIcon,
   FactCheck as EwtIcon,
   ShoppingCart as PoIcon,
 } from '@mui/icons-material';
@@ -177,6 +178,30 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
                 <ListItemText
                   primary="Statements of Account"
                   secondary="Partner (ACTI) & client SOAs"
+                  secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                  sx={{ color: 'white' }}
+                />
+              )}
+            </ListItemButton>
+          </Tooltip>
+        </ListItem>
+      )}
+
+      {user?.role !== 'tax_filer' && (
+        <ListItem disablePadding sx={{ mb: 0.5 }}>
+          <Tooltip title={isExpanded ? '' : 'Billing Statements'} placement="right" arrow>
+            <ListItemButton
+              selected={location.pathname === '/finance/bls'}
+              onClick={() => navigate('/finance/bls')}
+              sx={navBtnSx(location.pathname === '/finance/bls')}
+            >
+              <ListItemIcon sx={iconSx()}>
+                <BlsIcon />
+              </ListItemIcon>
+              {isExpanded && (
+                <ListItemText
+                  primary="Billing Statements"
+                  secondary="BLS per project / milestone"
                   secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
                   sx={{ color: 'white' }}
                 />
