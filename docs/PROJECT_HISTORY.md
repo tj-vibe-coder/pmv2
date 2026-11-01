@@ -1030,3 +1030,4 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
   - Progress Report tables show top-level codes as "1.0", "2.0"… (sub-codes like "1.1" unchanged; PDF only, the stored WBS codes are not touched).
   - COC now uses the Progress Report letterhead (logo, company name, address and TIN stacked on the left; no title on the right since the title is in the body) and footer (bare doc number left, "Page 1 of 1" right). The "Certificate No. …" line under the title is gone. The separate certificate letterhead mode and `docNo` option were removed from `ReportDoc.finish`.
   - COC title "Certificate of Completion" set in bold (TJ).
+  - COC: the leftover space on short certificates is now shared evenly by all the gaps (no cap), so there is no big hole between "This certificate is issued on…" and the client acceptance; signatures stay pinned to the foot (TJ).

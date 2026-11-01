@@ -90,8 +90,9 @@ export function buildCompletionCertificatePdf(data: CompletionCertificateData, a
   };
 
   let out = render(0);
-  // Share most of the empty space between the blocks; keep ~14 mm above the acceptance.
-  const spread = Math.min(7, Math.max(0, (out.free - 14) / GAPS));
+  // Share the empty space evenly: the 4 gaps above the text end each grow by `spread`, and the
+  // gap above the acceptance shrinks to 10 + spread, so no single hole is left above the signatures.
+  const spread = Math.max(0, (out.free - 10) / GAPS);
   if (spread > 0.5) out = render(spread);
   return { doc: out.doc, filename: `${safeFileName(docNo)}.pdf` };
 }
