@@ -21,7 +21,6 @@ const drData = (n: number, longEvery = 0): DeliveryReceiptData => ({
   despatchDate: '2026-10-30',
   poNumber: '4500123987',
   shipTo: { name: 'Analog Devices Inc.', address: 'Gateway Business Park, General Trias, Cavite', contactName: 'Maria Santos' },
-  invoiceTo: { name: 'Analog Devices Inc.', address: 'Gateway Business Park, General Trias, Cavite' },
   items: Array.from({ length: n }, (_, i) => ({
     itemNo: i + 1,
     description: longEvery && i % longEvery === 0
@@ -104,6 +103,8 @@ describe('report PDFs', () => {
     // A part number prints under its item's description.
     expect(pageText(doc, 1)).toContain('6ES7515-2AM02-0AB0');
     expect(pageText(doc, 1)).not.toContain('Part No.');
+    expect(pageText(doc, 1)).toContain('Ship To:');
+    expect(pageText(doc, 1)).not.toContain('Invoice To');
   });
 
   it.each([

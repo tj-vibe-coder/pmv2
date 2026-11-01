@@ -16,6 +16,8 @@ import {
   Select,
   MenuItem,
   IconButton,
+  Grid,
+  Snackbar,
   useMediaQuery,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, PictureAsPdf as PictureAsPdfIcon, Save as SaveIcon, History as HistoryIcon } from '@mui/icons-material';
@@ -59,9 +61,6 @@ export interface SavedDeliveryReceipt {
   shippingContactName: string;
   shippingContactPhone: string;
   shippingContactEmail: string;
-  invoiceSameAsShipping: boolean;
-  invoiceName: string;
-  invoiceAddress: string;
   items: DeliveryLineItem[];
   dispatchedByName: string;
   dispatchedByDate: string;
@@ -123,6 +122,34 @@ function loadOrdersFromTracker(): OrderRecord[] {
   }
 }
 
+const NET_PACIFIC_COLORS = {
+  primary: '#2c5aa0',
+  secondary: '#1e4a72',
+};
+
+/** Titled content paper (DESIGN_PHILOSOPHY §8); `flush` drops the body padding for tables, `fill` stretches to the grid row. */
+const Section: React.FC<{ title: React.ReactNode; action?: React.ReactNode; flush?: boolean; fill?: boolean; children: React.ReactNode }> = ({ title, action, flush, fill, children }) => (
+  <Paper
+    elevation={0}
+    sx={{
+      borderRadius: 2,
+      overflow: 'hidden',
+      background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+      border: '1px solid #e2e8f0',
+      mb: fill ? 0 : 1.5,
+      height: fill ? '100%' : undefined,
+    }}
+  >
+    <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+      <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+        {title}
+      </Typography>
+      {action}
+    </Box>
+    <Box sx={{ p: flush ? 0 : 1.5 }}>{children}</Box>
+  </Paper>
+);
+
 const DeliveryPage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
@@ -138,9 +165,6 @@ const DeliveryPage: React.FC = () => {
   const [shippingContactName, setShippingContactName] = useState('');
   const [shippingContactPhone, setShippingContactPhone] = useState('');
   const [shippingContactEmail, setShippingContactEmail] = useState('');
-  const [invoiceSameAsShipping, setInvoiceSameAsShipping] = useState(true);
-  const [invoiceName, setInvoiceName] = useState('');
-  const [invoiceAddress, setInvoiceAddress] = useState('');
   const [items, setItems] = useState<DeliveryLineItem[]>(() => [emptyItem()]);
   // Portrait phones (< 600 px): item lines and saved receipts show as cards.
   const isPhone = useMediaQuery('(max-width:599.95px)');
@@ -264,9 +288,6 @@ const DeliveryPage: React.FC = () => {
       shippingContactName,
       shippingContactPhone,
       shippingContactEmail,
-      invoiceSameAsShipping,
-      invoiceName,
-      invoiceAddress,
       items: items.map((i) => ({ ...i })),
       dispatchedByName,
       dispatchedByDate,
@@ -277,6 +298,12 @@ const DeliveryPage: React.FC = () => {
     };
     saveDRToList(dr);
     setSavedList(loadSavedDRs());
+  };
+
+  const [snack, setSnack] = useState('');
+  const handleSave = () => {
+    handleSaveDR();
+    setSnack(`Saved ${deliveryNoteNo.trim() || 'DR'}`);
   };
 
   const handleDeleteSavedDR = (dr: SavedDeliveryReceipt) => {
@@ -296,9 +323,6 @@ const DeliveryPage: React.FC = () => {
     setShippingContactName(dr.shippingContactName ?? '');
     setShippingContactPhone(dr.shippingContactPhone ?? '');
     setShippingContactEmail(dr.shippingContactEmail ?? '');
-    setInvoiceSameAsShipping(dr.invoiceSameAsShipping);
-    setInvoiceName(dr.invoiceName);
-    setInvoiceAddress(dr.invoiceAddress);
     setItems(dr.items.length ? dr.items.map((i) => ({ ...i, id: i.id || Math.random().toString(36).slice(2) })) : [emptyItem()]);
     setDispatchedByName(dr.dispatchedByName);
     setDispatchedByDate(dr.dispatchedByDate);
@@ -321,9 +345,6 @@ const DeliveryPage: React.FC = () => {
     setShippingContactName('');
     setShippingContactPhone('');
     setShippingContactEmail('');
-    setInvoiceSameAsShipping(true);
-    setInvoiceName('');
-    setInvoiceAddress('');
     setItems([emptyItem()]);
     setDispatchedByName('');
     setDispatchedByDate('');
@@ -345,8 +366,6 @@ const DeliveryPage: React.FC = () => {
   const shipContact = shippingContactName.trim() || '';
   const shipPhone = shippingContactPhone.trim() || '';
   const shipEmail = shippingContactEmail.trim() || '';
-  const invName = invoiceSameAsShipping ? shipName : (invoiceName.trim() || '—');
-  const invAddr = invoiceSameAsShipping ? shipAddr : (invoiceAddress.trim() || '—');
 
   const exportToPDF = async () => {
     const { doc, filename } = buildDeliveryReceiptPdf({
@@ -355,7 +374,6 @@ const DeliveryPage: React.FC = () => {
       despatchDate,
       poNumber,
       shipTo: { name: shipName, address: shipAddr, contactName: shipContact, phone: shipPhone, email: shipEmail },
-      invoiceTo: { name: invName, address: invAddr },
       items: items.map((it) => ({ itemNo: it.itemNo, description: it.description, partNo: it.partNo, delivered: it.delivered, unit: it.unit })),
       dispatchedBy: { name: dispatchedByName, date: dispatchedByDate },
       receivedBy: { name: receivedByName, date: receivedByDate },
@@ -363,51 +381,43 @@ const DeliveryPage: React.FC = () => {
     doc.save(filename);
   };
 
+  const actionButtons = (
+    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+      <Button variant="text" size="small" onClick={handleClearDR}>New DR</Button>
+      <Button
+        variant="outlined"
+        size="small"
+        startIcon={<SaveIcon />}
+        onClick={handleSave}
+        sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+      >
+        Save DR
+      </Button>
+      <Button
+        variant="contained"
+        size="small"
+        startIcon={<PictureAsPdfIcon />}
+        onClick={exportToPDF}
+        sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+      >
+        Generate PDF
+      </Button>
+    </Box>
+  );
+
+  const headCell = { fontWeight: 600, fontSize: '0.875rem', whiteSpace: 'nowrap' as const };
+
   return (
     <Box>
-      <Typography variant="h5" sx={{ fontWeight: 600, mb: 2 }}>
-        Delivery Receipt
-      </Typography>
-      <Paper sx={{ p: 3 }}>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
-            <FormControl fullWidth size="small">
-              <InputLabel>Report as company</InputLabel>
-              <Select
-                value={reportCompany}
-                label="Report as company"
-                onChange={(e) => {
-                  const v = e.target.value as ReportCompanyKey;
-                  setReportCompany(v);
-                }}
-              >
-                <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
-                <MenuItem value="IOCT">{REPORT_COMPANIES.IOCT}</MenuItem>
-              </Select>
-            </FormControl>
-          </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
-            <TextField
-              fullWidth
-              size="small"
-              label="DR Number"
-              value={deliveryNoteNo}
-              onChange={(e) => setDeliveryNoteNo(e.target.value)}
-              placeholder="e.g. IOCT2602002-DR-1"
-            />
-          </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
-            <TextField
-              fullWidth
-              size="small"
-              type="date"
-              label="Dispatch Date"
-              value={despatchDate}
-              onChange={(e) => setDespatchDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-          </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
+      <Box sx={{ mb: 1.5 }}>
+        <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
+          Delivery Receipt
+        </Typography>
+      </Box>
+
+      <Section title="Delivery Details">
+        <Grid container spacing={1.5}>
+          <Grid size={{ xs: 12, md: 6 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Project (optional)</InputLabel>
               <Select
@@ -423,13 +433,13 @@ const DeliveryPage: React.FC = () => {
                 ))}
               </Select>
             </FormControl>
-          </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
+          </Grid>
+          <Grid size={{ xs: 12, md: 6 }}>
             <FormControl fullWidth size="small">
-              <InputLabel>Link to Order (Material Request → Order → DR)</InputLabel>
+              <InputLabel>Link to Order (optional)</InputLabel>
               <Select
                 value={linkedOrderId}
-                label="Link to Order (Material Request → Order → DR)"
+                label="Link to Order (optional)"
                 onChange={(e) => handleLinkOrder(e.target.value)}
               >
                 <MenuItem value="">— None —</MenuItem>
@@ -440,8 +450,27 @@ const DeliveryPage: React.FC = () => {
                 ))}
               </Select>
             </FormControl>
-          </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Issued by</InputLabel>
+              <Select value={reportCompany} label="Issued by" onChange={(e) => setReportCompany(e.target.value as ReportCompanyKey)}>
+                <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
+                <MenuItem value="IOCT">{REPORT_COMPANIES.IOCT}</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <TextField
+              fullWidth
+              size="small"
+              label="DR Number"
+              value={deliveryNoteNo}
+              onChange={(e) => setDeliveryNoteNo(e.target.value)}
+              placeholder="e.g. IOCT2602002-DR-1"
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <TextField
               fullWidth
               size="small"
@@ -449,384 +478,286 @@ const DeliveryPage: React.FC = () => {
               value={poNumber}
               onChange={(e) => setPoNumber(e.target.value)}
             />
-          </Box>
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <TextField
+              fullWidth
+              size="small"
+              type="date"
+              label="Dispatch Date"
+              value={despatchDate}
+              onChange={(e) => setDespatchDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+            />
+          </Grid>
+        </Grid>
+      </Section>
 
-          <Box sx={{ width: '100%' }}>
-            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
-              Shipping to
-            </Typography>
-            <TextField
-              fullWidth
-              size="small"
-              label="Client / Company name"
-              value={shippingName}
-              onChange={(e) => setShippingName(e.target.value)}
-              sx={{ mb: 1 }}
-            />
-            <TextField
-              fullWidth
-              size="small"
-              label="ATTN (Contact person)"
-              value={shippingContactName}
-              onChange={(e) => setShippingContactName(e.target.value)}
-              placeholder="ATTN:"
-              sx={{ mb: 1 }}
-            />
-            <TextField
-              fullWidth
-              size="small"
-              label="Address"
-              value={shippingAddress}
-              onChange={(e) => setShippingAddress(e.target.value)}
-              multiline
-              rows={2}
-              sx={{ mb: 1 }}
-            />
-            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-              <TextField
-                size="small"
-                label="Mobile No"
-                value={shippingContactPhone}
-                onChange={(e) => setShippingContactPhone(e.target.value)}
-                placeholder="Mobile No"
-                sx={{ flex: 1, minWidth: 120 }}
-              />
-              <TextField
-                size="small"
-                label="Email"
-                value={shippingContactEmail}
-                onChange={(e) => setShippingContactEmail(e.target.value)}
-                placeholder="Email"
-                type="email"
-                sx={{ flex: 1, minWidth: 160 }}
-              />
-            </Box>
-          </Box>
-          <Box sx={{ width: '100%' }}>
-            <FormControl fullWidth size="small" sx={{ mb: 1 }}>
-              <InputLabel>Invoice Address</InputLabel>
-              <Select
-                value={invoiceSameAsShipping ? 'same' : 'different'}
-                label="Invoice Address"
-                onChange={(e) => setInvoiceSameAsShipping(e.target.value === 'same')}
-              >
-                <MenuItem value="same">Same as Shipping Address</MenuItem>
-                <MenuItem value="different">Different</MenuItem>
-              </Select>
-            </FormControl>
-            {!invoiceSameAsShipping && (
-              <>
-                <TextField
-                  fullWidth
-                  size="small"
-                  label="Invoice Name"
-                  value={invoiceName}
-                  onChange={(e) => setInvoiceName(e.target.value)}
-                  sx={{ mb: 1 }}
-                />
-                <TextField
-                  fullWidth
-                  size="small"
-                  label="Invoice Address"
-                  value={invoiceAddress}
-                  onChange={(e) => setInvoiceAddress(e.target.value)}
-                  multiline
-                  rows={2}
-                />
-              </>
-            )}
-          </Box>
+      <Section title="Ship To">
+        <Grid container spacing={1.5}>
+          <Grid size={{ xs: 12, md: 6 }}>
+            <TextField fullWidth size="small" label="Client / Company name" value={shippingName} onChange={(e) => setShippingName(e.target.value)} />
+          </Grid>
+          <Grid size={{ xs: 12, md: 6 }}>
+            <TextField fullWidth size="small" label="Attention (contact person)" value={shippingContactName} onChange={(e) => setShippingContactName(e.target.value)} />
+          </Grid>
+          <Grid size={{ xs: 12, md: 6 }}>
+            <TextField fullWidth size="small" label="Address" value={shippingAddress} onChange={(e) => setShippingAddress(e.target.value)} multiline minRows={1} />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <TextField fullWidth size="small" label="Mobile No." value={shippingContactPhone} onChange={(e) => setShippingContactPhone(e.target.value)} />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <TextField fullWidth size="small" label="Email" type="email" value={shippingContactEmail} onChange={(e) => setShippingContactEmail(e.target.value)} />
+          </Grid>
+        </Grid>
+      </Section>
 
-          <Box sx={{ width: '100%' }}>
-            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
-              Item Details
-            </Typography>
-            {isPhone ? (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {items.map((it, idx) => (
-                  <Paper key={it.id} variant="outlined" sx={{ p: 1.25 }}>
-                    <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.25 }}>
+      <Section
+        title={`Items Delivered (${items.length})`}
+        flush
+        action={
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<AddIcon />}
+            onClick={addItem}
+            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+          >
+            Add Item
+          </Button>
+        }
+      >
+        {isPhone ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1.5 }}>
+            {items.map((it, idx) => (
+              <Paper key={it.id} variant="outlined" sx={{ p: 1.25 }}>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.25 }}>
+                  <TextField
+                    size="small" type="number" label="Item #" value={it.itemNo || ''}
+                    onChange={(e) => updateItem(it.id, 'itemNo', parseInt(e.target.value, 10) || 0)}
+                    inputProps={{ min: 0, inputMode: 'numeric' }}
+                  />
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ mr: 'auto' }}>Line {idx + 1}</Typography>
+                    <IconButton onClick={() => removeItem(it.id)} color="error" disabled={items.length <= 1} aria-label="Remove item">
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Box>
+                  <TextField
+                    size="small" label="Description" value={it.description} multiline minRows={1} sx={{ gridColumn: '1 / -1' }}
+                    onChange={(e) => updateItem(it.id, 'description', e.target.value)}
+                  />
+                  <TextField
+                    size="small" label="Part No. (optional)" value={it.partNo || ''} sx={{ gridColumn: '1 / -1' }}
+                    onChange={(e) => updateItem(it.id, 'partNo', e.target.value)}
+                  />
+                  <TextField
+                    size="small" type="number" label="Qty" value={it.delivered || ''}
+                    onChange={(e) => updateItem(it.id, 'delivered', parseInt(e.target.value, 10) || 0)}
+                    inputProps={{ min: 0, inputMode: 'numeric' }}
+                  />
+                  <TextField
+                    select size="small" label="UOM" value={it.unit || ''}
+                    onChange={(e) => updateItem(it.id, 'unit', e.target.value)}
+                    SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}
+                  >
+                    <MenuItem value="">—</MenuItem>
+                    {UOM_OPTIONS.filter((u) => u !== '').map((u) => (
+                      <MenuItem key={u} value={u}>{u}</MenuItem>
+                    ))}
+                  </TextField>
+                </Box>
+              </Paper>
+            ))}
+          </Box>
+        ) : (
+          <TableContainer sx={{ overflowX: 'auto' }}>
+            <Table size="small" sx={{ tableLayout: 'fixed', minWidth: 760 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ ...headCell, width: 76 }}>Item #</TableCell>
+                  <TableCell sx={headCell}>Description</TableCell>
+                  <TableCell sx={{ ...headCell, width: 180 }}>Part No.</TableCell>
+                  <TableCell sx={{ ...headCell, width: 90 }} align="right">Qty</TableCell>
+                  <TableCell sx={{ ...headCell, width: 100 }}>UOM</TableCell>
+                  <TableCell sx={{ width: 48 }} />
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {items.map((it) => (
+                  <TableRow key={it.id} hover sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' }, '& td': { py: 0.75 } }}>
+                    <TableCell>
                       <TextField
-                        size="small" type="number" label="Item #" value={it.itemNo || ''}
+                        size="small"
+                        type="number"
+                        value={it.itemNo || ''}
                         onChange={(e) => updateItem(it.id, 'itemNo', parseInt(e.target.value, 10) || 0)}
-                        inputProps={{ min: 0, inputMode: 'numeric' }}
+                        inputProps={{ min: 0, 'aria-label': 'Item number' }}
+                        fullWidth
                       />
-                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
-                        <Typography variant="caption" color="text.secondary" sx={{ mr: 'auto' }}>Line {idx + 1}</Typography>
-                        <IconButton onClick={() => removeItem(it.id)} color="error" disabled={items.length <= 1} aria-label="Remove item">
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Box>
+                    </TableCell>
+                    <TableCell>
                       <TextField
-                        size="small" label="Description" value={it.description} multiline minRows={1} sx={{ gridColumn: '1 / -1' }}
+                        size="small"
+                        value={it.description}
                         onChange={(e) => updateItem(it.id, 'description', e.target.value)}
+                        placeholder="Description"
+                        inputProps={{ 'aria-label': 'Description' }}
+                        fullWidth
                       />
+                    </TableCell>
+                    <TableCell>
                       <TextField
-                        size="small" label="Part No. (optional)" value={it.partNo || ''} sx={{ gridColumn: '1 / -1' }}
+                        size="small"
+                        value={it.partNo || ''}
                         onChange={(e) => updateItem(it.id, 'partNo', e.target.value)}
+                        placeholder="Optional"
+                        inputProps={{ 'aria-label': 'Part number' }}
+                        fullWidth
                       />
+                    </TableCell>
+                    <TableCell align="right">
                       <TextField
-                        size="small" type="number" label="QTY" value={it.delivered || ''}
+                        size="small"
+                        type="number"
+                        value={it.delivered || ''}
                         onChange={(e) => updateItem(it.id, 'delivered', parseInt(e.target.value, 10) || 0)}
-                        inputProps={{ min: 0, inputMode: 'numeric' }}
+                        inputProps={{ min: 0, 'aria-label': 'Quantity', style: { textAlign: 'right' } }}
+                        fullWidth
                       />
-                      <TextField
-                        select size="small" label="UOM" value={it.unit || ''}
+                    </TableCell>
+                    <TableCell>
+                      <Select
+                        size="small"
+                        fullWidth
+                        value={it.unit || ''}
                         onChange={(e) => updateItem(it.id, 'unit', e.target.value)}
-                        SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}
+                        displayEmpty
+                        inputProps={{ 'aria-label': 'Unit of measure' }}
                       >
                         <MenuItem value="">—</MenuItem>
                         {UOM_OPTIONS.filter((u) => u !== '').map((u) => (
                           <MenuItem key={u} value={u}>{u}</MenuItem>
                         ))}
-                      </TextField>
-                    </Box>
-                  </Paper>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      <IconButton size="small" onClick={() => removeItem(it.id)} color="error" disabled={items.length <= 1} aria-label="Remove item">
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </Box>
-            ) : (
-            <TableContainer component={Paper} variant="outlined" sx={{ overflowX: 'auto' }}>
-              <Table
-                size="small"
-                sx={{
-                  tableLayout: 'fixed',
-                  minWidth: 800,
-                  '& .MuiTableCell-root': { py: 0.75 },
-                  '& .MuiInputBase-input': {
-                    color: 'rgba(0, 0, 0, 0.87)',
-                    WebkitTextFillColor: 'rgba(0, 0, 0, 0.87)',
-                    fontSize: '0.875rem',
-                  },
-                  '& .MuiInputBase-input::placeholder': {
-                    color: 'rgba(0, 0, 0, 0.4)',
-                    opacity: 1,
-                  },
-                }}
-              >
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </Section>
+
+      <Section title="Signatures">
+        <Grid container spacing={1.5}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <TextField fullWidth size="small" label="Dispatched by" value={dispatchedByName} onChange={(e) => setDispatchedByName(e.target.value)} />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <TextField fullWidth size="small" type="date" label="Dispatch sign date" value={dispatchedByDate} onChange={(e) => setDispatchedByDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <TextField fullWidth size="small" label="Received by" value={receivedByName} onChange={(e) => setReceivedByName(e.target.value)} placeholder="Leave blank to sign by hand" />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <TextField fullWidth size="small" type="date" label="Received date" value={receivedByDate} onChange={(e) => setReceivedByDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+          </Grid>
+        </Grid>
+      </Section>
+
+      {filteredSavedList.length > 0 && (
+        <Section
+          flush
+          title={
+            <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}>
+              <HistoryIcon fontSize="small" /> Saved DRs ({filteredSavedList.length}){projectId !== '' ? ' · this project' : ''}
+            </Box>
+          }
+        >
+          {isPhone ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1.5 }}>
+              {filteredSavedList.map((dr) => (
+                <Paper key={dr.id} variant="outlined" sx={{ p: 1.25 }}>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{dr.deliveryNoteNo || '—'}</Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    {[dr.poNumber && `PO ${dr.poNumber}`, dr.despatchDate && `Dispatch ${dr.despatchDate}`].filter(Boolean).join(' · ') || '—'}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Saved {new Date(dr.savedAt).toLocaleString()}</Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                    <Button size="small" variant="outlined" onClick={() => handleLoadDR(dr)}>Load</Button>
+                    <Box sx={{ flex: 1 }} />
+                    {isAdmin && (
+                      <IconButton onClick={() => handleDeleteSavedDR(dr)} color="error" title="Delete (admin only)">
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    )}
+                  </Box>
+                </Paper>
+              ))}
+            </Box>
+          ) : (
+            <TableContainer sx={{ maxHeight: 360 }}>
+              <Table stickyHeader size="small">
                 <TableHead>
-                  <TableRow sx={{ bgcolor: 'primary.main', color: 'white' }}>
-                    <TableCell sx={{ color: 'white', fontWeight: 600, width: 56 }}>Item #</TableCell>
-                    <TableCell sx={{ color: 'white', fontWeight: 600 }}>Description</TableCell>
-                    <TableCell sx={{ color: 'white', fontWeight: 600, width: 160 }}>Part No.</TableCell>
-                    <TableCell sx={{ color: 'white', fontWeight: 600, width: 80 }} align="right">QTY</TableCell>
-                    <TableCell sx={{ color: 'white', fontWeight: 600, width: 72 }}>UOM</TableCell>
-                    <TableCell sx={{ color: 'white', width: 48 }} />
+                  <TableRow>
+                    <TableCell sx={headCell}>DR Number</TableCell>
+                    <TableCell sx={headCell}>PO</TableCell>
+                    <TableCell sx={headCell}>Dispatch Date</TableCell>
+                    <TableCell sx={headCell}>Saved</TableCell>
+                    <TableCell sx={headCell} align="right">Action</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {items.map((it) => (
-                    <TableRow key={it.id}>
-                      <TableCell sx={{ width: 56, verticalAlign: 'middle' }}>
-                        <TextField
-                          size="small"
-                          type="number"
-                          value={it.itemNo || ''}
-                          onChange={(e) => updateItem(it.id, 'itemNo', parseInt(e.target.value, 10) || 0)}
-                          inputProps={{ min: 0 }}
-                          fullWidth
-                        />
-                      </TableCell>
-                      <TableCell sx={{ verticalAlign: 'middle' }}>
-                        <TextField
-                          size="small"
-                          value={it.description}
-                          onChange={(e) => updateItem(it.id, 'description', e.target.value)}
-                          placeholder="Description"
-                          fullWidth
-                        />
-                      </TableCell>
-                      <TableCell sx={{ width: 160, verticalAlign: 'middle' }}>
-                        <TextField
-                          size="small"
-                          value={it.partNo || ''}
-                          onChange={(e) => updateItem(it.id, 'partNo', e.target.value)}
-                          placeholder="Optional"
-                          fullWidth
-                        />
-                      </TableCell>
-                      <TableCell sx={{ width: 80, verticalAlign: 'middle' }} align="right">
-                        <TextField
-                          size="small"
-                          type="number"
-                          value={it.delivered || ''}
-                          onChange={(e) => updateItem(it.id, 'delivered', parseInt(e.target.value, 10) || 0)}
-                          inputProps={{ min: 0 }}
-                          sx={{ width: 56 }}
-                        />
-                      </TableCell>
-                      <TableCell sx={{ width: 72, verticalAlign: 'middle' }}>
-                        <FormControl size="small" fullWidth>
-                          <Select
-                            value={it.unit || ''}
-                            onChange={(e) => updateItem(it.id, 'unit', e.target.value)}
-                            displayEmpty
-                            sx={{
-                              color: 'rgba(0, 0, 0, 0.87)',
-                              fontSize: '0.875rem',
-                              minHeight: 40,
-                            }}
-                          >
-                            <MenuItem value="">—</MenuItem>
-                            {UOM_OPTIONS.filter((u) => u !== '').map((u) => (
-                              <MenuItem key={u} value={u}>
-                                {u}
-                              </MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
-                      </TableCell>
-                      <TableCell sx={{ width: 48, verticalAlign: 'middle' }}>
-                        <IconButton size="small" onClick={() => removeItem(it.id)} color="error" disabled={items.length <= 1}>
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
+                  {filteredSavedList.map((dr) => (
+                    <TableRow key={dr.id} hover sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' }, '& td': { fontSize: '0.8rem' } }}>
+                      <TableCell>{dr.deliveryNoteNo || '—'}</TableCell>
+                      <TableCell>{dr.poNumber || '—'}</TableCell>
+                      <TableCell>{dr.despatchDate || '—'}</TableCell>
+                      <TableCell>{new Date(dr.savedAt).toLocaleString()}</TableCell>
+                      <TableCell align="right">
+                        <Button size="small" variant="text" onClick={() => handleLoadDR(dr)} sx={{ color: NET_PACIFIC_COLORS.primary }}>
+                          Load
+                        </Button>
+                        {isAdmin && (
+                          <IconButton size="small" onClick={() => handleDeleteSavedDR(dr)} color="error" title="Delete (admin only)">
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </TableContainer>
-            )}
-            <Button startIcon={<AddIcon />} onClick={addItem} size="small" sx={{ mt: 1 }}>
-              Add item
-            </Button>
-          </Box>
-
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
-            <TextField
-              fullWidth
-              size="small"
-              label="Dispatched By – Name"
-              value={dispatchedByName}
-              onChange={(e) => setDispatchedByName(e.target.value)}
-            />
-          </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
-            <TextField
-              fullWidth
-              size="small"
-              type="date"
-              label="Dispatched By – Date"
-              value={dispatchedByDate}
-              onChange={(e) => setDispatchedByDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-          </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
-            <TextField
-              fullWidth
-              size="small"
-              label="Received By – Name"
-              value={receivedByName}
-              onChange={(e) => setReceivedByName(e.target.value)}
-            />
-          </Box>
-          <Box sx={{ width: { xs: '100%', md: 'calc(50% - 12px)' } }}>
-            <TextField
-              fullWidth
-              size="small"
-              type="date"
-              label="Received By – Date"
-              value={receivedByDate}
-              onChange={(e) => setReceivedByDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-          </Box>
-          <Box sx={{ width: '100%', display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-            <Button
-              variant="contained"
-              startIcon={<PictureAsPdfIcon />}
-              onClick={exportToPDF}
-              sx={{ bgcolor: '#2c5aa0', '&:hover': { bgcolor: '#1e4a72' } }}
-            >
-              Generate Delivery Receipt (PDF)
-            </Button>
-            <Button
-              variant="outlined"
-              startIcon={<SaveIcon />}
-              onClick={handleSaveDR}
-              sx={{ borderColor: '#2c5aa0', color: '#2c5aa0' }}
-            >
-              Save DR
-            </Button>
-            <Button
-              variant="outlined"
-              onClick={handleClearDR}
-              sx={{ borderColor: '#666', color: '#666' }}
-            >
-              Clear (new DR)
-            </Button>
-          </Box>
-
-          {filteredSavedList.length > 0 && (
-            <Box sx={{ width: '100%', mt: 3 }}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-                <HistoryIcon /> Saved delivery receipts{projectId !== '' ? ' (this project)' : ' (all)'}
-              </Typography>
-              {isPhone ? (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  {filteredSavedList.map((dr) => (
-                    <Paper key={dr.id} variant="outlined" sx={{ p: 1.25 }}>
-                      <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{dr.deliveryNoteNo || '—'}</Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                        {[dr.poNumber && `PO ${dr.poNumber}`, dr.despatchDate && `Dispatch ${dr.despatchDate}`].filter(Boolean).join(' · ') || '—'}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Saved {new Date(dr.savedAt).toLocaleString()}</Typography>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
-                        <Button size="small" variant="outlined" onClick={() => handleLoadDR(dr)}>Load</Button>
-                        <Box sx={{ flex: 1 }} />
-                        {isAdmin && (
-                          <IconButton onClick={() => handleDeleteSavedDR(dr)} color="error" title="Delete (admin only)">
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        )}
-                      </Box>
-                    </Paper>
-                  ))}
-                </Box>
-              ) : (
-              <TableContainer component={Paper} variant="outlined">
-                <Table size="small">
-                  <TableHead>
-                    <TableRow sx={{ bgcolor: 'grey.100' }}>
-                      <TableCell sx={{ fontWeight: 600 }}>DR Number</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>PO</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Dispatch Date</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Saved</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }} align="right">Action</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {filteredSavedList.map((dr) => (
-                      <TableRow key={dr.id}>
-                        <TableCell>{dr.deliveryNoteNo || '—'}</TableCell>
-                        <TableCell>{dr.poNumber || '—'}</TableCell>
-                        <TableCell>{dr.despatchDate || '—'}</TableCell>
-                        <TableCell>{new Date(dr.savedAt).toLocaleString()}</TableCell>
-                        <TableCell align="right">
-                          <Button size="small" variant="text" onClick={() => handleLoadDR(dr)}>
-                            Load
-                          </Button>
-                          {isAdmin && (
-                            <IconButton
-                              size="small"
-                              onClick={() => handleDeleteSavedDR(dr)}
-                              color="error"
-                              title="Delete (admin only)"
-                            >
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-              )}
-            </Box>
           )}
-        </Box>
+        </Section>
+      )}
+
+      {/* Actions stay in reach at the bottom of the screen while the form scrolls. */}
+      <Paper
+        elevation={3}
+        sx={{ position: 'sticky', bottom: 0, zIndex: 10, borderTop: `2px solid ${NET_PACIFIC_COLORS.primary}`, pl: 1.5, pr: 9, py: 1, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
+      >
+        <Typography variant="body2" color="text.secondary" sx={{ flex: 1, minWidth: 160 }}>
+          {deliveryNoteNo.trim() || 'New DR'} · {items.filter((i) => i.description.trim()).length} item(s)
+        </Typography>
+        {actionButtons}
       </Paper>
+
+      <Snackbar
+        open={!!snack}
+        autoHideDuration={3000}
+        onClose={() => setSnack('')}
+        message={snack}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      />
     </Box>
   );
 };

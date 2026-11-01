@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { Alert, Box, Chip, CircularProgress, Paper, Typography, Button, TextField, FormControl, InputLabel, Select, MenuItem, Grid, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton } from '@mui/material';
+import { Alert, Box, Chip, CircularProgress, Paper, Typography, Button, TextField, Grid, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton } from '@mui/material';
 import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, CloudUpload as CloudUploadIcon, CheckCircle as CheckCircleIcon, Save as SaveIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
 import {
@@ -20,7 +20,28 @@ import { buildCompletionCertificatePdf } from '../../utils/reports/completionCer
 import { REPORT_ISSUERS } from '../../utils/reports/reportPdfKit';
 import { loadReportLogo } from '../../utils/reports/reportLogo';
 
-const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
+const NET_PACIFIC_COLORS = { primary: '#2c5aa0', secondary: '#1e4a72' };
+
+/** Titled content paper (DESIGN_PHILOSOPHY §8); `flush` drops the body padding for tables, `fill` stretches to the grid row. */
+const Section: React.FC<{ title: React.ReactNode; flush?: boolean; fill?: boolean; children: React.ReactNode }> = ({ title, flush, fill, children }) => (
+  <Paper
+    elevation={0}
+    sx={{
+      borderRadius: 2,
+      overflow: 'hidden',
+      background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+      border: '1px solid #e2e8f0',
+      height: fill ? '100%' : undefined,
+    }}
+  >
+    <Box sx={{ p: 1.5, borderBottom: '1px solid #e0e0e0' }}>
+      <Typography variant="h6" sx={{ fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+        {title}
+      </Typography>
+    </Box>
+    <Box sx={{ p: flush ? 0 : 1.5 }}>{children}</Box>
+  </Paper>
+);
 
 export interface CompletionCertificateTabProps {
   project: Project;
@@ -248,109 +269,139 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     }
   };
 
+  const contractorName = (preparedBy.name || currentUser?.full_name || currentUser?.username || currentUser?.email || '').trim();
+  const headCell = { fontWeight: 600, fontSize: '0.875rem', whiteSpace: 'nowrap' as const };
+  const fact = (label: string, value?: string | null) => (
+    <Box sx={{ display: 'flex', gap: 1, py: 0.5, borderBottom: '1px dashed #e2e8f0', '&:last-of-type': { borderBottom: 0 } }}>
+      <Typography variant="body2" color="text.secondary" sx={{ width: 96, flexShrink: 0 }}>{label}</Typography>
+      <Typography variant="body2" sx={{ fontWeight: 500, minWidth: 0, overflowWrap: 'anywhere' }}>{value || '—'}</Typography>
+    </Box>
+  );
+
   return (
-    <Paper elevation={0} sx={{ p: 3, borderRadius: 2, border: '1px solid #e2e8f0', bgcolor: '#fff' }}>
-      <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
-        Certificate of Completion
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Generate the Certificate of Completion. Preview or Export to PDF.
-      </Typography>
-      <Grid container spacing={2} sx={{ mb: 2 }}>
-        <Grid size={{ xs: 12, sm: 'auto' }}>
-          <TextField
-            label="Completion Date"
-            type="date"
-            value={completionDateOverride}
-            onChange={(e) => setCompletionDateOverride(e.target.value)}
-            size="small"
-            sx={{ minWidth: 200 }}
-            InputLabelProps={{ shrink: true }}
-          />
+    <Box>
+      <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
+        <Grid size={{ xs: 12, md: 5 }}>
+          <Section title="Certificate Details" fill>
+            <TextField
+              label="Completion Date"
+              type="date"
+              value={completionDateOverride}
+              onChange={(e) => setCompletionDateOverride(e.target.value)}
+              size="small"
+              fullWidth
+              InputLabelProps={{ shrink: true }}
+              helperText={`Printed as ${completionDateDisplay}`}
+              sx={{ mb: 1.5 }}
+            />
+            {fact('Project', project.project_name)}
+            {fact('Project No.', project.project_no)}
+            {fact('Client', project.account_name)}
+            {fact('PO No.', project.po_number)}
+          </Section>
         </Grid>
-        <Grid size={{ xs: 12 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>Approved by (PDF)</Typography>
-          <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-            <TextField size="small" label="Name" value={approverName} onChange={(e) => setApproverName(e.target.value)} sx={{ width: 220 }} placeholder={clientApprover?.name || 'Client approver name'} />
-            <TextField size="small" label="Designation" value={approverDesignation} onChange={(e) => setApproverDesignation(e.target.value)} sx={{ width: 180 }} placeholder={clientApprover?.designation || 'Position'} />
-            <TextField size="small" label="Company" value={approverCompany} onChange={(e) => setApproverCompany(e.target.value)} sx={{ width: 220 }} placeholder={clientApprover?.company || 'Company'} />
-          </Box>
+        <Grid size={{ xs: 12, md: 7 }}>
+          <Section title="Signatories" fill>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>Contractor</Typography>
+            <Box sx={{ p: 1.25, mb: 2, borderRadius: 1, bgcolor: 'rgba(0,0,0,0.03)', border: '1px dashed #cbd5e1' }}>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>{contractorName || 'Prepared by (set in Progress Report)'}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {[preparedBy.designation?.trim(), REPORT_COMPANIES[reportCompany]].filter(Boolean).join(' · ')}
+              </Typography>
+            </Box>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>Accepted by (Client)</Typography>
+            <Grid container spacing={1.5}>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField fullWidth size="small" label="Name" value={approverName} onChange={(e) => setApproverName(e.target.value)} placeholder={clientApprover?.name || 'Client approver name'} />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField fullWidth size="small" label="Designation" value={approverDesignation} onChange={(e) => setApproverDesignation(e.target.value)} placeholder={clientApprover?.designation || 'Position'} />
+              </Grid>
+              <Grid size={12}>
+                <TextField fullWidth size="small" label="Company" value={approverCompany} onChange={(e) => setApproverCompany(e.target.value)} placeholder={clientApprover?.company || project.account_name || 'Company'} />
+              </Grid>
+            </Grid>
+          </Section>
         </Grid>
       </Grid>
+
       {exportFeedback && (
-        <Alert severity={exportFeedback.severity} onClose={() => setExportFeedback(null)} sx={{ mb: 2 }}>
+        <Alert severity={exportFeedback.severity} onClose={() => setExportFeedback(null)} sx={{ mb: 1.5 }}>
           {exportFeedback.message}
         </Alert>
       )}
-      {oneDriveConfigured && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-          {oneDriveSignedIn ? (
-            <Chip
-              size="small"
-              icon={<CheckCircleIcon />}
-              label="OneDrive connected — PDF will upload on export"
-              color="success"
-              variant="outlined"
-            />
+
+      <Paper
+        elevation={0}
+        sx={{ mb: 1.5, p: 1.5, borderRadius: 2, border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
+          {editingCertId && <Chip label="Editing saved certificate" size="small" color="info" variant="outlined" />}
+          {oneDriveConfigured && (oneDriveSignedIn ? (
+            <Chip size="small" icon={<CheckCircleIcon />} label="Uploads to OneDrive on export" color="success" variant="outlined" />
           ) : (
             <Button
               size="small"
-              variant="outlined"
+              variant="text"
               startIcon={oneDriveAuthLoading ? <CircularProgress size={14} /> : <CloudUploadIcon />}
               disabled={oneDriveAuthLoading}
               onClick={oneDriveLogin}
-              sx={{ textTransform: 'none', borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}
+              sx={{ textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}
             >
-              Sign in to OneDrive to enable upload
+              Sign in to OneDrive to upload
             </Button>
-          )}
+          ))}
         </Box>
-      )}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <FormControl size="small" sx={{ minWidth: 280 }}>
-          <InputLabel id="coc-report-company-label">Report as company</InputLabel>
-          <Select labelId="coc-report-company-label" value={reportCompany} label="Report as company" onChange={(e) => setReportCompany(e.target.value as ReportCompanyKey)}>
-            <MenuItem value="IOCT">{REPORT_COMPANIES.IOCT}</MenuItem>
-            <MenuItem value="ACT">{REPORT_COMPANIES.ACT}</MenuItem>
-          </Select>
-        </FormControl>
-        {editingCertId && (
-          <Chip label="Editing saved certificate" size="small" color="info" variant="outlined" />
-        )}
-        <Button variant="contained" size="small" startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />} onClick={handleSaveCertificate} disabled={saving} sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}>{editingCertId ? 'Update Saved' : 'Save Certificate'}</Button>
-        <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>Preview PDF</Button>
-        <Button variant="outlined" size="small" startIcon={<PictureAsPdfIcon />} onClick={handleExport} disabled={exporting} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>{exporting ? 'Uploading…' : 'Export Certificate of Completion'}</Button>
-      </Box>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Button variant="outlined" size="small" startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />} onClick={handleSaveCertificate} disabled={saving} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>
+            {editingCertId ? 'Update Saved' : 'Save'}
+          </Button>
+          <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={handlePreview} sx={{ borderColor: NET_PACIFIC_COLORS.primary, color: NET_PACIFIC_COLORS.primary }}>
+            Preview
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={exporting ? <CircularProgress size={14} color="inherit" /> : <PictureAsPdfIcon />}
+            onClick={handleExport}
+            disabled={exporting}
+            sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
+          >
+            {exporting ? 'Uploading…' : 'Export PDF'}
+          </Button>
+        </Box>
+      </Paper>
 
       {/* Saved certificates — Firestore history for backtracking */}
-      <Box sx={{ mt: 3 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
-            Saved Certificates
-          </Typography>
-          {savedCerts.length > 0 && <Chip label={String(savedCerts.length)} size="small" variant="outlined" />}
-          {certsLoading && <CircularProgress size={16} sx={{ color: NET_PACIFIC_COLORS.primary }} />}
-        </Box>
+      <Section
+        flush
+        title={
+          <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}>
+            Saved Certificates ({savedCerts.length})
+            {certsLoading && <CircularProgress size={14} sx={{ color: NET_PACIFIC_COLORS.primary }} />}
+          </Box>
+        }
+      >
         {savedCerts.length > 0 ? (
-          <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 280 }}>
-            <Table size="small" stickyHeader>
+          <TableContainer sx={{ maxHeight: 320 }}>
+            <Table size="small" stickyHeader sx={{ minWidth: 560 }}>
               <TableHead>
                 <TableRow>
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Saved</TableCell>
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Completion Date</TableCell>
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Company</TableCell>
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Approved By</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Actions</TableCell>
+                  <TableCell sx={headCell}>Saved</TableCell>
+                  <TableCell sx={headCell}>Completion Date</TableCell>
+                  <TableCell sx={headCell}>Company</TableCell>
+                  <TableCell sx={headCell}>Accepted By</TableCell>
+                  <TableCell align="right" sx={headCell}>Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {savedCerts.map((c) => (
-                  <TableRow key={c.id} hover selected={editingCertId === c.id}>
+                  <TableRow key={c.id} hover selected={editingCertId === c.id} sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' }, '& td': { fontSize: '0.8rem' } }}>
                     <TableCell>{c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-US', { dateStyle: 'medium' }) : '—'}</TableCell>
                     <TableCell>{c.completionDate ? formatCompletionDateForPdf(c.completionDate) : '—'}</TableCell>
                     <TableCell>{c.companyName || c.reportCompany}</TableCell>
                     <TableCell>{c.approverName || '—'}</TableCell>
-                    <TableCell align="right">
+                    <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                       <Button size="small" onClick={() => handleLoadCertificate(c)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
                       <IconButton size="small" color="error" onClick={() => handleDeleteCertificate(c)} title="Delete certificate" aria-label="Delete certificate">
                         <DeleteIcon fontSize="small" />
@@ -362,12 +413,12 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
             </Table>
           </TableContainer>
         ) : (
-          <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-            No saved certificates yet. Use <strong>Save Certificate</strong> to keep a record for backtracking.
+          <Typography variant="body2" color="text.secondary" sx={{ p: 1.5 }}>
+            No saved certificates yet. Use <strong>Save</strong> to keep a record of this certificate.
           </Typography>
         )}
-      </Box>
-    </Paper>
+      </Section>
+    </Box>
   );
 };
 

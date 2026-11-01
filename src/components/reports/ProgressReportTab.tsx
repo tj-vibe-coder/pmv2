@@ -67,7 +67,7 @@ import { saveAs } from 'file-saver';
 import { REPORT_ISSUERS } from '../../utils/reports/reportPdfKit';
 import { loadReportLogo } from '../../utils/reports/reportLogo';
 
-const NET_PACIFIC_COLORS = { primary: '#2c5aa0' };
+const NET_PACIFIC_COLORS = { primary: '#2c5aa0', secondary: '#1e4a72' };
 
 interface PhotoItem {
   localId: string;
@@ -256,6 +256,21 @@ export interface ProgressReportTabProps {
   /** All contacts from the project's client — powers the approver name autocomplete */
   clientContacts?: { name: string; designation: string; company: string }[];
 }
+
+/** Accordion sections styled as the design guide's content papers (DESIGN_PHILOSOPHY §8). */
+const sectionSx = {
+  mb: 1.5,
+  borderRadius: '8px !important',
+  overflow: 'hidden',
+  border: '1px solid #e2e8f0',
+  background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+  '&:before': { display: 'none' },
+} as const;
+const summarySx = { minHeight: 52, px: 1.5, '&.Mui-expanded': { borderBottom: '1px solid #e0e0e0' }, '& .MuiAccordionSummary-content': { alignItems: 'center', my: 1 } } as const;
+const sectionTitleSx = { fontSize: '1.1rem', fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 } as const;
+const wbsHeadSx = { fontWeight: 600, fontSize: '0.875rem', bgcolor: '#f8fafc', color: 'text.primary', borderBottom: '2px solid #e2e8f0', py: 1.25, px: 1.5, whiteSpace: 'nowrap' } as const;
+const wbsTotalSx = { fontWeight: 700, fontSize: '0.875rem', color: 'text.primary', borderTop: '2px solid #e2e8f0', borderBottom: 0, bgcolor: '#f8fafc', py: 1.25, px: 1.5 } as const;
+const savedHeadSx = { fontWeight: 600, fontSize: '0.875rem', bgcolor: '#f8fafc' } as const;
 
 const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   project,
@@ -958,10 +973,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           onChange={() => toggleSection('setup')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Report Setup
             </Typography>
             {pbInput && preparedBy.date && (
@@ -998,10 +1013,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           onChange={() => toggleSection('wbs')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Work Breakdown Structure
             </Typography>
             {wbsItems.length > 0 && (
@@ -1009,11 +1024,12 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
             )}
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1, flexWrap: 'wrap' }}>
-              <FormControl size="small" sx={{ minWidth: 200 }}>
-                <InputLabel id="wbs-template-label">Template</InputLabel>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, pt: 1.5, pb: 1, flexWrap: 'wrap' }}>
+              <FormControl size="small" sx={{ minWidth: { xs: '100%', sm: 240 } }}>
+                <InputLabel id="wbs-template-label" shrink>Template</InputLabel>
                 <Select
                   labelId="wbs-template-label"
+                  notched
                   value=""
                   label="Template"
                   onChange={(e) => {
@@ -1028,27 +1044,29 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                 </Select>
               </FormControl>
               <Button
+                variant="contained"
+                size="small"
                 startIcon={<AddIcon />}
                 onClick={handleAddWBSItem}
-                sx={{ textTransform: 'none', fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}
+                sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
               >
                 Add WBS item
               </Button>
             </Box>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, pb: 1 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 1.5, pb: 1.5 }}>
               Tip: a row becomes a bold <strong>sub-header</strong> automatically when other rows use its code as a prefix — e.g. code <strong>1</strong> is the &quot;Engineering Services&quot; header, and <strong>1.1</strong> / <strong>1.2</strong> are its items (their weight &amp; progress roll up into the header). Drag the <DragIndicatorIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} /> handle to reorder rows.
             </Typography>
             <DndContext sensors={wbsSensors} collisionDetection={closestCenter} onDragEnd={handleWbsDragEnd}>
             <TableContainer sx={{ border: 0, borderRadius: 0, overflow: 'auto' }}>
-              <Table stickyHeader size="medium" sx={{ minWidth: 560 }}>
+              <Table stickyHeader size="small" sx={{ minWidth: 560 }}>
                 <TableHead>
                   <TableRow>
-                    <TableCell sx={{ width: 40, bgcolor: NET_PACIFIC_COLORS.primary, borderBottom: '2px solid #e2e8f0', py: 2, px: 0.5 }} />
-                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Code</TableCell>
-                    <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, minWidth: 200 }}>Name</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Weight %</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 100 }}>Progress %</TableCell>
-                    <TableCell align="center" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: NET_PACIFIC_COLORS.primary, color: '#fff', borderBottom: '2px solid #e2e8f0', py: 2, px: 1.5, width: 72 }}>Actions</TableCell>
+                    <TableCell sx={{ ...wbsHeadSx, width: 40, px: 0.5 }} />
+                    <TableCell sx={{ ...wbsHeadSx, width: 100 }}>Code</TableCell>
+                    <TableCell sx={{ ...wbsHeadSx, minWidth: 200 }}>Name</TableCell>
+                    <TableCell align="right" sx={{ ...wbsHeadSx, width: 100 }}>Weight %</TableCell>
+                    <TableCell align="right" sx={{ ...wbsHeadSx, width: 100 }}>Progress %</TableCell>
+                    <TableCell align="center" sx={{ ...wbsHeadSx, width: 72 }}>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1073,9 +1091,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                           style={style}
                           hover
                           sx={{
-                            bgcolor: isParent ? '#fffacd' : (index % 2 === 0 ? '#fff' : 'grey.50'),
+                            // Sub-headers get a light brand tint; items are lightly striped.
+                            bgcolor: isParent ? 'rgba(44,90,160,0.07)' : (index % 2 === 0 ? '#fff' : 'rgba(0,0,0,0.02)'),
                             '&:hover': {
-                              bgcolor: isParent ? '#fff9c4' : undefined,
+                              bgcolor: isParent ? 'rgba(44,90,160,0.11)' : undefined,
                             }
                           }}
                         >
@@ -1087,7 +1106,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                           >
                             <DragIndicatorIcon fontSize="small" />
                           </TableCell>
-                          <TableCell sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                          <TableCell sx={{ py: 0.75, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             <TextField
                               size="small"
                               fullWidth
@@ -1106,7 +1125,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                               inputProps={{ maxLength: 20 }}
                             />
                           </TableCell>
-                          <TableCell sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                          <TableCell sx={{ py: 0.75, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             <Box sx={{ pl: `${indentPx}px` }}>
                               <TextField
                                 size="small"
@@ -1126,7 +1145,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                               />
                             </Box>
                           </TableCell>
-                          <TableCell align="right" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                          <TableCell align="right" sx={{ py: 0.75, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             {isParent ? (
                               <Typography sx={{ fontWeight: 700, fontSize: '0.9375rem', color: '#1e293b', fontFamily: '"Arial Narrow", Arial, sans-serif' }}>
                                 {parentTotals ? parentTotals.weight.toFixed(2) : '0.00'}
@@ -1146,7 +1165,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                               />
                             )}
                           </TableCell>
-                          <TableCell align="right" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                          <TableCell align="right" sx={{ py: 0.75, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             {isParent ? (
                               <Typography sx={{ fontWeight: 700, fontSize: '0.9375rem', color: '#1e293b', fontFamily: '"Arial Narrow", Arial, sans-serif' }}>
                                 {parentTotals ? parentTotals.progress.toFixed(2) : '0.00'}
@@ -1166,7 +1185,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                               />
                             )}
                           </TableCell>
-                          <TableCell align="center" sx={{ py: 1.5, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
+                          <TableCell align="center" sx={{ py: 0.75, px: 1.5, verticalAlign: 'middle', borderBottom: '1px solid #f1f5f9' }}>
                             <IconButton size="small" onClick={() => handleDeleteWBSItem(item.id)} title="Delete" color="error"><DeleteIcon fontSize="small" /></IconButton>
                           </TableCell>
                         </TableRow>
@@ -1183,10 +1202,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                   return (
                     <TableFooter>
                       <TableRow sx={{ bgcolor: '#f8fafc' }}>
-                        <TableCell colSpan={3} sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>Total progress</TableCell>
-                        <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>{totalWeight.toFixed(2)}%</TableCell>
-                        <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem', borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }}>{wbsOverallProgress.toFixed(2)}%</TableCell>
-                        <TableCell sx={{ borderTop: '2px solid #e2e8f0', py: 2, px: 1.5 }} />
+                        <TableCell colSpan={3} sx={wbsTotalSx}>Total</TableCell>
+                        <TableCell align="right" sx={{ ...wbsTotalSx, color: Math.abs(totalWeight - 100) > 0.01 ? 'error.main' : undefined }}>{totalWeight.toFixed(2)}%</TableCell>
+                        <TableCell align="right" sx={wbsTotalSx}>{wbsOverallProgress.toFixed(2)}%</TableCell>
+                        <TableCell sx={wbsTotalSx} />
                       </TableRow>
                     </TableFooter>
                   );
@@ -1203,10 +1222,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           onChange={() => toggleSection('signatories')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Signatories
             </Typography>
             {(preparedBy.name || approvers.length > 0) && (
@@ -1331,10 +1350,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           onChange={() => toggleSection('photos')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Site Photos
             </Typography>
             {photos.length > 0 && (
@@ -1458,10 +1477,10 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           onChange={() => toggleSection('savedReports')}
           disableGutters
           elevation={0}
-          sx={{ border: '1px solid #e2e8f0', '&:before': { display: 'none' }, mb: 1 }}
+          sx={sectionSx}
         >
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary, flex: 1 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={summarySx}>
+            <Typography variant="h6" sx={sectionTitleSx}>
               Saved Reports
             </Typography>
             {savedReports.length > 0 && (
@@ -1471,19 +1490,19 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           </AccordionSummary>
           <AccordionDetails>
             {savedReports.length > 0 ? (
-              <TableContainer sx={{ mb: 1.5, border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 240 }}>
+              <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 280 }}>
                 <Table size="small" stickyHeader>
                   <TableHead>
                     <TableRow>
-                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>PB#</TableCell>
-                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Date</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Progress</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.8125rem', bgcolor: '#f8fafc' }}>Actions</TableCell>
+                      <TableCell sx={savedHeadSx}>PB#</TableCell>
+                      <TableCell sx={savedHeadSx}>Date</TableCell>
+                      <TableCell align="right" sx={savedHeadSx}>Progress</TableCell>
+                      <TableCell align="right" sx={savedHeadSx}>Actions</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {savedReports.map((s) => (
-                      <TableRow key={s.id} hover selected={editingReportId === s.id}>
+                      <TableRow key={s.id} hover selected={editingReportId === s.id} sx={{ '&:nth-of-type(odd)': { backgroundColor: 'rgba(0,0,0,0.02)' }, '& td': { fontSize: '0.8rem' } }}>
                         <TableCell>PB{s.pbNumber}</TableCell>
                         <TableCell>{new Date(s.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</TableCell>
                         <TableCell align="right">{Math.round(s.overallProgress * 100) / 100}%</TableCell>
@@ -1520,8 +1539,9 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
           bottom: 0,
           zIndex: 10,
           borderTop: `2px solid ${NET_PACIFIC_COLORS.primary}`,
-          px: 2,
-          py: 1.5,
+          pl: 2,
+          pr: 9,
+          py: 1.25,
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
@@ -1581,7 +1601,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
               startIcon={<PictureAsPdfIcon />}
               onClick={handleExport}
               disabled={hasBlockingWarnings || exporting}
-              sx={{ bgcolor: NET_PACIFIC_COLORS.primary }}
+              sx={{ backgroundColor: NET_PACIFIC_COLORS.primary, '&:hover': { backgroundColor: NET_PACIFIC_COLORS.secondary } }}
             >
               {exporting ? 'Uploading...' : 'Export PDF'}
             </Button>

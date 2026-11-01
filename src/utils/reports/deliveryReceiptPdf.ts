@@ -8,7 +8,6 @@ export interface DeliveryReceiptData {
   despatchDate: string;
   poNumber: string;
   shipTo: { name: string; address: string; contactName?: string; phone?: string; email?: string };
-  invoiceTo: { name: string; address: string };
   items: { itemNo: number; description: string; partNo?: string; delivered: number; unit: string }[];
   dispatchedBy: { name?: string; date?: string };
   receivedBy: { name?: string; date?: string };
@@ -51,32 +50,25 @@ export function buildDeliveryReceiptPdf(data: DeliveryReceiptData, assets: Repor
     ['Dispatch Date', date],
   ]);
 
-  // Ship To / Invoice To as two plain address blocks side by side.
+  // Ship To as a plain address block; the company name (first line) is bold.
   const ship = data.shipTo;
-  const blocks = [
-    { label: 'Ship To', lines: [ship.name || '—', ship.address || '—',
-      ...(ship.contactName ? [`Attn: ${ship.contactName}`] : []),
-      ...(ship.phone ? [`Mobile: ${ship.phone}`] : []),
-      ...(ship.email ? [`Email: ${ship.email}`] : [])] },
-    { label: 'Invoice To', lines: [data.invoiceTo.name || '—', data.invoiceTo.address || '—'] },
-  ];
+  const lines = [ship.name || '—', ship.address || '—',
+    ...(ship.contactName ? [`Attn: ${ship.contactName}`] : []),
+    ...(ship.phone ? [`Mobile: ${ship.phone}`] : []),
+    ...(ship.email ? [`Email: ${ship.email}`] : [])];
   const colW = CONTENT_WIDTH / 2 - 4;
   const lh = ReportDoc.lineHeight(9.5);
-  // The company name (first line of each block) is bold.
-  const wrapped = blocks.map((b) => b.lines.flatMap((l, li) => {
+  const wrapped = lines.flatMap((l, li) => {
     if (li === 0) r.bold(9.5); else r.prose(9.5);
     return (r.doc.splitTextToSize(l, colW) as string[]).map((text) => ({ text, bold: li === 0 }));
-  }));
-  const blockH = lh + Math.max(...wrapped.map((w) => w.length)) * lh;
+  });
+  const blockH = lh + wrapped.length * lh;
   r.ensure(blockH);
-  blocks.forEach((b, i) => {
-    const x = PAGE.margin + i * (CONTENT_WIDTH / 2);
-    r.bold(9.5);
-    r.doc.text(`${b.label}:`, x, r.y + lh * 0.72);
-    wrapped[i].forEach((line, li) => {
-      if (line.bold) r.bold(9.5); else r.prose(9.5);
-      r.doc.text(line.text, x, r.y + lh * 0.72 + (li + 1) * lh);
-    });
+  r.bold(9.5);
+  r.doc.text('Ship To:', PAGE.margin, r.y + lh * 0.72);
+  wrapped.forEach((line, li) => {
+    if (line.bold) r.bold(9.5); else r.prose(9.5);
+    r.doc.text(line.text, PAGE.margin, r.y + lh * 0.72 + (li + 1) * lh);
   });
   r.gap(blockH + 6);
 
