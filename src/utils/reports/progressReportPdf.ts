@@ -187,7 +187,7 @@ export function buildProgressReportPdf(data: ProgressReportData, assets: ReportA
       issuer,
       logoDataUrl: assets.logoDataUrl,
       title: 'Progress Report',
-      meta: [`Doc. No.: ${docNo}`, `Report Date: ${reportDate}`],
+      meta: [docNo, reportDate],
       docNo,
     });
     return { doc: r.doc, signatureOrphaned: broke || (multiPageTable && tailOnPage < 3) };
