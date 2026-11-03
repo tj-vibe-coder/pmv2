@@ -31,6 +31,7 @@ import WhiteboardDialog from './WhiteboardDialog';
 import ChangePasswordDialog from './ChangePasswordDialog';
 import { useWhiteboardStore } from '../store/whiteboardStore';
 import { whiteboardDueState } from '../types/Whiteboard';
+import { canOpenProjectMonitoring, isStaffRole } from '../utils/projectMonitoringAccess';
 
 // Shown once per browser tab session, right after login — sessionStorage
 // clears itself when the tab/window closes, so it naturally re-shows on the
@@ -52,6 +53,8 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
   const isFinanceWorkspace = location.pathname === '/finance' || location.pathname.startsWith('/finance/');
   const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
   const isAdminUser = user?.role === 'superadmin' || user?.role === 'admin';
+  // Staff ticked for Project Monitoring switch between Projects and Employee only.
+  const isMonitoringStaff = isStaffRole(user) && canOpenProjectMonitoring(user);
   const workspace = isEmployeeWorkspace ? 'employee' : isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects';
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
   const [whiteboardOpen, setWhiteboardOpen] = useState(false);
@@ -149,7 +152,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, md: 2 }, flexShrink: 0 }}>
           {isAuthenticated ? (
             <>
-              {user?.role !== 'tax_filer' && (!isEmployeeWorkspace || isAdminUser) && (
+              {user?.role !== 'tax_filer' && (isMonitoringStaff || !isEmployeeWorkspace || isAdminUser) && (
               <ToggleButtonGroup
                 value={workspace}
                 exclusive
@@ -180,9 +183,9 @@ const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
                 }}
               >
                 <ToggleButton value="projects">Projects</ToggleButton>
-                <ToggleButton value="sales">Sales</ToggleButton>
-                <ToggleButton value="finance">Finance</ToggleButton>
-                {isAdminUser && <ToggleButton value="employee">Employee</ToggleButton>}
+                {!isMonitoringStaff && <ToggleButton value="sales">Sales</ToggleButton>}
+                {!isMonitoringStaff && <ToggleButton value="finance">Finance</ToggleButton>}
+                {(isAdminUser || isMonitoringStaff) && <ToggleButton value="employee">Employee</ToggleButton>}
               </ToggleButtonGroup>
               )}
 

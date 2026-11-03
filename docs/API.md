@@ -1052,4 +1052,4 @@ Superadmin login session only (never an agent key). POST `{ name }` returns the 
 **Note:** Payroll access is gated by **username** (`TJC` or `RJR`), not role. Any role with one of these usernames can access payroll.
 Current production `TJC` and `RJR` records are approved superadmins.
 
-Settings user management uses the existing `/api/users` endpoints. `PATCH /api/users/:id` accepts `username`, `email`, `full_name`, `designation`, `role`, `approved`, and optional `password`; blank/omitted password leaves the password unchanged. The server validates unique username/email, password length when provided, and protects against removing access from the last superadmin.
+Settings user management uses the existing `/api/users` endpoints. `PATCH /api/users/:id` accepts `username`, `email`, `full_name`, `designation`, `role`, `approved`, `project_monitoring` (boolean; lets a staff account open Project Monitoring), and optional `password`; blank/omitted password leaves the password unchanged. The server validates unique username/email, password length when provided, and protects against removing access from the last superadmin.

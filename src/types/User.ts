@@ -7,6 +7,8 @@ export interface User {
   full_name?: string | null;
   designation?: string | null;
   contact_number?: string | null;
+  /** Staff only: may open Project Monitoring (set in User Management). */
+  project_monitoring?: boolean;
   created_at: number;
   updated_at: number;
 }

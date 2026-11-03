@@ -47,6 +47,7 @@ phHolidays ── standalone collection
 | `approved` | number | Yes | `0` = pending, `1` = approved |
 | `full_name` | string\|null | No | |
 | `designation` | string\|null | No | |
+| `project_monitoring` | boolean | No | Staff (`user`/`viewer`) only: may open Project Monitoring (`/dashboard`, `/projects/:id`). Set in User Management; admins always can. |
 | `created_at` | number | Yes | Unix seconds |
 | `updated_at` | number | Yes | Unix seconds |
 

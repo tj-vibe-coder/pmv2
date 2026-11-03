@@ -41,6 +41,7 @@ interface UserRow {
   contact_number: string | null;
   role: string;
   approved: number;
+  project_monitoring?: boolean;
   created_at: number;
   updated_at: number;
 }
@@ -52,6 +53,12 @@ interface PayrollEmployee {
 }
 
 const ROLES = ['superadmin', 'admin', 'user', 'viewer', 'tax_filer'] as const;
+// Staff roles land in the Employee Portal; the Project Monitoring column lets them in.
+const STAFF_ROLES = ['user', 'viewer'];
+const monitoringLabel = (u: UserRow) => {
+  if (STAFF_ROLES.includes(u.role)) return u.project_monitoring ? 'Yes' : 'No';
+  return u.role === 'tax_filer' ? '—' : 'Always';
+};
 
 export default function UsersPage() {
   const { user, updateCachedUser } = useAuth();
@@ -66,6 +73,7 @@ export default function UsersPage() {
   const [editContactNumber, setEditContactNumber] = useState('');
   const [editRole, setEditRole] = useState<string>('');
   const [editApproved, setEditApproved] = useState<number>(1);
+  const [editProjectMonitoring, setEditProjectMonitoring] = useState(false);
   const [editPassword, setEditPassword] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -147,6 +155,7 @@ export default function UsersPage() {
     setEditContactNumber(u.contact_number ?? '');
     setEditRole(u.role);
     setEditApproved(u.approved);
+    setEditProjectMonitoring(!!u.project_monitoring);
     setEditPassword('');
     // Find which payroll employee is currently linked to this user
     const linked = payrollEmployees.find((pe) => pe.userId === u.id);
@@ -239,6 +248,7 @@ export default function UsersPage() {
           contact_number: editContactNumber.trim() || null,
           role: editRole,
           approved: editApproved,
+          project_monitoring: STAFF_ROLES.includes(editRole) && editProjectMonitoring,
           ...(editPassword ? { password: editPassword } : {}),
         }),
       });
@@ -371,6 +381,7 @@ export default function UsersPage() {
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Company Position</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Access Role</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Approved</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Project Monitoring</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Password</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Payroll Employee</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: theme.primary }}>Created</TableCell>
@@ -485,6 +496,22 @@ export default function UsersPage() {
                       'Yes'
                     ) : (
                       'No'
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {editingId === u.id && STAFF_ROLES.includes(editRole) ? (
+                      <Select
+                        size="small"
+                        value={editProjectMonitoring ? 1 : 0}
+                        onChange={(e) => setEditProjectMonitoring(Number(e.target.value) === 1)}
+                        sx={{ minWidth: 80 }}
+                        inputProps={{ 'aria-label': 'Project Monitoring access' }}
+                      >
+                        <MenuItem value={1}>Yes</MenuItem>
+                        <MenuItem value={0}>No</MenuItem>
+                      </Select>
+                    ) : (
+                      monitoringLabel(editingId === u.id ? { ...u, role: editRole } : u)
                     )}
                   </TableCell>
                   <TableCell>

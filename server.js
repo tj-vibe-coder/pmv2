@@ -340,6 +340,7 @@ function userResponse(id, user) {
     full_name: user.full_name || null,
     designation: user.designation || null,
     contact_number: user.contact_number || null,
+    project_monitoring: !!user.project_monitoring,
     created_at: user.created_at,
     updated_at: user.updated_at,
   };
@@ -654,7 +655,7 @@ usersRouter.patch('/:id', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
   if (user.role !== 'superadmin') return res.status(403).json({ success: false, error: 'Superadmin only' });
-  const { username, email, password, full_name, designation, contact_number, role, approved } = req.body;
+  const { username, email, password, full_name, designation, contact_number, role, approved, project_monitoring } = req.body;
   const updates = {};
   if (username !== undefined) {
     const nextUsername = String(username).trim();
@@ -678,6 +679,8 @@ usersRouter.patch('/:id', async (req, res) => {
   if (contact_number !== undefined) updates.contact_number = contact_number == null ? null : String(contact_number).trim();
   if (role !== undefined && ['superadmin', 'admin', 'user', 'viewer', 'tax_filer'].includes(role)) updates.role = role;
   if (approved !== undefined) updates.approved = approved ? 1 : 0;
+  // Lets a staff account open Project Monitoring (client route guard).
+  if (project_monitoring !== undefined) updates.project_monitoring = !!project_monitoring;
   if (Object.keys(updates).length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update' });
   updates.updated_at = Math.floor(Date.now() / 1000);
   try {

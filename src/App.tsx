@@ -13,6 +13,7 @@ import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
 import ProjectMonitoringApp from './components/ProjectMonitoringApp';
+import { canOpenProjectMonitoring, isStaffRole } from './utils/projectMonitoringAccess';
 import ProjectLocationDashboard from './components/ProjectLocationDashboard';
 import ExpenseMonitoring from './components/ExpenseMonitoring';
 import LiquidationFormPage from './components/LiquidationFormPage';
@@ -218,10 +219,11 @@ const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return <>{children}</>;
 };
 
-// Employee guard: redirect user/viewer roles to the employee portal
-const EmployeeGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+// Employee guard: redirect user/viewer roles to the employee portal. With
+// allowProjectMonitoring, staff ticked for Project Monitoring may stay.
+const EmployeeGuard: React.FC<{ children: React.ReactNode; allowProjectMonitoring?: boolean }> = ({ children, allowProjectMonitoring }) => {
   const { user } = useAuth();
-  if (user && (user.role === 'user' || user.role === 'viewer')) {
+  if (user && isStaffRole(user) && !(allowProjectMonitoring && canOpenProjectMonitoring(user))) {
     return <Navigate to="/employee" replace />;
   }
   return <>{children}</>;
@@ -395,7 +397,7 @@ function App() {
               path="/dashboard"
               element={
                 <ProtectedRoute>
-                  <EmployeeGuard>
+                  <EmployeeGuard allowProjectMonitoring>
                     <TaxFilerBlock>
                       <AppLayout>
                         <ProjectMonitoringApp />
@@ -409,7 +411,7 @@ function App() {
               path="/projects/:projectId"
               element={
                 <ProtectedRoute>
-                  <EmployeeGuard>
+                  <EmployeeGuard allowProjectMonitoring>
                     <TaxFilerBlock>
                       <AppLayout>
                         <ProjectMonitoringApp />

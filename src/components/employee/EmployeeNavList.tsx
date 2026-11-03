@@ -1,5 +1,7 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
+import { canOpenProjectMonitoring, isStaffRole } from '../../utils/projectMonitoringAccess';
 import {
   List,
   ListItem,
@@ -16,6 +18,7 @@ import {
   DescriptionOutlined as PayslipIcon,
   Assignment as ReportIcon,
   Payments as PaymentsIcon,
+  Dashboard as DashboardIcon,
 } from '@mui/icons-material';
 
 interface EmployeeNavListProps {
@@ -27,8 +30,9 @@ interface EmployeeNavListProps {
 const EmployeeNavList: React.FC<EmployeeNavListProps> = ({ isExpanded, navBtnSx, iconSx }) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
-  const items = [
+  const items: { label: string; icon: React.ReactNode; path: string; exact?: boolean }[] = [
     { label: 'Home', icon: <HomeIcon />, path: '/employee', exact: true },
     { label: 'Clock In/Out', icon: <QrCodeIcon />, path: '/employee/clock' },
     { label: 'Daily Time Record', icon: <CalendarIcon />, path: '/employee/dtr' },
@@ -37,6 +41,10 @@ const EmployeeNavList: React.FC<EmployeeNavListProps> = ({ isExpanded, navBtnSx,
     { label: 'Liquidation', icon: <ReceiptIcon />, path: '/employee/liquidation-form' },
     { label: 'Cash Advance', icon: <PaymentsIcon />, path: '/employee/ca-form' },
   ];
+  // Admins switch workspaces from the header; ticked staff get a link here.
+  if (isStaffRole(user) && canOpenProjectMonitoring(user)) {
+    items.push({ label: 'Project Monitoring', icon: <DashboardIcon />, path: '/dashboard' });
+  }
 
   return (
     <List sx={{ px: 1 }}>

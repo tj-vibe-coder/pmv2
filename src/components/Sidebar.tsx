@@ -46,6 +46,7 @@ import {
 import FinanceNavList from './finance/FinanceNavList';
 import SalesNavList from './sales/SalesNavList';
 import EmployeeNavList from './employee/EmployeeNavList';
+import { canOpenProjectMonitoring, isStaffRole } from '../utils/projectMonitoringAccess';
 
 const SIDEBAR_WIDTH = 280;
 const SIDEBAR_COLLAPSED_WIDTH = 68;
@@ -68,6 +69,8 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
   const location = useLocation();
   const { user } = useAuth();
   const isAdminUser = user?.role === 'superadmin' || user?.role === 'admin';
+  // Staff ticked for Project Monitoring keep their Employee menu (it links to the project list).
+  const isMonitoringStaff = isStaffRole(user) && canOpenProjectMonitoring(user);
   const isEmployeeWorkspace = location.pathname === '/employee' || location.pathname.startsWith('/employee/');
   const isFinanceWorkspace = user?.role === 'tax_filer' || location.pathname === '/finance' || location.pathname.startsWith('/finance/');
   const isSalesWorkspace = location.pathname === '/sales' || location.pathname.startsWith('/sales/');
@@ -195,7 +198,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
           toggle, which is hidden on small screens — so surface it in the drawer.
           Admins also get it inside the employee workspace (+ an Employee option)
           so they can reach and leave their own portal on a phone. */}
-      {isMobile && user?.role !== 'tax_filer' && (!isEmployeeWorkspace || isAdminUser) && (
+      {isMobile && user?.role !== 'tax_filer' && (isMonitoringStaff || !isEmployeeWorkspace || isAdminUser) && (
         <Box sx={{ px: 2, pb: 1.5 }}>
           <ToggleButtonGroup
             value={isEmployeeWorkspace ? 'employee' : isFinanceWorkspace ? 'finance' : isSalesWorkspace ? 'sales' : 'projects'}
@@ -227,9 +230,9 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
             }}
           >
             <ToggleButton value="projects">Projects</ToggleButton>
-            <ToggleButton value="sales">Sales</ToggleButton>
-            <ToggleButton value="finance">Finance</ToggleButton>
-            {isAdminUser && <ToggleButton value="employee">Employee</ToggleButton>}
+            {!isMonitoringStaff && <ToggleButton value="sales">Sales</ToggleButton>}
+            {!isMonitoringStaff && <ToggleButton value="finance">Finance</ToggleButton>}
+            {(isAdminUser || isMonitoringStaff) && <ToggleButton value="employee">Employee</ToggleButton>}
           </ToggleButtonGroup>
         </Box>
       )}
@@ -237,7 +240,7 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
       <Divider sx={{ borderColor: 'rgba(255,255,255,0.2)', mx: isExpanded ? 2 : 1 }} />
 
       <Box sx={{ flexGrow: 1, mt: 1, overflowY: 'auto', overflowX: 'hidden', '@media (max-height: 600px)': { flexGrow: 0, flexShrink: 0, overflowY: 'visible' } }}>
-        {isEmployeeWorkspace ? (
+        {isEmployeeWorkspace || isMonitoringStaff ? (
           <EmployeeNavList isExpanded={isExpanded} navBtnSx={navBtnSx} iconSx={iconSx} />
         ) : isFinanceWorkspace ? (
           <FinanceNavList isExpanded={isExpanded} navBtnSx={navBtnSx} iconSx={iconSx} />
