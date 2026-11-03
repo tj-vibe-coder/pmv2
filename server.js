@@ -2666,6 +2666,10 @@ app.put('/api/liquidations/:id', async (req, res) => {
     // Still a draft (submitted forms are rejected above): number by date; frozen if this save submits.
     const { rows, numbering } = require('./server/liquidationItemNumbers').draftNumberedRows(rows_json || [], user, status === 'submitted' ? 'date-order-at-submit' : 'draft-date-order');
     let receipts = receipts_json ? (typeof receipts_json === 'string' ? JSON.parse(receipts_json) : receipts_json) : [];
+    // Never let a save quietly drop stored receipts (see server/liquidationReceiptGuard.js).
+    const guarded = require('./server/liquidationReceiptGuard').keepStoredReceipts(existing.receipts_json, receipts, req.body.removed_receipt_ids);
+    if (guarded.restored.length) console.warn(`[liquidation] PUT ${id} omitted ${guarded.restored.length} stored receipt(s) without deleting them; kept them`);
+    receipts = guarded.receipts;
     const total = parseFloat(total_amount) || 0;
     const now = Math.floor(Date.now() / 1000);
     const liqStatus = status === 'submitted' ? 'submitted' : 'draft';
@@ -3442,7 +3446,14 @@ app.post('/api/liquidations/:id/propose-edit', async (req, res) => {
       try { reviewed = review.exists && require('./server/liquidationReceiptReview').reviewStatus(liq, review.data()) === 'reviewed'; } catch (_) {}
       if (reviewed) return res.status(403).json({ success: false, error: 'This liquidation has been reviewed and is locked. Ask RJ/an admin to make changes.' });
     }
-    const { rows_json, receipts_json, total_amount, employee_name, date_of_submission, note } = req.body;
+    const { rows_json, total_amount, employee_name, date_of_submission, note } = req.body;
+    let { receipts_json } = req.body;
+    if (receipts_json != null) {
+      // Same guard as the draft PUT: an edit only removes receipts the user deleted.
+      const guarded = require('./server/liquidationReceiptGuard').keepStoredReceipts(liq.receipts_json, receipts_json, req.body.removed_receipt_ids);
+      if (guarded.restored.length) console.warn(`[liquidation] propose-edit ${id} omitted ${guarded.restored.length} stored receipt(s) without deleting them; kept them`);
+      receipts_json = guarded.receipts;
+    }
     if (parseLiqRows(rows_json).length === 0) return res.status(400).json({ success: false, error: 'Revision needs at least one row' });
     if (liq.pending_revision && liq.pending_revision.proposed_by !== user.id && user.role !== 'superadmin') return res.status(409).json({ success: false, error: 'Another edit is pending approval' });
     const prepared = await require('./server/liquidationItemNumbers').reserveNumberedRows(db, ref, parseLiqRows(rows_json), user);

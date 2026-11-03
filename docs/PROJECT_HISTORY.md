@@ -1082,3 +1082,11 @@ RJ's new draft LQ26-022 showed items numbered in entry order (newest line first 
 
 - **Why:** one place to see everything the agents (and people) log against projects. New page `src/components/ProjectActivityPage.tsx` at `/projects/activity` (sidebar: Project Activity): KPI cards (open / overdue / updates / emails), filters (search, project, period, owner, agents vs people) and tabs By project, Action items (tick done in place), Updates, Emails (expand for summary, open in Outlook). Data from `GET /api/project-activity` (`server/projectActivity.js`).
 - **Verified:** `npm run test:api-access`; `tsc --noEmit`, eslint and `ProjectActivityPage.test.tsx` (mocked fetch). Not opened in a browser or run against prod data.
+
+### 2026-11-03 — Liquidation receipts can no longer be dropped by a save (LQ26-024-TJC)
+
+LQ26-024-TJC had 67 rows and `receipts_json = []`, while 43 of its receipt files sat in OneDrive under `Liquidation Receipts/2026/LQ26-022-TJC/` (the form's preview number). The page only saves receipts whose upload finished in the current tab, so a save from a tab that had lost them (reload, other device, switching forms, uploads still running) overwrote the stored list, and submit-time relabel had nothing to move. Fixes on branch `rj/liq-receipts-folder`:
+- **Server** (`server/liquidationReceiptGuard.js` + test): draft `PUT /api/liquidations/:id` and `POST /:id/propose-edit` keep any stored receipt that has a OneDrive id unless the save lists it in the new `removed_receipt_ids` body field; restored receipts are logged.
+- **Client** (`LiquidationFormPage.tsx`): sends `removed_receipt_ids` (receipt deletes and row deletes), blocks Save/Submit/Edit while uploads are running, confirms when failed uploads will be skipped, warns on tab close and on switching forms with unsaved receipts, and shows receipts the server kept back after Save Draft.
+- **Recovery (report only)**: `node scripts/find-stranded-liquidation-receipts.js [--year 2026] [--out file.json]` lists OneDrive receipt files no liquidation/expense links to and suggests rows by `_Item-N_<date>_`. First run: 66 unlinked files; all 43 in `LQ26-022-TJC/` match LQ26-024-TJC rows. Relinking needs RJ's approval and was not done.
+- Preview-number folder names were left as is: with the receipt list kept intact, submit-time relabel moves files into the real number's folder.

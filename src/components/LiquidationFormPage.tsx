@@ -545,6 +545,12 @@ export default function LiquidationFormPage() {
   const [scanOneEditUrl, setScanOneEditUrl] = useState<string | null>(null);
   const [scanOneEditQuad, setScanOneEditQuad] = useState<Quad | null>(null);
   const receiptsFolderRef = useRef<{ key: string; driveId: string; folderId: string } | null>(null);
+  // Receipts the user deleted since the last load/save. The server keeps any
+  // stored receipt a save leaves out unless it is listed here, so a tab that
+  // lost its receipt list can't wipe the saved one (LQ26-024-TJC).
+  const removedReceiptIdsRef = useRef<Set<string>>(new Set());
+  // Receipt ids as of the last load/save, to warn before leaving with unsaved uploads.
+  const savedReceiptIdsRef = useRef<Set<string>>(new Set());
   const { isAuthenticated: oneDriveSignedIn, getAccessToken: getOneDriveToken, login: oneDriveLogin } = useOneDriveAuth();
   const [saving, setSaving] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
@@ -905,7 +911,48 @@ export default function LiquidationFormPage() {
     }
   };
 
-  const removeReceipt = (id: string) => setReceipts((prev) => prev.filter((r) => r.id !== id));
+  const markReceiptsRemoved = (gone: ReceiptAttachment[]) => {
+    for (const r of gone) {
+      removedReceiptIdsRef.current.add(r.id);
+      if (r.oneDriveId) removedReceiptIdsRef.current.add(r.oneDriveId);
+    }
+  };
+  const removeReceipt = (id: string) => {
+    markReceiptsRemoved(receiptsRef.current.filter((r) => r.id === id));
+    setReceipts((prev) => prev.filter((r) => r.id !== id));
+  };
+  // Call after a load or a successful save: the server copy now matches `list`.
+  const markReceiptsSaved = (list: ReceiptAttachment[]) => {
+    removedReceiptIdsRef.current = new Set();
+    savedReceiptIdsRef.current = new Set(list.map((r) => r.id));
+  };
+  // Saving while an upload runs (or after one failed) would leave that file in
+  // OneDrive with no link to it. Returns false when the save should not go ahead.
+  const receiptsReadyToSave = (): boolean => {
+    const current = receiptsRef.current;
+    const uploading = current.filter((r) => r.uploadStatus === 'uploading').length;
+    if (uploading > 0) {
+      setSubmitSuccess(`Wait for ${uploading} receipt upload${uploading === 1 ? '' : 's'} to finish before saving.`);
+      return false;
+    }
+    const failed = current.filter((r) => r.uploadStatus === 'error').length;
+    if (failed > 0) {
+      return window.confirm(`${failed} receipt${failed === 1 ? '' : 's'} failed to upload and will not be saved. Save anyway? (Cancel to retry or re-attach them first.)`);
+    }
+    return true;
+  };
+  // Warn before closing/reloading the tab with uploaded receipts that aren't saved yet.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      const unsaved = receiptsRef.current.some((r) => r.uploadStatus === 'uploading'
+        || (r.uploadStatus === 'done' && !savedReceiptIdsRef.current.has(r.id)));
+      if (!unsaved) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
 
   // In-app viewer (with rotate) instead of always jumping out to OneDrive.
   // Prefers the in-memory File (this session's own upload, no network round-trip)
@@ -1084,10 +1131,12 @@ export default function LiquidationFormPage() {
     receipts_json: receipts
       .filter((r) => r.uploadStatus === 'done' && r.oneDriveId)
       .map(({ file: _f, uploadStatus: _s, ...keep }) => keep),
+    removed_receipt_ids: Array.from(removedReceiptIdsRef.current),
   });
 
   const saveDraft = async () => {
     if (!token) return;
+    if (!receiptsReadyToSave()) return;
     setSaving(true);
     setSubmitSuccess(null);
     try {
@@ -1101,6 +1150,13 @@ export default function LiquidationFormPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
+        // The server keeps stored receipts this tab didn't know about; show them.
+        const known = new Set(receiptsRef.current.map((r) => r.id));
+        const kept: ReceiptAttachment[] = (Array.isArray(data.receipts) ? data.receipts : [])
+          .filter((r: ReceiptAttachment) => r && r.id && !known.has(r.id))
+          .map((r: ReceiptAttachment) => ({ ...r, uploadStatus: 'done' as const }));
+        if (kept.length) setReceipts((prev) => [...prev, ...kept]);
+        markReceiptsSaved([...receiptsRef.current.filter((r) => r.uploadStatus === 'done' && r.oneDriveId), ...kept]);
         const newId = data.id ?? draftId;
         setDraftId(newId);
         if (newId) setLoadedOptionValue(`draft:${newId}`);
@@ -1212,6 +1268,7 @@ export default function LiquidationFormPage() {
       loadedReceipts = [];
     }
     setReceipts(loadedReceipts);
+    markReceiptsSaved(loadedReceipts);
     setDraftId(submitted ? null : l.id);
     setLoadedOptionValue(submitted ? `submitted:${l.id}` : `draft:${l.id}`);
     setLoadedReimb(
@@ -1355,6 +1412,7 @@ export default function LiquidationFormPage() {
       setSubmitSuccess('Add at least one row.');
       return;
     }
+    if (!receiptsReadyToSave()) return;
     setSaving(true);
     setSubmitSuccess(null);
     try {
@@ -1368,6 +1426,7 @@ export default function LiquidationFormPage() {
           total_amount: p.total_amount,
           employee_name: p.employee_name,
           date_of_submission: p.date_of_submission,
+          removed_receipt_ids: p.removed_receipt_ids,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1479,6 +1538,7 @@ export default function LiquidationFormPage() {
         setDateOfSubmission(new Date().toISOString().slice(0, 10));
         setCaId('');
         setReceipts([]);
+        markReceiptsSaved([]);
         setLoadedReimb(null);
         setSubmitSuccess('Liquidation deleted.');
         refreshLiquidationsList();
@@ -1527,6 +1587,7 @@ export default function LiquidationFormPage() {
       setSubmitSuccess('Add at least one row.');
       return;
     }
+    if (!receiptsReadyToSave()) return;
     setSaving(true);
     setSubmitSuccess(null);
     try {
@@ -1557,6 +1618,7 @@ export default function LiquidationFormPage() {
           : `Liquidation ${finalFormNo} submitted as an out-of-pocket reimbursement claim (pending payback); expenses added to project expense.`);
         setCaId('');
         setReceipts([]);
+        markReceiptsSaved([]);
         // Fetch next form number for new form
         fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } })
           .then((r) => r.json())
@@ -1597,6 +1659,7 @@ export default function LiquidationFormPage() {
   const removeRow = (id: string) => {
     setRows((prev) => prev.filter((r) => r.id !== id));
     // Receipts belong to their row — drop them with it.
+    markReceiptsRemoved(receiptsRef.current.filter((r) => r.rowId === id));
     setReceipts((prev) => prev.filter((r) => r.rowId !== id));
   };
 
@@ -1979,6 +2042,9 @@ export default function LiquidationFormPage() {
               value={loadedOptionValue}
               onChange={(e) => {
                 const raw = e.target.value as string;
+                const unsavedReceipts = receiptsRef.current.filter((r) => r.uploadStatus === 'uploading'
+                  || (r.uploadStatus === 'done' && !savedReceiptIdsRef.current.has(r.id))).length;
+                if (unsavedReceipts > 0 && !window.confirm(`${unsavedReceipts} receipt${unsavedReceipts === 1 ? ' is' : 's are'} uploaded but not saved to this form. Switch anyway? (Cancel, then Save Draft, to keep them linked.)`)) return;
                 if (raw === '') {
                   setIsViewingSubmitted(false);
                   setRevisionMode(false);
@@ -1994,6 +2060,7 @@ export default function LiquidationFormPage() {
                   setDateOfSubmission(new Date().toISOString().slice(0, 10));
                   setCaId('');
                   setReceipts([]);
+                  markReceiptsSaved([]);
                   setLoadedReimb(null);
                   setSubmitSuccess(null);
                   return;
