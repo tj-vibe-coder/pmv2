@@ -18,6 +18,7 @@ import {
   Alert,
 } from '@mui/material';
 import { API_BASE } from '../../config/api';
+import { accountFor } from '../../data/financeCategories';
 
 const NET_PACIFIC_COLORS = {
   primary:   '#2c5aa0',
@@ -50,6 +51,10 @@ interface PnlResponse {
   overheadByCategory: Array<{ category: string; amount: number }>;
   operatingIncome: number;
   percentageTaxEstimate: number;
+  /** 2551Q payments recorded under Taxes & Licenses (kept out of OPEX). */
+  percentageTaxPaid?: number;
+  /** The larger of the estimate and the recorded payments. */
+  percentageTax?: number;
   netIncomeBeforeIncomeTax: number;
   error?: string;
 }
@@ -141,12 +146,12 @@ const CompanyPnLPage: React.FC = () => {
                     <TableRow><TableCell sx={{ fontWeight: 700 }}>Gross Profit ({(data.grossMarginPct ?? 0).toFixed(1)}%)</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>{formatPHP(data.grossProfit)}</TableCell></TableRow>
                     <TableRow><TableCell>Less: Operating Expenses</TableCell><TableCell align="right">({formatPHP(data.operatingExpenses)})</TableCell></TableRow>
                     <TableRow><TableCell sx={{ fontWeight: 700 }}>Operating Income</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>{formatPHP(data.operatingIncome)}</TableCell></TableRow>
-                    <TableRow><TableCell>Less: Percentage Tax (3% est.)</TableCell><TableCell align="right">({formatPHP(data.percentageTaxEstimate)})</TableCell></TableRow>
+                    <TableRow><TableCell>Less: Percentage Tax (2551Q, 3%)</TableCell><TableCell align="right">({formatPHP(data.percentageTax ?? data.percentageTaxEstimate)})</TableCell></TableRow>
                     <TableRow><TableCell sx={{ fontWeight: 700 }}>Net Income Before Income Tax</TableCell><TableCell align="right" sx={{ fontWeight: 700, color: data.netIncomeBeforeIncomeTax < 0 ? 'error.main' : 'inherit' }}>{data.netIncomeBeforeIncomeTax < 0 ? `(${formatPHP(Math.abs(data.netIncomeBeforeIncomeTax))})` : formatPHP(data.netIncomeBeforeIncomeTax)}</TableCell></TableRow>
                   </TableBody>
                 </Table>
                 <Typography variant="caption" display="block" sx={{ mt: 2 }} color="text.secondary">
-                  Revenue is accrual (invoiced); {formatPHP(data.revenueCollected)} collected to date. The 3% percentage tax is estimated on collections (gross receipts).<br />
+                  Revenue is accrual (invoiced); {formatPHP(data.revenueCollected)} collected to date. The 3% percentage tax is the larger of the estimate on collections ({formatPHP(data.percentageTaxEstimate)}) and the 2551Q payments recorded under Taxes &amp; Licenses ({formatPHP(data.percentageTaxPaid ?? 0)}); those payments are not repeated in operating expenses.<br />
                   Revenue and cost are each recognized in the period recorded and are not matched per project, so a single year&apos;s margin can be distorted by billing/spend timing.<br />
                   Cost of Services currently excludes in-house field-labor payroll (posted in a later update), so gross margin may be overstated for projects staffed by own field crews.<br />
                   Corporate income tax (RCIT/MCIT) is estimated separately at year-end and is not included here.
@@ -162,8 +167,8 @@ const CompanyPnLPage: React.FC = () => {
                     {!data.overheadByCategory?.length ? (
                       <TableRow><TableCell colSpan={2} align="center" sx={{ color: 'text.secondary', py: 3 }}>No overhead expenses for {data.year}.</TableCell></TableRow>
                     ) : (
-                      (data.overheadByCategory ?? []).map((c) => (
-                        <TableRow key={c.category}><TableCell>{c.category}</TableCell><TableCell align="right">{formatPHP(c.amount)}</TableCell></TableRow>
+                      [...(data.overheadByCategory ?? [])].sort((a, b) => accountFor(a.category, 'overhead').code.localeCompare(accountFor(b.category, 'overhead').code)).map((c) => (
+                        <TableRow key={c.category}><TableCell>{accountFor(c.category, 'overhead').code} · {c.category}</TableCell><TableCell align="right">{formatPHP(c.amount)}</TableCell></TableRow>
                       ))
                     )}
                     <TableRow><TableCell sx={{ fontWeight: 700 }}>Total</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>{formatPHP(data.operatingExpenses)}</TableCell></TableRow>

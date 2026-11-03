@@ -715,7 +715,7 @@ async function queryAnalytics(db, args, asOf) {
     }
 
     if (groupBy === 'forecast_monthly' || groupBy === 'forecast_recurring' || groupBy === 'forecast_category') {
-      const RECURRING_CATS = ['Rent', 'Salaries & Wages', 'Communication & Utilities', 'Government Contributions', 'Advertising/Marketing', 'Supplies', 'Repairs & Maintenance', 'Entertainment'];
+      const RECURRING_CATS = ['Rent', 'Salaries & Wages', 'Communication & Utilities', 'Government Contributions', 'Advertising/Marketing', 'Supplies', 'Repairs & Maintenance', 'Entertainment', 'Professional Fees', 'Taxes & Licenses', 'Software & Subscriptions'];
       const monthMap = new Map();
       const catMap = new Map();
 

@@ -162,6 +162,9 @@ export const RECURRING_EXPENSE_CATEGORIES = [
   'Supplies',
   'Repairs & Maintenance',
   'Entertainment',
+  'Professional Fees',
+  'Taxes & Licenses',
+  'Software & Subscriptions',
 ] as const;
 
 export function isRecurringExpense(item: { type?: string; category?: string }): boolean {

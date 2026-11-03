@@ -23,6 +23,8 @@ test('prepare-functions includes finance trace runtime modules and excludes test
       'financeTraceRouter.js',
       'financeTrace.test.js',
       'financeTraceRouter.test.js',
+      'fundingSource.js',
+      'fundingSource.test.js',
     ]) {
       fs.copyFileSync(path.join(root, 'server', name), path.join(fixture, 'server', name));
     }
@@ -41,6 +43,8 @@ test('prepare-functions includes finance trace runtime modules and excludes test
     assert.equal(fs.existsSync(path.join(runtimeDir, 'financeTraceRouter.js')), true);
     assert.equal(fs.existsSync(path.join(runtimeDir, 'financeTrace.test.js')), false);
     assert.equal(fs.existsSync(path.join(runtimeDir, 'financeTraceRouter.test.js')), false);
+    assert.equal(fs.existsSync(path.join(runtimeDir, 'fundingSource.js')), true);
+    assert.equal(fs.existsSync(path.join(runtimeDir, 'fundingSource.test.js')), false);
 
     const trace = require(path.join(runtimeDir, 'financeTrace.js'));
     const router = require(path.join(runtimeDir, 'financeTraceRouter.js'));

@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { randomUUID } = require('crypto');
+const { liquidationEquityError } = require('./fundingSource');
 const {
   confirmedReferences,
   focusUrl,
@@ -374,7 +375,7 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
         : [...excludedExpenseKeys, excludedExpenseKey],
     };
     const corporateExpensePatch = {
-      fundingSource: { type: 'corporate_bank' },
+      fundingSource: { type: 'corporate_bank', treatment: 'company_funded' },
       ...deleteFields(FieldValue, ['linkedInvestmentId']),
       updatedAt: timestamp,
     };
@@ -386,9 +387,17 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
         linkedExpenseProjectId: expense.projectId || null,
         updated_at: timestamp,
       };
+      const equityFunding = {
+        type: 'investor_outofpocket',
+        treatment: 'equity_contribution',
+        investor: investment.investor || '',
+      };
+      const fundingError = liquidationEquityError(expense, equityFunding);
+      if (fundingError) throw resolutionError(422, 'LIQUIDATION_ROW', fundingError);
       const expensePatch = {
         fundingSource: {
           type: 'investor_outofpocket',
+          treatment: 'equity_contribution',
           investor: investment.investor || '',
           linkedInvestmentId: input.investmentId,
         },
@@ -410,7 +419,7 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
       };
       afterExpense = {
         ...withoutFields(afterExpense, ['linkedInvestmentId']),
-        fundingSource: { type: 'corporate_bank' }, updatedAt: timestamp,
+        fundingSource: { type: 'corporate_bank', treatment: 'company_funded' }, updatedAt: timestamp,
       };
       retainedOrigin = { type: 'investment', id: input.investmentId };
     } else if (input.action === 'keep_investment_delete_expense') {
@@ -434,7 +443,7 @@ async function resolvePair({ db, FieldValue, user, body, requestId }) {
       afterInvestment = { id: input.investmentId, deleted: true };
       afterExpense = {
         ...withoutFields(afterExpense, ['linkedInvestmentId']),
-        fundingSource: { type: 'corporate_bank' }, updatedAt: timestamp,
+        fundingSource: { type: 'corporate_bank', treatment: 'company_funded' }, updatedAt: timestamp,
       };
       retainedOrigin = { type: 'expense', collection: input.expenseCollection, id: input.expenseId };
     }

@@ -941,8 +941,8 @@ const ReimbursementDashboard: React.FC = () => {
               if (v !== 'investor_outofpocket') setPayInvestor('');
             }}
           >
-            <MenuItem value="corporate_bank">Corporate Bank / Petty Cash</MenuItem>
-            <MenuItem value="investor_outofpocket">Investor Out-of-Pocket</MenuItem>
+            <MenuItem value="corporate_bank">IOCT bank account / petty cash</MenuItem>
+            <MenuItem value="investor_outofpocket">Owner's own money (capital)</MenuItem>
           </TextField>
           {payFundingType === 'investor_outofpocket' && (
             <TextField
@@ -1094,8 +1094,8 @@ const ReimbursementDashboard: React.FC = () => {
               }}
               sx={{ flex: 1, minWidth: { xs: '100%', sm: 240 } }}
             >
-              <MenuItem value="corporate_bank">Corporate Bank / Petty Cash</MenuItem>
-              <MenuItem value="investor_outofpocket">Investor Out-of-Pocket</MenuItem>
+              <MenuItem value="corporate_bank">IOCT bank account / petty cash</MenuItem>
+              <MenuItem value="investor_outofpocket">Owner's own money (capital)</MenuItem>
             </TextField>
             {lineFundingType === 'investor_outofpocket' && (
               <TextField size="small" label="Investor Name" value={lineInvestor} onChange={(e) => setLineInvestor(e.target.value)} fullWidth />

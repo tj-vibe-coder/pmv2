@@ -1088,8 +1088,8 @@ export default function CAFormPage() {
                   if (v !== 'investor_outofpocket') { setFundingInvestor(''); setLinkedInvestmentId(''); setLinkedInvestments([]); }
                 }}
               >
-                <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
-                <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
+                <MenuItem value="corporate_bank">IOCT bank account</MenuItem>
+                <MenuItem value="investor_outofpocket">Owner's own money (capital)</MenuItem>
               </TextField>
               {fundingType === 'investor_outofpocket' && (
                 <TextField
@@ -1995,8 +1995,8 @@ export default function CAFormPage() {
                 if (v !== 'investor_outofpocket') { setFundingEditInvestor(''); setFundingEditLinkedId(''); setFundingEditLinkedInvestments([]); }
               }}
             >
-              <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
-              <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
+              <MenuItem value="corporate_bank">IOCT bank account</MenuItem>
+              <MenuItem value="investor_outofpocket">Owner's own money (capital)</MenuItem>
             </TextField>
             {fundingEditType === 'investor_outofpocket' && (
               <TextField

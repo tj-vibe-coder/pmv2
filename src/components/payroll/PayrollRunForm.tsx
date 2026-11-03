@@ -422,8 +422,8 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel, editRun }) => {
             </Typography>
             <TextField select label="Paid From" value={fundingType} fullWidth
               onChange={(e) => { const v = e.target.value as 'corporate_bank' | 'investor_outofpocket'; setFundingType(v); if (v !== 'investor_outofpocket') { setFundingInvestor(''); setLinkedInvestmentId(''); setLinkedInvestments([]); } }}>
-              <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
-              <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
+              <MenuItem value="corporate_bank">IOCT bank account</MenuItem>
+              <MenuItem value="investor_outofpocket">Owner's own money (capital)</MenuItem>
             </TextField>
             {fundingType === 'investor_outofpocket' && (
               <TextField select label="Investor" value={fundingInvestor} fullWidth onChange={(e) => handleFundingInvestorChange(e.target.value)}>
@@ -659,8 +659,8 @@ const PayrollRunForm: React.FC<Props> = ({ onComplete, onCancel, editRun }) => {
             <Typography>
               <strong>Funded By:</strong>{' '}
               {createdRun.fundingSource?.type === 'investor_outofpocket'
-                ? `${createdRun.fundingSource.investor} (Out-of-Pocket)${createdRun.fundingSource.linkedInvestmentId ? ' — linked to existing investment' : ''}`
-                : 'Corporate Bank Account'}
+                ? `${createdRun.fundingSource.investor} (own money, capital)${createdRun.fundingSource.linkedInvestmentId ? ' — linked to existing investment' : ''}`
+                : 'IOCT bank account'}
             </Typography>
           </Box>
           <Divider sx={{ mb: 2 }} />

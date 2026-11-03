@@ -31,6 +31,7 @@ import {
   ManageSearch as ReceiptSearchIcon,
 } from '@mui/icons-material';
 import HubModuleList from '../HubModuleList';
+import DueToPeopleCard from './DueToPeopleCard';
 import { useAuth } from '../../contexts/AuthContext';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
 import { API_BASE } from '../../config/api';
@@ -440,6 +441,8 @@ const FinanceHomePage: React.FC = () => {
       </Box>
 
       {error && <Alert severity="warning" sx={{ mb: 2 }}>{error}</Alert>}
+
+      {isAdmin && <DueToPeopleCard />}
 
       {/* KPI Cards Grid */}
       {isPhone ? (

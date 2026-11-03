@@ -16,7 +16,7 @@ function actualExport(name,context){
 }
 function data(){
   const rows=numberedRows({rows_json:fixture.rows}).map(row=>({...row,particulars:row.id===fixture.targetRowId?'Diesel physical Item7':'Fixture expense',date:row.id===fixture.targetRowId?'2026-06-29':row.date}));
-  return {rows,formNo:fixture.formNo,dateOfSubmission:'2026-09-02',employeeName:'Fixture Employee',employeeNumber:'',totalAmount:rows.reduce((n,r)=>n+r.amount,0),...helpers.exports};
+  return {rows,formNo:fixture.formNo,formNoIsFinal:true,dateOfSubmission:'2026-09-02',employeeName:'Fixture Employee',employeeNumber:'',totalAmount:rows.reduce((n,r)=>n+r.amount,0),...helpers.exports};
 }
 test('actual PDF generator retains Item7 after correction, all27 numbers and receipt caption',async()=>{
   let buffer;const bodies=[];const texts=[];

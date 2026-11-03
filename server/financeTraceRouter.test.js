@@ -349,7 +349,7 @@ test('confirm_match writes reciprocal links and one append-only audit row', asyn
   assert.equal(store.investments.i1.linkedExpenseId, 'e2');
   assert.equal(store.investments.i1.linkedExpenseCollection, 'project_expenses');
   assert.deepEqual(store.project_expenses.e2.fundingSource, {
-    type: 'investor_outofpocket', investor: 'TJ Caballero', linkedInvestmentId: 'i1',
+    type: 'investor_outofpocket', treatment: 'equity_contribution', investor: 'TJ Caballero', linkedInvestmentId: 'i1',
   });
   assert.equal(Object.keys(store.finance_trace_audit).length, 1);
   const audit = Object.values(store.finance_trace_audit)[0];
@@ -432,7 +432,7 @@ test('keep_both_separate clears links and retains both records with corporate fu
 
   assert.equal(response.status, 200);
   assert.equal(server.fakeDb.store.investments.i1.linkedExpenseId, undefined);
-  assert.deepEqual(server.fakeDb.store.project_expenses.e2.fundingSource, { type: 'corporate_bank' });
+  assert.deepEqual(server.fakeDb.store.project_expenses.e2.fundingSource, { type: 'corporate_bank', treatment: 'company_funded' });
   const audit = Object.values(server.fakeDb.store.finance_trace_audit)[0];
   assert.equal('linkedExpenseId' in audit.after.investment, false);
   assert.equal('linkedExpenseCollection' in audit.after.investment, false);
@@ -476,7 +476,7 @@ test('keep_expense_delete_investment deletes the investment and retains a corpor
 
   assert.equal(response.status, 200);
   assert.equal(server.fakeDb.store.investments.i1, undefined);
-  assert.deepEqual(server.fakeDb.store.project_expenses.e2.fundingSource, { type: 'corporate_bank' });
+  assert.deepEqual(server.fakeDb.store.project_expenses.e2.fundingSource, { type: 'corporate_bank', treatment: 'company_funded' });
   assert.equal(Object.values(server.fakeDb.store.finance_trace_audit)[0].after.investment.deleted, true);
 });
 
