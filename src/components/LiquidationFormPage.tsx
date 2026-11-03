@@ -564,6 +564,12 @@ export default function LiquidationFormPage() {
   const [financeFocusLoading, setFinanceFocusLoading] = useState(false);
 
   const canDeleteLiquidation = draftId !== null || loadedOptionValue.startsWith('submitted:');
+  // Only a submitted liquidation has a real number. A draft's stored form_no is
+  // the preview from the day it was created; it still names the draft's receipt
+  // folder (submit moves the files from it), but another submit may have taken
+  // it since, so it is never shown or printed as the form's number.
+  const formNoIsFinal = loadedOptionValue.startsWith('submitted:');
+  const [livePreviewNo, setLivePreviewNo] = useState('');
   const liquidationToDeleteId = draftId ?? (loadedOptionValue.startsWith('submitted:') ? loadedOptionValue.split(':')[1] : null);
   const isAdmin = user?.role === 'superadmin' || user?.role === 'admin';
   const location = useLocation();
@@ -635,6 +641,16 @@ export default function LiquidationFormPage() {
       })
       .catch(() => {});
   }, [token, draftId, formNo]);
+  // Refresh the preview whenever an unsubmitted form is opened or saved.
+  useEffect(() => {
+    if (!token || formNoIsFinal) { setLivePreviewNo(''); return; }
+    let cancelled = false;
+    fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled && d.success && d.form_no) setLivePreviewNo(d.form_no); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [token, formNoIsFinal, draftId, loadedOptionValue]);
   useEffect(() => {
     if (!token) return;
     fetch(`${API_BASE}/api/liquidations`, { headers: { Authorization: `Bearer ${token}` } })
@@ -1896,7 +1912,7 @@ export default function LiquidationFormPage() {
 
     // Add footer with page number and Doc No. (LQ-YY-NNN-AAA) on all pages
     const totalPages = doc.getNumberOfPages();
-    const docNo = liquidationDocNo(formNo);
+    const docNo = formNoIsFinal ? liquidationDocNo(formNo) : `${liquidationDocNo('')} (not yet submitted)`;
     doc.setFontSize(8);
     for (let p = 1; p <= totalPages; p++) {
       doc.setPage(p);
@@ -1907,7 +1923,7 @@ export default function LiquidationFormPage() {
     // Filename names the CA (and therefore the project) the liquidation
     // settles against, e.g. LQ-0005_IOCT2606001-CA01.pdf — or flags it as an
     // out-of-pocket reimbursement claim.
-    const fnBase = formNo || 'form';
+    const fnBase = formNoIsFinal ? (formNo || 'form') : 'DRAFT';
     doc.save(
       caId
         ? (selectedCa?.ca_no
@@ -1941,7 +1957,7 @@ export default function LiquidationFormPage() {
     // A4 print: paperSize 9 = A4, fitToPage so content fits one A4 sheet
     ws['!pageSetup'] = { paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
     XLSX.utils.book_append_sheet(wb, ws, 'Liquidation');
-    const filename = `liquidation_${formNo}_${dateOfSubmission.replace(/-/g, '')}.xlsx`;
+    const filename = `liquidation_${formNoIsFinal ? formNo : 'DRAFT'}_${dateOfSubmission.replace(/-/g, '')}.xlsx`;
     XLSX.writeFile(wb, filename);
   };
 
@@ -2288,10 +2304,10 @@ export default function LiquidationFormPage() {
             <TextField
               fullWidth
               size="small"
-              label={isViewingSubmitted ? 'Form No.' : 'Form No. (preview)'}
-              value={formNo}
+              label={formNoIsFinal ? 'Form No.' : 'Form No. (preview)'}
+              value={formNoIsFinal ? formNo : (livePreviewNo || formNo)}
               disabled
-              helperText={isViewingSubmitted ? undefined : 'Assigned on submit'}
+              helperText={formNoIsFinal ? undefined : 'Assigned on submit'}
               sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'background.paper' } }}
             />
           </Box>
