@@ -1095,3 +1095,7 @@ LQ26-024-TJC had 67 rows and `receipts_json = []`, while 43 of its receipt files
 ### 2026-11-03 — Draft liquidation PDFs no longer print a stale form number (LQ26-024-KKS)
 
 Kim exported LQ26-026-KKS seconds before submitting it, and the PDF said "LQ-26-024-KKS": a draft kept showing and printing the preview number from the day it was created (Oct 22), although TJ's submit took 024 on Oct 30. The app data was right (submit assigned 026 and moved the receipts). Now `LiquidationFormPage.tsx` refreshes the preview field from `/next-form-no` when a draft is opened or saved, and exports from an unsubmitted form print `LQ-DRAFT (not yet submitted)` with a `DRAFT` filename. The draft's stored `form_no` is unchanged on purpose: it names the draft's receipt folder, and submit-time relabel moves the files from it.
+
+### 2026-11-03 — Calcsheet projects list shows one price per kind
+
+The Sales column on `/sales/calcsheet/projects` listed every quotation on a project (six "ACTI: PHP …" lines for a project with six ACTI revisions), unlabeled and unsorted. `CalcsheetProjects.tsx` now shows one line per kind (IOCT, then ACTI) with its revision: the awarded quotation (`Project.awarded.quotationId`) if the project was won on it, otherwise the highest revision number (not the last edited). Other revisions show as "(+N more)" with a hover list on desktop, plain text on phones. The Margin column and the Sales sort now use the same shown quotation (the sort used the highest price across all revisions before).

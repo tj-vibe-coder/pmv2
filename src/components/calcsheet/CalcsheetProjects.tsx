@@ -20,7 +20,7 @@ import CloudSyncIcon from '@mui/icons-material/CloudSync';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { Link } from 'react-router-dom';
 import { useQuotationStore } from '../../store/quotationStore';
-import type { ProjectStatus, Project, OpportunityGrade } from '../../types/Quotation';
+import type { ProjectStatus, Project, OpportunityGrade, Quotation, QuotationKind } from '../../types/Quotation';
 import { PROJECT_STATUSES, projectStatusLabel, OPPORTUNITY_GRADES, opportunityGradeLabel } from '../../types/Quotation';
 import { format } from 'date-fns';
 import { PHP, computeTotals, ioctMargin } from '../../utils/calcsheet/calc';
@@ -276,23 +276,30 @@ export default function Projects() {
     const customer = clients.find((c) => c.id === p.customerId);
     const partner = clients.find((c) => c.id === p.partnerId);
     const qs = quotations.filter((q) => q.projectId === p.id);
-    const totals = qs.map((q) => {
-      const quotationTotals = computeTotals(q);
-      return {
-        kind: q.kind,
-        total: salesAccountedTotal(q, quotationTotals),
-        servicesOnly: q.salesValueScope === 'services_only',
-      };
+    const line = (q: Quotation) => ({
+      kind: q.kind,
+      revision: q.revision || '00',
+      total: salesAccountedTotal(q, computeTotals(q)),
+      servicesOnly: q.salesValueScope === 'services_only',
+    });
+    // One line per kind (IOCT first): the awarded quotation when the project was
+    // won on that kind, otherwise the highest revision. The rest go in a tooltip.
+    const current: Partial<Record<QuotationKind, Quotation>> = {};
+    const kinds = Array.from(new Set<QuotationKind>(['IOCT', 'ACTI', ...qs.map((q) => q.kind)]));
+    const totals = kinds.flatMap((kind) => {
+      const revs = qs
+        .filter((q) => q.kind === kind)
+        .sort((a, b) => (b.revision || '00').localeCompare(a.revision || '00'));
+      if (revs.length === 0) return [];
+      const shown = revs.find((q) => q.id === p.awarded?.quotationId) ?? revs[0];
+      current[kind] = shown;
+      return [{ ...line(shown), others: revs.filter((q) => q !== shown).map(line) }];
     });
     const grandTotal = totals.reduce((sum, t) => Math.max(sum, t.total), 0);  // use max kind as the "headline"
     const hasLegacy = qs.some((q) => q.formulaVersion === 'legacy');
     const year = p.date ? new Date(p.date).getFullYear() : 0;
-    // IOCT margin: pick the latest IOCT quotation (highest revision).
-    const ioctQuotes = qs.filter((q) => q.kind === 'IOCT');
-    const latestIoct = ioctQuotes.sort((a, b) =>
-      (b.revision || '00').localeCompare(a.revision || '00'),
-    )[0];
-    const margin = latestIoct ? ioctMargin(computeTotals(latestIoct)) : null;
+    // IOCT margin follows the IOCT line shown in the Sales column.
+    const margin = current.IOCT ? ioctMargin(computeTotals(current.IOCT)) : null;
     return { p, customer, partner, totals, grandTotal, hasLegacy, year, margin };
   }), [projects, clients, quotations]);
 
@@ -767,7 +774,10 @@ export default function Projects() {
                   <Stack spacing={0.25}>
                     {totals.map((t, i) => (
                       <Typography key={i} variant="caption" sx={{ fontFamily: 'monospace' }}>
-                        <strong>{t.kind}:</strong> {PHP(t.total)}{t.servicesOnly ? ' · services only' : ''}
+                        <strong>{t.kind} R{t.revision}:</strong> {PHP(t.total)}{t.servicesOnly ? ' · services only' : ''}
+                        {t.others.length > 0 && (
+                          <Box component="span" sx={{ color: 'text.secondary' }}> (+{t.others.length} more)</Box>
+                        )}
                       </Typography>
                     ))}
                     {totals.length === 0 && <Typography variant="caption" color="text.secondary">No quotation yet</Typography>}
@@ -965,8 +975,24 @@ export default function Projects() {
                   <Stack spacing={0.25}>
                     {totals.map((t, i) => (
                       <Typography key={i} variant="caption" sx={{ fontFamily: 'monospace' }}>
-                        <strong>{t.kind}:</strong> {PHP(t.total)}
+                        <strong>{t.kind} R{t.revision}:</strong> {PHP(t.total)}
                         {t.servicesOnly ? ' · services only' : ''}
+                        {t.others.length > 0 && ' '}
+                        {t.others.length > 0 && (
+                          <Tooltip
+                            title={
+                              <Box sx={{ fontFamily: 'monospace' }}>
+                                {t.others.map((o, j) => (
+                                  <div key={j}>R{o.revision}  {PHP(o.total)}{o.servicesOnly ? ' · services only' : ''}</div>
+                                ))}
+                              </Box>
+                            }
+                          >
+                            <Box component="span" sx={{ color: 'text.secondary', cursor: 'help', textDecoration: 'underline dotted' }}>
+                              (+{t.others.length} more)
+                            </Box>
+                          </Tooltip>
+                        )}
                       </Typography>
                     ))}
                     {totals.length === 0 && <Typography variant="caption" color="text.secondary">none</Typography>}
