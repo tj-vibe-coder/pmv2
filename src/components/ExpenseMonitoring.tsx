@@ -6,6 +6,7 @@ import {
   Card,
   CardContent,
   FormControl,
+  FormHelperText,
   InputLabel,
   Select,
   MenuItem,
@@ -87,6 +88,7 @@ import ReceiptViewer from './ReceiptViewer';
 import ScanBatch from './ScanBatch';
 import ScanWithPhoneButton from './ScanWithPhoneButton';
 import { useAuth } from '../contexts/AuthContext';
+import RecurringExpensesTray from './finance/RecurringExpensesTray';
 import { getDriveItemThumbnailUrl, fetchDriveItemBlob, deleteDriveItem, replaceDriveItemContent } from '../services/onedriveFolderService';
 import MoneyTrailButton from './finance/MoneyTrailButton';
 import { useFinanceRowFocus } from '../hooks/useFinanceRowFocus';
@@ -145,7 +147,7 @@ export interface ProjectExpense {
    *  join wouldn't resolve for other employees' liquidation-sourced rows. */
   liquidationFiledBy?: string;
   liquidationFiledAt?: string;
-  sourceType?: 'manual' | 'receipt_scan' | 'po_sync' | 'liquidation_sync' | 'migrated';
+  sourceType?: 'manual' | 'receipt_scan' | 'po_sync' | 'liquidation_sync' | 'migrated' | 'recurring';
   sourceCaId?: string;
   supplier?: string;
   invoiceNo?: string;
@@ -253,7 +255,7 @@ const ExpenseMonitoring: React.FC = () => {
   const [expenseInvoiceType, setExpenseInvoiceType] = useState('');
   const [expenseVat, setExpenseVat] = useState('');
   const [expenseTin, setExpenseTin] = useState('');
-  const [expenseFundingType, setExpenseFundingType] = useState<'corporate_bank' | 'investor_outofpocket'>('corporate_bank');
+  const [expenseFundingType, setExpenseFundingType] = useState<'corporate_bank' | 'corporate_card' | 'investor_outofpocket'>('corporate_bank');
   const [expenseFundingInvestor, setExpenseFundingInvestor] = useState('');
   const [expenseLinkedInvestments, setExpenseLinkedInvestments] = useState<{ id: string; date: string; category: string; description: string; amount: number }[]>([]);
   const [expenseLinkedInvestmentId, setExpenseLinkedInvestmentId] = useState('');
@@ -840,8 +842,9 @@ const ExpenseMonitoring: React.FC = () => {
 
   // Sync-sourced rows are managed by their origin job (PO/liquidation/payroll sync) —
   // editing or moving them here would be overwritten or double-counted on re-sync.
+  // Recurring postings are written once and never re-synced, so they stay editable.
   const isUserManagedRow = (e: ProjectExpense) =>
-    !e.sourceType || e.sourceType === 'manual' || e.sourceType === 'receipt_scan' || e.sourceType === 'migrated';
+    !e.sourceType || e.sourceType === 'manual' || e.sourceType === 'receipt_scan' || e.sourceType === 'migrated' || e.sourceType === 'recurring';
 
   const openEditDialog = (expense: ProjectExpense) => {
     setEditError('');
@@ -1384,9 +1387,9 @@ const ExpenseMonitoring: React.FC = () => {
           ...(expenseInvoiceType ? { invoiceType: expenseInvoiceType } : {}),
           ...(expenseVat && !isNaN(Number(expenseVat)) ? { vat: Number(expenseVat) } : {}),
           ...(expenseTin.trim() ? { tin: expenseTin.trim() } : {}),
-          ...(expenseFundingType === 'investor_outofpocket' && expenseFundingInvestor
-            ? { fundingSource: { type: 'investor_outofpocket', investor: expenseFundingInvestor, ...(expenseLinkedInvestmentId ? { linkedInvestmentId: expenseLinkedInvestmentId } : {}) } }
-            : {}),
+          fundingSource: expenseFundingType === 'investor_outofpocket'
+            ? { type: 'investor_outofpocket', treatment: 'equity_contribution', investor: expenseFundingInvestor, ...(expenseLinkedInvestmentId ? { linkedInvestmentId: expenseLinkedInvestmentId } : {}) }
+            : { type: 'corporate_bank', treatment: 'company_funded', paidVia: expenseFundingType === 'corporate_card' ? 'corporate_card' : 'bank' },
           ...(typeof expenseDeductible === 'boolean' ? { deductible: expenseDeductible } : {}),
           ...(expenseDeductibleReason ? { deductibleReason: expenseDeductibleReason } : {}),
           ...(receiptRef ? { receiptRef } : {}),
@@ -1678,6 +1681,10 @@ const ExpenseMonitoring: React.FC = () => {
         </Grid>
       </Grid>
 
+      {(user?.role === 'admin' || user?.role === 'superadmin') && (
+        <RecurringExpensesTray onPosted={() => { fetchExpenses(); }} />
+      )}
+
       {/* Charts Row */}
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
         {/* Expense Distribution Pie Chart */}
@@ -1909,7 +1916,8 @@ const ExpenseMonitoring: React.FC = () => {
                             expense.sourceType === 'po_sync' ? 'PO' :
                             expense.sourceType === 'liquidation_sync' ? 'Liquidation' :
                             expense.sourceType === 'migrated' ? 'Migrated' :
-                            expense.sourceType === 'receipt_scan' ? 'Scan' : 'Manual'
+                            expense.sourceType === 'receipt_scan' ? 'Scan' :
+                              expense.sourceType === 'recurring' ? 'Recurring' : 'Manual'
                           }
                           color={
                             expense.sourceType === 'po_sync' ? 'primary' :
@@ -1977,8 +1985,11 @@ const ExpenseMonitoring: React.FC = () => {
                           <Typography variant="caption" color="text.secondary">No receipt</Typography>
                         )}
                       </Box>
-                      {(expense.fundingSource?.type === 'investor_outofpocket' && expense.fundingSource.investor?.trim()) || linkedOrigins.some((l) => l.type !== 'investment') ? (
+                      {(expense.fundingSource?.type === 'investor_outofpocket' && expense.fundingSource.investor?.trim()) || expense.fundingSource?.paidVia === 'corporate_card' || linkedOrigins.some((l) => l.type !== 'investment') ? (
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
+                          {expense.fundingSource?.paidVia === 'corporate_card' && (
+                            <Chip size="small" variant="outlined" label="Corporate card" />
+                          )}
                           {expense.fundingSource?.type === 'investor_outofpocket' && expense.fundingSource.investor?.trim() && (
                             <Chip
                               size="small" variant="outlined" color="info" icon={<InvestorLinkIcon fontSize="small" />}
@@ -2147,15 +2158,19 @@ const ExpenseMonitoring: React.FC = () => {
                               expense.sourceType === 'po_sync' ? 'PO' :
                               expense.sourceType === 'liquidation_sync' ? 'Liquidation' :
                               expense.sourceType === 'migrated' ? 'Migrated' :
-                              expense.sourceType === 'receipt_scan' ? 'Scan' : 'Manual'
+                              expense.sourceType === 'receipt_scan' ? 'Scan' :
+                              expense.sourceType === 'recurring' ? 'Recurring' : 'Manual'
                             }
                             color={
                               expense.sourceType === 'po_sync' ? 'primary' :
                               expense.sourceType === 'liquidation_sync' ? 'warning' : 'default'
                             }
                           />
+                          {expense.fundingSource?.paidVia === 'corporate_card' && (
+                            <Chip size="small" variant="outlined" label="Corporate card" />
+                          )}
                           {expense.fundingSource?.type === 'investor_outofpocket' && expense.fundingSource.investor?.trim() && (
-                            <MuiTooltip title={`Funded out-of-pocket by ${expense.fundingSource.investor} — linked in Investment Tracker`}>
+                            <MuiTooltip title={`${expense.fundingSource.investor}'s own money, counted as capital in the Investment Tracker`}>
                               <Chip
                                 size="small"
                                 variant="outlined"
@@ -2341,19 +2356,28 @@ const ExpenseMonitoring: React.FC = () => {
                       <MenuItem key={cat} value={cat}>{cat}</MenuItem>
                     ))}
                   </Select>
+                  {expenseCategory === 'Taxes & Licenses' && (
+                    <FormHelperText>For BIR percentage tax, put 2551Q in the description. Don't record 1601-C or 0619-E remittances as expenses.</FormHelperText>
+                  )}
                 </FormControl>
               </Grid>
               <Grid size={{ xs: expenseFundingType === 'investor_outofpocket' ? 6 : 12 }}>
                 <FormControl fullWidth size="small">
-                  <InputLabel>Paid From</InputLabel>
+                  <InputLabel>Paid By</InputLabel>
                   <Select
-                    label="Paid From"
+                    label="Paid By"
                     value={expenseFundingType}
-                    onChange={(e) => { setExpenseFundingType(e.target.value as 'corporate_bank' | 'investor_outofpocket'); if (e.target.value !== 'investor_outofpocket') setExpenseFundingInvestor(''); }}
+                    onChange={(e) => { setExpenseFundingType(e.target.value as 'corporate_bank' | 'corporate_card' | 'investor_outofpocket'); if (e.target.value !== 'investor_outofpocket') setExpenseFundingInvestor(''); }}
                   >
-                    <MenuItem value="corporate_bank">Corporate Bank Account</MenuItem>
-                    <MenuItem value="investor_outofpocket">Investor (Out-of-Pocket)</MenuItem>
+                    <MenuItem value="corporate_bank">IOCT bank account</MenuItem>
+                    <MenuItem value="corporate_card">IOCT corporate card</MenuItem>
+                    <MenuItem value="investor_outofpocket">Owner's own money (capital)</MenuItem>
                   </Select>
+                  <FormHelperText>
+                    {expenseFundingType === 'investor_outofpocket'
+                      ? 'Counts as capital in the Investment Tracker. Never repaid.'
+                      : 'Paid with your own card or PayLater and want it back? Add it to your liquidation instead.'}
+                  </FormHelperText>
                 </FormControl>
               </Grid>
               {expenseFundingType === 'investor_outofpocket' && (

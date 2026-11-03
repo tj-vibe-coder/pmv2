@@ -1571,18 +1571,9 @@ app.post('/api/project-expenses/migrate-from-localstorage', async (req, res) => 
 // the payroll_sync_* overhead sync: a deterministic doc id keyed on the source
 // expense, upsert on out-of-pocket, delete otherwise. Never throws to caller.
 // ---------------------------------------------------------------------------
-function normalizeFundingSource(fs) {
-  if (!fs || typeof fs !== 'object') return null;
-  const type = fs.type === 'investor_outofpocket' ? 'investor_outofpocket' : 'corporate_bank';
-  const out = { type };
-  if (type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim()) {
-    out.investor = fs.investor.trim();
-    if (typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()) {
-      out.linkedInvestmentId = fs.linkedInvestmentId.trim();
-    }
-  }
-  return out;
-}
+// Rules live in server/fundingSource.js: `treatment` (company_funded |
+// equity_contribution) beside the original `type`, and only capital syncs.
+const { normalizeFundingSource, isEquityFunding, liquidationEquityError } = require('./server/fundingSource');
 
 // project_expenses keys the project ref as `projectId`; cash_advances (a plain Firestore
 // doc predating the camelCase convention) keys it as `project_id`. Everything else (overhead,
@@ -1627,7 +1618,7 @@ async function syncExpenseFundingInvestment(id, collection, doc) {
   const invRef = db.collection('investments').doc(`expense_sync_${id}`);
   try {
     const fs = doc && doc.fundingSource;
-    const isOutOfPocket = fs && fs.type === 'investor_outofpocket' && typeof fs.investor === 'string' && fs.investor.trim();
+    const isOutOfPocket = isEquityFunding(fs);
     const linkedId = isOutOfPocket && typeof fs.linkedInvestmentId === 'string' && fs.linkedInvestmentId.trim()
       ? fs.linkedInvestmentId.trim() : null;
 
@@ -1779,7 +1770,8 @@ app.post('/api/project-expenses', async (req, res) => {
           if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
           if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
           const fundingSource = normalizeFundingSource(exp.fundingSource);
-          if (fundingSource) doc.fundingSource = fundingSource;
+          // A liquidation row is recorded by its liquidation; it never doubles as capital.
+          if (fundingSource && !(doc.sourceType === 'liquidation_sync' && isEquityFunding(fundingSource))) doc.fundingSource = fundingSource;
           batch.set(ref, doc);
           inserted.push({ id: ref.id, ...doc });
         }
@@ -1789,7 +1781,7 @@ app.post('/api/project-expenses', async (req, res) => {
       // rows that actually carry an investor_outofpocket funding source need a
       // write — skip the rest so a large legacy-import batch doesn't issue a
       // no-op delete() per plain row.
-      const outOfPocketInserted = inserted.filter(exp => exp.fundingSource && exp.fundingSource.type === 'investor_outofpocket');
+      const outOfPocketInserted = inserted.filter(exp => isEquityFunding(exp.fundingSource));
       await Promise.all(outOfPocketInserted.map(exp => syncExpenseFundingInvestment(exp.id, 'project_expenses', exp)));
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
@@ -1889,7 +1881,9 @@ app.patch('/api/project-expenses/:id', async (req, res) => {
     if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
     if (fundingSource !== undefined) {
       const nf = normalizeFundingSource(fundingSource);
-      allowed.fundingSource = (nf && nf.type === 'investor_outofpocket') ? nf : FieldValue.delete();
+      const fundingError = liquidationEquityError(snap.data(), nf);
+      if (fundingError) return res.status(400).json({ success: false, error: fundingError });
+      allowed.fundingSource = nf || FieldValue.delete();
     }
     if (Object.keys(allowed).length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update' });
     allowed.updatedAt = new Date().toISOString();
@@ -5979,6 +5973,8 @@ app.get('/api/health', (req, res) => {
 // ========== STATIC FILES & SPA ROUTING ==========
 // ========== INVOICE / COLLECTIONS ROUTES ==========
 app.use('/api/finance-evidence', require('./server/financeEvidenceRouter').createFinanceEvidenceRouter({ db, requireActiveUser }));
+// Recurring expenses: templates + a confirm-to-post tray (admins). See server/recurringExpenses.js.
+app.use('/api/recurring-expenses', require('./server/recurringExpenses').createRecurringExpensesRouter({ db, requireActiveUser }));
 
 
 app.get('/api/invoices', async (req, res) => {
@@ -7902,6 +7898,27 @@ app.get('/api/overhead-expenses/summary', async (req, res) => {
 // overhead_expenses (operating expenses) for the given year. In-memory date-prefix
 // filtering mirrors the summary endpoints — NO composite index required.
 // COMPANY-WIDE for all authenticated users (management report; no per-user scoping).
+// What the company owes people for costs they paid themselves (server/dueToPeople.js).
+app.get('/api/finance/due-to-people', async (req, res) => {
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (user.role !== 'superadmin' && user.role !== 'admin') return res.status(403).json({ success: false, error: 'Forbidden' });
+  try {
+    const [reimbSnap, draftSnap] = await Promise.all([
+      db.collection('reimbursements').where('status', '==', 'pending').get(),
+      db.collection('liquidations').where('status', '==', 'draft').get(),
+    ]);
+    const summary = require('./server/dueToPeople').summarizeDueToPeople(
+      reimbSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+      draftSnap.docs.map(d => { const x = d.data(); return { id: d.id, user_id: x.user_id, employee_name: x.employee_name, total_amount: x.total_amount, form_no: x.form_no, updated_at: x.updated_at }; }),
+    );
+    res.json({ success: true, ...summary });
+  } catch (err) {
+    console.error('Error computing due-to-people:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 app.get('/api/finance/pnl', async (req, res) => {
   const user = await getCurrentUser(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -7934,11 +7951,18 @@ app.get('/api/finance/pnl', async (req, res) => {
     });
 
     let operatingExpenses = 0;
+    // BIR 2551Q payments recorded under Taxes & Licenses are the percentage tax
+    // itself; they go on the percentage-tax line below, not in OPEX as well.
+    let percentageTaxPaid = 0;
     const catMap = {};
     overExpSnap.docs.forEach(doc => {
       const d = doc.data();
       if (d.date && String(d.date).startsWith(year)) {
         const amt = Number(d.amount) || 0;
+        if (d.category === 'Taxes & Licenses' && /2551Q|percentage tax/i.test(`${d.description || ''} ${d.remarks || ''}`)) {
+          percentageTaxPaid += amt;
+          return;
+        }
         operatingExpenses += amt;
         const cat = d.category || 'Uncategorized';
         catMap[cat] = (catMap[cat] || 0) + amt;
@@ -7952,7 +7976,9 @@ app.get('/api/finance/pnl', async (req, res) => {
     const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
     const operatingIncome = grossProfit - operatingExpenses;
     const percentageTaxEstimate = revenueCollected * 0.03; // PH 2551Q: 3% on gross receipts (collected), not accrual
-    const netIncomeBeforeIncomeTax = operatingIncome - percentageTaxEstimate;
+    // Until every quarter is filed, recorded payments trail the estimate; never count both.
+    const percentageTax = Math.max(percentageTaxEstimate, percentageTaxPaid);
+    const netIncomeBeforeIncomeTax = operatingIncome - percentageTax;
 
     res.json({
       success: true,
@@ -7968,6 +7994,8 @@ app.get('/api/finance/pnl', async (req, res) => {
       overheadByCategory,
       operatingIncome,
       percentageTaxEstimate,
+      percentageTaxPaid,
+      percentageTax,
       netIncomeBeforeIncomeTax,
     });
   } catch (err) {
@@ -8060,13 +8088,14 @@ app.post('/api/overhead-expenses', async (req, res) => {
           if (typeof exp.deductible === 'boolean') doc.deductible = exp.deductible;
           if (exp.deductibleReason) doc.deductibleReason = String(exp.deductibleReason);
           const fundingSource = normalizeFundingSource(exp.fundingSource);
-          if (fundingSource) doc.fundingSource = fundingSource;
+          // A liquidation row is recorded by its liquidation; it never doubles as capital.
+          if (fundingSource && !(doc.sourceType === 'liquidation_sync' && isEquityFunding(fundingSource))) doc.fundingSource = fundingSource;
           batch.set(ref, doc);
           inserted.push({ id: ref.id, ...doc });
         }
         await batch.commit();
       }
-      const outOfPocketInserted = inserted.filter(exp => exp.fundingSource && exp.fundingSource.type === 'investor_outofpocket');
+      const outOfPocketInserted = inserted.filter(exp => isEquityFunding(exp.fundingSource));
       await Promise.all(outOfPocketInserted.map(exp => syncExpenseFundingInvestment(exp.id, 'overhead_expenses', exp)));
       return res.status(201).json({ success: true, count: inserted.length, expenses: inserted });
     }
@@ -8139,7 +8168,9 @@ app.patch('/api/overhead-expenses/:id', async (req, res) => {
     if (deductibleReason !== undefined) allowed.deductibleReason = deductibleReason == null ? null : String(deductibleReason);
     if (fundingSource !== undefined) {
       const nf = normalizeFundingSource(fundingSource);
-      allowed.fundingSource = (nf && nf.type === 'investor_outofpocket') ? nf : FieldValue.delete();
+      const fundingError = liquidationEquityError(snap.data(), nf);
+      if (fundingError) return res.status(400).json({ success: false, error: fundingError });
+      allowed.fundingSource = nf || FieldValue.delete();
     }
     allowed.updatedAt = new Date().toISOString();
     await ref.update(allowed);

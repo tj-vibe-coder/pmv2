@@ -21,6 +21,12 @@ export const OVERHEAD_CATEGORIES = [
   'Advertising/Marketing',
   'Repairs & Maintenance',
   'Government Contributions',
+  // Added 2026-11-03 (IOCT Finance expense plan). Armin's retainer, BIR 2551Q and
+  // permits, and Claude/ChatGPT/Microsoft 365. Withheld-tax remittances (1601-C,
+  // 0619-E) are NOT Taxes & Licenses: they settle tax already withheld.
+  'Professional Fees',
+  'Taxes & Licenses',
+  'Software & Subscriptions',
   'Others',
 ] as const;
 
@@ -66,6 +72,9 @@ export const ACCOUNT_MAP: Record<string, { code: string; type: AccountType }> = 
   'Advertising/Marketing': { code: '6006', type: 'operating_expense' },
   'Repairs & Maintenance': { code: '6007', type: 'operating_expense' },
   'Government Contributions': { code: '6010', type: 'operating_expense' },
+  'Professional Fees': { code: '6011', type: 'operating_expense' },
+  'Taxes & Licenses': { code: '6012', type: 'operating_expense' },
+  'Software & Subscriptions': { code: '6013', type: 'operating_expense' },
   'Others': { code: '6900', type: 'operating_expense' },
 
   // Equity (3xxx)
@@ -101,6 +110,9 @@ export const LIQUIDATION_CATEGORIES = [
   'Meals',
   'Advertising/Marketing',
   'Repairs & Maintenance',
+  'Professional Fees',
+  'Taxes & Licenses',
+  'Software & Subscriptions',
   'Others',
 ] as const;
 
@@ -127,11 +139,19 @@ export const INVESTORS = [
 
 export type InvestorType = typeof INVESTORS[number];
 
-// Marks an expense as paid directly by an investor out of pocket (rather than
-// from the corporate bank account) so it can be auto-linked to a matching
-// `investments` row server-side instead of being re-entered by hand.
+// Who paid for a cost (server/fundingSource.js has the rules):
+//  - company_funded: IOCT paid (bank, corporate card, petty cash); nobody is owed.
+//  - equity_contribution: an owner paid with their own money as capital; it is
+//    mirrored into `investments` server-side instead of being re-entered by hand.
+// Someone who wants to be repaid files a liquidation instead of a direct expense.
+// `type` is the original field and stays in step with `treatment`.
+export type FundingTreatment = 'company_funded' | 'equity_contribution';
+export type FundingPaidVia = 'bank' | 'corporate_card' | 'petty_cash';
 export interface FundingSource {
   type: 'corporate_bank' | 'investor_outofpocket';
+  treatment?: FundingTreatment;
+  /** Company payments only: how IOCT paid. */
+  paidVia?: FundingPaidVia;
   /** Optional: draw against an EXISTING investments row (e.g. a lump-sum capital
    * contribution) instead of auto-creating a new one-off row for this expense. */
   linkedInvestmentId?: string;
