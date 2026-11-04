@@ -9,7 +9,7 @@ import {
   formatDiscountPct,
 } from './calc';
 import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, defaultTaxStatusTerm, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
-import { quotationRefNo } from './codes';
+import { quotationExportRefNo } from './codes';
 import { quotationPdfScale, type QuotationPdfLayout } from './quotationPdfLayout';
 import { subheaderBefore } from './subheaders';
 import { componentExportDetails } from './componentExportDetails';
@@ -328,7 +328,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
   ].reduce((sum, t) => sum + (t?.length || 0), 0);
   const scale = quotationPdfScale({ totalRows, termsCharCount, layout });
   const styles = buildStyles(scale);
-  const refNo = quotationRefNo(project.code, recipient?.code, quotation.revision);
+  const refNo = quotationExportRefNo(project.code, recipient?.code, quotation.revision);
   const logoUrl = typeof window !== 'undefined' ? `${window.location.origin}${issuer.logo}` : issuer.logo;
   const dateSent = quotationDate(quotation.dateSent);
 
@@ -1010,7 +1010,7 @@ export async function exportQuotationPdf(
 
   const modifiedBytes = await pdfDoc.save();
   const modifiedBlob = new Blob([modifiedBytes], { type: 'application/pdf' });
-  const filename = `${quotationRefNo(project.code, recipient?.code, quotation.revision)}.pdf`;
+  const filename = `${quotationExportRefNo(project.code, recipient?.code, quotation.revision)}.pdf`;
   if (options.save !== false) {
     saveAs(modifiedBlob, filename);
   }

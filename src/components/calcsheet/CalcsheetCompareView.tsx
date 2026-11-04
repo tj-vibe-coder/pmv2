@@ -105,7 +105,7 @@ export default function CompareView() {
               <Typography variant="body2">Discount</Typography>
               <Typography sx={{ fontFamily: 'monospace', textAlign: 'right', color: 'error.main' }}>− {PHP(t.discount)}</Typography>
             </>}
-            {q.vatPct > 0 && <>
+            {!q.nonVat && q.vatPct > 0 && <>
               <Typography variant="body2">VAT ({q.vatPct}%)</Typography>
               <Typography sx={{ fontFamily: 'monospace', textAlign: 'right' }}>{PHP(t.vat)}</Typography>
             </>}

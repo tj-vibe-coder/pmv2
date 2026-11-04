@@ -4,24 +4,47 @@ const express = require('express');
 
 const BLS_COLLECTION = 'billing_statements';
 const KINDS = ['BLS', 'SOA'];
+// Same people the page is open to (the client sends user/viewer to the employee portal and tax_filer to its ledger).
+const ALLOWED_ROLES = ['superadmin', 'admin'];
 
 /**
  * Next document number for a project: `<ProjectNo>-BLS-NN` (cf. -PB-, -COC, -SR1).
  * Existing numbers are scanned, so imported files with their old numbers don't
  * collide with generated ones.
  */
-function nextDocNo(projectNo, existingDocNos) {
+function nextDocNo(projectNo, existingDocNos, kind = 'BLS') {
   const base = String(projectNo || '').trim();
-  const re = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-BLS-(\\d+)$`, 'i');
+  const re = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-${kind}-(\\d+)$`, 'i');
   let max = 0;
   for (const no of existingDocNos) {
     const m = re.exec(String(no || '').trim());
     if (m) max = Math.max(max, parseInt(m[1], 10));
   }
-  return `${base}-BLS-${String(max + 1).padStart(2, '0')}`;
+  // BLS-NN, but SOA-NNN (cf. IOCT2602001-SOA-001).
+  return `${base}-${kind}-${String(max + 1).padStart(kind === 'SOA' ? 3 : 2, '0')}`;
 }
 
+// One document per (project, number): Firestore refuses a second create() with the same id,
+// so two people numbering at the same moment can't both get the same document number.
+const docIdFor = (projectNo, docNo) =>
+  `${projectNo}__${docNo}`.toUpperCase().replace(/[/\\\s]+/g, '_').slice(0, 200);
+const isAlreadyExists = (err) => err && (err.code === 6 || err.code === 'already-exists' || /already exists/i.test(err.message || ''));
+
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/** Running-account SOA figures. Rows marked PAID are previous billings; DUE rows are this statement's amount due. */
+function computeSoaSummary(txns, contractValue) {
+  const rows = Array.isArray(txns) ? txns : [];
+  const sum = (arr) => round2(arr.reduce((s, t) => s + (Number(t.amountBilled) || 0), 0));
+  const billed = sum(rows);
+  return {
+    contractValue: round2(contractValue),
+    previousBillings: sum(rows.filter((t) => t.status === 'PAID')),
+    thisBilling: sum(rows.filter((t) => t.status !== 'PAID')),
+    totalDue: sum(rows.filter((t) => t.status !== 'PAID')),
+    balanceAfter: round2(round2(contractValue) - billed),
+  };
+}
 
 /** Gross, withholding tax and net due for a bill's line items (same maths as the PDF). */
 function computeBlsTotals(lines, whtPct) {
@@ -39,6 +62,7 @@ function createBlsRouter(opts) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+      if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ success: false, error: 'Forbidden' });
       req.user = user;
       next();
     } catch (err) {
@@ -53,7 +77,8 @@ function createBlsRouter(opts) {
     const out = {};
     ['kind', 'docNo', 'date', 'projectId', 'projectNo', 'projectName', 'billedToName', 'billedToAddress',
       'attention', 'subtitle', 'billingLabel', 'terms', 'approverLabel', 'preparedByName', 'preparedByTitle',
-      'invoiceId', 'invoiceNo', 'source', 'notes'].forEach((k) => {
+      'invoiceId', 'invoiceNo', 'source', 'notes', 'poNo', 'poDate', 'billedToTin', 'billedToEmail',
+      'remarks', 'remittance', 'paymentNote'].forEach((k) => {
       if (p[k] !== undefined) out[k] = typeof p[k] === 'string' ? p[k].trim() : p[k];
     });
     if (Array.isArray(p.refRows)) out.refRows = p.refRows.map((r) => ({ label: String(r.label || ''), value: String(r.value || '') }));
@@ -63,6 +88,14 @@ function createBlsRouter(opts) {
       }));
     }
     if (Array.isArray(p.supportingDocs)) out.supportingDocs = p.supportingDocs.map((d) => String(d)).filter(Boolean);
+    if (p.contractValue !== undefined) out.contractValue = Number(p.contractValue) || 0;
+    if (Array.isArray(p.txns)) {
+      out.txns = p.txns.map((t) => ({
+        invoiceDate: String(t.invoiceDate || ''), siNo: String(t.siNo || ''), description: String(t.description || ''),
+        details: String(t.details || ''), contractAmount: Number(t.contractAmount) || 0, billingPct: Number(t.billingPct) || 0,
+        amountBilled: Number(t.amountBilled) || 0, status: t.status === 'PAID' ? 'PAID' : 'DUE',
+      }));
+    }
     if (p.whtPct !== undefined) out.whtPct = Number(p.whtPct) || 0;
     if (p.file !== undefined) {
       out.file = p.file && p.file.onedrive_item_id
@@ -78,6 +111,10 @@ function createBlsRouter(opts) {
   }
 
   function withTotals(rec) {
+    if (rec.kind === 'SOA' && Array.isArray(rec.txns)) {
+      const s = computeSoaSummary(rec.txns, rec.contractValue);
+      return { ...rec, totalNet: s.totalDue, balanceAfter: s.balanceAfter };
+    }
     if (!Array.isArray(rec.lines)) return rec;
     const t = computeBlsTotals(rec.lines, rec.whtPct);
     return { ...rec, totalGross: t.gross, totalWht: t.wht, totalNet: t.net };
@@ -106,7 +143,8 @@ function createBlsRouter(opts) {
       const snap = await db.collection(BLS_COLLECTION).where('projectNo', '==', projectNo).get();
       const nos = [];
       snap.forEach((d) => nos.push(d.data().docNo));
-      res.json({ success: true, docNo: nextDocNo(projectNo, nos) });
+      const kind = req.query.kind === 'SOA' ? 'SOA' : 'BLS';
+      res.json({ success: true, docNo: nextDocNo(projectNo, nos, kind) });
     } catch (err) {
       console.error('[BLS Router] GET /next-no error:', err);
       res.status(500).json({ success: false, error: 'Failed to compute next number' });
@@ -137,12 +175,13 @@ function createBlsRouter(opts) {
       if (data.docNo && nos.some((n) => String(n).toLowerCase() === data.docNo.toLowerCase())) {
         return res.status(409).json({ success: false, error: `${data.docNo} already exists` });
       }
-      if (!data.docNo) {
-        if (data.kind !== 'BLS') return res.status(400).json({ success: false, error: 'docNo is required' });
-        data.docNo = nextDocNo(data.projectNo, nos);
+      const supplied = !!data.docNo;
+      if (!supplied && data.source === 'imported') {
+        // Generated documents are numbered here; imported files must bring their own number.
+        return res.status(400).json({ success: false, error: 'docNo is required' });
       }
       const now = new Date().toISOString();
-      const record = {
+      const base = {
         ...data,
         date: data.date || now.slice(0, 10),
         source: data.source || 'generated',
@@ -150,8 +189,21 @@ function createBlsRouter(opts) {
         updatedAt: now,
         createdBy: req.user.username || req.user.userId || 'system',
       };
-      const ref = await db.collection(BLS_COLLECTION).add(record);
-      res.status(201).json({ success: true, id: ref.id, data: withTotals({ ...record, id: ref.id }) });
+      // Auto-numbered: retry with the next number if someone else took it first.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const docNo = supplied ? data.docNo : nextDocNo(data.projectNo, nos, data.kind);
+        const id = docIdFor(data.projectNo, docNo);
+        const record = { ...base, docNo };
+        try {
+          await db.collection(BLS_COLLECTION).doc(id).create(record);
+          return res.status(201).json({ success: true, id, data: withTotals({ ...record, id }) });
+        } catch (err) {
+          if (!isAlreadyExists(err)) throw err;
+          if (supplied) return res.status(409).json({ success: false, error: `${docNo} already exists` });
+          nos.push(docNo);
+        }
+      }
+      return res.status(409).json({ success: false, error: 'Could not assign a document number, please retry' });
     } catch (err) {
       console.error('[BLS Router] POST / error:', err);
       res.status(500).json({ success: false, error: 'Failed to create billing statement' });
@@ -166,6 +218,8 @@ function createBlsRouter(opts) {
       const data = pick(req.body);
       delete data.kind;
       delete data.source;
+      delete data.projectNo;
+      delete data.projectId;
       if (data.docNo && data.docNo.toLowerCase() !== String(existing.data().docNo || '').toLowerCase()) {
         return res.status(400).json({ success: false, error: 'Document number cannot be changed' });
       }
@@ -194,4 +248,4 @@ function createBlsRouter(opts) {
   return router;
 }
 
-module.exports = { createBlsRouter, nextDocNo, computeBlsTotals };
+module.exports = { createBlsRouter, nextDocNo, computeBlsTotals, computeSoaSummary };

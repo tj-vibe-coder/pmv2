@@ -64,6 +64,8 @@ import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import { ensureExecutionFolder, resolveSharingUrl } from '../services/onedriveFolderService';
 import { getSoasByProject } from '../services/soaService';
+import { listBillingStatements } from '../services/billingStatementService';
+import type { BillingStatement } from '../types/BillingStatement';
 
 const PROJECT_EXPENSES_KEY = 'projectExpenses';
 const MATERIAL_REQUESTS_KEY = 'materialRequests';
@@ -673,6 +675,7 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     }
   }, [project.id, project.project_budget, calcsheetBudget]);
 
+  const [projectBls, setProjectBls] = useState<BillingStatement[]>([]);
   const [projectSoas, setProjectSoas] = useState<Array<{ id: string; soaNo: string; date: string; status: string; recipientName: string; matchingItems: any[] }>>([]);
 
   useEffect(() => {
@@ -687,6 +690,12 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
     getSoasByProject(String(project.id))
       .then(soas => {
         if (!cancelled) setProjectSoas(soas);
+      })
+      .catch(() => {});
+
+    listBillingStatements(String(project.id))
+      .then(rows => {
+        if (!cancelled) setProjectBls(rows);
       })
       .catch(() => {});
 
@@ -1931,6 +1940,54 @@ const ProjectDetails: React.FC<ProjectDetailsProps> = ({ project, onBack, onProj
                         </Typography>
                       </Box>
                     )}
+                  </Box>
+                )}
+
+                {/* Billing Statements (BLS) + filed BLS/SOA PDFs */}
+                {projectBls.length > 0 && (
+                  <Box sx={{ mt: 3, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: NET_PACIFIC_COLORS.primary }}>
+                        Billing Statements
+                      </Typography>
+                      <Button
+                        size="small"
+                        variant="text"
+                        endIcon={<OpenInNewIcon fontSize="small" />}
+                        onClick={() => navigate('/finance/bls')}
+                        sx={{ fontSize: '0.75rem' }}
+                      >
+                        Open Billing Statements
+                      </Button>
+                    </Box>
+                    <Stack spacing={1}>
+                      {projectBls.map((b) => (
+                        <Box
+                          key={b.id}
+                          sx={{
+                            p: 1.5, borderRadius: 1, bgcolor: '#f8fafc', border: '1px solid #e2e8f0',
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1,
+                          }}
+                        >
+                          <Box>
+                            <Typography variant="body2" sx={{ fontWeight: 700, fontFamily: 'monospace', color: NET_PACIFIC_COLORS.primary }}>
+                              {b.docNo}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {b.kind === 'SOA' ? 'Statement of Account' : 'Billing Statement'} · {b.date}
+                              {b.invoiceNo ? ` · SI ${b.invoiceNo}` : ''}
+                            </Typography>
+                          </Box>
+                          {b.file?.onedrive_web_url ? (
+                            <Button size="small" endIcon={<OpenInNewIcon fontSize="small" />} href={b.file.onedrive_web_url} target="_blank" rel="noopener noreferrer">
+                              Open in OneDrive
+                            </Button>
+                          ) : (
+                            <Chip size="small" label="Not filed in OneDrive" sx={{ fontSize: '0.7rem' }} />
+                          )}
+                        </Box>
+                      ))}
+                    </Stack>
                   </Box>
                 )}
               </Paper>

@@ -12,6 +12,18 @@ export interface BlsLine {
   unitPrice: number;
 }
 
+/** One row of a running-account SOA: an invoice billed against the contract. */
+export interface SoaTxn {
+  invoiceDate: string;                // 'YYYY-MM-DD'
+  siNo: string;
+  description: string;
+  details?: string;                   // sub-lines under the description (newline-separated)
+  contractAmount: number;
+  billingPct: number;
+  amountBilled: number;
+  status: 'PAID' | 'DUE';
+}
+
 export interface BillingFile {
   onedrive_item_id: string;
   onedrive_web_url: string;
@@ -48,6 +60,17 @@ export interface BillingStatement {
   preparedByTitle?: string;
   invoiceId?: string;
   invoiceNo?: string;
+  // Running-account SOA (kind 'SOA', generated). `subtitle` = banner text, `billingLabel` = banner badge.
+  contractValue?: number;
+  poNo?: string;
+  poDate?: string;
+  billedToTin?: string;
+  billedToEmail?: string;
+  txns?: SoaTxn[];
+  paymentNote?: string;
+  remittance?: string;
+  remarks?: string;
+  balanceAfter?: number;
   file?: BillingFile | null;
   source?: 'generated' | 'imported';
   notes?: string;
@@ -70,6 +93,18 @@ export function computeBlsTotals(lines: BlsLine[] | undefined, whtPct: number | 
   const wht = round2((gross * (Number(whtPct) || 0)) / 100);
   return { gross, wht, net: round2(gross - wht) };
 }
+
+/** Rows marked PAID are previous billings; the rest make up this statement's amount due. */
+export function computeSoaSummary(txns: SoaTxn[] | undefined, contractValue: number | undefined) {
+  const rows = txns ?? [];
+  const sum = (arr: SoaTxn[]) => round2(arr.reduce((s, t) => s + (Number(t.amountBilled) || 0), 0));
+  const cv = round2(contractValue ?? 0);
+  const due = sum(rows.filter((t) => t.status !== 'PAID'));
+  return { contractValue: cv, previousBillings: sum(rows.filter((t) => t.status === 'PAID')), thisBilling: due, totalDue: due, balanceAfter: round2(cv - sum(rows)) };
+}
+
+export const DEFAULT_SOA_REMITTANCE =
+  'Please send payment remittance advice to:\nprojects@iocontroltech.com\n\nBank details are as stated in the Bank Certification submitted with our supplier accreditation.';
 
 const ONES = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve',
   'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];

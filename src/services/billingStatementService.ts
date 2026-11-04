@@ -21,8 +21,8 @@ export async function listBillingStatements(projectId?: string): Promise<Billing
   return (await call<{ data: BillingStatement[] }>(q)).data;
 }
 
-export async function nextBlsNo(projectNo: string): Promise<string> {
-  return (await call<{ docNo: string }>(`/next-no?projectNo=${encodeURIComponent(projectNo)}`)).docNo;
+export async function nextBlsNo(projectNo: string, kind: 'BLS' | 'SOA' = 'BLS'): Promise<string> {
+  return (await call<{ docNo: string }>(`/next-no?projectNo=${encodeURIComponent(projectNo)}&kind=${kind}`)).docNo;
 }
 
 export async function createBillingStatement(payload: Partial<BillingStatement>): Promise<BillingStatement> {

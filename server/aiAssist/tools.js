@@ -442,7 +442,7 @@ async function getQuotationSummary(db, args, asOf) {
 
   const rawSubtotal = generalSubtotal + componentsSubtotal + servicesSubtotal;
   const afterDiscount = rawSubtotal * (1 - (Number(record.discountPct) || 0) / 100);
-  const grandTotal = afterDiscount * (1 + (Number(record.vatPct) || 0) / 100);
+  const grandTotal = afterDiscount * (1 + (record.nonVat === true ? 0 : Number(record.vatPct) || 0) / 100);
 
   const projected = quotationProjection(record);
   const data = {
@@ -865,7 +865,7 @@ async function queryAnalytics(db, args, asOf) {
         components.reduce((s, l) => s + (Number(l.unitCost) || 0) * (Number(l.qty) || 0), 0) +
         services.reduce((s, l) => s + (Number(l.amount) || 0), 0);
       const afterDiscount = rawSubtotal * (1 - (Number(r.discountPct) || 0) / 100);
-      const grandTotal = afterDiscount * (1 + (Number(r.vatPct) || 0) / 100);
+      const grandTotal = afterDiscount * (1 + (r.nonVat === true ? 0 : Number(r.vatPct) || 0) / 100);
       g.totalAmount += grandTotal;
     }
     let data = Array.from(groups.values()).map((g) => ({
