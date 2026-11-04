@@ -943,6 +943,7 @@ export default function QuotationEditor() {
     ) },
     { key: 'code', card: 'eyebrow', label: 'Code', width: 90, mono: true },
     { key: 'description', card: 'title', label: 'Description', width: 260, render: (r, idx) => (
+      <Stack spacing={0.5} sx={{ minWidth: 0 }}>
       <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
         <TextField value={r.description ?? ''} onChange={(e) => updateRow('components', idx, 'description', e.target.value)}
           variant="standard" fullWidth disabled={inputsLocked} multiline minRows={1} sx={{ minWidth: 0, flex: 1 }}
@@ -953,6 +954,7 @@ export default function QuotationEditor() {
         )}
         <InternalNoteButton note={r.internalNote} lineLabel={r.description || r.code} disabled={inputsLocked}
           onClick={() => setNoteTarget({ section: 'components', id: r.id })} />
+      </Stack>
         {r.group && (
           <Tooltip title={groupDisplayMode(r.group) === 'lot'
             ? `"${r.group}" prints as one 1.00 LOT line — click to show each item's qty instead`
@@ -965,7 +967,7 @@ export default function QuotationEditor() {
               onClick={() => toggleGroupDisplay(r.group!)}
               onDelete={() => ungroupComp(r.id)}
               disabled={inputsLocked}
-              sx={{ height: 20, cursor: 'pointer', '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }}
+              sx={{ height: 20, cursor: 'pointer', alignSelf: 'flex-start', maxWidth: '100%', '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }}
             />
           </Tooltip>
         )}
