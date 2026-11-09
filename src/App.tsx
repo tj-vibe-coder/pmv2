@@ -1,72 +1,79 @@
-import React, { useState } from 'react';
+import React, { Suspense, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import { Box } from '@mui/material';
+import { Box, CircularProgress } from '@mui/material';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { OneDriveAuthProvider } from './contexts/OneDriveAuthContext';
 import AiAssistHost from './components/ai/AiAssistHost';
-import AiAssistPage from './components/ai/AiAssistPage';
-import AnalyticsStudioPage from './components/analytics/AnalyticsStudioPage';
-import ProjectActivityPage from './components/ProjectActivityPage';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
-import ProjectMonitoringApp from './components/ProjectMonitoringApp';
 import { canOpenProjectMonitoring, isStaffRole } from './utils/projectMonitoringAccess';
-import ProjectLocationDashboard from './components/ProjectLocationDashboard';
-import ExpenseMonitoring from './components/ExpenseMonitoring';
-import LiquidationFormPage from './components/LiquidationFormPage';
-import CAFormPage from './components/CAFormPage';
-import ClientsPage from './components/ClientsPage';
-import MaterialRequestFormPage from './components/MaterialRequestFormPage';
-import DeliveryPage from './components/DeliveryPage';
-import SuppliersPage from './components/SuppliersPage';
-import PurchaseOrderPage from './components/PurchaseOrderPage';
-import EstimatesPage from './components/EstimatesPage';
-import ReportsPage from './components/ReportsPage';
-import UtilitiesPage from './components/UtilitiesPage';
-import EHSPage from './components/EHSPage';
-import IDGeneratorPage from './components/IDGeneratorPage';
-import AcknowledgementReceiptPage from './components/AcknowledgementReceiptPage';
-import SystemBackupsPage from './components/SystemBackupsPage';
-import DirectLaborPage from './components/DirectLaborPage';
-import UserApprovalsPage from './components/UserApprovalsPage';
-import UsersPage from './components/UsersPage';
-import InvestmentTrackerPage from './components/InvestmentTrackerPage';
-import CollectionsDashboard from './components/CollectionsDashboard';
-import PayrollDashboard from './components/payroll/PayrollDashboard';
 import PayrollGuard from './components/payroll/PayrollGuard';
-import FinanceHomePage from './components/finance/FinanceHomePage';
-import ReimbursementDashboard from './components/ReimbursementDashboard';
-import ReceiptSearchPage from './components/finance/ReceiptSearchPage';
-import ProjectExpenseReport from './components/finance/ProjectExpenseReport';
-import OverheadExpensesPage from './components/OverheadExpensesPage';
-import CompanyPnLPage from './components/finance/CompanyPnLPage';
-import TaxFilerLedgerPage from './components/finance/TaxFilerLedgerPage';
-import SalesEwtRegisterPage from './components/finance/SalesEwtRegisterPage';
-import SoaDashboardPage from './components/finance/soa/SoaDashboardPage';
-import BlsPage from './components/finance/bls/BlsPage';
-import SoaDetailView from './components/finance/soa/SoaDetailView';
-import SalesHomePage from './components/sales/SalesHomePage';
 import EmployeePortalHome from './components/employee/EmployeePortalHome';
 import DTRPage from './components/employee/DTRPage';
 import ClockPage from './components/employee/ClockPage';
-import EmployeePayslipPage from './components/employee/EmployeePayslipPage';
-import EmployeeServiceReportPage from './components/employee/EmployeeServiceReportPage';
-import CalcsheetProjects from './components/calcsheet/CalcsheetProjects';
-import CalcsheetLegacyImport from './components/calcsheet/CalcsheetLegacyImport';
-import CalcsheetProjectDetail from './components/calcsheet/CalcsheetProjectDetail';
-import CalcsheetQuotationEditor from './components/calcsheet/CalcsheetQuotationEditor';
-import CalcsheetCompareView from './components/calcsheet/CalcsheetCompareView';
-import CalcsheetProjectSchedule from './components/calcsheet/CalcsheetProjectSchedule';
-import ProjectSchedulePage from './components/ProjectSchedulePage';
-import CalcsheetClients from './components/calcsheet/CalcsheetClients';
-import CalcsheetPresets from './components/calcsheet/CalcsheetPresets';
-import PricelistBrowser from './components/pricelists/PricelistBrowser';
-import ScanPage from './components/ScanPage';
 import { useQuotationStore } from './store/quotationStore';
+import { lazyWithRetry } from './utils/lazyWithRetry';
+import RouteErrorBoundary from './components/RouteErrorBoundary';
 import { saveLastPage, getLastPage } from './utils/lastPage';
+
+// Pages are downloaded when first opened, not all up front — a phone no longer has to fetch the whole app
+// before showing the first screen. Kept in the main bundle on purpose: the login page, the layout, and the
+// employee home / DTR / clock pages (field crews open those offline; the service worker only has what was
+// already downloaded). See src/utils/lazyWithRetry.ts for the after-a-deploy safety net.
+const AiAssistPage = lazyWithRetry(() => import('./components/ai/AiAssistPage'));
+const AnalyticsStudioPage = lazyWithRetry(() => import('./components/analytics/AnalyticsStudioPage'));
+const ProjectActivityPage = lazyWithRetry(() => import('./components/ProjectActivityPage'));
+const ProjectMonitoringApp = lazyWithRetry(() => import('./components/ProjectMonitoringApp'));
+const ProjectLocationDashboard = lazyWithRetry(() => import('./components/ProjectLocationDashboard'));
+const ExpenseMonitoring = lazyWithRetry(() => import('./components/ExpenseMonitoring'));
+const LiquidationFormPage = lazyWithRetry(() => import('./components/LiquidationFormPage'));
+const CAFormPage = lazyWithRetry(() => import('./components/CAFormPage'));
+const ClientsPage = lazyWithRetry(() => import('./components/ClientsPage'));
+const MaterialRequestFormPage = lazyWithRetry(() => import('./components/MaterialRequestFormPage'));
+const DeliveryPage = lazyWithRetry(() => import('./components/DeliveryPage'));
+const SuppliersPage = lazyWithRetry(() => import('./components/SuppliersPage'));
+const PurchaseOrderPage = lazyWithRetry(() => import('./components/PurchaseOrderPage'));
+const EstimatesPage = lazyWithRetry(() => import('./components/EstimatesPage'));
+const ReportsPage = lazyWithRetry(() => import('./components/ReportsPage'));
+const UtilitiesPage = lazyWithRetry(() => import('./components/UtilitiesPage'));
+const EHSPage = lazyWithRetry(() => import('./components/EHSPage'));
+const IDGeneratorPage = lazyWithRetry(() => import('./components/IDGeneratorPage'));
+const AcknowledgementReceiptPage = lazyWithRetry(() => import('./components/AcknowledgementReceiptPage'));
+const SystemBackupsPage = lazyWithRetry(() => import('./components/SystemBackupsPage'));
+const DirectLaborPage = lazyWithRetry(() => import('./components/DirectLaborPage'));
+const UserApprovalsPage = lazyWithRetry(() => import('./components/UserApprovalsPage'));
+const UsersPage = lazyWithRetry(() => import('./components/UsersPage'));
+const InvestmentTrackerPage = lazyWithRetry(() => import('./components/InvestmentTrackerPage'));
+const CollectionsDashboard = lazyWithRetry(() => import('./components/CollectionsDashboard'));
+const PayrollDashboard = lazyWithRetry(() => import('./components/payroll/PayrollDashboard'));
+const FinanceHomePage = lazyWithRetry(() => import('./components/finance/FinanceHomePage'));
+const ReimbursementDashboard = lazyWithRetry(() => import('./components/ReimbursementDashboard'));
+const ReceiptSearchPage = lazyWithRetry(() => import('./components/finance/ReceiptSearchPage'));
+const ProjectExpenseReport = lazyWithRetry(() => import('./components/finance/ProjectExpenseReport'));
+const OverheadExpensesPage = lazyWithRetry(() => import('./components/OverheadExpensesPage'));
+const CompanyPnLPage = lazyWithRetry(() => import('./components/finance/CompanyPnLPage'));
+const TaxFilerLedgerPage = lazyWithRetry(() => import('./components/finance/TaxFilerLedgerPage'));
+const SalesEwtRegisterPage = lazyWithRetry(() => import('./components/finance/SalesEwtRegisterPage'));
+const SoaDashboardPage = lazyWithRetry(() => import('./components/finance/soa/SoaDashboardPage'));
+const BlsPage = lazyWithRetry(() => import('./components/finance/bls/BlsPage'));
+const SoaDetailView = lazyWithRetry(() => import('./components/finance/soa/SoaDetailView'));
+const SalesHomePage = lazyWithRetry(() => import('./components/sales/SalesHomePage'));
+const EmployeePayslipPage = lazyWithRetry(() => import('./components/employee/EmployeePayslipPage'));
+const EmployeeServiceReportPage = lazyWithRetry(() => import('./components/employee/EmployeeServiceReportPage'));
+const CalcsheetProjects = lazyWithRetry(() => import('./components/calcsheet/CalcsheetProjects'));
+const CalcsheetLegacyImport = lazyWithRetry(() => import('./components/calcsheet/CalcsheetLegacyImport'));
+const CalcsheetProjectDetail = lazyWithRetry(() => import('./components/calcsheet/CalcsheetProjectDetail'));
+const CalcsheetQuotationEditor = lazyWithRetry(() => import('./components/calcsheet/CalcsheetQuotationEditor'));
+const CalcsheetCompareView = lazyWithRetry(() => import('./components/calcsheet/CalcsheetCompareView'));
+const CalcsheetProjectSchedule = lazyWithRetry(() => import('./components/calcsheet/CalcsheetProjectSchedule'));
+const ProjectSchedulePage = lazyWithRetry(() => import('./components/ProjectSchedulePage'));
+const CalcsheetClients = lazyWithRetry(() => import('./components/calcsheet/CalcsheetClients'));
+const CalcsheetPresets = lazyWithRetry(() => import('./components/calcsheet/CalcsheetPresets'));
+const PricelistBrowser = lazyWithRetry(() => import('./components/pricelists/PricelistBrowser'));
+const ScanPage = lazyWithRetry(() => import('./components/ScanPage'));
 
 // Phones (below MUI's sm breakpoint). Used by the theme-wide mobile overrides below.
 const PHONE = '@media (max-width:599.95px)';
@@ -282,8 +289,27 @@ const RootRedirect: React.FC = () => {
   return <Navigate to={getLastPage() ?? defaultPage} replace />;
 };
 
+// Shown in place of a page while its code downloads.
+const PageLoading: React.FC = () => (
+  <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '50vh' }} role="status" aria-label="Loading page">
+    <CircularProgress />
+  </Box>
+);
+
+// Wraps every route (including ones outside AppLayout, like /scan) so a page that fails to download or crashes
+// shows a "Reload" message instead of a blank screen, and the error clears when you navigate.
+const RoutesShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const location = useLocation();
+  return (
+    <RouteErrorBoundary resetKey={location.pathname}>
+      <Suspense fallback={<PageLoading />}>{children}</Suspense>
+    </RouteErrorBoundary>
+  );
+};
+
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const location = useLocation();
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', '@supports (height: 100dvh)': { minHeight: '100dvh' } }}>
       <Header onMenuClick={() => setMobileNavOpen((o) => !o)} />
@@ -301,7 +327,9 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           pr: { xs: 'calc(8px + env(safe-area-inset-right))', md: 'calc(16px + env(safe-area-inset-right))' },
           pb: { xs: 'calc(8px + env(safe-area-inset-bottom))', md: 2 }
         }}>
-          {children}
+          <RouteErrorBoundary resetKey={location.pathname}>
+            <Suspense fallback={<PageLoading />}>{children}</Suspense>
+          </RouteErrorBoundary>
         </Box>
       </Box>
     </Box>
@@ -317,6 +345,7 @@ function App() {
         <Router>
           <LastPageTracker />
           <AiAssistHost>
+          <RoutesShell>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/scan" element={<ScanPage />} />
@@ -1147,6 +1176,7 @@ function App() {
               }
             />
           </Routes>
+          </RoutesShell>
           </AiAssistHost>
         </Router>
       </ThemeProvider>
