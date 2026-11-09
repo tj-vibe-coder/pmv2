@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Box, Typography, Grid, Card, CardContent, Paper, TextField, FormControl, InputLabel, Select, MenuItem,
   Tabs, Tab, Table, TableHead, TableBody, TableRow, TableCell, TableContainer, Button, Checkbox, Chip,
-  Tooltip, IconButton, Alert, CircularProgress, Link, Collapse, LinearProgress,
+  Tooltip, IconButton, Alert, CircularProgress, Link, Collapse, LinearProgress, useMediaQuery,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
@@ -159,8 +159,155 @@ function EmailRowView({ e, onProject }: { e: EmailRow; onProject: (id: string) =
   );
 }
 
+// ── Phone (portrait, < 600 px): each tab's table becomes a list of cards ─────────────────────────
+const clamp2 = { display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', overflowWrap: 'anywhere' } as const;
+const cardSx = { p: 1.25 } as const;
+
+function Stat({ label, value, danger }: { label: string; value: number; danger?: boolean }) {
+  return (
+    <Box>
+      <Typography variant="subtitle1" sx={{ fontWeight: 700, lineHeight: 1.1, color: danger && value ? '#e53935' : undefined }}>{value}</Typography>
+      <Typography variant="caption" color="text.secondary">{label}</Typography>
+    </Box>
+  );
+}
+
+function ProjectCard({ p, onOpen }: { p: ProjectRow; onOpen: (id: string) => void }) {
+  return (
+    <Paper variant="outlined" data-testid={`activity-project-${p.project_id}`} onClick={() => onOpen(p.project_id)} sx={{ ...cardSx, cursor: 'pointer', '&:active': { bgcolor: 'action.hover' } }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>{p.ovp_number || '—'}</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere', display: 'block' }}>
+            {p.project_name}{p.account_name ? ` · ${p.account_name}` : ''}
+          </Typography>
+        </Box>
+        <Chip size="small" variant="outlined" sx={{ flexShrink: 0 }} label={`${p.project_status || '—'}${p.progress ? ` · ${p.progress}%` : ''}`} />
+      </Box>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 0.5, mt: 1, textAlign: 'center' }}>
+        <Stat label="Open" value={p.open_items} />
+        <Stat label="Overdue" value={p.overdue_items} danger />
+        <Stat label="Updates" value={p.updates} />
+        <Stat label="Emails" value={p.emails} />
+      </Box>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+        Next due {fmtDate(p.next_due)} · Last activity {fmtDateTime(p.last_activity)}
+      </Typography>
+      {p.latest_update && (
+        <Box sx={{ mt: 0.75, p: 1, bgcolor: 'grey.50', borderRadius: 1 }}>
+          <Typography variant="body2" sx={clamp2}>{p.latest_update.note}</Typography>
+          {p.latest_update.next_step && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+              Next: {p.latest_update.next_step}{p.latest_update.next_date ? ` (${fmtDate(p.latest_update.next_date)})` : ''}
+            </Typography>
+          )}
+        </Box>
+      )}
+    </Paper>
+  );
+}
+
+function ActionItemCard({ i, saving, onToggle, onProject }: { i: ActionItem; saving: boolean; onToggle: (i: ActionItem) => void; onProject: (id: string) => void }) {
+  return (
+    <Paper variant="outlined" sx={{ ...cardSx, display: 'flex', alignItems: 'flex-start', gap: 0.5, pl: 0.5 }}>
+      <Box sx={{ width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        {saving ? <CircularProgress size={18} /> : (
+          <Checkbox checked={i.done} onChange={() => onToggle(i)} inputProps={{ 'aria-label': i.done ? 'Mark not done' : 'Mark done' }} />
+        )}
+      </Box>
+      <Box sx={{ flex: 1, minWidth: 0, pt: 0.5 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500, textDecoration: i.done ? 'line-through' : undefined, color: i.done ? 'text.secondary' : undefined, overflowWrap: 'anywhere' }}>
+          {i.text}
+        </Typography>
+        <Link component="button" underline="hover" onClick={() => onProject(i.project_id)} sx={{ fontSize: '0.8rem', textAlign: 'left' }}>{i.project}</Link>
+        <Typography variant="caption" sx={{ display: 'block', color: i.overdue ? '#e53935' : 'text.secondary', fontWeight: i.overdue ? 700 : undefined }}>
+          Due {fmtDate(i.due_date)}{i.progress !== null ? ` · ${i.progress}%` : ''}{i.subtasks_total > 0 ? ` · ${i.subtasks_done}/${i.subtasks_total} subtasks` : ''}
+        </Typography>
+        {i.latest_note && <Typography variant="caption" color="text.secondary" sx={{ ...clamp2, mt: 0.25 }}>{i.latest_note}</Typography>}
+        <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.25 }}>
+          <ViaBadge via={i.via} by={i.posted_by} />
+          {i.done && i.done_by ? ` · done by ${i.done_by} · ${fmtDateTime(i.done_at)}` : ''}
+        </Typography>
+      </Box>
+    </Paper>
+  );
+}
+
+function UpdateCard({ u, onProject }: { u: UpdateRow; onProject: (id: string) => void }) {
+  return (
+    <Paper variant="outlined" sx={cardSx}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+        <Typography variant="caption" sx={{ fontWeight: 600 }}>{fmtDate(u.date)} · {u.type}</Typography>
+        {u.risk && u.risk !== 'low' && (
+          <Chip size="small" label={`${u.risk} risk`} sx={{ height: 20, fontSize: '0.7rem', color: 'white', backgroundColor: u.risk === 'high' ? '#e53935' : NET_PACIFIC_COLORS.accent2 }} />
+        )}
+      </Box>
+      <Link component="button" underline="hover" onClick={() => onProject(u.project_id)} sx={{ fontSize: '0.8rem', textAlign: 'left', display: 'block', mt: 0.25 }}>{u.project}</Link>
+      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mt: 0.5, overflowWrap: 'anywhere' }}>{u.note}</Typography>
+      {(u.status || u.progress !== null) && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          {[u.status, u.progress !== null ? `${u.progress}% site progress` : null].filter(Boolean).join(' · ')}
+        </Typography>
+      )}
+      {u.next_step && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          Next: {u.next_step}{u.next_date ? ` (${fmtDate(u.next_date)})` : ''}
+        </Typography>
+      )}
+      {u.link && <Link href={u.link} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.8rem', display: 'block' }}>Open link</Link>}
+      <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.25 }}><ViaBadge via={u.via} by={u.posted_by} /></Typography>
+    </Paper>
+  );
+}
+
+function EmailCard({ e, onProject }: { e: EmailRow; onProject: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Paper variant="outlined" sx={cardSx}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+        <Typography variant="caption" sx={{ fontWeight: 600 }}>{fmtDateTime(e.date)}</Typography>
+        <Chip size="small" label={e.direction === 'outbound' ? 'Sent' : 'Received'} variant="outlined"
+          sx={{ height: 20, fontSize: '0.7rem', borderColor: e.direction === 'outbound' ? NET_PACIFIC_COLORS.success : NET_PACIFIC_COLORS.primary }} />
+      </Box>
+      <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.25, overflowWrap: 'anywhere' }}>
+        {e.subject || '(no subject)'}
+        {e.attachments.length > 0 && <AttachFileIcon sx={{ fontSize: 14, ml: 0.5, verticalAlign: 'middle', color: 'text.secondary' }} />}
+      </Typography>
+      <Link component="button" underline="hover" onClick={() => onProject(e.project_id)} sx={{ fontSize: '0.8rem', textAlign: 'left', display: 'block' }}>{e.project}</Link>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+        {[e.from, e.category].filter(Boolean).join(' · ') || '—'}
+      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, mx: -0.5 }}>
+        <Button size="small" onClick={() => setOpen((v) => !v)} endIcon={open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />} sx={{ textTransform: 'none' }}>
+          {open ? 'Hide summary' : 'Show summary'}
+        </Button>
+        <Box sx={{ flex: 1 }} />
+        {e.link && (
+          <IconButton href={e.link} target="_blank" rel="noopener noreferrer" aria-label="Open email"><OpenInNewIcon fontSize="small" /></IconButton>
+        )}
+      </Box>
+      <Collapse in={open} unmountOnExit>
+        <Box sx={{ pt: 0.5 }}>
+          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mb: 1, overflowWrap: 'anywhere' }}>{e.summary || 'No summary logged.'}</Typography>
+          {e.to.length > 0 && <Typography variant="caption" color="text.secondary" component="div" sx={{ overflowWrap: 'anywhere' }}>To: {e.to.join(', ')}</Typography>}
+          {e.attachments.length > 0 && (
+            <Typography variant="caption" color="text.secondary" component="div" sx={{ overflowWrap: 'anywhere' }}>
+              Attachments: {e.attachments.map((a, i) => (
+                <span key={i}>{i > 0 && ', '}{a.link ? <Link href={a.link} target="_blank" rel="noopener noreferrer">{a.name}</Link> : a.name}</span>
+              ))}
+            </Typography>
+          )}
+          <Typography variant="caption" color="text.secondary" component="div">Logged by {e.logged_by || '—'}</Typography>
+        </Box>
+      </Collapse>
+    </Paper>
+  );
+}
+
 export default function ProjectActivityPage() {
   const navigate = useNavigate();
+  // Portrait phones (< 600 px): each tab's table becomes a list of cards.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [data, setData] = useState<ActivityData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -384,6 +531,25 @@ export default function ProjectActivityPage() {
         </Box>
         {loading && <LinearProgress />}
 
+        {isPhone ? (
+          <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 1, minHeight: 200 }}>
+            {!data && loading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
+            ) : tab === 'projects' ? (
+              projects.length ? projects.map((p) => <ProjectCard key={p.project_id} p={p} onOpen={openProject} />)
+                : <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No activity in this period.</Typography>
+            ) : tab === 'items' ? (
+              items.length ? items.map((i) => <ActionItemCard key={i.id} i={i} saving={saving === i.id} onToggle={toggleDone} onProject={openProject} />)
+                : <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No action items match.</Typography>
+            ) : tab === 'updates' ? (
+              updates.length ? updates.map((u) => <UpdateCard key={`${u.project_id}-${u.id}`} u={u} onProject={openProject} />)
+                : <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No updates in this period.</Typography>
+            ) : (
+              emails.length ? emails.map((e) => <EmailCard key={e.id} e={e} onProject={openProject} />)
+                : <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>No emails logged in this period.</Typography>
+            )}
+          </Box>
+        ) : (
         <TableContainer sx={{ maxHeight: 'calc(100vh - 480px)', minHeight: 300 }}>
           {!data && loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
@@ -541,6 +707,7 @@ export default function ProjectActivityPage() {
             </Table>
           )}
         </TableContainer>
+        )}
       </Paper>
     </Box>
   );
