@@ -22,6 +22,7 @@ import {
   ToggleButtonGroup,
   Tooltip,
   CircularProgress,
+  useMediaQuery,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -241,6 +242,8 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     setPreparedByName(prev => prev || preparedByDefaultName);
     setPreparedByDesignation(prev => prev || (preparedBy.designation || '').trim());
   }, [preparedByDefaultName, preparedBy.designation]);
+  // Portrait phones (< 600 px): activity rows and saved reports show as cards instead of tables.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [exporting, setExporting] = useState(false);
   const [exportingXlsx, setExportingXlsx] = useState(false);
   const {
@@ -816,6 +819,46 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
     }
   };
 
+  // Photo thumbnails + attach button for one activity row (shared by the table row and the phone card).
+  const renderActivityPhotos = (index: number) => {
+    const rowPhotos = photos.filter(p => p.activityIndex === index);
+    return (
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
+        {rowPhotos.map(p => (
+          <Tooltip key={p.localId} title={p.uploadStatus === 'error' ? (p.errorMessage || 'Upload failed') : (p.filename || p.file?.name || '')}>
+            <Box sx={{ position: 'relative', width: 36, height: 36, borderRadius: 0.5, overflow: 'hidden', border: '1px solid #e2e8f0', flexShrink: 0, bgcolor: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {(p.previewUrl || p.thumbnailDataUrl) ? (
+                <img src={p.previewUrl ?? p.thumbnailDataUrl} alt={p.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : null}
+              {p.uploadStatus === 'uploading' && (
+                <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <CircularProgress size={14} />
+                </Box>
+              )}
+              {p.uploadStatus === 'error' && (
+                <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,0,0,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Typography variant="caption" sx={{ color: 'error.main', fontSize: '0.6rem', fontWeight: 700 }}>!</Typography>
+                </Box>
+              )}
+              <IconButton size="small" onClick={() => handleRemovePhoto(p.localId)} sx={{ position: 'absolute', top: -2, right: -2, bgcolor: 'rgba(0,0,0,0.5)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(200,0,0,0.8)' } }}>
+                <DeleteIcon sx={{ fontSize: 10 }} />
+              </IconButton>
+            </Box>
+          </Tooltip>
+        ))}
+        <Tooltip title={oneDriveSignedIn ? 'Attach photo to this activity' : 'Sign in to OneDrive (see Photos section below)'}>
+          <IconButton
+            size="small"
+            onClick={() => oneDriveSignedIn ? triggerPhotoInput(index) : oneDriveLogin()}
+            sx={{ color: oneDriveSignedIn ? NET_PACIFIC_COLORS.primary : 'text.disabled', border: '1px dashed', borderColor: 'divider', borderRadius: 0.5, p: 0.5 }}
+          >
+            <CameraAltIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+    );
+  };
+
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Scrollable accordion area */}
@@ -900,6 +943,24 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0 }}>
             <Box sx={{ px: 2, pt: 1.5 }}>
+              {isPhone ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {serviceReportActivitiesTable.map((row, index) => (
+                    <Paper key={index} variant="outlined" sx={{ p: 1.25 }} data-testid={`activity-card-${index}`}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Activity {index + 1}</Typography>
+                        <IconButton size="small" onClick={() => setServiceReportActivitiesTable((prev) => prev.filter((_, i) => i !== index))} color="error" title="Remove row" aria-label={`Remove activity ${index + 1}`}><DeleteIcon fontSize="small" /></IconButton>
+                      </Box>
+                      <TextField size="small" fullWidth multiline minRows={1} label="Activity" value={row.activity} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, activity: e.target.value } : r)))} sx={{ mb: 1.25 }} />
+                      <TextField size="small" fullWidth multiline minRows={1} label="Findings / Results" value={row.findingOutcome} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, findingOutcome: e.target.value } : r)))} sx={{ mb: 1.25 }} />
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Typography variant="caption" color="text.secondary">Photos</Typography>
+                        {renderActivityPhotos(index)}
+                      </Box>
+                    </Paper>
+                  ))}
+                </Box>
+              ) : (
               <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1 }}>
                 <Table size="small" sx={{ minWidth: 560, '& td, & th': { border: '1px solid #e2e8f0' } }}>
                   <TableHead>
@@ -913,7 +974,6 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
                   </TableHead>
                   <TableBody>
                     {serviceReportActivitiesTable.map((row, index) => {
-                      const rowPhotos = photos.filter(p => p.activityIndex === index);
                       return (
                         <TableRow key={index}>
                           <TableCell sx={{ verticalAlign: 'top', pt: 1.5 }}>{index + 1}</TableCell>
@@ -924,39 +984,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
                             <TextField size="small" fullWidth multiline minRows={1} placeholder="Findings / Results" value={row.findingOutcome} onChange={(e) => setServiceReportActivitiesTable((prev) => prev.map((r, i) => (i === index ? { ...r, findingOutcome: e.target.value } : r)))} />
                           </TableCell>
                           <TableCell sx={{ verticalAlign: 'top', pt: 0.5, px: 0.5 }}>
-                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
-                              {rowPhotos.map(p => (
-                                <Tooltip key={p.localId} title={p.uploadStatus === 'error' ? (p.errorMessage || 'Upload failed') : (p.filename || p.file?.name || '')}>
-                                  <Box sx={{ position: 'relative', width: 36, height: 36, borderRadius: 0.5, overflow: 'hidden', border: '1px solid #e2e8f0', flexShrink: 0, bgcolor: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                    {(p.previewUrl || p.thumbnailDataUrl) ? (
-                                      <img src={p.previewUrl ?? p.thumbnailDataUrl} alt={p.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                    ) : null}
-                                    {p.uploadStatus === 'uploading' && (
-                                      <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        <CircularProgress size={14} />
-                                      </Box>
-                                    )}
-                                    {p.uploadStatus === 'error' && (
-                                      <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(255,0,0,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        <Typography variant="caption" sx={{ color: 'error.main', fontSize: '0.6rem', fontWeight: 700 }}>!</Typography>
-                                      </Box>
-                                    )}
-                                    <IconButton size="small" onClick={() => handleRemovePhoto(p.localId)} sx={{ position: 'absolute', top: -2, right: -2, bgcolor: 'rgba(0,0,0,0.5)', color: '#fff', p: 0.25, '&:hover': { bgcolor: 'rgba(200,0,0,0.8)' } }}>
-                                      <DeleteIcon sx={{ fontSize: 10 }} />
-                                    </IconButton>
-                                  </Box>
-                                </Tooltip>
-                              ))}
-                              <Tooltip title={oneDriveSignedIn ? 'Attach photo to this activity' : 'Sign in to OneDrive (see Photos section below)'}>
-                                <IconButton
-                                  size="small"
-                                  onClick={() => oneDriveSignedIn ? triggerPhotoInput(index) : oneDriveLogin()}
-                                  sx={{ color: oneDriveSignedIn ? NET_PACIFIC_COLORS.primary : 'text.disabled', border: '1px dashed', borderColor: 'divider', borderRadius: 0.5, p: 0.5 }}
-                                >
-                                  <CameraAltIcon sx={{ fontSize: 16 }} />
-                                </IconButton>
-                              </Tooltip>
-                            </Box>
+                            {renderActivityPhotos(index)}
                           </TableCell>
                           <TableCell sx={{ verticalAlign: 'top', pt: 1 }}>
                             <IconButton size="small" onClick={() => setServiceReportActivitiesTable((prev) => prev.filter((_, i) => i !== index))} color="error" title="Remove row"><DeleteIcon fontSize="small" /></IconButton>
@@ -967,6 +995,7 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
                   </TableBody>
                 </Table>
               </TableContainer>
+              )}
               <Button size="small" startIcon={<AddIcon />} onClick={() => setServiceReportActivitiesTable((prev) => [...prev, { activity: '', findingOutcome: '' }])} sx={{ mt: 1, textTransform: 'none', color: NET_PACIFIC_COLORS.primary }}>Add row</Button>
             </Box>
 
@@ -1184,7 +1213,30 @@ const ServiceReportTab: React.FC<ServiceReportTabProps> = ({
             {srLoading && <CircularProgress size={16} sx={{ color: NET_PACIFIC_COLORS.primary, mr: 1 }} />}
           </AccordionSummary>
           <AccordionDetails>
-            {serviceReports.length > 0 ? (
+            {serviceReports.length > 0 && isPhone ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, maxHeight: 420, overflowY: 'auto' }}>
+                {serviceReports.map((r) => (
+                  <Paper
+                    key={r.id}
+                    variant="outlined"
+                    data-testid={`saved-report-${r.id}`}
+                    sx={{ p: 1.25, ...(editingServiceReportId === r.id ? { borderColor: NET_PACIFIC_COLORS.primary, bgcolor: 'rgba(0,0,0,0.03)' } : {}) }}
+                  >
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{r.reportNo}</Typography>
+                      <Typography variant="caption" color="text.secondary">{new Date(r.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</Typography>
+                    </Box>
+                    <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{r.title || 'Service Report'}</Typography>
+                    <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                      <Button size="small" onClick={() => handleLoadServiceReport(r)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
+                      <IconButton size="small" color="error" onClick={() => handleDeleteServiceReport(r)} title="Delete report" aria-label="Delete report">
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  </Paper>
+                ))}
+              </Box>
+            ) : serviceReports.length > 0 ? (
               <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 280 }}>
                 <Table size="small" stickyHeader>
                   <TableHead>

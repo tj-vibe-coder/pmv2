@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { Alert, Box, Chip, CircularProgress, Paper, Typography, Button, TextField, Grid, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton } from '@mui/material';
+import { Alert, Box, Chip, CircularProgress, Paper, Typography, Button, TextField, Grid, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton, useMediaQuery } from '@mui/material';
 import { PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, CloudUpload as CloudUploadIcon, CheckCircle as CheckCircleIcon, Save as SaveIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
 import {
@@ -88,6 +88,8 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
     login: oneDriveLogin,
     getAccessToken: getOneDriveToken,
   } = useOneDriveAuth();
+  // Portrait phones (< 600 px): saved certificates show as cards instead of a table.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [exporting, setExporting] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
   // Local copy of execution folder id — updated if we auto-create the folder on first export
@@ -382,7 +384,39 @@ const CompletionCertificateTab: React.FC<CompletionCertificateTabProps> = ({
           </Box>
         }
       >
-        {savedCerts.length > 0 ? (
+        {savedCerts.length > 0 && isPhone ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1, maxHeight: 420, overflowY: 'auto' }}>
+            {savedCerts.map((c) => (
+              <Paper
+                key={c.id}
+                variant="outlined"
+                data-testid={`saved-cert-${c.id}`}
+                sx={{ p: 1.25, ...(editingCertId === c.id ? { borderColor: NET_PACIFIC_COLORS.primary, bgcolor: 'rgba(0,0,0,0.03)' } : {}) }}
+              >
+                <Typography variant="body2" sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{c.companyName || c.reportCompany}</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  Saved {c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-US', { dateStyle: 'medium' }) : '—'}
+                </Typography>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.75, mt: 0.75 }}>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Completion date</Typography>
+                    <Typography variant="body2">{c.completionDate ? formatCompletionDateForPdf(c.completionDate) : '—'}</Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Accepted by</Typography>
+                    <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{c.approverName || '—'}</Typography>
+                  </Box>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                  <Button size="small" onClick={() => handleLoadCertificate(c)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
+                  <IconButton size="small" color="error" onClick={() => handleDeleteCertificate(c)} title="Delete certificate" aria-label="Delete certificate">
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+              </Paper>
+            ))}
+          </Box>
+        ) : savedCerts.length > 0 ? (
           <TableContainer sx={{ maxHeight: 320 }}>
             <Table size="small" stickyHeader sx={{ minWidth: 560 }}>
               <TableHead>
