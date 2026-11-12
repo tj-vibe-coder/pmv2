@@ -205,6 +205,7 @@ interface CaOption {
 interface LoadedLiquidationOption {
   id: string;
   form_no: string;
+  draft_key?: string | null;
   date_of_submission: string;
   status: string;
   total_amount: number;
@@ -256,6 +257,9 @@ interface PendingRevisionInfo {
   proposedAt: number;
   note: string | null;
 }
+
+// Private key for an unsubmitted form: names its OneDrive receipt folder/files, never shown as the form number.
+const newDraftKey = () => `DRAFT-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
 const newRow = (projectName = '', projectNo = ''): LiquidationRow => ({
   id: `row-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -503,7 +507,9 @@ export default function LiquidationFormPage() {
   const [dateOfSubmission, setDateOfSubmission] = useState(() =>
     new Date().toISOString().slice(0, 10)
   );
-  const [formNo, setFormNo] = useState('');
+  // Drafts have no LQ number. `formNo` holds the real number once submitted; until then it is a
+  // private `DRAFT-xxxxxx` key that only names this form's receipt folder and file names.
+  const [formNo, setFormNo] = useState(newDraftKey);
   const nextPhysicalItemNoRef = useRef(1);
   const newPhysicalRow = (projectName = '', projectNo = ''): LiquidationRow => ({
     ...newRow(projectName, projectNo), physicalItemNo: nextPhysicalItemNoRef.current++,
@@ -564,12 +570,10 @@ export default function LiquidationFormPage() {
   const [financeFocusLoading, setFinanceFocusLoading] = useState(false);
 
   const canDeleteLiquidation = draftId !== null || loadedOptionValue.startsWith('submitted:');
-  // Only a submitted liquidation has a real number. A draft's stored form_no is
-  // the preview from the day it was created; it still names the draft's receipt
-  // folder (submit moves the files from it), but another submit may have taken
-  // it since, so it is never shown or printed as the form's number.
+  // Only a submitted liquidation has a number. A draft's `formNo` is just its private DRAFT-key
+  // (or, for drafts saved before 2026-11-12, the old preview number); it names the draft's receipt
+  // folder (submit moves the files from it) and is never shown or printed as the form's number.
   const formNoIsFinal = loadedOptionValue.startsWith('submitted:');
-  const [livePreviewNo, setLivePreviewNo] = useState('');
   const liquidationToDeleteId = draftId ?? (loadedOptionValue.startsWith('submitted:') ? loadedOptionValue.split(':')[1] : null);
   const isAdmin = user?.role === 'superadmin' || user?.role === 'admin';
   const location = useLocation();
@@ -629,28 +633,6 @@ export default function LiquidationFormPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch next form number on mount (for new forms)
-  useEffect(() => {
-    if (!token || draftId !== null || formNo) return;
-    fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.success && d.form_no) {
-          setFormNo(d.form_no);
-        }
-      })
-      .catch(() => {});
-  }, [token, draftId, formNo]);
-  // Refresh the preview whenever an unsubmitted form is opened or saved.
-  useEffect(() => {
-    if (!token || formNoIsFinal) { setLivePreviewNo(''); return; }
-    let cancelled = false;
-    fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((d) => { if (!cancelled && d.success && d.form_no) setLivePreviewNo(d.form_no); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [token, formNoIsFinal, draftId, loadedOptionValue]);
   useEffect(() => {
     if (!token) return;
     fetch(`${API_BASE}/api/liquidations`, { headers: { Authorization: `Bearer ${token}` } })
@@ -1210,7 +1192,7 @@ export default function LiquidationFormPage() {
       isSubmitted ||
       serverStatus === 'submitted';
     setIsViewingSubmitted(submitted);
-    setFormNo(l.form_no || '');
+    setFormNo(l.form_no || l.draft_key || newDraftKey());
     setDateOfSubmission(l.date_of_submission || new Date().toISOString().slice(0, 10));
     setEmployeeName(l.employee_name || '');
     setEmployeeNumber(l.employee_number || '');
@@ -1548,7 +1530,7 @@ export default function LiquidationFormPage() {
         setSortConfig(DEFAULT_ROW_SORT);
         nextPhysicalItemNoRef.current = 1;
         setRows([newPhysicalRow('', '')]);
-        setFormNo('');
+        setFormNo(newDraftKey());
         setEmployeeName(user?.full_name?.trim() || user?.username || '');
         setEmployeeNumber('');
         setDateOfSubmission(new Date().toISOString().slice(0, 10));
@@ -1577,7 +1559,7 @@ export default function LiquidationFormPage() {
         setSortConfig(DEFAULT_ROW_SORT);
         nextPhysicalItemNoRef.current = 1;
         setRows([newPhysicalRow('', '')]);
-        setFormNo('');
+        setFormNo(newDraftKey());
         setEmployeeName(user?.full_name?.trim() || user?.username || '');
         setEmployeeNumber('');
         setDateOfSubmission(new Date().toISOString().slice(0, 10));
@@ -1628,22 +1610,13 @@ export default function LiquidationFormPage() {
         setSortConfig(DEFAULT_ROW_SORT);
         nextPhysicalItemNoRef.current = 1;
         setRows([newPhysicalRow('', '')]);
-        setFormNo('');
+        setFormNo(newDraftKey());
         setSubmitSuccess(caId
           ? `Liquidation ${finalFormNo} submitted. Amount applied to CA has been deducted; expenses added to project expense.`
           : `Liquidation ${finalFormNo} submitted as an out-of-pocket reimbursement claim (pending payback); expenses added to project expense.`);
         setCaId('');
         setReceipts([]);
         markReceiptsSaved([]);
-        // Fetch next form number for new form
-        fetch(`${API_BASE}/api/liquidations/next-form-no`, { headers: { Authorization: `Bearer ${token}` } })
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.success && d.form_no) {
-              setFormNo(d.form_no);
-            }
-          })
-          .catch(() => {});
         fetch(`${API_BASE}/api/liquidations`, { headers: { Authorization: `Bearer ${token}` } })
           .then((r) => r.json())
           .then((d) => {
@@ -1939,7 +1912,7 @@ export default function LiquidationFormPage() {
   const handleExport = () => {
     const wb = XLSX.utils.book_new();
     const headerRow1 = ['Employee Name', employeeName, 'Employee Number', employeeNumber];
-    const headerRow2 = ['Date of Submission', dateOfSubmission, 'Form No.', formNo];
+    const headerRow2 = ['Date of Submission', dateOfSubmission, 'Form No.', formNoIsFinal ? formNo : 'DRAFT'];
     const tableHeaders = ['Item #', 'Date', 'Category', 'Project Name', 'PO #', 'Particulars', 'Amount', 'Remarks'];
     const exportRows = sortLiquidationRows(rows);
     const dataRows = exportRows.map((r, i) => [
@@ -1981,7 +1954,7 @@ export default function LiquidationFormPage() {
         if (r0[1] != null) setEmployeeName(String(r0[1]));
         if (r0[3] != null) setEmployeeNumber(String(r0[3]));
         if (r1[1] != null) setDateOfSubmission(String(r1[1]).slice(0, 10));
-        if (r1[3] != null) setFormNo(String(r1[3]));
+        if (r1[3] != null && /^LQ\d/.test(String(r1[3]))) setFormNo(String(r1[3]));
         const headerRow = raw[3] as unknown[];
         if (!headerRow || (headerRow[0] !== 'No.' && headerRow[0] !== 'Item #' && headerRow[0] !== 1)) return;
         const imported: LiquidationRow[] = [];
@@ -2070,7 +2043,7 @@ export default function LiquidationFormPage() {
                   setSortConfig(DEFAULT_ROW_SORT);
                   nextPhysicalItemNoRef.current = 1;
                   setRows([newPhysicalRow('', '')]);
-                  setFormNo('');
+                  setFormNo(newDraftKey());
                   setEmployeeName('');
                   setEmployeeNumber('');
                   setDateOfSubmission(new Date().toISOString().slice(0, 10));
@@ -2091,7 +2064,7 @@ export default function LiquidationFormPage() {
                 if (v === '') return 'Load liquidation…';
                 const id = v.includes(':') ? v.split(':')[1] : '';
                 const item = [...drafts, ...submittedLiquidations].find((d) => d.id === id);
-                return item?.form_no || `#${id}`;
+                return v.startsWith('draft:') ? 'Draft' : (item?.form_no || `#${id}`);
               }}
             >
               <MenuItem value="">
@@ -2103,7 +2076,7 @@ export default function LiquidationFormPage() {
                 </MenuItem>,
                 ...drafts.map((d) => (
                   <MenuItem key={`draft-${d.id}`} value={`draft:${d.id}`}>
-                    {d.form_no || `#${d.id}`} – {d.date_of_submission || 'no date'} (₱{Number(d.total_amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })})
+                    Draft – {d.date_of_submission || 'no date'} (₱{Number(d.total_amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })})
                   </MenuItem>
                 )),
               ]}
@@ -2304,8 +2277,8 @@ export default function LiquidationFormPage() {
             <TextField
               fullWidth
               size="small"
-              label={formNoIsFinal ? 'Form No.' : 'Form No. (preview)'}
-              value={formNoIsFinal ? formNo : (livePreviewNo || formNo)}
+              label="Form No."
+              value={formNoIsFinal ? formNo : 'Draft'}
               disabled
               helperText={formNoIsFinal ? undefined : 'Assigned on submit'}
               sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'background.paper' } }}

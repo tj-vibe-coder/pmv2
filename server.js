@@ -2122,25 +2122,10 @@ app.post('/api/overhead-expenses/:id/promote-to-liquidation', promoteExpenseToLi
 
 // ========== CASH ADVANCES ==========
 
-function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-// Human-readable CA reference number: a single global monthly sequence
-// (e.g. CA2606-001) for every CA regardless of project. Project traceability
-// lives on the record itself (project_id/project_no/project_name), not in
-// the number, so the sequence stays gapless/auditable per type+period.
-// Scan-max with no transaction — same approach as nextIoctProjectNo() and
-// /api/liquidations/next-form-no; volume is low and `id` stays the real key.
-async function nextCaNo(dateLike) {
-  const prefix = `CA${phYearMonth(dateLike)}-`;
-  const snap = await db.collection('cash_advances').select('ca_no').get();
-  const re = new RegExp(`^${escapeRegExp(prefix)}(\\d{3})$`);
-  let max = 0;
-  for (const d of snap.docs) {
-    const m = String(d.data().ca_no || '').trim().toUpperCase().match(re);
-    if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > max) max = n; }
-  }
-  return `${prefix}${String(max + 1).padStart(3, '0')}`;
-}
+// Human-readable CA reference number CA<YY>-<###>-<INITIALS> (e.g. CA26-001-RJR): one running sequence
+// per year, owner's initials, allocated transactionally by server/caNumber.js. Project traceability
+// lives on the record (project_id/project_no/project_name), not in the number.
+const caNumber = require('./server/caNumber');
 
 app.get('/api/cash-advances', async (req, res) => {
   const user = await getCurrentUser(req);
@@ -2204,14 +2189,17 @@ app.post('/api/cash-advances', async (req, res) => {
   const fundingSource = isAdminRequester ? normalizeFundingSource(req.body.fundingSource) : null;
   // Only an admin/superadmin may attribute the CA to someone other than themselves.
   let ownerId = user.id;
+  let ownerUser = user;
   const onBehalfOfUserId = req.body.on_behalf_of_user_id != null ? String(req.body.on_behalf_of_user_id).trim() : '';
   if (isAdminRequester && onBehalfOfUserId && onBehalfOfUserId !== user.id) {
     const targetDoc = await db.collection('users').doc(onBehalfOfUserId).get();
     if (!targetDoc.exists) return res.status(400).json({ success: false, error: 'Selected employee not found' });
     ownerId = onBehalfOfUserId;
+    ownerUser = targetDoc.data();
   }
   try {
-    const caNo = await nextCaNo(new Date(requestedAt * 1000));
+    // Year of the request date; initials are the CA owner's.
+    const caNo = await caNumber.allocateCaNo(db, ownerUser, phYearMonth(new Date(requestedAt * 1000)).slice(0, 2));
     const ref = await db.collection('cash_advances').add({ user_id: ownerId, amount, balance_remaining: 0, status: 'pending', purpose, breakdown: breakdown || null, project_id: projectId || null, ca_no: caNo, requested_at: requestedAt, approved_at: null, approved_by: null, created_by: ownerId !== user.id ? user.id : null, created_at: requestedAt, updated_at: requestedAt, ...(fundingSource ? { fundingSource } : {}) });
     res.status(201).json({ success: true, id: ref.id, ca_no: caNo, message: `Cash advance ${caNo} requested` });
   } catch (err) {
@@ -2612,7 +2600,7 @@ app.post('/api/liquidations', async (req, res) => {
     // that exceeds the CA's balance — are tracked so the requester gets paid
     // back (see /api/reimbursements).
     const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
-    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, physical_item_numbering: numbering, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
+    const ref = await db.collection('liquidations').add({ user_id: user.id, form_no: liqStatus === 'submitted' ? (form_no || null) : null, ...(liqStatus === 'submitted' ? {} : { draft_key: form_no || null }), date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, physical_item_numbering: numbering, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, reimbursed_at: null, reimbursed_by: null, created_at: now, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       // Decrement by the FULL total, not just the covered portion — a CA's
       // balance_remaining going negative IS the "company owes this employee" signal
@@ -2684,12 +2672,15 @@ app.put('/api/liquidations/:id', async (req, res) => {
     }
     if (liqStatus === 'submitted') {
       // A draft's number is only a preview (it may be days old); assign the real one now.
-      const provisionalNo = form_no || existing.form_no;
+      const provisionalNo = form_no || existing.draft_key || existing.form_no;
       form_no = await allocateLiquidationFormNo(user);
       receipts = await relabelLiquidationReceipts(receipts, provisionalNo, form_no);
     }
     const reimbursementStatus = liqStatus === 'submitted' && reimbursableAmount > 0 ? 'pending' : null;
-    await ref.update({ physical_item_numbering: numbering, form_no: form_no || null, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
+    // A draft has NO form number: the browser's value is only a private receipt-folder key (draft_key).
+    // The real LQ number exists once submitted (allocated above).
+    const draftKey = liqStatus === 'submitted' ? null : (form_no || existing.draft_key || existing.form_no || null);
+    await ref.update({ physical_item_numbering: numbering, form_no: liqStatus === 'submitted' ? (form_no || null) : null, draft_key: draftKey, date_of_submission: date_of_submission || null, employee_name: employee_name || null, employee_number: employee_number || null, rows_json: JSON.stringify(rows), receipts_json: JSON.stringify(receipts), total_amount: total, ca_covered_amount: caCoveredAmount, reimbursable_amount: reimbursableAmount, ca_id: caId, status: liqStatus, reimbursement_status: reimbursementStatus, updated_at: now });
     if (liqStatus === 'submitted' && caId) {
       // Full total, matching POST above — the CA's balance_remaining can go
       // negative, which is the existing "company owes this employee" signal.

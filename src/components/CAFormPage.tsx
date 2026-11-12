@@ -541,25 +541,25 @@ export default function CAFormPage() {
     doc.text(`Date Requested: ${(data.dateRequested || '—').trim()}`, margin, y);
     y += lineH;
 
-    const previousCAs = data.previousCAs?.filter((ca) => Number(ca.balance_remaining) > 0) ?? [];
-    if (previousCAs.length > 0) {
-      y += 4;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.text('Previous CA details', margin, y);
-      y += lineH;
+    // `previousCAs` is already the requester's OUTSTANDING (not yet liquidated) CAs (see outstandingCAsFor).
+    // One short row each: CA no. | date | amount.
+    const unliquidated = data.previousCAs ?? [];
+    y += 4;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(unliquidated.length === 0 ? 'Outstanding CAs (pending liquidation): none' : 'Outstanding CAs (pending liquidation):', margin, y);
+    y += lineH;
+    if (unliquidated.length > 0) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(9);
-      previousCAs.forEach((ca) => {
+      unliquidated.forEach((ca) => {
         const reqDate = ca.requested_at ? new Date(ca.requested_at * 1000).toLocaleDateString() : '—';
-        doc.text(`${ca.id}: Date ${reqDate} | Amount PHP ${Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })} | Balance remaining PHP ${Number(ca.balance_remaining).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, margin, y);
+        doc.text(`${ca.id} | ${reqDate} | PHP ${Number(ca.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, margin, y);
         y += lineH - 1;
       });
-      y += lineH + 2;
-      doc.setFont('helvetica', 'normal');
-    } else {
-      y += 4;
+      y += 2;
     }
+    doc.setFont('helvetica', 'normal');
 
     const body = data.breakdownRows.length > 0
       ? data.breakdownRows.map((r) => [
@@ -609,9 +609,24 @@ export default function CAFormPage() {
 
   const preparedByName = (user?.full_name?.trim() || user?.username || '').trim() || '—';
 
-  const previousApprovedWithBalance = list.filter(
-    (ca) => ca.status === 'approved' && Number(ca.balance_remaining) > 0
-  );
+  // The request PDF's "Unliquidated CAs" line = the REQUESTER's own approved CAs that have no
+  // submitted liquidation linked to them (a CA counts as liquidated as soon as one linked
+  // liquidation is submitted, whatever the amount). Admins load every employee's CAs into
+  // `list`, so the requester filter matters (Renzel's CA2611-009 export once listed KIM's).
+  const outstandingCAsFor = (requesterId: string | undefined, exclude?: CashAdvanceRow) => {
+    const liquidatedCaIds = new Set(
+      liquidations.filter((l) => l.status === 'submitted' && l.ca_id).map((l) => String(l.ca_id)),
+    );
+    return list.filter((c) =>
+      c.status === 'approved'
+      && !liquidatedCaIds.has(String(c.id))
+      && !!requesterId && String(c.user_id) === String(requesterId)
+      && (!exclude || (c.id !== exclude.id && (c.created_at || 0) < (exclude.created_at || 0)))
+    );
+  };
+  const previousApprovedWithBalance = editingCA
+    ? outstandingCAsFor(editingCA.user_id, editingCA)
+    : outstandingCAsFor(user?.id != null ? String(user.id) : undefined);
 
   // Answers "does this person still hold unliquidated cash, or has their liquidation
   // exceeded what they were advanced (company owes them the difference)?" balance_remaining
@@ -726,9 +741,7 @@ export default function CAFormPage() {
       : ca.created_at
         ? new Date(ca.created_at * 1000).toISOString().slice(0, 10)
         : '—';
-    const previousOthers = list.filter(
-      (c) => c.status === 'approved' && Number(c.balance_remaining) > 0 && c.id !== ca.id
-    );
+    const previousOthers = outstandingCAsFor(ca.user_id, ca);
     const doc = buildCAFormPdf({
       projectName: ca.project_name || (ca.purpose ? `${ca.purpose} (prospect)` : ''),
       dateRequested: requestedDate,

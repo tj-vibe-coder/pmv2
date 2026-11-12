@@ -1,6 +1,9 @@
 'use strict';
 // Liquidation form numbers: LQ<YY>-<###>-<INITIALS>, e.g. LQ26-022-RJR.
 //
+// Drafts carry NO number: the browser holds a private `DRAFT-xxxxxx` key (stored as `draft_key`)
+// that only names the draft's receipt folder/files; submit moves them under the real number.
+//
 // The number is assigned by the server at the moment a liquidation is submitted,
 // inside a Firestore transaction. Drafts only ever show a *preview*. Before this,
 // the browser fetched a number when the form opened and sent it back on submit;
@@ -96,7 +99,7 @@ async function relabelReceipts(receipts, oldNo, newNo, graph) {
         update.parentReference = { id: targetFolders.get(parent.id) };
         emptiedCandidates.add(parent.id);
       }
-      if (/^LQ\d/.test(oldNo) && item.name.includes(oldNo)) update.name = item.name.split(oldNo).join(newNo);
+      if (/^(LQ\d|DRAFT-)/.test(oldNo) && item.name.includes(oldNo)) update.name = item.name.split(oldNo).join(newNo);
       if (!Object.keys(update).length) { out.push(r); continue; }
       const res = await graph.updateItem(r.oneDriveId, update);
       const next = { ...r, webUrl: res.webUrl || r.webUrl };
