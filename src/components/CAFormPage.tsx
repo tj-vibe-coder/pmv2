@@ -53,6 +53,7 @@ import { isCorporateOneDriveConfigured } from '../config/onedriveConfig';
 import { useOneDriveAuth } from '../contexts/OneDriveAuthContext';
 import { resolveCorporateDriveId, ensureFolder, uploadFileToFolderById, sanitizeForOneDrive } from '../services/onedriveFolderService';
 import MoneyTrailButton from './finance/MoneyTrailButton';
+import { newId } from '../utils/newId';
 import { useFinanceRowFocus } from '../hooks/useFinanceRowFocus';
 import { financeFocusToken, financeFocusUrl } from '../utils/financeTraceFocus';
 import { cashAdvanceOrigin } from '../utils/financeModuleOrigins';
@@ -194,7 +195,7 @@ export default function CAFormPage() {
   const [onBehalfUserId, setOnBehalfUserId] = useState('');
   const [purpose, setPurpose] = useState('');
   const [dateRequested, setDateRequested] = useState(() => new Date().toISOString().slice(0, 10));
-  const [breakdown, setBreakdown] = useState<BreakdownItem[]>([{ _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
+  const [breakdown, setBreakdown] = useState<BreakdownItem[]>([{ _uid: newId(), category: 'Materials', description: '', amount: '' }]);
   const [fundingType, setFundingType] = useState<'corporate_bank' | 'investor_outofpocket'>('corporate_bank');
   const [fundingInvestor, setFundingInvestor] = useState('');
   const [linkedInvestmentId, setLinkedInvestmentId] = useState('');
@@ -430,7 +431,7 @@ export default function CAFormPage() {
     }
   };
 
-  const addBreakdownRow = () => setBreakdown((b) => [...b, { _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
+  const addBreakdownRow = () => setBreakdown((b) => [...b, { _uid: newId(), category: 'Materials', description: '', amount: '' }]);
   const removeBreakdownRow = (index: number) =>
     setBreakdown((b) => {
       if (b.length <= 1) return b;
@@ -764,7 +765,7 @@ export default function CAFormPage() {
     setSelectedProject(null);
     setPurpose('');
     setDateRequested(new Date().toISOString().slice(0, 10));
-    setBreakdown([{ _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
+    setBreakdown([{ _uid: newId(), category: 'Materials', description: '', amount: '' }]);
     pendingReceiptsRef.current = {};
     setError(null);
   };
@@ -776,7 +777,7 @@ export default function CAFormPage() {
     setDateRequested(new Date((ca.requested_at || ca.created_at) * 1000).toISOString().slice(0, 10));
     const rows = parseBreakdown(ca.breakdown);
     setBreakdown((rows.length ? rows : [{ category: 'Materials', description: ca.purpose || '', amount: ca.amount }]).map(r => ({
-      _uid: crypto.randomUUID(), category: r.category || 'Materials', description: r.description || '', amount: String(r.amount || ''),
+      _uid: newId(), category: r.category || 'Materials', description: r.description || '', amount: String(r.amount || ''),
     })));
     pendingReceiptsRef.current = {};
     setError(null);
@@ -830,7 +831,7 @@ export default function CAFormPage() {
         setSelectedProject(null);
         setPurpose('');
         setOnBehalfUserId('');
-        setBreakdown([{ _uid: crypto.randomUUID(), category: 'Materials', description: '', amount: '' }]);
+        setBreakdown([{ _uid: newId(), category: 'Materials', description: '', amount: '' }]);
         setFundingType('corporate_bank');
         setFundingInvestor('');
         setLinkedInvestmentId('');

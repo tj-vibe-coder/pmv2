@@ -23,6 +23,8 @@ import {
   DialogActions,
   InputLabel,
   FormControl,
+  Chip,
+  useMediaQuery,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -62,6 +64,8 @@ const monitoringLabel = (u: UserRow) => {
 
 export default function UsersPage() {
   const { user, updateCachedUser } = useAuth();
+  // Portrait phones (< 600 px): users show as cards (editing happens inside the card) and the add dialog is full-screen.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -338,7 +342,7 @@ export default function UsersPage() {
   const theme = { primary: '#2c5aa0', secondary: '#1e4a72' };
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box sx={{ p: { xs: 0, sm: 3 } }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 2 }}>
         <Box>
           <Typography variant="h5" sx={{ fontWeight: 600, color: theme.primary }}>
@@ -367,6 +371,101 @@ export default function UsersPage() {
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
           <CircularProgress />
+        </Box>
+      ) : isPhone ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {users.map((u) => {
+            const editing = editingId === u.id;
+            const payrollName = payrollEmployees.find((pe) => pe.userId === u.id)?.name;
+            return (
+              <Paper key={u.id} variant="outlined" sx={{ p: 1.25 }} data-testid={`user-card-${u.id}`}>
+                {editing ? (
+                  <Stack spacing={1.5}>
+                    <Typography variant="caption" color="text.secondary">Editing {u.username}</Typography>
+                    <TextField size="small" label="Username" value={editUsername} onChange={(e) => setEditUsername(e.target.value)} fullWidth />
+                    <TextField size="small" label="Email" type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} fullWidth />
+                    <TextField size="small" label="Full name" value={editFullName} onChange={(e) => setEditFullName(e.target.value)} fullWidth />
+                    <TextField size="small" label="Contact no." value={editContactNumber} onChange={(e) => setEditContactNumber(e.target.value)} placeholder="+63 ..." fullWidth />
+                    <TextField size="small" label="Company position" value={editDesignation} onChange={(e) => setEditDesignation(e.target.value)} fullWidth />
+                    <TextField select size="small" label="Access role" value={editRole} onChange={(e) => setEditRole(e.target.value)} fullWidth>
+                      {ROLES.map((r) => <MenuItem key={r} value={r}>{r}</MenuItem>)}
+                    </TextField>
+                    <TextField select size="small" label="Approved" value={editApproved} onChange={(e) => setEditApproved(Number(e.target.value))} fullWidth>
+                      <MenuItem value={1}>Yes</MenuItem>
+                      <MenuItem value={0}>No</MenuItem>
+                    </TextField>
+                    {STAFF_ROLES.includes(editRole) && (
+                      <TextField select size="small" label="Project Monitoring access" value={editProjectMonitoring ? 1 : 0} onChange={(e) => setEditProjectMonitoring(Number(e.target.value) === 1)} fullWidth>
+                        <MenuItem value={1}>Yes</MenuItem>
+                        <MenuItem value={0}>No</MenuItem>
+                      </TextField>
+                    )}
+                    <TextField size="small" label="New password" type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder="Leave blank to keep" fullWidth />
+                    <TextField
+                      select size="small" label="Payroll employee" value={editPayrollEmpId} onChange={(e) => setEditPayrollEmpId(e.target.value)}
+                      SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }} fullWidth
+                    >
+                      <MenuItem value=""><em>None</em></MenuItem>
+                      {payrollEmployees.map((pe) => (
+                        <MenuItem key={pe.id} value={pe.id} disabled={!!pe.userId && pe.userId !== u.id}>
+                          {pe.name}{pe.userId && pe.userId !== u.id ? ' (linked)' : ''}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                    <Stack direction="row" spacing={1} justifyContent="flex-end">
+                      <Button onClick={cancelEdit}>Cancel</Button>
+                      <Button variant="contained" startIcon={<SaveIcon />} onClick={saveUser} disabled={savingId === u.id} sx={{ bgcolor: theme.primary, '&:hover': { bgcolor: theme.secondary } }}>
+                        Save
+                      </Button>
+                    </Stack>
+                  </Stack>
+                ) : (
+                  <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{u.full_name || u.username}</Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{u.username} · {u.email}</Typography>
+                      </Box>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, justifyContent: 'flex-end', flexShrink: 0 }}>
+                        <Chip size="small" label={u.role} variant="outlined" />
+                        <Chip size="small" label={u.approved ? 'Approved' : 'Pending'} color={u.approved ? 'success' : 'warning'} />
+                      </Box>
+                    </Box>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.75, mt: 0.75 }}>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Company position</Typography>
+                        <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{u.designation || '—'}</Typography>
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Contact no.</Typography>
+                        <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{u.contact_number || '—'}</Typography>
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Project Monitoring</Typography>
+                        <Typography variant="body2">{monitoringLabel(u)}</Typography>
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Payroll employee</Typography>
+                        <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{payrollName || '—'}</Typography>
+                      </Box>
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+                        Created {u.created_at ? new Date(u.created_at * 1000).toLocaleDateString() : '—'}
+                      </Typography>
+                      <Button size="small" startIcon={<EditIcon />} onClick={() => startEdit(u)} sx={{ color: theme.primary }}>Edit</Button>
+                      <IconButton
+                        color="error" disabled={deletingId === u.id || String(user?.id) === u.id} onClick={() => deleteUser(u)} aria-label="Delete user"
+                        title={String(user?.id) === u.id ? 'Cannot delete your own account' : 'Delete user'}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  </>
+                )}
+              </Paper>
+            );
+          })}
         </Box>
       ) : (
         <TableContainer component={Paper} sx={{ border: '1px solid #e0e0e0', borderRadius: 1 }}>
@@ -604,7 +703,7 @@ export default function UsersPage() {
         </TableContainer>
       )}
 
-      <Dialog open={addOpen} onClose={() => !addSaving && setAddOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={addOpen} onClose={() => !addSaving && setAddOpen(false)} maxWidth="sm" fullWidth fullScreen={isPhone}>
         <DialogTitle>Add User</DialogTitle>
         <DialogContent>
           {addError && (

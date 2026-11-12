@@ -64,10 +64,13 @@ test.each([
   ['/finance/payroll', 'PayrollDashboard'],
   ['/finance/reimbursements', 'ReimbursementDashboard'],
   ['/finance/investment-tracker', 'InvestmentTrackerPage'],
-])('%s keeps the shared header and sidebar', (path, page) => {
+])('%s keeps the shared header and sidebar', async (path, page) => {
   window.history.replaceState({}, '', path);
   render(<App />);
-  expect(screen.getByText(page)).toBeInTheDocument();
+  // Pages are downloaded on demand, so the layout is there first and the page follows.
+  expect(screen.getByText('Header')).toBeInTheDocument();
+  expect(screen.getByText('Sidebar')).toBeInTheDocument();
+  expect(await screen.findByText(page)).toBeInTheDocument();
   expect(screen.getByText('Header')).toBeInTheDocument();
   expect(screen.getByText('Sidebar')).toBeInTheDocument();
 });

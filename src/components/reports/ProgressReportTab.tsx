@@ -38,6 +38,7 @@ import {
   Tooltip,
   FormControlLabel,
   Switch,
+  useMediaQuery,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, PictureAsPdf as PictureAsPdfIcon, Visibility as VisibilityIcon, CameraAlt as CameraAltIcon, OpenInNew as OpenInNewIcon, DragIndicator as DragIndicatorIcon } from '@mui/icons-material';
 import { Project } from '../../types/Project';
@@ -348,6 +349,8 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
   const hasSchedule = (scheduleTaskCount ?? 0) > 0;
   const [pbInput, setPbInput] = useState(initialPb ?? '');
   const [showBillingHint, setShowBillingHint] = useState(false);
+  // Portrait phones (< 600 px): WBS rows and saved reports show as cards instead of tables.
+  const isPhone = useMediaQuery('(max-width:599.95px)');
   const [exporting, setExporting] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const [saveFeedback, setSaveFeedback] = useState(false);
@@ -934,6 +937,21 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
     }
   };
 
+  // Commit a typed weight/progress draft to the WBS item (on blur) — same logic as the table cells.
+  const commitWbsDraft = (id: string, field: 'weight' | 'progress') => {
+    const raw = wbsDraft[id]?.[field];
+    if (raw === undefined) return;
+    handleUpdateWBSItem(id, field, parseWBSNum(raw));
+    setWbsDraft((prev) => {
+      const next = { ...prev };
+      if (next[id]) {
+        delete next[id][field];
+        if (Object.keys(next[id]).length === 0) delete next[id];
+      }
+      return next;
+    });
+  };
+
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Scrollable accordion area */}
@@ -1057,6 +1075,113 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
               Tip: a row becomes a bold <strong>sub-header</strong> automatically when other rows use its code as a prefix — e.g. code <strong>1</strong> is the &quot;Engineering Services&quot; header, and <strong>1.1</strong> / <strong>1.2</strong> are its items (their weight &amp; progress roll up into the header). Drag the <DragIndicatorIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} /> handle to reorder rows.
             </Typography>
             <DndContext sensors={wbsSensors} collisionDetection={closestCenter} onDragEnd={handleWbsDragEnd}>
+            {isPhone ? (
+              <Box sx={{ px: 1, pb: 1 }}>
+                {wbsItems.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary" align="center" sx={{ py: 3 }}>No WBS items. Tap &quot;Add WBS item&quot; above.</Typography>
+                ) : (
+                  <SortableContext items={wbsItems.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+                    {wbsItems.map((item) => {
+                      const code = (item.code || '').trim();
+                      const isParent = isParentItem(code, wbsItems);
+                      const indentPx = Math.min(getIndentLevel(code), 3) * 12;
+                      const parentTotals = isParent ? calculateParentTotals(code, wbsItems) : null;
+                      return (
+                        <SortableItem key={item.id} id={item.id}>
+                          {({ setNodeRef, style, attributes, listeners }) => (
+                            <Paper
+                              ref={setNodeRef}
+                              style={style}
+                              variant="outlined"
+                              data-testid={`wbs-card-${item.id}`}
+                              sx={{ p: 1, mb: 1, ml: `${indentPx}px`, bgcolor: isParent ? 'rgba(44,90,160,0.07)' : '#fff' }}
+                            >
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
+                                <Box
+                                  {...attributes}
+                                  {...listeners}
+                                  title="Drag to reorder"
+                                  aria-label="Drag to reorder"
+                                  sx={{ display: 'flex', alignItems: 'center', p: 0.5, color: 'text.disabled', cursor: 'grab', touchAction: 'none' }}
+                                >
+                                  <DragIndicatorIcon fontSize="small" />
+                                </Box>
+                                <TextField
+                                  size="small"
+                                  label="Code"
+                                  value={item.code}
+                                  onChange={(e) => handleUpdateWBSItem(item.id, 'code', e.target.value)}
+                                  placeholder="1.1"
+                                  inputProps={{ maxLength: 20 }}
+                                  sx={{ ...wbsInputSx, width: 96, '& .MuiInputBase-input': { ...wbsInputSx['& .MuiInputBase-input'], fontWeight: isParent ? 700 : 'normal' } }}
+                                />
+                                <Box sx={{ flex: 1 }} />
+                                <IconButton size="small" onClick={() => handleDeleteWBSItem(item.id)} title="Delete" aria-label="Delete WBS item" color="error"><DeleteIcon fontSize="small" /></IconButton>
+                              </Box>
+                              <TextField
+                                size="small"
+                                fullWidth
+                                label="Name"
+                                value={item.name}
+                                onChange={(e) => handleUpdateWBSItem(item.id, 'name', e.target.value)}
+                                placeholder="Work package name"
+                                sx={{ ...wbsInputSx, mb: 1, '& .MuiInputBase-input': { ...wbsInputSx['& .MuiInputBase-input'], fontWeight: isParent ? 700 : 'normal' } }}
+                              />
+                              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1 }}>
+                                {isParent ? (
+                                  <>
+                                    <Box>
+                                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Weight %</Typography>
+                                      <Typography sx={{ fontWeight: 700 }}>{parentTotals ? parentTotals.weight.toFixed(2) : '0.00'}</Typography>
+                                    </Box>
+                                    <Box>
+                                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Progress %</Typography>
+                                      <Typography sx={{ fontWeight: 700 }}>{parentTotals ? parentTotals.progress.toFixed(2) : '0.00'}</Typography>
+                                    </Box>
+                                  </>
+                                ) : (
+                                  <>
+                                    <TextField
+                                      size="small"
+                                      type="number"
+                                      label="Weight %"
+                                      value={wbsDraft[item.id]?.weight ?? String(parseWBSNum(item.weight))}
+                                      onFocus={(e) => (e.target as HTMLInputElement).select()}
+                                      onChange={(e) => setWbsDraft((prev) => ({ ...prev, [item.id]: { ...prev[item.id], weight: e.target.value } }))}
+                                      onBlur={() => commitWbsDraft(item.id, 'weight')}
+                                      inputProps={{ min: 0, max: 100, step: 1 }}
+                                      sx={wbsNumInputSx}
+                                    />
+                                    <TextField
+                                      size="small"
+                                      type="number"
+                                      label="Progress %"
+                                      value={wbsDraft[item.id]?.progress ?? String(parseWBSNum(item.progress))}
+                                      onFocus={(e) => (e.target as HTMLInputElement).select()}
+                                      onChange={(e) => setWbsDraft((prev) => ({ ...prev, [item.id]: { ...prev[item.id], progress: e.target.value } }))}
+                                      onBlur={() => commitWbsDraft(item.id, 'progress')}
+                                      inputProps={{ min: 0, max: 100, step: 1 }}
+                                      sx={wbsNumInputSx}
+                                    />
+                                  </>
+                                )}
+                              </Box>
+                            </Paper>
+                          )}
+                        </SortableItem>
+                      );
+                    })}
+                  </SortableContext>
+                )}
+                {wbsItems.length > 0 && (
+                  <Paper variant="outlined" sx={{ p: 1.25, bgcolor: '#f8fafc', display: 'flex', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }} data-testid="wbs-total">
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>Total</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 700, color: Math.abs(wbsTotalWeight - 100) > 0.01 ? 'error.main' : undefined }}>Weight {wbsTotalWeight.toFixed(2)}%</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>Progress {wbsOverallProgress.toFixed(2)}%</Typography>
+                  </Paper>
+                )}
+              </Box>
+            ) : (
             <TableContainer sx={{ border: 0, borderRadius: 0, overflow: 'auto' }}>
               <Table stickyHeader size="small" sx={{ minWidth: 560 }}>
                 <TableHead>
@@ -1212,6 +1337,7 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
                 })()}
               </Table>
             </TableContainer>
+            )}
             </DndContext>
           </AccordionDetails>
         </Accordion>
@@ -1489,7 +1615,30 @@ const ProgressReportTab: React.FC<ProgressReportTabProps> = ({
             {savedLoading && <CircularProgress size={16} sx={{ color: NET_PACIFIC_COLORS.primary, mr: 1 }} />}
           </AccordionSummary>
           <AccordionDetails>
-            {savedReports.length > 0 ? (
+            {savedReports.length > 0 && isPhone ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, maxHeight: 420, overflowY: 'auto' }}>
+                {savedReports.map((s) => (
+                  <Paper
+                    key={s.id}
+                    variant="outlined"
+                    data-testid={`saved-snapshot-${s.id}`}
+                    sx={{ p: 1.25, ...(editingReportId === s.id ? { borderColor: NET_PACIFIC_COLORS.primary, bgcolor: 'rgba(0,0,0,0.03)' } : {}) }}
+                  >
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>PB{s.pbNumber}</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{Math.round(s.overallProgress * 100) / 100}%</Typography>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary">{new Date(s.date).toLocaleDateString('en-US', { dateStyle: 'medium' })}</Typography>
+                    <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.5 }}>
+                      <Button size="small" onClick={() => handleLoadSnapshot(s)} sx={{ color: NET_PACIFIC_COLORS.primary }}>Load</Button>
+                      <IconButton size="small" color="error" onClick={() => handleDeleteSnapshot(s)} title="Delete snapshot" aria-label="Delete snapshot">
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  </Paper>
+                ))}
+              </Box>
+            ) : savedReports.length > 0 ? (
               <TableContainer sx={{ border: '1px solid #e2e8f0', borderRadius: 1, maxHeight: 280 }}>
                 <Table size="small" stickyHeader>
                   <TableHead>
