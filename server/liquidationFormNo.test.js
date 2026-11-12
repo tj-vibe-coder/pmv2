@@ -84,3 +84,13 @@ test('relabelReceipts handles receipts uploaded before any preview number (draft
   assert.equal(out.receipts[0].filename, 'draft-notes.jpg');
   assert.equal(graph.calls.find(c => c[0] === 'update')[2].name, undefined);
 });
+
+test('relabelReceipts moves a DRAFT-key folder to the assigned number and renames files that carry the key', async () => {
+  const graph = fakeGraph({
+    f1: { name: 'DRAFT-AB12CD_2026-11-12_PHP100.jpg', parentReference: { id: 'old', path: '/drive/root:/Liquidation Receipts/2026/DRAFT-AB12CD' } },
+  });
+  const out = await relabelReceipts([{ rowId: 'r1', oneDriveId: 'f1', filename: 'DRAFT-AB12CD_2026-11-12_PHP100.jpg' }], 'DRAFT-AB12CD', 'LQ26-029-RJR', graph);
+  assert.equal(out.moved, 1);
+  assert.equal(out.receipts[0].filename, 'LQ26-029-RJR_2026-11-12_PHP100.jpg');
+  assert.equal(graph.calls.find(c => c[0] === 'update')[2].parentReference.id, 'newFolder');
+});
