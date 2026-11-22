@@ -14,8 +14,9 @@ import {
 
 // Export Gantt dialog: layout / document / chart settings on the left, a live
 // preview of the exact PDF pages on the right. Settings are remembered per
-// project. No company branding or sign-off block — schedules also go out on
-// projects where IOCT is the subcontractor.
+// project. No IOCT branding or sign-off block — schedules also go out on
+// projects where IOCT is the subcontractor; those can carry the client's logo
+// instead (Gantt page → Client logo).
 
 interface Props {
   open: boolean;
@@ -175,6 +176,7 @@ export default function ScheduleExportDialog({ open, onClose, projectId, project
               {text('revision', 'Revision')}
             </Stack>
             {text('projectTitle', 'Project title')}
+            {data?.clientLogo && check('showClientLogo', 'Client logo in the header', false, data.clientLogo.name || 'subcontracted project')}
           </Section>
 
           <Divider sx={{ mb: 1.5 }} />

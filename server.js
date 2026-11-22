@@ -4140,6 +4140,8 @@ async function syncCalcsheetProjectToMainProject(projectId, options = {}) {
       // Freeze the awarded plan as the project's first baseline version.
       if (copied > 0) await snapshotScheduleVersion(mainProjectId, 'Baseline (at award)', 'System');
     } catch (e) { console.error('Schedule carry-over failed:', e.message); }
+    await copyScheduleBrandingToProject(projectId, mainProjectId)
+      .catch((e) => console.error('Schedule branding carry-over failed:', e.message));
   }
 
   return {
@@ -4721,6 +4723,63 @@ app.put('/api/calcsheet/install-materials/:key', async (req, res) => {
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to save installation material price' }); }
 });
+
+// ── Project work schedule (Gantt) client branding ────────────────────────────
+// When IOCT is the subcontractor, the Gantt (screen + PDF) carries the client's
+// / main contractor's logo instead of staying unbranded. One doc per schedule
+// projectId (calcsheet or monitoring id), logo stored inline as a small data
+// URL (the client resizes it before upload) — direct doc get, no index.
+const SCHEDULE_LOGO_MAX_CHARS = 700 * 1024;
+const SCHEDULE_LOGO_RE = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/;
+
+app.get('/api/schedule-branding/:projectId', async (req, res) => {
+  try {
+    const doc = await db.collection('calcsheet_schedule_branding').doc(String(req.params.projectId)).get();
+    res.json({ success: true, branding: doc.exists ? doc.data() : null });
+  } catch (err) {
+    console.error('Error fetching schedule branding:', err);
+    res.status(500).json({ success: false, error: 'Failed to get schedule branding' });
+  }
+});
+
+app.put('/api/schedule-branding/:projectId', async (req, res) => {
+  try {
+    const user = await requireActiveUser(req, res);
+    if (!user) return;
+    const { subcontracted, clientName, logoDataUrl, logoWidth, logoHeight } = req.body || {};
+    if (logoDataUrl != null && logoDataUrl !== '') {
+      if (typeof logoDataUrl !== 'string' || !SCHEDULE_LOGO_RE.test(logoDataUrl)) {
+        return res.status(400).json({ success: false, error: 'Logo must be a PNG or JPEG image' });
+      }
+      if (logoDataUrl.length > SCHEDULE_LOGO_MAX_CHARS) {
+        return res.status(400).json({ success: false, error: 'Logo is too large' });
+      }
+    }
+    const branding = {
+      subcontracted: !!subcontracted,
+      clientName: typeof clientName === 'string' ? clientName.trim().slice(0, 120) : '',
+      logoDataUrl: logoDataUrl || null,
+      logoWidth: logoDataUrl ? Math.max(1, Number(logoWidth) || 0) || null : null,
+      logoHeight: logoDataUrl ? Math.max(1, Number(logoHeight) || 0) || null : null,
+      updatedAt: new Date().toISOString(),
+      updatedBy: user.username || user.name || '',
+    };
+    await db.collection('calcsheet_schedule_branding').doc(String(req.params.projectId)).set(branding);
+    res.json({ success: true, branding });
+  } catch (err) {
+    console.error('Error saving schedule branding:', err);
+    res.status(500).json({ success: false, error: 'Failed to save schedule branding' });
+  }
+});
+
+// Carry a proposal's Gantt branding over to the awarded project (only when the
+// awarded project has none yet).
+async function copyScheduleBrandingToProject(fromProjectId, toProjectId) {
+  const col = db.collection('calcsheet_schedule_branding');
+  const [src, dest] = await Promise.all([col.doc(String(fromProjectId)).get(), col.doc(String(toProjectId)).get()]);
+  if (!src.exists || dest.exists) return;
+  await col.doc(String(toProjectId)).set({ ...src.data(), updatedAt: new Date().toISOString() });
+}
 
 // ── Project work schedule (Gantt) tasks ───────────────────────────────────────
 // Equality-only filter on projectId, sorted in memory — no composite index

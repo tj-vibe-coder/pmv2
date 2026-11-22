@@ -35,6 +35,7 @@ import FlagIcon from '@mui/icons-material/Flag';
 import RedoIcon from '@mui/icons-material/Redo';
 import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import OutlinedFlagIcon from '@mui/icons-material/OutlinedFlag';
+import BusinessIcon from '@mui/icons-material/Business';
 import { useQuotationStore } from '../../store/quotationStore';
 import type { ServiceLine, Quotation } from '../../types/Quotation';
 import { PHP } from '../../utils/calcsheet/calc';
@@ -59,6 +60,8 @@ import MsProjectGantt, { GANTT_GRID_MAX_W, type GanttNav, type GanttZoom } from 
 import { MAX_DAY_W, MIN_DAY_W, ZOOM_PRESETS, snapRange, tierFor } from '../../utils/calcsheet/scheduleTimescale';
 import ScheduleSCurve from './ScheduleSCurve';
 import ScheduleExportDialog from './ScheduleExportDialog';
+import ScheduleBrandingDialog from './ScheduleBrandingDialog';
+import { activeLogo, fetchScheduleBranding, type ScheduleBranding } from '../../utils/calcsheet/scheduleBranding';
 import { baselineFromVersion, finishVariance, matchBaseline, varianceLabel, type ScheduleBaseline } from '../../utils/calcsheet/scheduleBaseline';
 import { computeSCurve, type SCurveSnapshot } from '../../utils/calcsheet/scheduleSCurve';
 import {
@@ -738,7 +741,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
   keyHandler.current = (e: KeyboardEvent) => {
     if (view !== 'gantt') return;
-    if (dialogOpen || deleteTarget || bulkDelete || weightsOpen || importOpen || saveVerOpen || historyOpen || compareVersion || helpOpen || ctxMenu || hlMenu || pdfOpen || linkPop) return;
+    if (dialogOpen || deleteTarget || bulkDelete || weightsOpen || importOpen || saveVerOpen || historyOpen || compareVersion || helpOpen || ctxMenu || hlMenu || pdfOpen || brandingOpen || linkPop) return;
     const target = e.target as HTMLElement | null;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
@@ -1290,6 +1293,17 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     }
   };
 
+  // Client branding (subcontracted projects carry the client's logo).
+  const [branding, setBranding] = useState<ScheduleBranding | null>(null);
+  const [brandingOpen, setBrandingOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setBranding(null);
+    fetchScheduleBranding(id).then((b) => { if (!cancelled) setBranding(b); }).catch(() => { /* unbranded */ });
+    return () => { cancelled = true; };
+  }, [id]);
+  const clientLogo = activeLogo(branding);
+
   // PDF export goes through the Export dialog (settings + live preview).
   const [pdfOpen, setPdfOpen] = useState(false);
   const exportRows = useMemo(() => (pdfOpen ? flattenTree(rolledTasks, new Set()) : []), [pdfOpen, rolledTasks]);
@@ -1299,6 +1313,7 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
     criticalIds: criticalPath(leafTasks(tasks), workingDays),
     snapshots: await loadSnapshots().catch(() => []),
     baseline,
+    clientLogo,
   });
 
   // ── Version history ─────────────────────────────────────────────────────
@@ -1550,7 +1565,24 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
             {code} — {name}
           </Typography>
         </Box>
+        {clientLogo && (
+          <Tooltip title={`Subcontracted${clientLogo.name ? ` for ${clientLogo.name}` : ''} — click to change`}>
+            <Box
+              component="img" src={clientLogo.src} alt={clientLogo.name || 'Client logo'}
+              onClick={() => setBrandingOpen(true)}
+              sx={{
+                height: { xs: 36, sm: 48 }, maxWidth: { xs: 140, sm: 220 }, objectFit: 'contain', cursor: 'pointer',
+                order: { xs: -1, sm: 0 }, ml: { sm: 'auto' }, mr: { sm: 1 },
+              }}
+            />
+          </Tooltip>
+        )}
         <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1}>
+          <Tooltip title="Show the client's logo when IOCT is the subcontractor">
+            <Button variant="outlined" startIcon={<BusinessIcon />} onClick={() => setBrandingOpen(true)}>
+              Client logo
+            </Button>
+          </Tooltip>
           <Button variant="outlined" startIcon={<HistoryIcon />} onClick={() => void openHistory()}>
             History
           </Button>
@@ -2417,6 +2449,14 @@ export function WorkScheduleGantt({ projectId, code, name, backHref, quotationsF
         loadData={loadExportData}
         initial={{ showCritical, showBaseline: showBaseline && !!baseline }}
         hasBaseline={!!baseline}
+      />
+
+      <ScheduleBrandingDialog
+        open={brandingOpen}
+        onClose={() => setBrandingOpen(false)}
+        projectId={id}
+        branding={branding}
+        onSaved={(b) => { setBranding(b); setToast(activeLogo(b) ? 'Client logo saved' : 'Gantt chart set to unbranded'); }}
       />
 
       {/* Save version dialog */}

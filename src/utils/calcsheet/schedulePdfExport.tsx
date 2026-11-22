@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Document, Page, Text, View, Svg, Rect, Polygon, Path, Line, Circle, pdf } from '@react-pdf/renderer';
+import { Document, Page, Text, View, Svg, Rect, Polygon, Path, Line, Circle, Image, pdf } from '@react-pdf/renderer';
 import { saveAs } from 'file-saver';
 import { TASK_HIGHLIGHTS, type ScheduleTask } from '../../types/ScheduleTask';
 import { leafTasks, type TreeRow } from './scheduleTree';
@@ -66,6 +66,8 @@ export interface ScheduleExportSettings {
   showManpower: boolean;
   showToday: boolean;
   showWeekends: boolean;
+  /** Draw the client's logo in the page header (only when the project has one). */
+  showClientLogo: boolean;
 }
 
 export function defaultExportSettings(project: ScheduleProjectRef): ScheduleExportSettings {
@@ -92,6 +94,7 @@ export function defaultExportSettings(project: ScheduleProjectRef): ScheduleExpo
     showManpower: true,
     showToday: true,
     showWeekends: true,
+    showClientLogo: true,
   };
 }
 
@@ -103,6 +106,8 @@ export interface ScheduleExportData {
   /** Saved versions as dated status snapshots (S-Curve actual points). */
   snapshots?: SCurveSnapshot[];
   baseline?: ScheduleBaseline | null;
+  /** Client / main contractor logo when IOCT is the subcontractor (see scheduleBranding.ts). */
+  clientLogo?: { src: string; w: number; h: number; name: string } | null;
 }
 
 const MARGIN = 28;
@@ -363,13 +368,29 @@ function ScheduleDoc({ project, rows, data, s }: { project: ScheduleProjectRef; 
     <Text style={{ fontSize: 7, color: C.sub, marginLeft: 'auto' }} render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
   );
 
+  // Client logo (subcontracted projects): left of the title, sized to the
+  // header height with its aspect kept and its width capped.
+  const logo = s.showClientLogo && data.clientLogo ? data.clientLogo : null;
+  const logoBoxH = HEADER_H - 10;
+  const logoSize = logo ? (() => {
+    const maxW = CONTENT_W * (narrow ? 0.16 : 0.14);
+    const w = Math.min(maxW, logoBoxH * (logo.w / logo.h));
+    return { w, h: w * (logo.h / logo.w) };
+  })() : null;
+  const titleW = (narrow ? CONTENT_W * 0.42 : CONTENT_W * 0.45) - (logoSize ? logoSize.w + 10 : 0);
+
   const pageHeader = (title: string, kpis: [string, string][]) => (
     <View style={{ height: HEADER_H, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-      <View style={{ maxWidth: narrow ? CONTENT_W * 0.42 : CONTENT_W * 0.45 }}>
-        <Text style={{ fontSize: narrow ? 13 : 16, fontFamily: 'Helvetica-Bold', color: C.primary }}>{title}</Text>
-        <Text style={{ fontSize: narrow ? 7.5 : 9, color: C.sub, marginTop: 2 }}>
-          {fit([s.projectNumber, s.projectTitle].filter(Boolean).join(' — ') + (s.revision.trim() ? ` · Rev. ${s.revision.trim()}` : ''), narrow ? CONTENT_W * 0.42 : CONTENT_W * 0.45, narrow ? 7.5 : 9)}
-        </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+        {logo && logoSize && (
+          <Image src={logo.src} style={{ width: logoSize.w, height: logoSize.h, marginRight: 10 }} />
+        )}
+        <View style={{ maxWidth: titleW }}>
+          <Text style={{ fontSize: narrow ? 13 : 16, fontFamily: 'Helvetica-Bold', color: C.primary }}>{fit(title, titleW, narrow ? 13 : 16)}</Text>
+          <Text style={{ fontSize: narrow ? 7.5 : 9, color: C.sub, marginTop: 2 }}>
+            {fit([s.projectNumber, s.projectTitle].filter(Boolean).join(' — ') + (s.revision.trim() ? ` · Rev. ${s.revision.trim()}` : ''), titleW, narrow ? 7.5 : 9)}
+          </Text>
+        </View>
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', maxWidth: CONTENT_W * 0.56 }}>
         {kpis.map(([k, v]) => (
