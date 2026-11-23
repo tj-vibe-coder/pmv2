@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-23 — "Compact PDF (1 page)" now really fits one page (branch `rj/dev`)
+- **Bug:** the Quotation editor's **Compact PDF (1 page)** button (added in `e34d014`) only shrank the layout by a fixed scale (0.76) and never checked the result. With a long terms section the closing line + "Prepared by / Accepted by" signature block spilled onto page 2 (seen on TN2611175-ACT-00), so the button's label was false.
+- **Fix:** `exportQuotationPdf` (`src/utils/calcsheet/pdfExport.tsx`) now auto-fits when `layout === 'compact'`: it renders, counts pages with `pdf-lib`, and re-renders at progressively smaller scales until the PDF is 1 page. `QuotationDoc` takes an optional `scaleOverride`; the ladder is `COMPACT_FIT_SCALES = [0.7, 0.64, 0.58, 0.52, 0.46]` in `quotationPdfLayout.ts`. Standard export unchanged.
+- **Known limits:** compact is still offered only for quotations with ≤ 6 item lines (`compactLayoutAvailability`). If even 0.46 doesn't fit (very long terms), the export silently stays at 2 pages — no warning yet; the real remedy is trimming the terms text. Worth adding a notice if it ever happens.
+- **Verified:** `tsc --noEmit` clean, `quotationPdfLayout` jest (3 tests) pass. **Not verified:** actual PDF output — re-export TN2611175-ACT-00 (and a short quote) in the browser and confirm 1 page and readable text.
+
 ## 2026-11-23 — Scroll trapped over tables + Recipient dropdown stuck (branch `rj/dev`)
 - **Table scroll:** `src/index.css` had `overscroll-behavior: contain` on `.MuiTableContainer-root`. A TableContainer is `overflow-x: auto` (a scroll container on both axes), so the wheel/trackpad was trapped inside it and the page wouldn't scroll with the pointer over any table (Clients page was the report). Now only the x-axis is contained (`overscroll-behavior-x: contain; -y: auto`). Dialog/Drawer/Menu/Popover keep full `contain`. Global fix, covers every table page.
 - **Recipient stuck:** in `CalcsheetQuotationEditor.tsx` the Recipient `onChange` called the store's `updateQuotation` (PUT straight to the server) instead of editing `draft`, so the dropdown never changed on screen and showed "Unsaved changes" until a refresh. It now uses `setDraft` like every other field and persists on Save (behaviour change: no instant save).

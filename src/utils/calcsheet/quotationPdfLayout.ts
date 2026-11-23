@@ -2,6 +2,9 @@ export type QuotationPdfLayout = 'standard' | 'compact';
 
 const COMPACT_ITEM_LIMIT = 6;
 
+/** Progressively smaller scales tried by the compact export until it fits one page. */
+export const COMPACT_FIT_SCALES = [0.7, 0.64, 0.58, 0.52, 0.46];
+
 export function compactLayoutAvailability(totalRows: number): { available: boolean; reason: string } {
   if (totalRows <= COMPACT_ITEM_LIMIT) return { available: true, reason: '' };
   return {
