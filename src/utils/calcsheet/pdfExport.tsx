@@ -10,7 +10,7 @@ import {
 } from './calc';
 import { DEFAULT_SCOPE_OF_WORK, defaultBasisOfProposal, defaultDeliveryText, defaultTaxStatusTerm, DEFAULT_WARRANTY_EXCLUSION } from './defaultTerms';
 import { quotationExportRefNo } from './codes';
-import { quotationPdfScale, type QuotationPdfLayout } from './quotationPdfLayout';
+import { quotationPdfScale, COMPACT_FIT_SCALES, type QuotationPdfLayout } from './quotationPdfLayout';
 import { subheaderBefore } from './subheaders';
 import { componentExportDetails } from './componentExportDetails';
 
@@ -309,9 +309,11 @@ interface Props {
   customer: Client | null;
   salesContacts: SalesContact[];
   layout: QuotationPdfLayout;
+  /** Forces a specific scale (used by the compact auto-fit loop). */
+  scaleOverride?: number;
 }
 
-function QuotationDoc({ quotation, project, recipient, customer, salesContacts, layout }: Props) {
+function QuotationDoc({ quotation, project, recipient, customer, salesContacts, layout, scaleOverride }: Props) {
   const totals = computeTotals(quotation);
   // IOCT-only pricing buffer folded into markup — never printed as its own
   // line/label. See Quotation.ewtPct.
@@ -326,7 +328,7 @@ function QuotationDoc({ quotation, project, recipient, customer, salesContacts, 
     to0.scopeOfWork, to0.exclusions, to0.basisOfProposal, to0.deliveryLines, to0.warrantyExclusion,
     nonVat ? (to0.taxStatus || defaultTaxStatusTerm(ISSUER_INFO[quotation.kind].name)) : undefined,
   ].reduce((sum, t) => sum + (t?.length || 0), 0);
-  const scale = quotationPdfScale({ totalRows, termsCharCount, layout });
+  const scale = scaleOverride ?? quotationPdfScale({ totalRows, termsCharCount, layout });
   const styles = buildStyles(scale);
   const refNo = quotationExportRefNo(project.code, recipient?.code, quotation.revision);
   const logoUrl = typeof window !== 'undefined' ? `${window.location.origin}${issuer.logo}` : issuer.logo;
@@ -976,7 +978,7 @@ export async function exportQuotationPdf(
   salesContacts: SalesContact[],
   options: { save?: boolean; layout?: QuotationPdfLayout } = {},
 ): Promise<{ blob: Blob; filename: string }> {
-  const blob = await pdf(
+  const renderAt = (scaleOverride?: number) => pdf(
     <QuotationDoc
       quotation={quotation}
       project={project}
@@ -984,8 +986,20 @@ export async function exportQuotationPdf(
       customer={customer}
       salesContacts={salesContacts}
       layout={options.layout ?? 'standard'}
+      scaleOverride={scaleOverride}
     />,
   ).toBlob();
+
+  let blob = await renderAt();
+  if (options.layout === 'compact') {
+    // "Compact PDF (1 page)" must actually be one page: keep shrinking until
+    // the render fits (a fixed scale can't know how long the terms text is).
+    for (const scale of COMPACT_FIT_SCALES) {
+      const pageCount = (await PDFDocument.load(await blob.arrayBuffer())).getPageCount();
+      if (pageCount <= 1) break;
+      blob = await renderAt(scale);
+    }
+  }
 
   const arrayBuffer = await blob.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer);
