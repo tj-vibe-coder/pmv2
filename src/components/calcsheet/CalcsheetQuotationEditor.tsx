@@ -1648,10 +1648,14 @@ export default function QuotationEditor() {
               const newRecipientId = e.target.value || null;
               const newClient = clients.find((c) => c.id === newRecipientId) ?? null;
               const newPrimary = newClient?.contacts?.find((c) => c.isPrimary) ?? newClient?.contacts?.[0] ?? null;
-              update(quotation.id, {
+              // Edit the draft like every other field (persisted on Save). This used to
+              // call the store's updateQuotation, which wrote straight to the server but
+              // left `draft` untouched — so the dropdown never changed on screen until a refresh.
+              setDraft((d) => d ? ({
+                ...d,
                 recipientId: newRecipientId,
                 contactId: newPrimary?.id,
-              } as any);
+              } as Quotation) : d);
             }}
             disabled={inputsLocked}
           >

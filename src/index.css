@@ -16,10 +16,16 @@ button, a, [role='button'], input, select, textarea, .MuiTab-root {
 }
 
 /* Scrollable panes (dialogs, drawers, menus) shouldn't pass their scroll on to the page behind. */
-.MuiDialog-paper, .MuiDrawer-paper, .MuiMenu-paper, .MuiPopover-paper, .MuiTableContainer-root {
+.MuiDialog-paper, .MuiDrawer-paper, .MuiMenu-paper, .MuiPopover-paper {
   overscroll-behavior: contain;
 }
+/* Tables: a TableContainer is overflow-x:auto, which makes it a scroll container on both
+   axes. With `overscroll-behavior: contain` the mouse wheel / trackpad got trapped inside
+   it, so the page would not scroll while the pointer was over a table. Only contain the
+   horizontal axis (swipe-back guard); vertical scroll must chain to the page. */
 .MuiTableContainer-root {
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   -webkit-overflow-scrolling: touch;
 }
 

@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-11-23 — Scroll trapped over tables + Recipient dropdown stuck (branch `rj/dev`)
+- **Table scroll:** `src/index.css` had `overscroll-behavior: contain` on `.MuiTableContainer-root`. A TableContainer is `overflow-x: auto` (a scroll container on both axes), so the wheel/trackpad was trapped inside it and the page wouldn't scroll with the pointer over any table (Clients page was the report). Now only the x-axis is contained (`overscroll-behavior-x: contain; -y: auto`). Dialog/Drawer/Menu/Popover keep full `contain`. Global fix, covers every table page.
+- **Recipient stuck:** in `CalcsheetQuotationEditor.tsx` the Recipient `onChange` called the store's `updateQuotation` (PUT straight to the server) instead of editing `draft`, so the dropdown never changed on screen and showed "Unsaved changes" until a refresh. It now uses `setDraft` like every other field and persists on Save (behaviour change: no instant save).
+- **Verified:** `tsc --noEmit` clean. Not browser-tested.
+
 ## 2026-10-30 — DR/PO contact fixes: recipient comes from the client record (branch `rj/dr-po-client-contact`)
 
 Found by the Procurement tab while preparing Belmont DR `IOCT2610002-DR-1`: the DR page printed IOCT's own staff member as ATTN on a client DR.
