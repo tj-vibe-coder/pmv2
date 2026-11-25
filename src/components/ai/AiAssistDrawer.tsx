@@ -24,6 +24,7 @@ import AiComposer from './AiComposer';
 import AiLiveStatus from './AiLiveStatus';
 import AiMessageList from './AiMessageList';
 import AiProposalCard from './AiProposalCard';
+import { ANALYTICS_ENABLED } from '../../config/features';
 
 export const AI_ASSIST_DESKTOP_WIDTH_PX = 420;
 
@@ -142,7 +143,7 @@ export default function AiAssistDrawer({
               messages={messages}
               onFollowUp={(question) => send(question, pageContext)}
               onNavigateSource={onNavigateSource}
-              onOpenStudio={(chart) => {
+              onOpenStudio={!ANALYTICS_ENABLED ? undefined : (chart) => {
                 close();
                 const target = chart.tool === 'get_expense_summary' ? '/finance/analytics' : '/projects/analytics';
                 navigate(target, { state: { chart } });

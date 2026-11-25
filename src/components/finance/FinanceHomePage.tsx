@@ -40,6 +40,7 @@ import { Project } from '../../types/Project';
 import { buildActiExpectedQueue, splitActiExpectedQueue } from '../../utils/commercialTrail';
 import { PayrollRun } from '../../types/Payroll';
 import { getPayrollRuns } from '../../utils/firebasePayroll';
+import { ANALYTICS_ENABLED } from '../../config/features';
 
 const NET_PACIFIC_COLORS = {
   primary:   '#2c5aa0',
@@ -262,7 +263,7 @@ const FinanceHomePage: React.FC = () => {
         ];
 
   const intelligenceModules: ModuleCard[] = [
-    ...(user?.role !== 'tax_filer'
+    ...(ANALYTICS_ENABLED && user?.role !== 'tax_filer'
       ? [
           {
             title: 'Finance Analytics',

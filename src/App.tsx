@@ -18,6 +18,7 @@ import { useQuotationStore } from './store/quotationStore';
 import { lazyWithRetry } from './utils/lazyWithRetry';
 import RouteErrorBoundary from './components/RouteErrorBoundary';
 import { saveLastPage, getLastPage } from './utils/lastPage';
+import { ANALYTICS_ENABLED } from './config/features';
 
 // Pages are downloaded when first opened, not all up front — a phone no longer has to fetch the whole app
 // before showing the first screen. Kept in the main bundle on purpose: the login page, the layout, and the
@@ -368,7 +369,7 @@ function App() {
             <Route path="/analytics/finance" element={<Navigate to="/finance/analytics" replace />} />
             <Route
               path="/projects/analytics"
-              element={
+              element={!ANALYTICS_ENABLED ? <Navigate to="/" replace /> : (
                 <ProtectedRoute>
                   <EmployeeGuard>
                     <TaxFilerBlock>
@@ -378,7 +379,7 @@ function App() {
                     </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
-              }
+              )}
             />
             <Route
               path="/projects/activity"
@@ -396,7 +397,7 @@ function App() {
             />
             <Route
               path="/sales/analytics"
-              element={
+              element={!ANALYTICS_ENABLED ? <Navigate to="/sales" replace /> : (
                 <ProtectedRoute>
                   <EmployeeGuard>
                     <TaxFilerBlock>
@@ -406,11 +407,11 @@ function App() {
                     </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
-              }
+              )}
             />
             <Route
               path="/finance/analytics"
-              element={
+              element={!ANALYTICS_ENABLED ? <Navigate to="/finance" replace /> : (
                 <ProtectedRoute>
                   <EmployeeGuard>
                     <TaxFilerBlock>
@@ -420,7 +421,7 @@ function App() {
                     </TaxFilerBlock>
                   </EmployeeGuard>
                 </ProtectedRoute>
-              }
+              )}
             />
             <Route
               path="/dashboard"

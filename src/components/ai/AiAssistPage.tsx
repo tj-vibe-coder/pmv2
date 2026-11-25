@@ -10,6 +10,7 @@ import AiLiveStatus from './AiLiveStatus';
 import AiMessageList from './AiMessageList';
 import AiProposalCard from './AiProposalCard';
 import AiChartPanel from './AiChartPanel';
+import { ANALYTICS_ENABLED } from '../../config/features';
 
 const CONVERSATION_WIDTH_PX = 420;
 
@@ -102,7 +103,7 @@ export default function AiAssistPage(): React.ReactElement {
               messages={messages}
               onFollowUp={(question) => send(question, pageContext)}
               onNavigateSource={onNavigateSource}
-              onOpenStudio={(chart) => {
+              onOpenStudio={!ANALYTICS_ENABLED ? undefined : (chart) => {
                 const target = chart.tool === 'get_expense_summary' ? '/finance/analytics' : '/projects/analytics';
                 navigate(target, { state: { chart } });
               }}
@@ -123,7 +124,7 @@ export default function AiAssistPage(): React.ReactElement {
           {lastChart ? (
             <AiChartPanel
               chart={lastChart}
-              onOpenStudio={(chart) => {
+              onOpenStudio={!ANALYTICS_ENABLED ? undefined : (chart) => {
                 const target = chart.tool === 'get_expense_summary' ? '/finance/analytics' : '/projects/analytics';
                 navigate(target, { state: { chart } });
               }}
