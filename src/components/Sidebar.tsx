@@ -47,6 +47,7 @@ import FinanceNavList from './finance/FinanceNavList';
 import SalesNavList from './sales/SalesNavList';
 import EmployeeNavList from './employee/EmployeeNavList';
 import { canOpenProjectMonitoring, isStaffRole } from '../utils/projectMonitoringAccess';
+import { ANALYTICS_ENABLED } from '../config/features';
 
 const SIDEBAR_WIDTH = 280;
 const SIDEBAR_COLLAPSED_WIDTH = 68;
@@ -296,37 +297,39 @@ const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onMobileClose }) 
           </ListItem>
 
           {/* Projects Analytics Studio (Data Formulator) */}
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <Tooltip title={isExpanded ? '' : 'Projects Analytics'} placement="right" arrow>
-              <ListItemButton
-                selected={
-                  location.pathname === '/projects/analytics' ||
-                  location.pathname === '/analytics/projects' ||
-                  location.pathname === '/analytics/studio' ||
-                  location.pathname === '/analytics'
-                }
-                onClick={() => navigate('/projects/analytics')}
-                sx={navBtnSx(
-                  location.pathname === '/projects/analytics' ||
-                  location.pathname === '/analytics/projects' ||
-                  location.pathname === '/analytics/studio' ||
-                  location.pathname === '/analytics'
-                )}
-              >
-                <ListItemIcon sx={iconSx()}>
-                  <AutoAwesomeIcon />
-                </ListItemIcon>
-                {isExpanded && (
-                  <ListItemText
-                    primary="Projects Analytics"
-                    secondary="Visual charts & formulation"
-                    secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
-                    sx={{ color: 'white' }}
-                  />
-                )}
-              </ListItemButton>
-            </Tooltip>
-          </ListItem>
+          {ANALYTICS_ENABLED && (
+            <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <Tooltip title={isExpanded ? '' : 'Projects Analytics'} placement="right" arrow>
+                <ListItemButton
+                  selected={
+                    location.pathname === '/projects/analytics' ||
+                    location.pathname === '/analytics/projects' ||
+                    location.pathname === '/analytics/studio' ||
+                    location.pathname === '/analytics'
+                  }
+                  onClick={() => navigate('/projects/analytics')}
+                  sx={navBtnSx(
+                    location.pathname === '/projects/analytics' ||
+                    location.pathname === '/analytics/projects' ||
+                    location.pathname === '/analytics/studio' ||
+                    location.pathname === '/analytics'
+                  )}
+                >
+                  <ListItemIcon sx={iconSx()}>
+                    <AutoAwesomeIcon />
+                  </ListItemIcon>
+                  {isExpanded && (
+                    <ListItemText
+                      primary="Projects Analytics"
+                      secondary="Visual charts & formulation"
+                      secondaryTypographyProps={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}
+                      sx={{ color: 'white' }}
+                    />
+                  )}
+                </ListItemButton>
+              </Tooltip>
+            </ListItem>
+          )}
 
 
 

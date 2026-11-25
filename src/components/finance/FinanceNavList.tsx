@@ -35,6 +35,7 @@ import {
   ShoppingCart as PoIcon,
 } from '@mui/icons-material';
 import { isPayrollAuthorized } from '../../config/payrollAccess';
+import { ANALYTICS_ENABLED } from '../../config/features';
 
 const FINANCE_EXPENSE_PATHS = [
   '/finance/expense-monitoring',
@@ -114,7 +115,7 @@ const FinanceNavList: React.FC<FinanceNavListProps> = ({ isExpanded, navBtnSx, i
         </Tooltip>
       </ListItem>
 
-      {user?.role !== 'tax_filer' && (
+      {ANALYTICS_ENABLED && user?.role !== 'tax_filer' && (
         <ListItem disablePadding sx={{ mb: 0.5 }}>
           <Tooltip title={isExpanded ? '' : 'Finance Analytics'} placement="right" arrow>
             <ListItemButton
